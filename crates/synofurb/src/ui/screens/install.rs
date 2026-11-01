@@ -157,7 +157,7 @@ impl App {
             .bordered(true)
             .when(dom, |a| a.item(|i| i.title(copy::INSTALL_FLASH.short).open(flash_open).child(flash_rows)))
             .item(|i| i.title(copy::INSTALL_STEPS.short).child(steps))
-            .item(|i| i.title(copy::INSTALL_LOG.short).child(log));
+            .item(|i| i.title(copy::INSTALL_LOG.short).open(self.demo.is_some() && std::env::var("SYNOFURB_DEMO_LOG").is_ok()).child(log));
 
         let mut body = v_flex().w_full().gap(px(12.0));
         if v.past_no_return {

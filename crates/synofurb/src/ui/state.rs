@@ -29,7 +29,7 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 46] = [
+pub const DEMO_SCREEN_NAMES: [&str; 51] = [
     "failed-agent",
     "manage-rebuild",
     "manage-faildisk",
@@ -46,6 +46,8 @@ pub const DEMO_SCREEN_NAMES: [&str; 46] = [
     "recovery-agent",
     "inventory",
     "inventory-offline",
+    "inventory-empty",
+    "inventory-scanning",
     "connect",
     "inspect",
     "goal",
@@ -54,6 +56,9 @@ pub const DEMO_SCREEN_NAMES: [&str; 46] = [
     "system",
     "system-offline",
     "confirm",
+    "confirm-ready",
+    "confirm-keep",
+    "confirm-twin",
     "install",
     "install-after-ponr",
     "failed",
@@ -123,6 +128,12 @@ pub struct DemoTarget {
     pub tab: usize,
     pub hybrid_view: bool,
     pub updating: bool,
+    /// Another unit of the same model is on the network (the twin erase phrase).
+    pub twin: bool,
+    /// The Confirm gate is satisfied (Erase enabled).
+    pub ready: bool,
+    /// Find with no units: `Some(false)` empty and done, `Some(true)` still scanning.
+    pub no_units: Option<bool>,
 }
 
 /// What a demo run pretends to know about the unit (drives the risk Tag and the Recovery rows).
@@ -151,6 +162,9 @@ impl DemoTarget {
             tab: 0,
             hybrid_view: false,
             updating: false,
+            twin: false,
+            ready: false,
+            no_units: None,
         }
     }
 
@@ -159,6 +173,8 @@ impl DemoTarget {
         let n = name.trim().to_ascii_lowercase();
         let t = match n.as_str() {
             "inventory" | "find" => DemoTarget::at(Screen::Inventory),
+            "inventory-empty" => DemoTarget { no_units: Some(false), ..DemoTarget::at(Screen::Inventory) },
+            "inventory-scanning" => DemoTarget { no_units: Some(true), ..DemoTarget::at(Screen::Inventory) },
             "inventory-offline" => DemoTarget { offline: true, ..DemoTarget::at(Screen::Inventory) },
             "connect" => DemoTarget::at(Screen::Connect),
             "inspect" => DemoTarget::at(Screen::Inspect),
@@ -168,6 +184,9 @@ impl DemoTarget {
             "system" | "account" => DemoTarget::at(Screen::System),
             "system-offline" => DemoTarget { offline: true, ..DemoTarget::at(Screen::System) },
             "confirm" => DemoTarget::at(Screen::Confirm),
+            "confirm-ready" => DemoTarget { ready: true, ..DemoTarget::at(Screen::Confirm) },
+            "confirm-keep" => DemoTarget { keep: true, ..DemoTarget::at(Screen::Confirm) },
+            "confirm-twin" => DemoTarget { twin: true, ..DemoTarget::at(Screen::Confirm) },
             "install" => DemoTarget::at(Screen::Install),
             "install-after-ponr" => DemoTarget { past_no_return: true, ..DemoTarget::at(Screen::Install) },
             "failed" | "failure" | "failed-pre" => DemoTarget::at(Screen::Failed),

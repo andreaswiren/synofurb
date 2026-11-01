@@ -585,12 +585,19 @@ impl App {
             let facts = unit.facts();
             self.on_inspected(facts, raw, false, window, cx);
         }
+        if let Some(scanning) = t.no_units {
+            self.inv = Inventory::default();
+            self.scan.running = scanning;
+        }
+        if t.twin {
+            self.inv.merge(demo::twin_of_ds918());
+        }
         if t.keep {
             self.form.req.mode = StorageMode::KeepVolumes;
             self.rebuild_plan();
         }
         match t.screen {
-            Screen::Confirm if std::env::var("SYNOFURB_DEMO_GATE").as_deref() == Ok("ready") => {
+            Screen::Confirm if t.ready || std::env::var("SYNOFURB_DEMO_GATE").as_deref() == Ok("ready") => {
                 self.ack_backup = true;
                 self.ack_loss = true;
                 self.ack_unit = true;

@@ -128,6 +128,11 @@ fn found(model: &str, ip: &str, mac: &str, dsm: &str, serial: &str, sources: &[&
     }
 }
 
+/// A second DS918+ with another serial number: the twin of the default demo unit.
+pub fn twin_of_ds918() -> Found {
+    found("DS918+", "192.168.1.21", "00:11:32:aa:bb:02", "7.2.1-69057", "1920PDN654321", &["udp", "mdns"], false, "diskstation2")
+}
+
 pub fn inventory() -> Inventory {
     let mut inv = Inventory::default();
     inv.merge(found(
