@@ -528,6 +528,14 @@ impl App {
                 let partial: String = self.phrase(cx).chars().take(9).collect();
                 self.set_input(&self.inp.typed.clone(), &partial, window, cx);
             }
+            Screen::Failed if t.fixture == Fixture::Agent => {
+                self.ack_backup = true;
+                self.ack_loss = true;
+                self.ack_unit = true;
+                self.install_started = true;
+                self.agent_unknown = true;
+                self.result = Some(Err("the boot agent did not appear within 10 minutes. The NAS defaults to DSM: power-cycle it if it is stuck and it will boot DSM normally.".into()));
+            }
             Screen::Install | Screen::Failed | Screen::Done => {
                 self.ack_backup = true;
                 self.ack_loss = true;
@@ -669,6 +677,9 @@ impl App {
                 }
             }
             Msg::Finished(r) => {
+                if let Err(e) = &r {
+                    self.agent_unknown = super::facts::is_agent_timeout(e);
+                }
                 let ok = r.is_ok();
                 self.result = Some(r);
                 self.screen = if ok { Screen::Done } else { Screen::Failed };

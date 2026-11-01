@@ -12,7 +12,7 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{Disableable, h_flex, v_flex};
+use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, IntoElement, Window, px};
 
@@ -27,18 +27,20 @@ impl App {
             Some(Err(e)) => e.clone(),
             _ => self.install.installer_failed.clone().unwrap_or_else(|| "The installer stopped.".into()),
         };
+        let uf_flash = self.unit_facts().flash;
         let dom = self.facts.as_ref().is_some_and(|f| self.sys.boot.resolve(f) == BootChoice::Dom);
         let subtitle = if self.install.step_total > 0 {
             format!("Step {} of {} \u{00b7} {}", self.install.step_n, self.install.step_total, self.install.step_name)
         } else {
-            "before the installer started".to_string()
+            if self.agent_unknown { "Waiting for the boot agent".to_string() } else { "before the installer started".to_string() }
         };
         let (disks_item, disks_tone, disks_icon) = if touched {
             (&copy::FAIL_DISKS_CHANGED, Tone::Err, role::DANGER)
         } else {
             (&copy::FAIL_DISKS_UNTOUCHED, Tone::Ok, role::SAFE)
         };
-        let (flash_item, flash_tone) = if dom { (&copy::FAIL_FLASH_CHANGED, Tone::Warn) } else { (&copy::FAIL_FLASH_UNTOUCHED, Tone::Ok) };
+        let (flash_item, flash_tone) =
+            if uf_flash { (&copy::FAIL_FLASH_CHANGED, Tone::Warn) } else { (&copy::FAIL_FLASH_UNTOUCHED, Tone::Ok) };
         let tags = h_flex()
             .gap(px(8.0))
             .items_center()
@@ -55,7 +57,7 @@ impl App {
                     .child(kit::tag(&p, flash_tone, Some(role::PACKAGE), flash_item.short))
                     .child(crate::ui::disclosure::info_tip("t-flash", flash_item, &app)),
             )
-            .child(
+            .children((!self.agent_unknown).then(|| {
                 h_flex()
                     .gap(px(6.0))
                     .items_center()
@@ -65,8 +67,8 @@ impl App {
                         "t-clock",
                         if touched { &copy::FAIL_RESCUE_IN } else { &copy::FAIL_DSM_IN },
                         &app,
-                    )),
-            );
+                    ))
+            }));
 
         let status: gpui_kit::AnyElement = match &self.recover {
             Job::Done(Ok(s)) => Alert::success("rec-ok", s.trim().to_string()).small().icon(icons::icon(role::OK)).into_any_element(),
@@ -99,21 +101,29 @@ impl App {
             .child(status)
             .child(acc);
 
-        let primary = if touched {
-            Button::new("rescue")
+        let primary: gpui_kit::AnyElement = if self.agent_unknown {
+            Button::new("manual")
                 .primary()
-                .icon(icons::icon(role::TERMINAL))
-                .label(copy::FAIL_OPEN_RESCUE.short)
-                .disabled(true)
-                .tooltip(RESCUE_TIP)
+                .icon(icons::icon(role::HELP))
+                .label(copy::REC_MANUAL.short)
+                .on_click(cx.listener(|this, _, window, cx| this.open_manual_recovery(window, cx)))
+                .into_any_element()
+        } else if touched {
+            kit::with_reason(
+                "rescue-why",
+                Button::new("rescue").primary().icon(icons::icon(role::TERMINAL)).label(copy::FAIL_OPEN_RESCUE.short),
+                Some(RESCUE_TIP.to_string()),
+            )
         } else {
-            Button::new("wait-dsm")
-                .primary()
-                .label(copy::FAIL_WAIT_DSM.short)
-                .loading(self.recover.running())
-                .disabled(!dom || self.recover.running())
-                .tooltip(if dom { "" } else { "Nothing was written; DSM comes back when the NAS restarts." })
-                .on_click(cx.listener(|this, _, _, cx| this.start_recover(cx)))
+            kit::with_reason(
+                "wait-why",
+                Button::new("wait-dsm")
+                    .primary()
+                    .label(copy::FAIL_WAIT_DSM.short)
+                    .loading(self.recover.running())
+                    .on_click(cx.listener(|this, _, _, cx| this.start_recover(cx))),
+                (!dom).then(|| "Nothing was written; DSM comes back when the NAS restarts.".to_string()),
+            )
         };
         let diag = Button::new("export")
             .outline()
@@ -134,7 +144,7 @@ impl App {
                     .on_click(cx.listener(|this, _, window, cx| this.start_over(window, cx)))
                     .into_any_element(),
             ])
-            .right(vec![diag.into_any_element(), recovery.into_any_element(), primary.into_any_element()])
+            .right(vec![diag.into_any_element(), recovery.into_any_element(), primary])
     }
 }
 

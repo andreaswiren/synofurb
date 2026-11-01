@@ -29,7 +29,8 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 40] = [
+pub const DEMO_SCREEN_NAMES: [&str; 41] = [
+    "failed-agent",
     "manage-rebuild",
     "manage-faildisk",
     "manage-services",
@@ -157,6 +158,7 @@ impl DemoTarget {
             "install" => DemoTarget::at(Screen::Install),
             "install-after-ponr" => DemoTarget { past_no_return: true, ..DemoTarget::at(Screen::Install) },
             "failed" | "failure" | "failed-pre" => DemoTarget::at(Screen::Failed),
+            "failed-agent" => DemoTarget { fixture: Fixture::Agent, ..DemoTarget::at(Screen::Failed) },
             "failed-post" | "failed-keep" => DemoTarget { past_no_return: true, ..DemoTarget::at(Screen::Failed) },
             "done" => DemoTarget::at(Screen::Done),
             "update" => DemoTarget { overlay: Overlay::Update, ..DemoTarget::at(Screen::Inventory) },

@@ -180,7 +180,6 @@ impl App {
             });
         let toolbar =
             h_flex()
-                .w_full()
                 .gap(px(8.0))
                 .items_center()
                 .child(div().w(px(260.0)).child(
@@ -252,7 +251,7 @@ impl App {
                     .into_any_element()
             };
 
-        let mut body = v_flex().w_full().gap(px(12.0)).child(toolbar).child(units_ui);
+        let mut body = v_flex().w_full().gap(px(12.0)).child(units_ui);
         if !converted.is_empty() {
             body = body.child(kit::heading(copy::INV_RUNNING.short)).child(
                 Table::new()
@@ -288,20 +287,17 @@ impl App {
         }
         let none = selected.is_none();
         let _ = app;
-        Page::new(copy::INV_TITLE.short, body).subtitle(copy::INV_SUB.short).right(vec![
-            Button::new("connect")
-                .primary()
-                .label(copy::INV_CONNECT.short)
-                .icon(icons::icon(role::NEXT))
-                .tooltip(if none { copy::INV_CONNECT.tip } else { "" })
-                .disabled(none)
-                .on_click(cx.listener(|this, _, window, cx| {
+        Page::new(copy::INV_TITLE.short, body).subtitle(copy::INV_SUB.short).header_right(toolbar).right(vec![kit::with_reason(
+            "connect-why",
+            Button::new("connect").primary().label(copy::INV_CONNECT.short).icon(icons::icon(role::NEXT)).on_click(cx.listener(
+                |this, _, window, cx| {
                     if let Some(ip) = this.selected_ip.clone() {
                         this.select_host(&ip, window, cx);
                     }
-                }))
-                .into_any_element(),
-        ])
+                },
+            )),
+            none.then(|| copy::INV_CONNECT.tip.to_string()),
+        )])
     }
 
     /// Used by the other screens to name the selected unit.

@@ -230,6 +230,12 @@ pub fn recovery_manual_primary(f: &UnitFacts) -> bool {
     !f.debian && f.agent_unknown
 }
 
+/// The engine's error when the boot agent never answered (`domboot::wait_for_agent`): the default boot entry is then not
+/// confirmed to be DSM, so the UI offers the manual recovery instead of promising that DSM returns.
+pub fn is_agent_timeout(error: &str) -> bool {
+    error.contains("boot agent did not appear") || error.contains("boot agent did not answer")
+}
+
 // ------------------------------------------------------------------------------------------------ quick setup
 
 /// What "Quick setup" chooses for the data layout (everything else is the planner's default).
@@ -391,6 +397,12 @@ mod tests {
         assert_eq!((mixed.raid, mixed.mixed), (DataRaid::Shr1, true));
         assert_eq!(quick_defaults(&[3.6], 0.0, 3.6).copies, 1);
         assert_eq!(quick_defaults(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0], 5.0, 5.0).copies, 3);
+    }
+
+    #[test]
+    fn agent_timeout_is_recognised() {
+        assert!(is_agent_timeout("the boot agent did not appear within 10 minutes. The NAS defaults to DSM: power-cycle it"));
+        assert!(!is_agent_timeout("grub-install failed on sdc"));
     }
 
     #[test]
