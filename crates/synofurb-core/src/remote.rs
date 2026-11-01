@@ -1,6 +1,7 @@
 //! Remote execution on the NAS over SSH (russh), behind the [`RemoteShell`] trait so the install
 //! flow can be tested with a mock. Every command and its output is written to the debug log.
 
+use crate::hostkey::{HostKeyDecision, HostKeyError, HostKeyPolicy};
 use crate::logs::{Level, Logger, Source};
 use anyhow::{Context, Result, anyhow, bail};
 use russh::client;
@@ -40,20 +41,59 @@ pub enum Auth {
     Key(String),
 }
 
+/// Client handler. `check_server_key` runs during the handshake, before authentication: when the policy refuses, `Ok(false)` makes
+/// russh close the connection and the password / key signature is never produced.
 struct Handler {
     fingerprint: Arc<Mutex<Option<String>>>,
+    policy: HostKeyPolicy,
+    host: String,
+    port: u16,
+    /// Why the key was refused (russh itself only says "unknown server key").
+    refused: Arc<Mutex<Option<HostKeyError>>>,
+    /// Set when this connection pinned a first-time key (for the log line).
+    pinned: Arc<Mutex<bool>>,
+}
+
+impl Handler {
+    fn new(host: &str, port: u16, policy: &HostKeyPolicy) -> Handler {
+        Handler {
+            fingerprint: Arc::new(Mutex::new(None)),
+            policy: policy.clone(),
+            host: host.to_string(),
+            port,
+            refused: Arc::new(Mutex::new(None)),
+            pinned: Arc::new(Mutex::new(false)),
+        }
+    }
 }
 
 impl client::Handler for Handler {
     type Error = russh::Error;
     async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
-        // Trust-on-first-use: the fingerprint is shown to the user and written to the log.
         let fp = match key {
             PublicKeyOrCertificate::PublicKey { key, .. } => key.fingerprint(HashAlg::Sha256).to_string(),
             PublicKeyOrCertificate::Certificate(_) => "certificate".to_string(),
         };
-        *self.fingerprint.lock().unwrap() = Some(fp);
-        Ok(true)
+        *self.fingerprint.lock().unwrap() = Some(fp.clone());
+        match self.policy.check(&self.host, self.port, &fp) {
+            Ok(HostKeyDecision::Accept) => Ok(true),
+            Ok(HostKeyDecision::AcceptedAndPinned) => {
+                *self.pinned.lock().unwrap() = true;
+                Ok(true)
+            }
+            Err(e) => {
+                *self.refused.lock().unwrap() = Some(e);
+                Ok(false)
+            }
+        }
+    }
+}
+
+/// Turn a failed connect into the typed host-key error when that is what happened.
+fn connect_error(refused: &Arc<Mutex<Option<HostKeyError>>>, e: anyhow::Error) -> anyhow::Error {
+    match refused.lock().unwrap().take() {
+        Some(h) => anyhow::Error::new(h),
+        None => e,
     }
 }
 
@@ -70,11 +110,11 @@ pub struct SshSession {
 pub fn fetch_host_fingerprint(host: &str, port: u16, timeout: Duration) -> Result<String> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     rt.block_on(async {
-        let fp = Arc::new(Mutex::new(None));
+        // informational only: nothing is ever sent after this handshake, so no policy applies
+        let handler = Handler::new(host, port, &HostKeyPolicy::Insecure);
+        let fp = handler.fingerprint.clone();
         let cfg = Arc::new(client::Config { inactivity_timeout: Some(timeout), ..Default::default() });
-        let h = tokio::time::timeout(timeout, client::connect(cfg, (host, port), Handler { fingerprint: fp.clone() }))
-            .await
-            .map_err(|_| anyhow!("timed out"))??;
+        let h = tokio::time::timeout(timeout, client::connect(cfg, (host, port), handler)).await.map_err(|_| anyhow!("timed out"))??;
         let _ = h.disconnect(Disconnect::ByApplication, "", "en").await;
         let v = fp.lock().unwrap().clone();
         v.ok_or_else(|| anyhow!("server sent no host key"))
@@ -82,33 +122,52 @@ pub fn fetch_host_fingerprint(host: &str, port: u16, timeout: Duration) -> Resul
 }
 
 impl SshSession {
+    /// Connect with the process-wide host-key policy ([`crate::hostkey::default_policy`]: trust on first use, a changed key is an error).
     pub fn connect(host: &str, port: u16, user: &str, auth: &Auth, log: &Logger) -> Result<SshSession> {
+        Self::connect_with(host, port, user, auth, log, &crate::hostkey::default_policy())
+    }
+
+    /// Connect, check the server's host key with `policy` **before** authenticating, then authenticate. A refused key is a
+    /// [`HostKeyError`] inside the returned error (`err.downcast_ref::<HostKeyError>()`); nothing secret was sent in that case.
+    pub fn connect_with(host: &str, port: u16, user: &str, auth: &Auth, log: &Logger, policy: &HostKeyPolicy) -> Result<SshSession> {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
-        let fingerprint = Arc::new(Mutex::new(None));
-        let fp2 = fingerprint.clone();
-        let handle = rt.block_on(async {
-            let cfg = Arc::new(client::Config {
-                inactivity_timeout: Some(Duration::from_secs(3600)),
-                keepalive_interval: Some(Duration::from_secs(20)),
-                ..Default::default()
-            });
-            let mut h = tokio::time::timeout(Duration::from_secs(20), client::connect(cfg, (host, port), Handler { fingerprint: fp2 }))
-                .await
-                .map_err(|_| anyhow!("connection to {host}:{port} timed out"))?
-                .with_context(|| format!("connecting to {host}:{port}"))?;
-            let ok = match auth {
-                Auth::Password(p) => h.authenticate_password(user, p.clone()).await?.success(),
-                Auth::Key(pem) => {
-                    let key = russh::keys::PrivateKey::from_openssh(pem).context("invalid private key")?;
-                    let hash = h.best_supported_rsa_hash().await?.flatten();
-                    h.authenticate_publickey(user, russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await?.success()
+        let handler = Handler::new(host, port, policy);
+        let (fingerprint, refused, pinned) = (handler.fingerprint.clone(), handler.refused.clone(), handler.pinned.clone());
+        if matches!(policy, HostKeyPolicy::Insecure) {
+            log.warn(format!("HOST KEY NOT CHECKED for {host}:{port} (insecure mode): anyone on the network path could read the password"));
+        }
+        let handle = rt
+            .block_on(async {
+                let cfg = Arc::new(client::Config {
+                    inactivity_timeout: Some(Duration::from_secs(3600)),
+                    keepalive_interval: Some(Duration::from_secs(20)),
+                    ..Default::default()
+                });
+                let mut h = tokio::time::timeout(Duration::from_secs(20), client::connect(cfg, (host, port), handler))
+                    .await
+                    .map_err(|_| anyhow!("connection to {host}:{port} timed out"))?
+                    .with_context(|| format!("connecting to {host}:{port}"))?;
+                let ok = match auth {
+                    Auth::Password(p) => h.authenticate_password(user, p.clone()).await?.success(),
+                    Auth::Key(pem) => {
+                        let key = russh::keys::PrivateKey::from_openssh(pem).context("invalid private key")?;
+                        let hash = h.best_supported_rsa_hash().await?.flatten();
+                        h.authenticate_publickey(user, russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await?.success()
+                    }
+                };
+                if !ok {
+                    bail!("SSH authentication failed for {user}@{host}");
                 }
-            };
-            if !ok {
-                bail!("SSH authentication failed for {user}@{host}");
-            }
-            Ok::<_, anyhow::Error>(h)
-        })?;
+                Ok::<_, anyhow::Error>(h)
+            })
+            // russh reports a refused key as a generic disconnect, possibly only when authentication is attempted
+            .map_err(|e| connect_error(&refused, e))?;
+        if *pinned.lock().unwrap() {
+            log.warn(format!(
+                "first contact with {host}:{port}: pinned its SSH host key {} (later connections must present the same key)",
+                fingerprint.lock().unwrap().clone().unwrap_or_default()
+            ));
+        }
         let s = SshSession { rt, handle, fingerprint, log: log.clone(), label: format!("{user}@{host}") };
         log.info(format!("SSH connected to {} (host key {})", s.label, s.host_key_fingerprint().unwrap_or_default()));
         Ok(s)
@@ -334,5 +393,112 @@ pub mod mock {
         assert_eq!(m.uploads[0].2, 0o700);
         assert!(m.commands[0].starts_with("/bin/sh '/tmp/.synofurb-"));
         assert!(m.commands[1].starts_with("rm -f "));
+    }
+}
+
+#[cfg(test)]
+mod hostkey_tests {
+    use super::*;
+    use crate::hostkey::{HostKeyPolicy, KnownHosts};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A real SSH server (russh) that accepts any password and counts the password attempts it sees.
+    struct Srv(Arc<AtomicUsize>);
+    impl russh::server::Handler for Srv {
+        type Error = russh::Error;
+        async fn auth_password(&mut self, _user: &str, _password: &str) -> Result<russh::server::Auth, Self::Error> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(russh::server::Auth::Accept)
+        }
+    }
+
+    /// Returns (port, host key fingerprint, password attempts seen).
+    fn fake_sshd() -> (u16, String, Arc<AtomicUsize>) {
+        let kp = crate::config::generate_ssh_keypair("fake-sshd").unwrap();
+        let key = russh::keys::PrivateKey::from_openssh(&kp.private_openssh).unwrap();
+        let fp = key.public_key().fingerprint(HashAlg::Sha256).to_string();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let a2 = attempts.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+            rt.block_on(async move {
+                let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                tx.send(l.local_addr().unwrap().port()).unwrap();
+                let cfg = Arc::new(russh::server::Config { keys: vec![key], ..Default::default() });
+                loop {
+                    let Ok((sock, _)) = l.accept().await else { break };
+                    let (cfg, a) = (cfg.clone(), a2.clone());
+                    tokio::spawn(async move {
+                        if let Ok(session) = russh::server::run_stream(cfg, sock, Srv(a)).await {
+                            let _ = session.await;
+                        }
+                    });
+                }
+            });
+        });
+        (rx.recv().unwrap(), fp, attempts)
+    }
+
+    fn store(tag: &str) -> KnownHosts {
+        let p = std::env::temp_dir().join(format!("sf-sshkh-{tag}-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        KnownHosts::at(p)
+    }
+
+    fn connect(port: u16, policy: &HostKeyPolicy) -> Result<SshSession> {
+        SshSession::connect_with("127.0.0.1", port, "admin", &Auth::Password("hunter2".into()), &Logger::memory(None), policy)
+    }
+
+    #[test]
+    fn a_refused_host_key_closes_the_connection_before_the_password_is_sent() {
+        let (port, fp, attempts) = fake_sshd();
+        let other = "SHA256:ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ".to_string();
+
+        // wrong pin
+        let Err(e) = connect(port, &HostKeyPolicy::Pinned(other.clone())) else { panic!("must refuse") };
+        let h = e.downcast_ref::<HostKeyError>().unwrap_or_else(|| panic!("typed host key error, got: {e:#}"));
+        assert!(matches!(h, HostKeyError::PinMismatch { expected, presented, .. } if *expected == other && *presented == fp), "{h}");
+        // the user said no to a first contact
+        let s = store("no");
+        let Err(e) = connect(port, &HostKeyPolicy::tofu_with(s.clone(), Arc::new(|_| false))) else { panic!("must refuse") };
+        assert!(matches!(e.downcast_ref::<HostKeyError>(), Some(HostKeyError::NotTrusted { fingerprint, .. }) if *fingerprint == fp));
+        assert!(s.get("127.0.0.1", port).unwrap().is_none(), "a refused key is not pinned");
+        // a pin on record that differs: both fingerprints are named
+        let s2 = store("changed");
+        s2.pin("127.0.0.1", port, &other).unwrap();
+        let Err(e) = connect(port, &HostKeyPolicy::Tofu { store: s2.clone(), confirm: None }) else { panic!("must refuse") };
+        let t = format!("{e:#}");
+        assert!(
+            matches!(e.downcast_ref::<HostKeyError>(), Some(HostKeyError::Changed { .. })) && t.contains(&other) && t.contains(&fp),
+            "{t}"
+        );
+
+        // the heart of it: the server never saw a password in any of those attempts
+        assert_eq!(attempts.load(Ordering::SeqCst), 0, "no password may be sent before the host key is accepted");
+
+        // the right pin, a confirmed first contact, then the pinned key all work, and only now is the password used
+        assert!(connect(port, &HostKeyPolicy::Pinned(fp.clone())).is_ok());
+        let asked = Arc::new(AtomicUsize::new(0));
+        let a = asked.clone();
+        let pol = HostKeyPolicy::tofu_with(
+            s.clone(),
+            Arc::new(move |p| {
+                a.fetch_add(1, Ordering::SeqCst);
+                p.fingerprint.starts_with("SHA256:")
+            }),
+        );
+        assert!(connect(port, &pol).is_ok() && connect(port, &pol).is_ok());
+        assert_eq!(asked.load(Ordering::SeqCst), 1, "asked once; the second connection matches the pin");
+        assert_eq!(s.get("127.0.0.1", port).unwrap().unwrap().fingerprint, fp);
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        // insecure mode is a policy of its own and logs a loud warning
+        let (tx, rx) = std::sync::mpsc::channel();
+        let log = Logger::memory(Some(tx));
+        assert!(SshSession::connect_with("127.0.0.1", port, "admin", &Auth::Password("p".into()), &log, &HostKeyPolicy::Insecure).is_ok());
+        let warned = rx.try_iter().any(|e| matches!(e, crate::logs::Event::Log(l) if l.msg.contains("HOST KEY NOT CHECKED")));
+        assert!(warned);
+        let _ = std::fs::remove_file(s.path());
+        let _ = std::fs::remove_file(s2.path());
     }
 }

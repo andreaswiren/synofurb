@@ -21,6 +21,52 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
+/// Failures of the boot-flash flows that callers (the GUI, the CLI) must tell apart. They travel inside the `anyhow::Error` the flows
+/// return: `SessionError::find(&err)` or `err.downcast_ref::<SessionError>()`. Never match on the message text.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SessionError {
+    /// The unit was asked to reboot into the boot agent and the agent did not answer within `waited_min` minutes. The state of the unit
+    /// is unknown: see [`agent_timeout_message`] for the two possible outcomes. Nothing was reset by the app after the wait.
+    #[error("{}", agent_timeout_message(*waited_min, *watchdog_min))]
+    AgentTimeout { waited_min: u32, watchdog_min: u32 },
+    /// The backup of the boot flash did not complete or did not verify. **The boot flash was not written to** (the backup is the first
+    /// step and a prerequisite for every write), so DSM and the boot menu are exactly as they were. Different from "the flash changed".
+    #[error("backing up the boot flash failed, so nothing was written to it and the boot menu is unchanged: {reason}")]
+    FlashBackupFailed { reason: String },
+}
+
+impl SessionError {
+    /// The typed error inside `e`, if there is one.
+    pub fn find(e: &anyhow::Error) -> Option<&SessionError> {
+        e.downcast_ref::<SessionError>()
+    }
+
+    /// Is the boot flash certainly untouched? (Only said for the failures that happen before the first write.)
+    pub fn flash_untouched(&self) -> bool {
+        matches!(self, SessionError::FlashBackupFailed { .. })
+    }
+
+    /// Is the default boot entry possibly still the agent (so a power cycle may boot the agent again)?
+    pub fn boot_default_unconfirmed(&self) -> bool {
+        matches!(self, SessionError::AgentTimeout { .. })
+    }
+}
+
+/// The text of [`SessionError::AgentTimeout`]. It states both outcomes and promises nothing about DSM: when the agent never ran, the
+/// unit may keep booting the agent after every power cycle (`boot/dom/README.md`, "Fail-safe design").
+pub fn agent_timeout_message(waited_min: u32, watchdog_min: u32) -> String {
+    format!(
+        "The boot agent did not answer within {waited_min} minutes of the reboot request, and nothing was reset after the wait. \
+         What happened on the unit is not known. If the agent started, its watchdog sets the default boot entry back to DSM and reboots \
+         the unit {watchdog_min} minutes after the agent started (counted from the agent's start, not from the reboot request), so the \
+         unit can still come back by itself. If the agent never ran, the default boot entry may still point at the agent and the unit may \
+         boot the agent again after every power cycle, so do not rely on power-cycling it. To recover by hand you need physical access: \
+         choose SYNOLOGY_2 in the boot loader menu on a serial or VGA console for one boot and then run `synofurb-dom default dsm --yes` \
+         on DSM, or take the boot flash to another Linux computer and restore the saved image (`synofurb-dom restore --yes FILE`). \
+         See docs/RECOVERY.md."
+    )
+}
+
 #[derive(Clone)]
 pub struct SshTarget {
     pub host: String,
@@ -307,7 +353,7 @@ fn dom_install_flow(
     let is_root = fresh.is_root;
     let pw = job.target.sudo_password.clone();
     let unit = if fresh.serial.is_empty() { job.target.host.clone() } else { fresh.serial.clone() };
-    let backup = backup_dom(ssh, is_root, pw.clone(), backup_dir, &unit, dom.sectors * SECTOR, logger)?;
+    let backup = backup_dom(ssh, is_root, pw.clone(), backup_dir, &unit, dom.sectors * SECTOR, logger)?; // typed: SessionError::FlashBackupFailed
     logger
         .warn(format!("KEEP THIS FILE: {} is the only way to rebuild the unit's boot flash if it is ever damaged", backup.path.display()));
     let files = match &job.offline_bundle {
@@ -327,7 +373,7 @@ fn dom_install_flow(
     let key = agent_key_for(&unit, &crate::session::config_keys_dir())?;
     let overlay = AgentOverlay {
         hostname: format!("{}-agent", job.cfg.hostname),
-        timeout_min: 30,
+        timeout_min: crate::timing::INSTALL_WATCHDOG_MIN,
         authorized_keys: vec![key.public_openssh.clone()],
     };
     let dsm_fp = ssh.host_key_fingerprint();
@@ -359,7 +405,18 @@ fn dom_install_flow(
         return Err(e);
     }
     let peer: IpAddr = job.target.host.parse().context("host must be an IP address for the DOM flow")?;
-    let (mut agent, _ip) = wait_for_agent(&[peer], &key.private_openssh, dsm_fp.as_deref(), Duration::from_secs(10 * 60), cancel, logger)?;
+    // typed on timeout: SessionError::AgentTimeout
+    let (mut agent, _ip) = wait_for_agent(
+        &[peer],
+        &key.private_openssh,
+        dsm_fp.as_deref(),
+        AgentWait {
+            timeout: Duration::from_secs(crate::timing::AGENT_WAIT_MIN as u64 * 60),
+            watchdog_min: crate::timing::INSTALL_WATCHDOG_MIN,
+        },
+        cancel,
+        logger,
+    )?;
     agent.exec("sf-boot claim", None)?;
     let k = format!("{}/files/installer-kernel", staged.http_base);
     let i = format!("{}/files/installer-initrd", staged.http_base);
@@ -419,7 +476,11 @@ pub fn boot_manager_install(
         progress,
     )?;
     let key = agent_key_for(&unit, &config_keys_dir())?;
-    let overlay = AgentOverlay { hostname: hostname.to_string(), timeout_min: 60, authorized_keys: vec![key.public_openssh] };
+    let overlay = AgentOverlay {
+        hostname: hostname.to_string(),
+        timeout_min: crate::timing::BOOT_MANAGER_WATCHDOG_MIN,
+        authorized_keys: vec![key.public_openssh],
+    };
     install_agent(
         &mut ssh,
         facts.is_root,
@@ -698,6 +759,30 @@ mod tests {
         let log = Logger::memory(Some(tx));
         log.installer_line(crate::logs::Source::Installer, "x @@DONE ok");
         assert!(follow_installer(&rx, &cancel, Duration::from_secs(5), &log).is_ok());
+    }
+
+    #[test]
+    fn the_agent_timeout_is_typed_and_states_both_outcomes_without_promising_dsm() {
+        let e = anyhow::Error::new(SessionError::AgentTimeout { waited_min: 10, watchdog_min: 30 });
+        let found = SessionError::find(&e).expect("typed, found by downcast");
+        assert_eq!(found, &SessionError::AgentTimeout { waited_min: 10, watchdog_min: 30 });
+        assert!(found.boot_default_unconfirmed() && !found.flash_untouched());
+        let t = e.to_string();
+        let l = t.to_lowercase();
+        // outcome 1: the agent started, the watchdog resets the default, counted from the agent's start
+        assert!(t.contains("10 minutes") && t.contains("30 minutes after the agent started"), "{t}");
+        // outcome 2: the agent never ran
+        assert!(
+            l.contains("never ran") && l.contains("again after every power cycle") && l.contains("do not rely on power-cycling"),
+            "{t}"
+        );
+        // manual recovery, both routes
+        assert!(t.contains("SYNOLOGY_2") && t.contains("serial or VGA console") && t.contains("another Linux computer"), "{t}");
+        assert!(t.contains("synofurb-dom restore --yes FILE") && t.contains("docs/RECOVERY.md"));
+        // the false promises of the old text must not come back
+        for bad in ["boot dsm normally", "defaults to dsm", "dsm is the default", "dsm is already", "starts as before"] {
+            assert!(!l.contains(bad), "{bad}: {t}");
+        }
     }
 
     #[test]

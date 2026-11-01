@@ -9,9 +9,11 @@
 
 use crate::config::{generate_ssh_keypair, random_token};
 use crate::debian::{cpio_gz, sha256_hex};
+use crate::hostkey::HostKeyPolicy;
 use crate::logs::Logger;
 use crate::model::Arch;
 use crate::remote::{Auth, Privileged, RemoteShell, SshSession};
+use crate::session::SessionError;
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -50,7 +52,23 @@ pub struct DomBackup {
 
 /// Stream the whole DOM (`/dev/synoboot`) into `dest_dir` and verify it against a hash computed on the NAS.
 /// The backup is what makes every later step reversible, so a mismatch is fatal.
+///
+/// Any failure is a [`SessionError::FlashBackupFailed`] (find it with `SessionError::find`): the flash has not been written to at
+/// that point, which is different from every later failure.
 pub fn backup_dom(
+    sh: &mut dyn RemoteShell,
+    is_root: bool,
+    sudo_pw: Option<String>,
+    dest_dir: &Path,
+    unit: &str,
+    expected_bytes: u64,
+    log: &Logger,
+) -> Result<DomBackup> {
+    backup_dom_inner(sh, is_root, sudo_pw, dest_dir, unit, expected_bytes, log)
+        .map_err(|e| anyhow::Error::new(SessionError::FlashBackupFailed { reason: format!("{e:#}") }))
+}
+
+fn backup_dom_inner(
     sh: &mut dyn RemoteShell,
     is_root: bool,
     sudo_pw: Option<String>,
@@ -284,16 +302,34 @@ pub fn install_agent(
     Ok(())
 }
 
+/// How long to wait for the agent, and the watchdog the agent was armed with (for the text of the timeout error).
+#[derive(Debug, Clone, Copy)]
+pub struct AgentWait {
+    pub timeout: Duration,
+    pub watchdog_min: u32,
+}
+
+impl AgentWait {
+    /// The standard install wait ([`crate::timing::AGENT_WAIT_MIN`]) for an agent armed with `watchdog_min`.
+    pub fn standard(watchdog_min: u32) -> AgentWait {
+        AgentWait { timeout: Duration::from_secs(crate::timing::AGENT_WAIT_MIN as u64 * 60), watchdog_min }
+    }
+}
+
 /// Wait until the agent answers over SSH. DSM's own sshd also listens on port 22, so a successful key login with
 /// the agent's per-unit key (DSM does not know it) and a changed host key identify the agent.
+///
+/// The agent's host key is new at every boot and the login is by our per-unit key (no password is sent), so this connection uses
+/// [`HostKeyPolicy::KeyAuthOnly`]. On timeout the error is [`SessionError::AgentTimeout`].
 pub fn wait_for_agent(
     candidates: &[IpAddr],
     agent_key_pem: &str,
     dsm_fingerprint: Option<&str>,
-    timeout: Duration,
+    wait: AgentWait,
     cancel: &AtomicBool,
     log: &Logger,
 ) -> Result<(SshSession, IpAddr)> {
+    let timeout = wait.timeout;
     let deadline = Instant::now() + timeout;
     let mut last_log = Instant::now() - Duration::from_secs(60);
     while Instant::now() < deadline {
@@ -308,7 +344,14 @@ pub fn wait_for_agent(
                 if dsm_fingerprint == Some(fp.as_str()) {
                     continue; // still DSM (reboot not started yet)
                 }
-                if let Ok(s) = SshSession::connect(&ip.to_string(), 22, "root", &Auth::Key(agent_key_pem.to_string()), log) {
+                if let Ok(s) = SshSession::connect_with(
+                    &ip.to_string(),
+                    22,
+                    "root",
+                    &Auth::Key(agent_key_pem.to_string()),
+                    log,
+                    &HostKeyPolicy::KeyAuthOnly,
+                ) {
                     log.info(format!("boot agent is up at {ip} (host key {fp})"));
                     return Ok((s, *ip));
                 }
@@ -320,10 +363,7 @@ pub fn wait_for_agent(
         }
         std::thread::sleep(Duration::from_secs(4));
     }
-    bail!(
-        "the boot agent did not appear within {} minutes. The NAS defaults to DSM: power-cycle it if it is stuck and it will boot DSM normally.",
-        timeout.as_secs() / 60
-    )
+    Err(anyhow::Error::new(SessionError::AgentTimeout { waited_min: (timeout.as_secs() / 60) as u32, watchdog_min: wait.watchdog_min }))
 }
 
 /// A throw-away key pair for the agent session of this unit.
@@ -392,6 +432,33 @@ mod tests {
     }
 
     #[test]
+    fn every_backup_failure_is_the_typed_flash_untouched_error() {
+        let dir = std::env::temp_dir().join(format!("sf-domb4-{}", std::process::id()));
+        let mut m = MockShell::default();
+        m.push_ok("hello dom");
+        m.push_ok(&format!("{}  /dev/synoboot\n", "0".repeat(64))); // NAS hash differs
+        let e = backup_dom(&mut m, true, None, &dir, "x", 9, &Logger::memory(None)).unwrap_err();
+        let t = SessionError::find(&e).expect("typed");
+        assert!(matches!(t, SessionError::FlashBackupFailed { reason } if reason.contains("does not match")), "{e}");
+        assert!(t.flash_untouched() && !t.boot_default_unconfirmed());
+        assert!(e.to_string().contains("nothing was written to it"), "{e}");
+        let mut m = MockShell::default();
+        m.push_ok("short");
+        let e = backup_dom(&mut m, true, None, &dir, "x", 1000, &Logger::memory(None)).unwrap_err();
+        assert!(SessionError::find(&e).is_some_and(SessionError::flash_untouched), "{e}");
+    }
+
+    #[test]
+    fn waiting_for_the_agent_times_out_with_the_typed_error_carrying_the_watchdog() {
+        let w = AgentWait { timeout: Duration::from_millis(1), watchdog_min: crate::timing::INSTALL_WATCHDOG_MIN };
+        let Err(e) = wait_for_agent(&[], "", None, w, &AtomicBool::new(false), &Logger::memory(None)) else {
+            panic!("no agent was started")
+        };
+        assert_eq!(SessionError::find(&e), Some(&SessionError::AgentTimeout { waited_min: 0, watchdog_min: 30 }));
+        assert_eq!(AgentWait::standard(60).timeout, Duration::from_secs(600));
+    }
+
+    #[test]
     fn short_backup_is_rejected() {
         let dir = std::env::temp_dir().join(format!("sf-domb3-{}", std::process::id()));
         let mut m = MockShell::default();
@@ -406,7 +473,11 @@ mod tests {
         std::fs::write(dir.join("agent-amd64.vmlinuz"), b"KERNEL").unwrap();
         std::fs::write(dir.join("agent-amd64.initrd"), b"INITRD").unwrap();
         let files = AgentFiles::locate(Arch::X86_64, Some(&dir)).unwrap();
-        let ov = AgentOverlay { hostname: "nas".into(), timeout_min: 20, authorized_keys: vec!["ssh-ed25519 AAAA test".into()] };
+        let ov = AgentOverlay {
+            hostname: "nas".into(),
+            timeout_min: crate::timing::AGENT_DEFAULT_WATCHDOG_MIN,
+            authorized_keys: vec!["ssh-ed25519 AAAA test".into()],
+        };
         let mut m = MockShell::default();
         m.push_ok(""); // mkdir
         // three uploads each followed by a sha256sum that we let succeed with an empty answer (no tool)
