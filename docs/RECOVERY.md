@@ -7,7 +7,8 @@ software does and what it cannot do. Nothing here replaces a backup of your data
 ## The design rule
 
 > **DSM stays the default boot entry. Every step that boots something else is one-shot, and every failure path points
-> the default back at DSM.**
+> the default back at DSM.** One case is not covered: if the boot agent itself never starts, nothing has run to reset
+> the default, so the unit may keep booting the agent. Then use the manual recovery below.
 
 This applies to x86 units (Intel and AMD) that boot through the internal boot flash ("DOM"), which is what `synofurb`
 uses on those units (see [boot/dom](../boot/dom/README.md)). The mechanism is the same idea the
@@ -29,7 +30,9 @@ uses on those units (see [boot/dom](../boot/dom/README.md)). The mechanism is th
 You usually have only SSH. So no step is allowed to leave the unit in a state where the only way out is a keyboard.
 The default boot entry is switched to Debian **only** by the very last successful step of an install
 (`synofurb-dom default debian`), and back to DSM by any failure. If the unit ends up unreachable, powering it off and on
-again is always a valid recovery from the pre-point-of-no-return phases.
+again is a valid recovery from the pre-point-of-no-return phases **once the agent has run** (it resets the default to DSM as its
+first action). If the agent never started, a power cycle boots it again; use the manual recovery in
+[boot/dom](../boot/dom/README.md) (the boot menu on a serial or VGA console, or restoring the boot flash from another computer).
 
 ## Commands
 

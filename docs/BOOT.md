@@ -11,7 +11,7 @@ That holds for x86 units. ARM boards are the exception (see the table).
 
 ## x86: the internal boot flash
 
-Synology x86 units always boot a small USB flash module soldered to the mainboard (128 MB). It holds Synology's GRUB-style
+Synology x86 units always boot a small USB flash module on the mainboard (128 MB; see [boot/dom](../boot/dom/README.md) for how it is attached). It holds Synology's GRUB-style
 menu (`EFI/boot/SynoBootLoader.conf` on a FAT partition) and the DSM kernel and initrd (`zImage`, `rd.gz` on an ext2 partition).
 Because the firmware never looks at the disks first, Debian on the disks alone would not boot; Debian has to be reachable
 from this menu. This is the technique the [synodeb](https://github.com/rylos/synodeb) project documents for the DS923+
@@ -41,8 +41,8 @@ What `synofurb` writes there, and how safely ([boot/dom](../boot/dom/README.md))
 * Only units whose flash matches Synology's loader (FAT volume id `10EE-589C`, ext2 UUID `45e5b07d-...`, sizes at least 16/64 MiB) are
   edited. Anything else is refused.
 * Entries added: `SYNOFURB_BOOT` (the agent), `DEBIAN`, `DEBIAN_OLD` (previous kernel). The DSM entry is never altered, and **is the
-  default** except during an install that is actively progressing; every failure path sets the default back to DSM
-  ([RECOVERY.md](RECOVERY.md)).
+  default** except during an install that is actively progressing; every failure path sets the default back to DSM, provided the agent or
+  the app got to run ([RECOVERY.md](RECOVERY.md) describes the exception and the manual recovery).
 * The flash is small (the ext2 partition is at least 64 MiB and DSM's own files take most of it), so the installed system's initramfs is
   built with an explicit module list and `xz` (`MODULES=list`), and a kernel update that does not fit is refused, leaving the previous
   entry in place. Kernel updates are registered by a hook; the previous kernel is kept as `DEBIAN_OLD`.
