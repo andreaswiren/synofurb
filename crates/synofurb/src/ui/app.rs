@@ -209,6 +209,8 @@ pub struct App {
     /// A failure before the first write to the boot flash (typed `FlashBackupFailed`): the flash is untouched.
     pub flash_untouched: bool,
     pub dsm_wait: DsmWaitState,
+    /// `(host, port, pinned fingerprint)` as last read from the known-hosts file (read again after every connection).
+    pub pin_cache: Option<(String, u16, Option<String>)>,
     pub dsm_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub rec_result: Option<crate::ui::screens::recover::RecResult>,
     pub bootmgr: Job<()>,
@@ -241,6 +243,15 @@ impl App {
         let settings = if demo.is_some() { UiSettings::for_demo() } else { UiSettings::load(&UiSettings::path(&cfg_dir)) };
         let (tx, rx) = futures::channel::mpsc::unbounded::<Msg>();
         let is_demo = demo.is_some();
+        if !is_demo {
+            // Trust on first use with a question: the engine asks on a worker thread before any password is sent, the UI
+            // shows "Trust this NAS?" and the worker waits for the answer (no answer = refuse).
+            let txh = tx.clone();
+            synofurb_core::hostkey::set_default_policy(synofurb_core::hostkey::HostKeyPolicy::tofu_with(
+                synofurb_core::hostkey::KnownHosts::app_default(),
+                super::trust::bridge(move |a| txh.unbounded_send(Msg::HostKeyAsk(Box::new(a))).is_ok(), super::trust::ANSWER_TIMEOUT),
+            ));
+        }
         let unit = DemoUnit::from_env();
 
         let mut subs: Vec<Subscription> = vec![];
@@ -426,6 +437,7 @@ impl App {
             unit_state_loading: false,
             flash_untouched: false,
             dsm_wait: DsmWaitState::Idle,
+            pin_cache: None,
             dsm_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             rec_result: None,
             bootmgr: Job::Idle,
@@ -663,6 +675,23 @@ impl App {
             Overlay::Help(topic) => self.open_help_topic(topic, window, cx),
             Overlay::RecoveryDialog => super::disclosure::dialog(window, cx, &copy::DLG_RECOVERY, &app),
             Overlay::KeepDialog => self.open_keep_dialog(window, cx),
+            Overlay::HostKey => {
+                let fp = "SHA256:q3Zb1c8mPvX0dT7nKfL2yHrW9sUeJ5aG4oB6iNxVwYc".to_string();
+                let ask = super::trust::TrustAsk::demo(synofurb_core::hostkey::HostKeyPrompt {
+                    host: "192.168.1.20".into(),
+                    port: 22,
+                    fingerprint: fp,
+                });
+                self.open_hostkey_dialog(Box::new(ask), window, cx)
+            }
+            Overlay::HostKeyChanged => self.open_hostkey_changed(
+                "192.168.1.20".into(),
+                22,
+                "SHA256:q3Zb1c8mPvX0dT7nKfL2yHrW9sUeJ5aG4oB6iNxVwYc".into(),
+                "SHA256:Hd8vN0cYk2tqLxP4wZr1eJm7aB9sUf3oGiX5nKyVd6E".into(),
+                window,
+                cx,
+            ),
             Overlay::Quick => self.open_quick_dialog(window, cx),
             Overlay::Manual => self.open_manual_recovery(window, cx),
             Overlay::NextDialog => self.open_next_dialog(window, cx),
@@ -696,6 +725,7 @@ impl App {
                 self.scan.finished_once = true;
             }
             Msg::Inspected(r) => {
+                self.pin_cache = None;
                 self.inspecting = false;
                 match r {
                     Ok((f, raw)) => self.on_inspected(*f, raw, true, window, cx),
@@ -722,6 +752,8 @@ impl App {
                 self.screen = if ok { Screen::Done } else { Screen::Failed };
                 window.focus(&self.focus, cx);
             }
+            Msg::HostKeyAsk(ask) => self.open_hostkey_dialog(ask, window, cx),
+            Msg::HostKeyChanged { host, port, pinned, presented } => self.open_hostkey_changed(host, port, pinned, presented, window, cx),
             Msg::FailureKind { agent_timeout, flash_untouched } => {
                 self.agent_unknown = agent_timeout;
                 self.flash_untouched = flash_untouched;
@@ -882,6 +914,27 @@ impl App {
         self.flash_untouched = false;
         self.dsm_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         self.dsm_wait = DsmWaitState::Idle;
+    }
+
+    /// The host key pinned for the unit in the host and port fields (`None` = never trusted yet). In the demo a sample pin.
+    pub fn host_pin(&mut self, cx: &mut Context<App>) -> Option<String> {
+        let host = crate::ui::format::display_host(&self.input_value(&self.inp.host, cx));
+        let port: u16 = self.input_value(&self.inp.port, cx).trim().parse().unwrap_or(22);
+        if host.is_empty() {
+            return None;
+        }
+        if self.demo.is_some() {
+            return Some("SHA256:q3Zb1c8mPvX0dT7nKfL2yHrW9sUeJ5aG4oB6iNxVwYc".to_string());
+        }
+        if let Some((h, p, fp)) = &self.pin_cache
+            && *h == host
+            && *p == port
+        {
+            return fp.clone();
+        }
+        let fp = synofurb_core::hostkey::KnownHosts::app_default().get(&host, port).ok().flatten().map(|k| k.fingerprint);
+        self.pin_cache = Some((host, port, fp.clone()));
+        fp
     }
 
     pub fn select_host(&mut self, host: &str, window: &mut Window, cx: &mut Context<App>) {

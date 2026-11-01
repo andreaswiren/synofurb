@@ -42,6 +42,7 @@ pub mod settings;
 pub mod state;
 pub mod theme;
 pub mod tokens;
+pub mod trust;
 pub mod worker;
 
 use crate::cli::config_dir;

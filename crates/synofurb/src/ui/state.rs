@@ -29,7 +29,7 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 43] = [
+pub const DEMO_SCREEN_NAMES: [&str; 45] = [
     "failed-agent",
     "manage-rebuild",
     "manage-faildisk",
@@ -70,6 +70,8 @@ pub const DEMO_SCREEN_NAMES: [&str; 43] = [
     "dlg-recovery",
     "dlg-keep",
     "dlg-quick",
+    "dlg-hostkey",
+    "dlg-hostchanged",
     "dlg-manual",
     "dlg-next",
     "first-launch",
@@ -88,6 +90,10 @@ pub enum Overlay {
     RecoveryDialog,
     /// "Keep existing volumes" dialog.
     KeepDialog,
+    /// "Trust this NAS?" (Connect).
+    HostKey,
+    /// "Host key changed" (Connect).
+    HostKeyChanged,
     /// "Quick setup" dialog (Goal).
     Quick,
     /// "Manual recovery" dialog (Recovery).
@@ -189,6 +195,8 @@ impl DemoTarget {
             "help" => DemoTarget { overlay: Overlay::Help(None), ..DemoTarget::at(Screen::Inventory) },
             "help-topic" => DemoTarget { overlay: Overlay::Help(Some("recovery")), ..DemoTarget::at(Screen::Confirm) },
             "dlg-recovery" => DemoTarget { overlay: Overlay::RecoveryDialog, ..DemoTarget::at(Screen::Confirm) },
+            "dlg-hostkey" => DemoTarget { overlay: Overlay::HostKey, ..DemoTarget::at(Screen::Connect) },
+            "dlg-hostchanged" => DemoTarget { overlay: Overlay::HostKeyChanged, ..DemoTarget::at(Screen::Connect) },
             "dlg-quick" => DemoTarget { overlay: Overlay::Quick, ..DemoTarget::at(Screen::Goal) },
             "dlg-manual" => DemoTarget { overlay: Overlay::Manual, fixture: Fixture::Agent, ..DemoTarget::at(Screen::Recover) },
             "dlg-keep" => DemoTarget { overlay: Overlay::KeepDialog, keep: true, ..DemoTarget::at(Screen::Plan) },

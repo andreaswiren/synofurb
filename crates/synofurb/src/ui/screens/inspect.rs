@@ -59,6 +59,7 @@ impl App {
             .child(kit::compat_tag(&p, verdict.status))
             .child(info_tip("compat-info", &copy::INSPECT_COMPAT, &app))
             .into_any_element();
+        let pin = self.host_pin(cx);
         let facts = DescriptionList::horizontal()
             .columns(2)
             .bordered(false)
@@ -80,6 +81,18 @@ impl App {
             .child(
                 gpui_kit::component::description_list::DescriptionItem::new(label("l-backups", &copy::INSPECT_BACKUPS, &app))
                     .value(kit::chip(&p, "not checked").into_any_element()),
+            )
+            .child(
+                gpui_kit::component::description_list::DescriptionItem::new(label("l-hostkey", &copy::HK_PIN, &app)).value(match pin {
+                    Some(fp) => h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .child(kit::tag(&p, crate::ui::theme::Tone::Ok, Some(role::LOCK), copy::HK_PINNED_TAG.short))
+                        .child(kit::mono_sm(cx, fp.clone()).min_w_0().truncate())
+                        .child(gpui_kit::component::clipboard::Clipboard::new("hk-pin-copy").value(fp).tooltip("Copy"))
+                        .into_any_element(),
+                    None => kit::chip(&p, copy::HK_NOT_PINNED.short).into_any_element(),
+                }),
             );
 
         let disks = Table::new()

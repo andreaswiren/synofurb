@@ -78,7 +78,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 
 **F2 Online / Offline.** D6 Source toggle. *Online*: the NAS downloads packages (needs Internet; said in the *About 25 min* popover). *Offline*: Select a bundle (architecture-matched); if none, an inline error "No bundle" with Button *Download* that opens Settings > Data; the app needs Internet only to download the bundle. Offline also disables update check, list refresh and report-back (Tooltips explain). StatusBar shows *Offline* when the app itself is offline.
 
-**F3 Kernel channel.** D6 Kernel toggle: *Newest* (7.x from trixie-backports, default: the product requirement is kernel 7+ preferred; falls back to Stable) | *Stable* (Debian 6.12 LTS). One Popover; the choice is part of the Copy command output.
+**F3 Kernel channel.** D6 Kernel toggle: *Newest* (7.x from trixie-backports, default: the product requirement is kernel 7+ preferred; falls back to Stable for online installs only, an offline bundle holds one kernel) | *Stable* (Debian 6.12 LTS). One Popover; the choice is part of the Copy command output.
 
 **F4 CLI equivalent.** *Copy command* (terminal icon, tooltip only) on D5, D6 and D7 copies `synofurb install --host <ip> --user <admin> ...` for the current choices. On D7 the three confirmation flags `--have-backup --accept-data-loss --confirm` are included **only after** the three confirmations and the phrase are satisfied; before that the copied command is the `plan` form (read-only). Shortcut `Ctrl+Shift+C`.
 

@@ -478,3 +478,102 @@ impl App {
         self.go(Screen::Confirm, window, cx);
     }
 }
+
+// ------------------------------------------------------------------------------------------------ SSH host key
+
+impl App {
+    /// "Trust this NAS?": first contact with a unit. The worker thread is blocked on the answer; Cancel, Escape and closing the
+    /// dialog all refuse (the question is dropped), and nothing was sent to the unit (not even the password).
+    pub fn open_hostkey_dialog(&mut self, ask: Box<super::trust::TrustAsk>, window: &mut Window, cx: &mut Context<App>) {
+        let host = ask.prompt.host.clone();
+        let lines = super::trust::fingerprint_lines(&ask.prompt.fingerprint);
+        let full = ask.prompt.fingerprint.clone();
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(Some(*ask)));
+        window.open_dialog(cx, move |d, _, cx| {
+            let (s_no, s_yes) = (slot.clone(), slot.clone());
+            let (lines, full) = (lines.clone(), full.clone());
+            d.title(copy::DLG_HOSTKEY.short)
+                .w(px(layout::DIALOG_W))
+                .child(
+                    v_flex()
+                        .gap(px(8.0))
+                        .child(div().text_sm().child(format!("{} {}", copy::HK_FIRST.short, host)))
+                        .child(paragraphs(copy::DLG_HOSTKEY.body, cx))
+                        .child(
+                            gpui_kit::component::h_flex()
+                                .gap(px(8.0))
+                                .items_start()
+                                .p(px(8.0))
+                                .rounded(gpui_kit::component::ActiveTheme::theme(cx).radius)
+                                .bg(gpui_kit::component::ActiveTheme::theme(cx).muted)
+                                .child(v_flex().flex_1().min_w_0().children(lines.iter().map(|l| super::kit::mono(cx, l.clone()))))
+                                .child(gpui_kit::component::clipboard::Clipboard::new("hk-copy").value(full.clone()).tooltip("Copy")),
+                        ),
+                )
+                .footer(
+                    DialogFooter::new()
+                        .child(Button::new("hk-no").outline().label(copy::BTN_CANCEL.short).on_click(move |_, window, cx| {
+                            if let Some(a) = s_no.borrow_mut().take() {
+                                a.answer(false);
+                            }
+                            window.close_dialog(cx);
+                        }))
+                        .child(Button::new("hk-yes").primary().label(copy::HK_TRUST.short).on_click(move |_, window, cx| {
+                            if let Some(a) = s_yes.borrow_mut().take() {
+                                a.answer(true);
+                            }
+                            window.close_dialog(cx);
+                        })),
+                )
+        });
+    }
+
+    /// "Host key changed": a pinned unit shows another key. The engine already stopped; the only button is Cancel.
+    pub fn open_hostkey_changed(
+        &mut self,
+        host: String,
+        port: u16,
+        pinned: String,
+        presented: String,
+        window: &mut Window,
+        cx: &mut Context<App>,
+    ) {
+        use super::theme::Themed;
+        let p = cx.pal();
+        let forget =
+            format!("synofurb-cli host-key forget --host {}{}", host, if port == 22 { String::new() } else { format!(" --port {port}") });
+        window.open_dialog(cx, move |d, _, cx| {
+            let block = |cx: &mut gpui_kit::App, id: &'static str, label: &'static str, fp: &str| {
+                let lines = super::trust::fingerprint_lines(fp);
+                v_flex().gap(px(2.0)).child(super::kit::caption(cx, label)).child(
+                    gpui_kit::component::h_flex()
+                        .gap(px(8.0))
+                        .items_start()
+                        .child(v_flex().flex_1().min_w_0().children(lines.iter().map(|l| super::kit::mono(cx, l.clone()))))
+                        .child(gpui_kit::component::clipboard::Clipboard::new(id).value(fp.to_string()).tooltip("Copy")),
+                )
+            };
+            d.title(copy::DLG_HOSTKEY_CHANGED.short)
+                .w(px(layout::DIALOG_W))
+                .child(
+                    v_flex()
+                        .gap(px(8.0))
+                        .child(
+                            gpui_kit::component::h_flex()
+                                .gap(px(6.0))
+                                .items_center()
+                                .text_color(p.err_fg)
+                                .child(icons::icon_sized(role::STOP, 16.0, p.err_fg))
+                                .child(super::kit::strong(format!("{host}:{port}"))),
+                        )
+                        .child(paragraphs(copy::DLG_HOSTKEY_CHANGED.body, cx))
+                        .child(block(cx, "hk-old", copy::HK_PINNED_LABEL.short, &pinned))
+                        .child(block(cx, "hk-new", copy::HK_NOW_LABEL.short, &presented))
+                        .child(super::kit::command_row(cx, "hk-forget", forget.clone())),
+                )
+                .footer(DialogFooter::new().child(
+                    Button::new("hk-cancel").primary().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)),
+                ))
+        });
+    }
+}

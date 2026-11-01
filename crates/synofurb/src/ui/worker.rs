@@ -33,6 +33,16 @@ pub enum Msg {
     Inspected(Result<(Box<DeviceFacts>, String), String>),
     Ev(Event),
     /// What kind of failure the install ended with (typed, from the engine), sent just before `Finished(Err)`.
+    /// First contact with a unit: its SSH host key must be trusted before anything is sent. Answer the question; a dropped one
+    /// refuses.
+    HostKeyAsk(Box<crate::ui::trust::TrustAsk>),
+    /// A pinned unit now presents another key (the engine already refused to continue).
+    HostKeyChanged {
+        host: String,
+        port: u16,
+        pinned: String,
+        presented: String,
+    },
     FailureKind {
         /// `SessionError::AgentTimeout`: the agent never answered, so the unit's default boot entry is not confirmed.
         agent_timeout: bool,
@@ -74,6 +84,13 @@ pub struct CompatRefresh {
 
 fn send(tx: &Tx, m: Msg) {
     let _ = tx.unbounded_send(m);
+}
+
+/// A connection failed because a pinned unit now shows another host key: tell the UI (it opens the danger dialog).
+fn note_changed_key(tx: &Tx, e: &anyhow::Error) {
+    if let Some((host, port, pinned, presented)) = crate::ui::trust::changed_key(e) {
+        send(tx, Msg::HostKeyChanged { host, port, pinned, presented });
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ discovery
@@ -160,6 +177,9 @@ pub fn spawn_inspect(tx: Tx, t: SshTarget) {
             ssh.close();
             r
         })();
+        if let Err(e) = &r {
+            note_changed_key(&tx, e);
+        }
         send(&tx, Msg::Inspected(r.map(|(f, raw)| (Box::new(f), raw)).map_err(|e| format!("{e:#}"))));
     });
 }
@@ -168,8 +188,11 @@ pub fn spawn_inspect(tx: Tx, t: SshTarget) {
 pub fn spawn_unit_state(tx: Tx, t: SshTarget) {
     std::thread::spawn(move || {
         let log = Logger::memory(None);
-        let r = synofurb_core::recovery::read_unit_boot_state(&t, &log).map(Box::new).map_err(|e| format!("{e:#}"));
-        send(&tx, Msg::UnitState(r));
+        let r = synofurb_core::recovery::read_unit_boot_state(&t, &log);
+        if let Err(e) = &r {
+            note_changed_key(&tx, e);
+        }
+        send(&tx, Msg::UnitState(r.map(Box::new).map_err(|e| format!("{e:#}"))));
     });
 }
 
@@ -246,6 +269,7 @@ pub fn spawn_install(tx: Tx, job: InstallJob, log_dir: &Path, cancel: Arc<Atomic
         let r =
             session::run_install(&job, &lg, cancel, &mut |what, f| progress.emit(Event::Progress { what: what.to_string(), fraction: f }));
         if let Err(e) = &r {
+            note_changed_key(&tx, e);
             let t = session::SessionError::find(e);
             send(
                 &tx,
@@ -308,7 +332,10 @@ pub fn spawn_manage_health(tx: Tx, t: SshTarget) {
     std::thread::spawn(move || {
         let log = Logger::memory(None);
         let r = (|| -> Result<Box<synofurb_core::manage::Health>, String> {
-            let mut ssh = SshSession::connect(&t.host, t.port, &t.user, &t.auth, &log).map_err(|e| format!("{e:#}"))?;
+            let mut ssh = SshSession::connect(&t.host, t.port, &t.user, &t.auth, &log).map_err(|e| {
+                note_changed_key(&tx, &e);
+                format!("{e:#}")
+            })?;
             let is_root = t.user == "root";
             let mut p = synofurb_core::remote::Privileged { sh: &mut ssh, is_root, sudo_password: t.sudo_password.clone() };
             let h = synofurb_core::manage::fetch_health(&mut p).map_err(|e| e.to_string());
@@ -326,7 +353,10 @@ pub fn spawn_mgmt_update(tx: Tx, t: SshTarget, rollback: bool) {
     std::thread::spawn(move || {
         let log = Logger::memory(None);
         let r = (|| -> Result<MgmtDone, String> {
-            let mut ssh = SshSession::connect(&t.host, t.port, &t.user, &t.auth, &log).map_err(|e| format!("{e:#}"))?;
+            let mut ssh = SshSession::connect(&t.host, t.port, &t.user, &t.auth, &log).map_err(|e| {
+                note_changed_key(&tx, &e);
+                format!("{e:#}")
+            })?;
             let is_root = t.user == "root";
             let mut p = synofurb_core::remote::Privileged { sh: &mut ssh, is_root, sudo_password: t.sudo_password.clone() };
             let opts = UpdateOptions::default();

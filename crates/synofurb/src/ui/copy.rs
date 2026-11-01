@@ -514,6 +514,17 @@ mod strings {
         DLG_BOOT_DSM: Dialog, "Boot DSM next?", "Makes DSM the default boot entry.", "recovery", "This makes DSM the default boot entry on the unit. It does not reboot the unit: do that yourself afterwards. If the unit does not answer, use Manual recovery.";
         MGMT_ROLLBACK_OK: Button, "Roll back", "", "", "";
         DLG_MGMT_ROLLBACK: Dialog, "Roll back the update?", "Goes back to the version the unit had before.", "", "The unit goes back to the management app version it had before the last update. The web UI restarts and is unavailable for a few seconds. Disks and data are not touched.";
+        DLG_HOSTKEY: Dialog, "Trust this NAS?", "Checks that you are talking to your NAS.", "troubleshooting",
+            "Compare this fingerprint with DSM (Control Panel, Terminal and SNMP). If you did not expect a new key, cancel. Nothing, not even your password, is sent before you trust it.";
+        HK_FIRST: Label, "First connection to", "", "", "";
+        HK_TRUST: Button, "Trust", "", "", "";
+        DLG_HOSTKEY_CHANGED: Dialog, "Host key changed", "The NAS shows another key than the one saved.", "troubleshooting",
+            "This NAS now answers with a different key than the one saved for it. That can mean DSM was reinstalled, or that another device took this address. synofurb stopped before sending anything, not even your password. Do not sign in until you have checked the unit. If you replaced it on purpose, forget the old key with this command.";
+        HK_PINNED_LABEL: Label, "Saved key", "", "", "";
+        HK_NOW_LABEL: Label, "Key it shows now", "", "", "";
+        HK_PIN: Label, "Host key", "The fingerprint saved when you first trusted this NAS; later connections must match it.", "troubleshooting", "";
+        HK_PINNED_TAG: Label, "Pinned", "", "", "";
+        HK_NOT_PINNED: Label, "Not saved yet", "", "", "";
         REC_RUN: Button, "Run", "", "", "";
         REC_SAVED: Label, "Saved here", "First and last 1 MiB of changed disks; not your files.", "backups", "";
         REC_OPEN_FOLDER: Button, "Open folder", "", "", "";
@@ -722,6 +733,8 @@ pub static SCREENS: &[ScreenCopy] = &[
             &CONN_TITLE,
             &CONN_SUB,
             &CONN_PORT,
+            &HK_PIN,
+            &HK_PINNED_TAG,
             &CONN_USER,
             &CONN_SIGNIN,
             &CONN_PASSWORD,
@@ -736,6 +749,8 @@ pub static SCREENS: &[ScreenCopy] = &[
     ScreenCopy {
         name: "inspect",
         visible: &[
+            &HK_PIN,
+            &HK_PINNED_TAG,
             &INSPECT_TITLE,
             &INSPECT_SUB,
             &INSPECT_MODEL,

@@ -6,6 +6,7 @@ use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::state::Screen;
+use crate::ui::theme::Themed;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
@@ -45,12 +46,26 @@ impl App {
         };
 
         let host = crate::ui::format::display_host(&self.input_value(&self.inp.host, cx));
+        let pin = self.host_pin(cx);
+        let p = cx.pal();
 
         let mut form = Form::vertical()
             .child(kit::field_plain(copy::CONN_PORT.short, div().w(px(120.0)).child(Input::new(&self.inp.port))))
             .child(kit::field("f-user", &copy::CONN_USER, &app, Input::new(&self.inp.user)))
             .child(kit::field_plain(copy::CONN_SIGNIN.short, signin))
             .child(kit::field_plain(if self.use_key { copy::CONN_KEY_FILE.short } else { copy::CONN_PASSWORD.short }, secret));
+        if let Some(fp) = pin {
+            form = form.child(kit::field(
+                "f-hostkey",
+                &copy::HK_PIN,
+                &app,
+                h_flex()
+                    .gap(px(6.0))
+                    .items_center()
+                    .child(kit::tag(&p, crate::ui::theme::Tone::Ok, Some(role::LOCK), copy::HK_PINNED_TAG.short))
+                    .child(kit::mono_sm(cx, fp).min_w_0().truncate()),
+            ));
+        }
         form = form.child(kit::field_plain(
             "",
             v_flex()
@@ -100,18 +115,16 @@ impl App {
                     .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Inventory, window, cx)))
                     .into_any_element(),
             ])
-            .right(vec![
-                kit::with_reason(
-                    "inspect-why",
-                    Button::new("inspect")
-                        .primary()
-                        .label(copy::INV_CONNECT.short)
-                        .loading(inspecting)
-                        .disabled(inspecting)
-                        .on_click(cx.listener(|this, _, window, cx| this.start_inspect(window, cx))),
-                    host_empty.then(|| copy::CONN_HOST_WHY.tip.to_string()),
-                ),
-            ])
+            .right(vec![kit::with_reason(
+                "inspect-why",
+                Button::new("inspect")
+                    .primary()
+                    .label(copy::INV_CONNECT.short)
+                    .loading(inspecting)
+                    .disabled(inspecting)
+                    .on_click(cx.listener(|this, _, window, cx| this.start_inspect(window, cx))),
+                host_empty.then(|| copy::CONN_HOST_WHY.tip.to_string()),
+            )])
     }
 
     /// `(model, serial, status)` of the selected unit, from the discovery inventory or the inspection.
