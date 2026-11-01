@@ -148,7 +148,7 @@ impl App {
                     .trigger(div().id(id).child(kit::tag(&p, tone, Some(icon), format!("{} \u{00b7} {}", item.short, count))))
                     .content(move |_, _, _| {
                         let _ = &p2;
-                        v_flex().p(px(10.0)).gap(px(4.0)).max_w(px(360.0)).text_sm().children(lines.iter().map(|l| div().child(l.clone())))
+                        v_flex().p(px(8.0)).gap(px(4.0)).max_w(px(360.0)).text_sm().children(lines.iter().map(|l| div().child(l.clone())))
                     })
                     .into_any_element()
             };

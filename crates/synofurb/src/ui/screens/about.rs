@@ -122,7 +122,7 @@ impl App {
                 .gap(px(8.0))
                 .items_center()
                 .py(px(4.0))
-                .child(div().w(px(150.0)).text_sm().font_weight(gpui_kit::FontWeight::MEDIUM).child(*name))
+                .child(div().w(px(150.0)).text_sm().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(*name))
                 .child(div().flex_1().text_sm().text_color(cx.theme().muted_foreground).child(*what))
                 .child(Button::new(("lic", i)).link().small().label(*lic).tooltip(copy::ABOUT_LICENCE.short).on_click(
                     move |_, window, cx| {

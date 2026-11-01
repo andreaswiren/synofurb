@@ -230,14 +230,11 @@ pub fn is_agent_timeout(error: &str) -> bool {
 /// if the agent ran; when it never answered the unit may keep booting the agent (`boot/dom/README.md`, "Fail-safe
 /// design"). The UI never shows that promise: this replaces the sentence by what is known. Other text is unchanged.
 pub fn scrub_agent_promise(text: &str) -> String {
+    let Some(i) = text.find("The NAS defaults to DSM") else { return text.to_string() };
     if !is_agent_timeout(text) {
         return text.to_string();
     }
-    let head = match text.find("The NAS defaults to DSM") {
-        Some(i) => text[..i].trim_end(),
-        None => text.trim_end(),
-    };
-    let head = head.trim_end_matches('.');
+    let head = text[..i].trim_end().trim_end_matches('.');
     format!("{head}. Nothing was reset after the wait.")
 }
 
@@ -267,9 +264,7 @@ pub fn latest_backup(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("synofurb-dom-backup-") && n.ends_with(".img"))
-        })
+        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("synofurb-dom-backup-") && n.ends_with(".img")))
         .collect();
     found.sort();
     found.pop()
@@ -471,7 +466,10 @@ mod tests {
 
     #[test]
     fn destroyed_disk_line_names_size_and_serial_tail() {
-        assert_eq!(destroyed_disk_line("sda", "WDC WD40EFRX", "WD-WCC7K0000", "3.64 TiB"), "sda \u{00b7} WDC WD40EFRX \u{00b7} \u{2026}K0000 \u{00b7} 3.64 TiB");
+        assert_eq!(
+            destroyed_disk_line("sda", "WDC WD40EFRX", "WD-WCC7K0000", "3.64 TiB"),
+            "sda \u{00b7} WDC WD40EFRX \u{00b7} \u{2026}K0000 \u{00b7} 3.64 TiB"
+        );
         assert_eq!(destroyed_disk_line("nvme0n1", " ", "", "1.00 TiB"), "nvme0n1 \u{00b7} 1.00 TiB");
     }
 
@@ -482,6 +480,9 @@ mod tests {
         assert_eq!(t, "the boot agent did not appear within 10 minutes. Nothing was reset after the wait.");
         assert!(!t.contains("normally") && !t.contains("defaults to DSM"));
         assert_eq!(scrub_agent_promise("grub-install failed"), "grub-install failed");
+        // the engine's newer, honest text is left alone
+        let honest = "The boot agent did not answer within 10 minutes of the reboot request, and nothing was reset after the wait.";
+        assert_eq!(scrub_agent_promise(honest), honest);
     }
 
     #[test]

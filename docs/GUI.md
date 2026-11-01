@@ -74,35 +74,27 @@ task calls `App::on_msg` on the UI thread. The UI thread never blocks.
 
 ## Theme mapping
 
-`design/mockups/ui/tokens.json` is the source. `theme.rs` holds the same values (`LIGHT`, `DARK` tables, type styles,
-layout constants); a unit test reads `tokens.json` and fails when the two differ, another checks the declared text
-pairs for WCAG AA. A design revision is therefore: edit the tables (or regenerate them from the JSON), run
-`cargo test -p synofurb`.
+The sources are `design/v2/tokens-v2.json` (tokens, type scale, layout) and `design/v2/synofurb-theme.json` (the designer's
+GPUI ThemeSet, copied byte for byte to `assets/theme/synofurb-theme.json`). The theme is **not hand-mapped**:
 
-`theme::apply(palette, cx)` does two things: it stores the palette in a global (`cx.pal()` in screens) and writes the
-palette into GPUI Kit's `Theme` through `Theme::update`, so stock widgets match:
+* `theme::apply(dark, scale, accent, cx)` loads the ThemeSet with `Theme::apply_config`, patches the chosen accent
+  (Purple, Blue, Green, Amber, Rose, each with a tested contrast) into the Kit's colours, sets the rem size from the text
+  scale (100 / 115 / 130 %) and styles the scrollbars (`style_scrollbars`: 6 px thumb, 4 px inset, transparent track).
+* `tokens.rs` is generated from the JSON by `assets/theme/gen_tokens.py`; `cx.pal()` returns the `Palette` for the few tone
+  colours the Kit has no field for (ok / warn / err / info fg and bg, log colours).
+* Tests: the ThemeSet file equals the design copy, the type styles equal `tokens-v2.json`, every declared text pair meets
+  WCAG AA, every accent is at least 4.5:1 on its surface.
 
-| Our token | GPUI Kit theme field |
-|---|---|
-| canvas / fg / border / border_strong | background / foreground / border / input |
-| accent, accent_hover, accent_pressed, on_accent | primary, primary_hover, primary_active, primary_foreground (+ `button_primary*`) |
-| surface, surface_2, surface_3 | secondary / popover / list / table; secondary_hover; secondary_active |
-| danger, danger_hover, danger_pressed, on_danger | danger*, `button_danger*` |
-| ok / warn / info solid | success / warning / info (+ `button_*`) |
-| accent_bg, accent_fg | accent, accent_foreground, selection, list/table active |
-| sidebar, ring, scrim | sidebar, ring, overlay (alpha `scrim.alpha`) |
-| (not in Kit) ok/warn/err/info `*_fg *_bg *_border`, log colours | read directly: `Palette` / `Tone` in `theme.rs` |
-
-Theme choice is Follow system / Light / Dark (Settings; `observe_window_appearance` re-applies when the OS changes).
-Text size (100 / 115 / 130 %) sets the window's rem size; all type styles are in rems.
-The log viewer uses the dark terminal palette in both themes, as the design says.
+Theme choice is Follow system / Light / Dark (Settings; the window appearance observer re-applies it). The log viewer
+uses the dark terminal palette in both themes, as the design says.
 
 ## How to add a screen
 
 1. Add a variant to `state::Screen` (and to `DEMO_SCREEN_NAMES` / `DemoTarget::parse`, `Screen::step`, `risk_for`).
 2. Create `screens/<name>.rs` with `impl App { pub(crate) fn page_<name>(&mut self, window, cx) -> Page }`; register it
    in `screens/mod.rs` and in `App::page_for` (`render.rs`). Use `cx.pal()` and the helpers in `kit.rs`; no hex
-   values or pixel constants in screens (add them to `theme.rs` instead).
+   values in screens; spacing uses the design scale (2, 4, 6, 8, 12, 16, 20, 24, 32), sizes that are fixed by the design
+   live in `theme::layout`.
 3. Navigate with `self.go(Screen::X, window, cx)`; put background work in `worker.rs` with a new `Msg` variant and
    handle it in `App::on_msg`.
 4. If the screen holds pure decisions (what is enabled, what a count is), put them in `state.rs` and unit-test them.
@@ -121,9 +113,8 @@ To add an icon: copy the SVG from `gpui-kit-assets/assets/icons/` into `ui/asset
   through `modkey!`.
 * No platform-specific code lives outside `#[cfg(unix)]` for file permissions (`0600` on keys and saved logins) and
   `modkey!`. File dialogs are GPUI's `prompt_for_paths` / `prompt_for_new_path`, not `rfd`.
-* Fonts: the system UI font and the system monospace font are used. Inter and JetBrains Mono are not bundled yet (the
-  design asks for them; it is a decision for the owner, see below).
-
+* Fonts: Inter (Regular, SemiBold, Bold) and JetBrains Mono (Regular, Bold) are bundled (`assets/fonts/`, OFL texts next
+  to them) and registered at start-up; only weights 400, 600 and 700 ship.
 
 ## Accessibility
 
@@ -148,7 +139,7 @@ Verified (Linux, headless): per-file rustfmt, `cargo clippy -p synofurb --all-ta
 synofurb` (copy budgets, tokens vs JSON, accent contrast, risk Tag, Way back, recovery rows, Quick setup defaults,
 phrase gate, command-vs-plan, management health and update gate, RAID helpers); every demo screen renders under Xvfb with
 software Vulkan; Enter/Space behaviour of Erase and the Command button checked with injected XTest keys; screenshots in
-light and dark at 960 x 640 and 1180 x 760.
+light at 960 x 640 for every screen family, plus dark for Confirm, Manage, Recovery and Install, 1180 x 760 for Confirm and Plan, and large / largest text for Confirm and Plan. The rest of the matrix (dark, 1180 and larger text for every family, every dialog) is not captured yet.
 
 Not verified: Windows and macOS, real hardware, real SSH scan/inspect/install, the update download path, screen readers,
 IME and password managers, Largest text on every screen, Popover focus return, Select placement, RadioGroup/ToggleGroup

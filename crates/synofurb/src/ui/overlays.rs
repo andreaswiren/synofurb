@@ -370,27 +370,31 @@ impl gpui_kit::Render for CommandView {
 
 // ------------------------------------------------------------------------------------------------ quick setup
 
-/// The Quick setup dialog: recommended defaults in one line and, when the disks differ, an explicit Hybrid vs RAID choice.
+/// The Quick setup dialog: recommended defaults in one line and, when the disks differ, an explicit Hybrid vs RAID
+/// choice with nothing preselected (the owner's decision): "Use these" stays off until one is picked.
 pub struct QuickView {
     opts: Vec<(synofurb_core::plan::DataRaid, String)>,
-    pub sel: usize,
+    pub sel: Option<usize>,
     summary: String,
 }
 
 impl gpui_kit::Render for QuickView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::alert::Alert;
         use gpui_kit::component::radio::{Radio, RadioGroup};
         let mut col = v_flex().gap(px(12.0)).child(super::kit::mono(cx, self.summary.clone()));
         if self.opts.len() > 1 {
-            col = col.child(
-                RadioGroup::vertical("quick-raid")
-                    .selected_index(Some(self.sel))
-                    .children(self.opts.iter().enumerate().map(|(i, (_, l))| Radio::new(("qr", i)).label(l.clone())))
-                    .on_click(cx.listener(|v, ix: &usize, _, cx| {
-                        v.sel = *ix;
-                        cx.notify();
-                    })),
-            );
+            col = col
+                .child(
+                    RadioGroup::vertical("quick-raid")
+                        .selected_index(self.sel)
+                        .children(self.opts.iter().enumerate().map(|(i, (_, l))| Radio::new(("qr", i)).label(l.clone())))
+                        .on_click(cx.listener(|v, ix: &usize, _, cx| {
+                            v.sel = Some(*ix);
+                            cx.notify();
+                        })),
+                )
+                .child(Alert::info("quick-hybrid", copy::QUICK_HYBRID_CAUTION.short).icon(super::icons::icon(role::INFO)));
         }
         col
     }
@@ -400,47 +404,49 @@ impl App {
     pub fn open_quick_dialog(&mut self, window: &mut Window, cx: &mut Context<App>) {
         use synofurb_core::plan::{DataRaid, PlanRequest, build_plan};
         let Some(f) = self.facts.clone() else { return };
-        let usable = |r: DataRaid| build_plan(&f, &PlanRequest { data_raid: r, ..PlanRequest::default() }).sizes.data_usable_bytes;
+        let plan_for = |r: DataRaid| build_plan(&f, &PlanRequest { data_raid: r, ..PlanRequest::default() });
         let tib = |b: u64| b as f64 / (1u64 << 40) as f64;
         let sizes: Vec<f64> = f.candidate_disks().iter().map(|d| tib(d.size_bytes())).collect();
-        let (hyb, auto) = (usable(DataRaid::Shr1), usable(DataRaid::Auto));
+        let (hyb_plan, auto_plan) = (plan_for(DataRaid::Shr1), plan_for(DataRaid::Auto));
+        let (hyb, auto) = (hyb_plan.sizes.data_usable_bytes, auto_plan.sizes.data_usable_bytes);
         let q = super::facts::quick_defaults(&sizes, tib(hyb), tib(auto));
-        let mut opts = vec![(q.raid, String::new())];
-        if q.mixed {
-            opts = vec![
-                (DataRaid::Shr1, format!("{} \u{00b7} {}", super::raid::raid_label(DataRaid::Shr1), super::format::size_2dp(hyb))),
-                (DataRaid::Auto, format!("{} \u{00b7} {}", super::raid::raid_label(DataRaid::Auto), super::format::size_2dp(auto))),
-            ];
-            if q.raid == DataRaid::Auto {
-                opts.swap(0, 1);
-            }
-        }
+        // "RAID 6 · survives 2 disks · 7.15 TiB": the level the plan really builds, not "Auto".
+        let label = |plan: &synofurb_core::plan::Plan| {
+            let surv =
+                super::raid::survives(plan).map(|n| format!(" \u{00b7} survives {}", super::raid::survives_text(n))).unwrap_or_default();
+            format!("{}{surv} \u{00b7} {}", super::raid::resolved_label(plan), super::format::size_2dp(plan.sizes.data_usable_bytes))
+        };
+        let (opts, summary_layout) = if q.mixed {
+            (vec![(DataRaid::Auto, label(&auto_plan)), (DataRaid::Shr1, label(&hyb_plan))], "choose a layout".to_string())
+        } else {
+            (vec![(q.raid, String::new())], label(&auto_plan))
+        };
         let summary = format!(
-            "Wipe all \u{00b7} system {} GiB \u{00d7} {} \u{00b7} free {} % \u{00b7} {}",
-            q.system_gib,
-            q.copies,
-            q.free_percent,
-            if q.mixed {
-                super::raid::raid_label(opts[0].0).to_string()
-            } else {
-                format!("{} \u{00b7} {}", super::raid::raid_label(q.raid), super::format::size_2dp(auto))
-            }
+            "Wipe all \u{00b7} system {} GiB \u{00d7} {} \u{00b7} free {} % \u{00b7} Stable kernel \u{00b7} {}",
+            q.system_gib, q.copies, q.free_percent, summary_layout
         );
         let raids: Vec<DataRaid> = opts.iter().map(|o| o.0).collect();
-        let view = cx.new(|_| QuickView { opts, sel: 0, summary });
+        let single = opts.len() == 1;
+        let view = cx.new(|_| QuickView { opts, sel: single.then_some(0), summary });
         let app = cx.entity();
-        window.open_dialog(cx, move |d, _, _| {
+        window.open_dialog(cx, move |d, _, cx| {
             let (app, view2, raids) = (app.clone(), view.clone(), raids.clone());
+            let unchosen = view.read(cx).sel.is_none();
             d.title(copy::QUICK_TITLE.short).w(px(layout::DIALOG_W)).child(view.clone()).footer(
                 DialogFooter::new()
                     .child(
                         Button::new("q-cancel").outline().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)),
                     )
-                    .child(Button::new("q-use").primary().label(copy::QUICK_USE.short).on_click(move |_, window, cx| {
-                        let raid = raids[view2.read(cx).sel.min(raids.len() - 1)];
-                        window.close_dialog(cx);
-                        app.update(cx, |a, cx| a.apply_quick(raid, q.system_gib, q.copies, q.free_percent, window, cx));
-                    })),
+                    .child(super::kit::with_reason(
+                        "q-why",
+                        Button::new("q-use").primary().label(copy::QUICK_USE.short).on_click(move |_, window, cx| {
+                            let Some(sel) = view2.read(cx).sel else { return };
+                            let raid = raids[sel.min(raids.len() - 1)];
+                            window.close_dialog(cx);
+                            app.update(cx, |a, cx| a.apply_quick(raid, q.system_gib, q.copies, q.free_percent, window, cx));
+                        }),
+                        unchosen.then(|| copy::QUICK_CHOOSE.tip.to_string()),
+                    )),
             )
         });
     }
@@ -463,6 +469,7 @@ impl App {
         self.form.copies = copies;
         self.form.system_gib = system_gib as f32;
         self.sys.boot = BootChoice::Auto;
+        self.form.kernel = synofurb_core::config::KernelChannel::Stable;
         if let Some(ix) = synofurb_core::plan::DataRaid::ALL.iter().position(|r| *r == raid) {
             self.form.raid_select.update(cx, |s, cx| s.set_selected_index(Some(IndexPath::default().row(ix)), window, cx));
         }

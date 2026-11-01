@@ -131,7 +131,7 @@ impl App {
             .bordered(true)
             .item(|i| i.title(h_flex().gap(px(2.0)).child(copy::DONE_NEXT_STEPS.short)).child(next_ui));
 
-        let mut body = v_flex().w_full().max_w(px(680.0)).gap(px(14.0));
+        let mut body = v_flex().w_full().max_w(px(680.0)).gap(px(12.0));
         if !o.mgmt_reachable {
             body = body.child(Alert::warning("web-wait", "Web UI not answering yet.").small().icon(icons::icon(role::WARN)));
         }
@@ -154,7 +154,7 @@ impl App {
                                         .gap(px(8.0))
                                         .child(
                                             div()
-                                                .p(px(10.0))
+                                                .p(px(8.0))
                                                 .rounded(cx.theme_radius())
                                                 .bg(cx.pal().log_bg)
                                                 .text_color(cx.pal().log_fg)

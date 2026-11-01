@@ -630,6 +630,8 @@ impl App {
             Overlay::Help(topic) => self.open_help_topic(topic, window, cx),
             Overlay::RecoveryDialog => super::disclosure::dialog(window, cx, &copy::DLG_RECOVERY, &app),
             Overlay::KeepDialog => self.open_keep_dialog(window, cx),
+            Overlay::Quick => self.open_quick_dialog(window, cx),
+            Overlay::Manual => self.open_manual_recovery(window, cx),
             Overlay::NextDialog => self.open_next_dialog(window, cx),
             Overlay::FirstLaunch => self.open_first_launch(window, cx),
         }

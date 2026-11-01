@@ -51,7 +51,10 @@ pub fn mono_sm(cx: &GpuiApp, s: impl Into<SharedString>) -> Div {
 /// A status [`Tag`]: icon plus word, in a tone family. Never colour alone.
 pub fn tag(p: &Palette, tone: Tone, icon: Option<IconName>, label: impl Into<SharedString>) -> Tag {
     let c = p.tone(tone);
-    let t = Tag::custom(c.bg, c.fg, c.border);
+    // Outline Tag (design system, Tag row): transparent fill, the tone's text colour, a 1 px border in the full tone
+    // colour; Neutral uses the strong border. Never a tinted fill.
+    let edge = if tone == Tone::Neutral { p.border_strong } else { c.fg };
+    let t = Tag::custom(gpui_kit::transparent_black(), c.fg, edge);
     let row = h_flex().gap(px(4.0)).items_center().when_some(icon, |d, i| d.child(icons::icon_sized(i, 12.0, c.fg))).child(label.into());
     t.child(row)
 }
@@ -110,12 +113,14 @@ pub fn labelled(id: impl Into<ElementId>, item: &'static Item, app: &Entity<App>
 /// Rendering (UI review B2): a visible container border in `border_strong`, and the selected segment filled with the
 /// accent (white label, 700 weight), which is at least 3:1 against its neighbours and is told apart without colour by
 /// the weight. Unselected segments keep the surface fill and a regular label.
+type OnSelect = std::rc::Rc<dyn Fn(usize, &mut gpui_kit::Window, &mut GpuiApp)>;
+
 #[derive(IntoElement)]
 pub struct Segmented {
     id: ElementId,
     labels: Vec<SharedString>,
     selected: usize,
-    on_select: std::rc::Rc<dyn Fn(usize, &mut gpui_kit::Window, &mut GpuiApp)>,
+    on_select: OnSelect,
 }
 
 pub fn segmented<I: Into<ElementId>, L: Into<SharedString> + Clone, F: Fn(usize, &mut gpui_kit::Window, &mut GpuiApp) + 'static>(
@@ -124,12 +129,7 @@ pub fn segmented<I: Into<ElementId>, L: Into<SharedString> + Clone, F: Fn(usize,
     selected: usize,
     on_select: F,
 ) -> Segmented {
-    Segmented {
-        id: id.into(),
-        labels: labels.iter().cloned().map(Into::into).collect(),
-        selected,
-        on_select: std::rc::Rc::new(on_select),
-    }
+    Segmented { id: id.into(), labels: labels.iter().cloned().map(Into::into).collect(), selected, on_select: std::rc::Rc::new(on_select) }
 }
 
 impl RenderOnce for Segmented {

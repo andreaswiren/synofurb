@@ -80,7 +80,7 @@ impl App {
                 if uf.disks { copy::REC_DISKS_MODIFIED.short } else { copy::REC_DISKS_UNTOUCHED.short },
             ));
 
-        let mut body = v_flex().w_full().max_w(px(720.0)).gap(px(14.0)).child(chips);
+        let mut body = v_flex().w_full().max_w(px(720.0)).gap(px(12.0)).child(chips);
         if uf.agent_unknown {
             body = body.child(
                 h_flex()
@@ -143,7 +143,7 @@ impl App {
                     RecKind::ReinstallDsm => &copy::REC_REINSTALL,
                 };
                 h_flex()
-                    .gap(px(10.0))
+                    .gap(px(8.0))
                     .items_center()
                     .px(px(12.0))
                     .py(px(8.0))
@@ -169,7 +169,7 @@ impl App {
             ),
         ));
         body = body.child(Accordion::new("rec-acc").bordered(true).item(|i| i.title(copy::REC_SAVED.short).child(saved)));
-        Page::new(copy::REC_TITLE.short, body).subtitle(copy::REC_SUB.short).left(vec![
+        Page::new(copy::REC_TITLE.short, body).subtitle(copy::REC_SUB.short).subtitle_tip(&copy::REC_SUB).left(vec![
             Button::new("back")
                 .ghost()
                 .icon(icons::icon(role::BACK))
@@ -199,8 +199,9 @@ impl App {
                 let user = if user.trim().is_empty() { "admin".to_string() } else { user.trim().to_string() };
                 self.rec_result = Some(RecResult {
                     title: "Run on this computer".into(),
-                    detail: "This app does not start the agent. If it starts, its watchdog reboots the unit into DSM after the login timeout."
-                        .into(),
+                    detail:
+                        "This app does not start the agent. If it starts, its watchdog reboots the unit into DSM after the login timeout."
+                            .into(),
                     commands: vec![facts::agent_command(&host, &user)],
                 });
                 cx.notify();
@@ -272,7 +273,12 @@ impl App {
                                 app.update(cx, |a, cx| a.open_help_topic(Some("recovery"), window, cx));
                             },
                         ))
-                        .child(Button::new("mr-close").primary().label(copy::BTN_CLOSE.short).on_click(|_, window, cx| window.close_dialog(cx))),
+                        .child(
+                            Button::new("mr-close")
+                                .primary()
+                                .label(copy::BTN_CLOSE.short)
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        ),
                 )
         });
     }

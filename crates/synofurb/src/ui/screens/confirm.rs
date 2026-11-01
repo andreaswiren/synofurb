@@ -131,7 +131,7 @@ impl App {
         } else {
             format!(
                 "Debian 13 \u{00b7} {} \u{00b7} {usable} usable{survives} \u{00b7} system {:.0} GiB \u{00d7} {} \u{00b7} {hostname}",
-                raid::raid_label(plan.request.data_raid),
+                raid::resolved_label(&plan),
                 sys_gib,
                 copies
             )
@@ -140,7 +140,7 @@ impl App {
             .gap(px(8.0))
             .items_center()
             .px(px(12.0))
-            .py(px(10.0))
+            .py(px(8.0))
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
@@ -149,28 +149,29 @@ impl App {
         // The disks that change, by name and size, always visible (B4): not behind "Details".
         let cand = f.candidate_disks();
         let shown = cand.len().min(crate::ui::facts::DESTROYED_LINES_MAX);
-        let disk_list = v_flex()
-            .id("destroyed-list")
-            .gap(px(2.0))
-            .px(px(12.0))
-            .py(px(8.0))
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
-            .border_l_4()
-            .border_color(p.err_solid)
-            .child(
-                h_flex()
-                    .gap(px(6.0))
-                    .items_center()
-                    .text_color(p.err_fg)
-                    .child(icons::icon_sized(role::DELETE, 14.0, p.err_fg))
-                    .child(kit::strong(if keep { copy::CONF_LIST_KEEP.short } else { copy::CONF_LIST.short })),
-            )
-            .children(cand.iter().take(shown).map(|d| {
-                kit::mono_sm(cx, crate::ui::facts::destroyed_disk_line(&d.name, &d.model, &d.serial, &size_2dp(d.size_bytes())))
-            }))
-            .when(cand.len() > shown, |c| c.child(kit::caption(cx, format!("and {} more", cand.len() - shown))));
+        let disk_list =
+            v_flex()
+                .id("destroyed-list")
+                .gap(px(2.0))
+                .px(px(12.0))
+                .py(px(8.0))
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().border)
+                .border_l_4()
+                .border_color(p.err_solid)
+                .child(
+                    h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .text_color(p.err_fg)
+                        .child(icons::icon_sized(role::DELETE, 14.0, p.err_fg))
+                        .child(kit::strong(if keep { copy::CONF_LIST_KEEP.short } else { copy::CONF_LIST.short })),
+                )
+                .children(cand.iter().take(shown).map(|d| {
+                    kit::mono_sm(cx, crate::ui::facts::destroyed_disk_line(&d.name, &d.model, &d.serial, &size_2dp(d.size_bytes())))
+                }))
+                .when(cand.len() > shown, |c| c.child(kit::caption(cx, format!("and {} more", cand.len() - shown))));
         let details = v_flex().gap(px(2.0)).children(plan.destroyed.iter().map(|d| div().text_xs().child(d.clone())));
         let acc = Accordion::new("conf-details").bordered(true).item(|i| i.title(copy::CONF_DETAILS.short).child(details));
 
@@ -229,7 +230,7 @@ impl App {
             )
             .child(
                 v_flex()
-                    .gap(px(10.0))
+                    .gap(px(8.0))
                     .child(Checkbox::new("ack-backup").label(copy::CONF_BACKUP.short).checked(self.ack_backup).on_click(cx.listener(
                         |this, v: &bool, _, cx| {
                             this.ack_backup = *v;

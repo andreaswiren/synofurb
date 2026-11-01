@@ -122,4 +122,4 @@ Status: phases 1 and 2 are built. The screens follow the approved mockup (`desig
 * `gpui_kit::open_window` wraps the view in `Root`; dialogs, sheets and toasts need it. `Root` sets the window rem size from `Theme::font_size`.
 * The designer's `ThemeSet` JSON is loaded through `Theme::apply_config`; `theme::apply` re-applies text scale and scrollbar styles each time.
 * `icon_assets!` embeds only the SVGs of `icons::role` (about 80 icons, a few tens of KB), not the 1.8k catalogue.
-* Bundled fonts: Inter Regular/Medium/SemiBold/Bold (58 KB each, Latin subset, opsz 14) and JetBrains Mono Regular/Bold (65 KB each): 0.36 MB in total, OFL texts next to them (`crates/synofurb/assets/fonts/`).
+* Bundled fonts: Inter Regular/SemiBold/Bold (58 KB each, Latin subset, opsz 14) and JetBrains Mono Regular/Bold (65 KB each): 0.36 MB in total, OFL texts next to them (`crates/synofurb/assets/fonts/`).

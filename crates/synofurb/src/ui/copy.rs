@@ -242,6 +242,8 @@ mod strings {
         QUICK_TITLE: Dialog, "Quick setup", "Recommended defaults, then straight to Confirm.", "first-install", "";
         QUICK_USE: Button, "Use these", "", "", "";
         QUICK_HYBRID_LABEL: Label, "Hybrid 1-disk", "", "", "";
+        QUICK_HYBRID_CAUTION: Prose, "Hybrid is built by synofurb; DSM may not adopt it.", "", "", "";
+        QUICK_CHOOSE: Label, "Why unavailable", "Choose a layout first.", "", "";
         GOAL_PLAN_INSTALL: Button, "Plan install", "Debian 13 cannot run on this hardware.", "", "";
         GOAL_RECOVER: Label, "Restore / Recover", "Reads the unit's state before offering anything.", "recovery", "";
         GOAL_RECOVER_LINE: Prose, "Undo or repair.", "", "", "";
@@ -828,16 +830,7 @@ pub static SCREENS: &[ScreenCopy] = &[
     },
     ScreenCopy {
         name: "install",
-        visible: &[
-            &INSTALL_TITLE,
-            &INSTALL_SUB,
-            &INSTALL_PHASES,
-            &INSTALL_FLASH,
-            &INSTALL_STEPS,
-            &INSTALL_NO_RETURN,
-            &INSTALL_LOG,
-            &INSTALL_CANCEL,
-        ],
+        visible: &[&INSTALL_TITLE, &INSTALL_SUB, &INSTALL_FLASH, &INSTALL_STEPS, &INSTALL_NO_RETURN, &INSTALL_LOG, &INSTALL_CANCEL],
     },
     ScreenCopy {
         name: "failed",

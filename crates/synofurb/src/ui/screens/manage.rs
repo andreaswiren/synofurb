@@ -64,8 +64,8 @@ impl App {
             .child(if self.manage_report.is_none() && !self.manage_loading {
                 v_flex()
                     .gap(px(6.0))
-                    .child(Skeleton::new().h(px(14.0)).w(px(160.0)))
-                    .child(Skeleton::new().h(px(14.0)).w(px(100.0)))
+                    .child(Skeleton::new().h(px(16.0)).w(px(160.0)))
+                    .child(Skeleton::new().h(px(16.0)).w(px(100.0)))
                     .into_any_element()
             } else {
                 body
@@ -137,14 +137,18 @@ impl App {
                                 .child(kit::mono_sm(cx, if app_version.is_empty() { "-".to_string() } else { app_version.clone() })),
                         ),
                 )
-                .children((state == MgmtState::Updated && self.mgmt_note.as_deref().is_some_and(|n| n.contains("updated")) || demo && state == MgmtState::Updated).then(|| {
-                    Button::new("mgmt-rollback")
-                        .ghost()
-                        .icon(icons::icon(role::ROTATE_BACK))
-                        .label("Roll back")
-                        .on_click(cx.listener(|this, _, window, cx| this.confirm_mgmt_rollback(window, cx)))
-                        .into_any_element()
-                }))
+                .children(
+                    (state == MgmtState::Updated && self.mgmt_note.as_deref().is_some_and(|n| n.contains("updated"))
+                        || demo && state == MgmtState::Updated)
+                        .then(|| {
+                            Button::new("mgmt-rollback")
+                                .ghost()
+                                .icon(icons::icon(role::ROTATE_BACK))
+                                .label("Roll back")
+                                .on_click(cx.listener(|this, _, window, cx| this.confirm_mgmt_rollback(window, cx)))
+                                .into_any_element()
+                        }),
+                )
                 .child(kit::with_reason("mgmt-why", update, reason))
                 .child(kit::with_reason("web-why", open, h.is_none().then(|| "Unit unreachable.".to_string()))),
         );
@@ -170,10 +174,13 @@ impl App {
         }
         if state == MgmtState::Failed {
             col = col.child(
-                Alert::warning("mgmt-failed", self.mgmt_note.clone().unwrap_or_else(|| "Health check timed out. Rolled back to 0.9.1.".into()))
-                    .title("Update failed.")
-                    .small()
-                    .icon(icons::icon(role::ROTATE_BACK)),
+                Alert::warning(
+                    "mgmt-failed",
+                    self.mgmt_note.clone().unwrap_or_else(|| "Health check timed out. Rolled back to 0.9.1.".into()),
+                )
+                .title("Update failed.")
+                .small()
+                .icon(icons::icon(role::ROTATE_BACK)),
             );
         }
         GroupBox::new().outline().id("mgmt").child(col).into_any_element()
@@ -187,7 +194,7 @@ impl App {
                 return v_flex()
                     .gap(px(8.0))
                     .child(Skeleton::new().h(px(24.0)).w(px(240.0)))
-                    .child(Skeleton::new().h(px(14.0)).w(px(160.0)))
+                    .child(Skeleton::new().h(px(16.0)).w(px(160.0)))
                     .into_any_element();
             }
             return col
@@ -440,7 +447,7 @@ impl App {
             0 => self.overview_tab(cx, url.clone()),
             1 => self.storage_tab(cx, url.trim_end_matches('/').to_string()),
             2 => v_flex()
-                .gap(px(10.0))
+                .gap(px(8.0))
                 .child(
                     h_flex()
                         .gap(px(4.0))

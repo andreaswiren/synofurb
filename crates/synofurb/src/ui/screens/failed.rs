@@ -87,9 +87,11 @@ impl App {
             }));
 
         let status: gpui_kit::AnyElement = match &self.recover {
-            Job::Done(Ok(_)) => {
-                Alert::info("rec-ok", copy::REC_BOOT_DONE.tip).title(copy::REC_BOOT_DONE.short).small().icon(icons::icon(role::INFO)).into_any_element()
-            }
+            Job::Done(Ok(_)) => Alert::info("rec-ok", copy::REC_BOOT_DONE.tip)
+                .title(copy::REC_BOOT_DONE.short)
+                .small()
+                .icon(icons::icon(role::INFO))
+                .into_any_element(),
             Job::Done(Err(e)) => Alert::error("rec-err", e.clone()).small().icon(icons::icon(role::ERR)).into_any_element(),
             _ => gpui_kit::div().into_any_element(),
         };
@@ -111,7 +113,7 @@ impl App {
 
         let body = v_flex()
             .w_full()
-            .gap(px(14.0))
+            .gap(px(12.0))
             .child(tags)
             .child(if self.agent_unknown {
                 Alert::error("fail-banner", copy::FAIL_AGENT_TEXT.short).title(copy::FAIL_AGENT_TITLE.short).icon(icons::icon(role::ERR))

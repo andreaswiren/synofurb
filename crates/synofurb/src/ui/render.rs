@@ -236,6 +236,7 @@ impl App {
     fn render_stepper(&self, cx: &mut Context<App>) -> AnyElement {
         let cur = self.current_step();
         let running = self.install_running();
+        let p_err = cx.pal().err_fg;
         let items = Step::ALL.iter().map(|s| {
             let state = step_state(cur, *s);
             let clickable = can_jump(cur, *s, self.install_started) && !running;
@@ -247,11 +248,24 @@ impl App {
                 Step::Confirm => &copy::STEP_CONFIRM,
                 Step::Install => &copy::STEP_INSTALL,
             };
+            let failed = self.screen == Screen::Failed && *s == Step::Install;
             let done = state == StepState::Done || (self.screen == Screen::Done && *s == Step::Install);
-            let item = StepperItem::new()
-                .disabled(!clickable && state != StepState::Current)
-                .child(div().text_sm().when(state == StepState::Current, |d| d.font_weight(FontWeight::BOLD)).child(label.short));
-            if done { item.icon(icons::icon(role::CHECK)) } else { item }
+            let upcoming = !done && !failed && state != StepState::Current;
+            let item = StepperItem::new().disabled(!clickable && state != StepState::Current).child(
+                div()
+                    .text_sm()
+                    .when(state == StepState::Current, |d| d.font_weight(FontWeight::BOLD))
+                    .when(upcoming, |d| d.text_color(cx.theme().muted_foreground))
+                    .when(failed, |d| d.text_color(p_err))
+                    .child(label.short),
+            );
+            if failed {
+                item.icon(icons::icon(role::ERR))
+            } else if done {
+                item.icon(icons::icon(role::CHECK))
+            } else {
+                item
+            }
         });
         let at = if self.screen == Screen::Done { Step::ALL.len() } else { cur.number() - 1 };
         div()
@@ -544,7 +558,8 @@ impl Render for App {
             // button, link or field keeps Enter for itself (a bound action would swallow the button's own Enter), and the
             // Erase button swallows it on purpose (see `page_confirm`).
             .on_key_down(cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
-                if ev.keystroke.key == "enter" && ev.keystroke.modifiers == gpui_kit::Modifiers::default() && this.focus.is_focused(window) {
+                if ev.keystroke.key == "enter" && ev.keystroke.modifiers == gpui_kit::Modifiers::default() && this.focus.is_focused(window)
+                {
                     this.primary_action(window, cx);
                 }
             }))

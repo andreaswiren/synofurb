@@ -54,7 +54,7 @@ impl Render for UpdateView {
             .id("update-notes")
             .max_h(px(200.0))
             .w_full()
-            .p(px(10.0))
+            .p(px(8.0))
             .rounded(cx.theme().radius)
             .bg(cx.theme().muted)
             .overflow_y_scroll()
@@ -119,16 +119,14 @@ impl Render for UpdateView {
                         ))
                         .child(crate::ui::disclosure::info_tip("sig-info", &copy::UPD_SIGNATURE, &app))
                         .into_any_element(),
-                    vec![
-                        kit::with_reason(
-                            "apply-why",
-                            Button::new("upd-apply")
-                                .primary()
-                                .label(copy::UPD_RESTART.short)
-                                .on_click(move |_, _, cx| app2.update(cx, |a, cx| a.apply_update(cx))),
-                            install_running.then(|| copy::UPD_RESTART.tip.to_string()),
-                        ),
-                    ],
+                    vec![kit::with_reason(
+                        "apply-why",
+                        Button::new("upd-apply")
+                            .primary()
+                            .label(copy::UPD_RESTART.short)
+                            .on_click(move |_, _, cx| app2.update(cx, |a, cx| a.apply_update(cx))),
+                        install_running.then(|| copy::UPD_RESTART.tip.to_string()),
+                    )],
                 )
             }
             UpdateState::Failed(_, e) => {

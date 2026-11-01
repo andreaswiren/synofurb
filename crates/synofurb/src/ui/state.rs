@@ -29,7 +29,7 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 41] = [
+pub const DEMO_SCREEN_NAMES: [&str; 43] = [
     "failed-agent",
     "manage-rebuild",
     "manage-faildisk",
@@ -69,6 +69,8 @@ pub const DEMO_SCREEN_NAMES: [&str; 41] = [
     "about",
     "dlg-recovery",
     "dlg-keep",
+    "dlg-quick",
+    "dlg-manual",
     "dlg-next",
     "first-launch",
 ];
@@ -86,6 +88,10 @@ pub enum Overlay {
     RecoveryDialog,
     /// "Keep existing volumes" dialog.
     KeepDialog,
+    /// "Quick setup" dialog (Goal).
+    Quick,
+    /// "Manual recovery" dialog (Recovery).
+    Manual,
     /// "What happens next" dialog of the failure screen.
     NextDialog,
     /// "Before you start" dialog of the first launch.
@@ -183,6 +189,8 @@ impl DemoTarget {
             "help" => DemoTarget { overlay: Overlay::Help(None), ..DemoTarget::at(Screen::Inventory) },
             "help-topic" => DemoTarget { overlay: Overlay::Help(Some("recovery")), ..DemoTarget::at(Screen::Confirm) },
             "dlg-recovery" => DemoTarget { overlay: Overlay::RecoveryDialog, ..DemoTarget::at(Screen::Confirm) },
+            "dlg-quick" => DemoTarget { overlay: Overlay::Quick, ..DemoTarget::at(Screen::Goal) },
+            "dlg-manual" => DemoTarget { overlay: Overlay::Manual, fixture: Fixture::Agent, ..DemoTarget::at(Screen::Recover) },
             "dlg-keep" => DemoTarget { overlay: Overlay::KeepDialog, keep: true, ..DemoTarget::at(Screen::Plan) },
             "dlg-next" => DemoTarget { overlay: Overlay::NextDialog, past_no_return: true, ..DemoTarget::at(Screen::Failed) },
             "first-launch" => DemoTarget { overlay: Overlay::FirstLaunch, ..DemoTarget::at(Screen::Inventory) },

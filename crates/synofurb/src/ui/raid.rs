@@ -62,6 +62,25 @@ pub fn survives(plan: &Plan) -> Option<u8> {
     min
 }
 
+/// The level the plan will really build for the data volume ("RAID 6", "Hybrid 1-disk", "Single disk"), not the request
+/// ("Auto"). The Confirm After line and the Quick setup choice show this.
+pub fn resolved_label(plan: &Plan) -> String {
+    if plan.shr.is_some() && is_hybrid(plan.request.data_raid) {
+        return raid_label(plan.request.data_raid).to_string();
+    }
+    let data: Vec<&str> = plan
+        .vgs
+        .iter()
+        .filter(|v| v.name == "vg_data")
+        .flat_map(|v| v.pvs.iter())
+        .filter_map(|p| if let BlockRef::Md(n) = p { Some(n.as_str()) } else { None })
+        .collect();
+    match plan.arrays.iter().find(|a| data.contains(&a.name.as_str())) {
+        Some(a) => format!("RAID {}", a.level),
+        None => "Single disk".to_string(),
+    }
+}
+
 /// "1 disk", "2 disks", "none".
 pub fn survives_text(n: u8) -> String {
     match n {

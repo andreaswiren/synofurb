@@ -45,11 +45,11 @@ impl App {
                 &app,
             )));
 
-        let mut body = v_flex().w_full().max_w(px(640.0)).gap(px(14.0)).child(tags);
+        let mut body = v_flex().w_full().max_w(px(640.0)).gap(px(12.0)).child(tags);
         let card: gpui_kit::AnyElement = if idle {
             let key_ix = usize::from(self.sys.key_mode == KeyMode::Paste);
             v_flex()
-                .gap(px(14.0))
+                .gap(px(12.0))
                 .child(
                     Form::vertical()
                         .child(kit::field(
@@ -130,7 +130,9 @@ impl App {
                         .child(Clipboard::new("bm-copy").value(cmd).tooltip("Copy")),
                 )
                 .child(match &self.recover {
-                    Job::Running => Alert::info("bm-back-run", copy::REC_BOOT_RUNNING.short).icon(icons::icon(role::RUNNING)).into_any_element(),
+                    Job::Running => {
+                        Alert::info("bm-back-run", copy::REC_BOOT_RUNNING.short).icon(icons::icon(role::RUNNING)).into_any_element()
+                    }
                     Job::Done(Ok(_)) => Alert::info("bm-back", copy::REC_BOOT_DONE.tip)
                         .title(copy::REC_BOOT_DONE.short)
                         .icon(icons::icon(role::INFO))

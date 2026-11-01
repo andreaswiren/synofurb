@@ -18,6 +18,8 @@ pub enum DemoUnit {
     Ds918,
     Ds1621,
     Rs816,
+    /// DS918+ with one larger disk (mixed sizes: Quick setup asks Hybrid vs RAID).
+    Mixed,
 }
 
 impl DemoUnit {
@@ -25,6 +27,7 @@ impl DemoUnit {
         match std::env::var("SYNOFURB_DEMO_UNIT").unwrap_or_default().to_ascii_lowercase().as_str() {
             "ds1621" | "amd" | "dom" => DemoUnit::Ds1621,
             "rs816" | "arm" | "uboot" => DemoUnit::Rs816,
+            "mixed" => DemoUnit::Mixed,
             _ => DemoUnit::Ds918,
         }
     }
@@ -33,6 +36,18 @@ impl DemoUnit {
     pub fn raw(self) -> String {
         let base = fixtures::ds_4bay();
         match self {
+            DemoUnit::Mixed => {
+                let mut out = base.replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n");
+                for d in ["sdc", "sdd"] {
+                    let old = format!("|{}|512|1|0|gpt\n", 7_814_037_168u64);
+                    let marker = format!("DISK|{d}|");
+                    if let Some(i) = out.find(&marker) {
+                        let j = i + out[i..].find(&old).unwrap_or(0);
+                        out.replace_range(j..j + old.len(), "|15628053168|512|1|0|gpt\n");
+                    }
+                }
+                out
+            }
             DemoUnit::Ds918 => base.replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n"),
             DemoUnit::Ds1621 => base
                 .replace("KV|unique|synology_apollolake_918+", "KV|unique|synology_v1000_1621+")
@@ -62,7 +77,7 @@ impl DemoUnit {
 
     pub fn address(self) -> &'static str {
         match self {
-            DemoUnit::Ds918 => "192.168.1.20",
+            DemoUnit::Ds918 | DemoUnit::Mixed => "192.168.1.20",
             DemoUnit::Ds1621 => "192.168.1.31",
             DemoUnit::Rs816 => "192.168.1.44",
         }

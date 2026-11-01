@@ -137,7 +137,7 @@ impl App {
                             .text_size(theme::LOG.size())
                             .when(selected, |d| d.bg(p.accent.opacity(0.28)))
                             .when(problem && !selected, |d| d.bg(if l.level == Level::Error { p.log_err_bg } else { p.log_wrn_bg }))
-                            .child(div().w(px(3.0)).h_full().flex_none().when(problem, |d| d.bg(c)))
+                            .child(div().w(px(4.0)).h_full().flex_none().when(problem, |d| d.bg(c)))
                             .child(div().w(px(70.0)).flex_none().text_color(p.log_dim).child(l.ts.clone()))
                             .child(
                                 h_flex()

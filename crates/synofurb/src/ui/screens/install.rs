@@ -13,14 +13,12 @@ use crate::ui::theme::{Themed, Tone};
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, IntoElement, Role, Window, div, px};
+use gpui_kit::{AnyElement, Context, FontWeight, IntoElement, Role, Window, div, px};
 
-const PHASES: [&str; PHASE_COUNT] = ["Connect", "Re-check", "Stage", "Boot installer", "Install", "Reboot", "Verify"];
 const FLASH_STEPS: [&str; 4] = ["Back up flash", "Upload agent", "Reboot into agent", "Send installer"];
 
 impl App {
@@ -50,7 +48,7 @@ impl App {
                     .gap(px(8.0))
                     .items_center()
                     .px(px(8.0))
-                    .py(px(3.0))
+                    .py(px(4.0))
                     .rounded(cx.theme().radius)
                     .when(st == StepProgress::Running, |d| d.bg(cx.theme().tokens.accent))
                     .child(icon)
@@ -79,60 +77,58 @@ impl App {
         let log = self.render_log_viewer(Some(240.0), cx);
         let v = &self.install;
         let phase_ix = v.phase_index().max(1);
-        let bar = v.bar_fraction() * 100.0;
+        let app_e = cx.entity();
         let upload = v.progress.clone().filter(|(_, f)| *f < 1.0);
         let finished = v.installer_done;
         let dom = self.facts.as_ref().is_some_and(|f| self.sys.boot.resolve(f) == BootChoice::Dom);
 
-        let phases = Popover::new("phases")
-            .trigger(
-                Button::new("phase-tag")
-                    .ghost()
-                    .small()
-                    .icon(icons::icon(role::INFO))
-                    .label(PHASES[phase_ix - 1])
-                    .accessibility_label(copy::INSTALL_PHASES.short),
-            )
-            .content({
-                let cur = phase_ix;
-                move |_, _, cx| {
-                    v_flex().w(px(240.0)).gap(px(4.0)).text_sm().child(kit::strong(copy::INSTALL_PHASES.tip)).children(
-                        PHASES.iter().enumerate().map(move |(i, n)| {
+        // One numbering scheme: the engine's 12 steps. Before step 1 starts the line names the phase instead.
+        let now_line = if v.step_total > 0 {
+            format!("Step {} of {} \u{00b7} {}", v.step_n, v.step_total, v.step_name)
+        } else {
+            v.phase_label().to_string()
+        };
+        let seg_state = |n: u32| v.step_progress(n, false);
+        let strip = v_flex()
+            .gap(px(4.0))
+            .child(
+                // the point-of-no-return flag sits over segment 3
+                h_flex().w_full().gap(px(4.0)).children((1..=12u32).map(|n| {
+                    div().flex_1().min_w_0().h(px(26.0)).when(n == PONR_STEP, |d| {
+                        d.child(
                             h_flex()
-                                .gap(px(6.0))
-                                .items_center()
-                                .child(icons::icon_sized(
-                                    if i + 1 < cur {
-                                        role::OK
-                                    } else if i + 1 == cur {
-                                        role::CURRENT
-                                    } else {
-                                        role::PENDING
-                                    },
-                                    14.0,
-                                    cx.theme().foreground,
-                                ))
-                                .child(format!("{} {}", i + 1, n))
-                        }),
-                    )
-                }
-            });
+                                .gap(px(2.0))
+                                .child(kit::tag(&p, Tone::Err, Some(role::STOP), copy::INSTALL_NO_RETURN.short))
+                                .child(info_tip("ponr-info", &copy::INSTALL_NO_RETURN, &app_e)),
+                        )
+                    })
+                })),
+            )
+            .child(h_flex().w_full().gap(px(4.0)).children((1..=12u32).map(|n| {
+                let c = match seg_state(n) {
+                    StepProgress::Done => p.ok_solid,
+                    StepProgress::Running => p.accent,
+                    StepProgress::Failed => p.err_solid,
+                    StepProgress::Pending => p.border_strong.opacity(0.35),
+                };
+                div().id(("seg", n as usize)).flex_1().min_w_0().h(px(8.0)).rounded(px(2.0)).bg(c)
+            })));
         let progress = v_flex()
-            .gap(px(6.0))
+            .gap(px(8.0))
             .child(
                 h_flex()
                     .gap(px(12.0))
-                    .items_center()
+                    .items_baseline()
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(Progress::new("install-bar").value(bar).accessibility_label("Installation progress")),
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_size(crate::ui::theme::TITLE.size())
+                            .font_weight(FontWeight::BOLD)
+                            .child(percent(v.bar_fraction())),
                     )
-                    .child(kit::mono_sm(cx, percent(v.bar_fraction())))
-                    .child(kit::mono_sm(cx, format!("Phase {phase_ix} of {PHASE_COUNT}")))
-                    .child(phases),
+                    .child(kit::muted(cx, now_line)),
             )
+            .child(strip)
             .when_some(upload, |d, (what, f)| {
                 d.child(
                     h_flex()
@@ -150,7 +146,7 @@ impl App {
                 .gap(px(8.0))
                 .items_center()
                 .px(px(8.0))
-                .py(px(3.0))
+                .py(px(4.0))
                 .child(icons::icon_sized(if done { role::OK } else { role::PENDING }, 16.0, if done { p.ok_fg } else { p.placeholder }))
                 .child(div().text_sm().child(*n))
         }));
@@ -160,10 +156,10 @@ impl App {
             .multiple(true)
             .bordered(true)
             .when(dom, |a| a.item(|i| i.title(copy::INSTALL_FLASH.short).open(flash_open).child(flash_rows)))
-            .item(|i| i.title(copy::INSTALL_STEPS.short).open(!flash_open).child(steps))
+            .item(|i| i.title(copy::INSTALL_STEPS.short).child(steps))
             .item(|i| i.title(copy::INSTALL_LOG.short).child(log));
 
-        let mut body = v_flex().w_full().gap(px(14.0));
+        let mut body = v_flex().w_full().gap(px(12.0));
         if v.past_no_return {
             body = body.child(
                 Alert::error("ponr", format!("{} \u{00b7} {}", copy::INSTALL_NO_RETURN.short, copy::INSTALL_SUB.short))
@@ -189,16 +185,14 @@ impl App {
                     })
                     .into_any_element(),
             ])
-            .right(vec![
-                kit::with_reason(
-                    "cancel-why",
-                    Button::new("cancel-install")
-                        .outline()
-                        .label(copy::INSTALL_CANCEL.short)
-                        .on_click(cx.listener(|this, _, window, cx| this.confirm_cancel(window, cx))),
-                    (!can_cancel).then(|| copy::INSTALL_CANCEL.tip.to_string()),
-                ),
-            ])
+            .right(vec![kit::with_reason(
+                "cancel-why",
+                Button::new("cancel-install")
+                    .outline()
+                    .label(copy::INSTALL_CANCEL.short)
+                    .on_click(cx.listener(|this, _, window, cx| this.confirm_cancel(window, cx))),
+                (!can_cancel).then(|| copy::INSTALL_CANCEL.tip.to_string()),
+            )])
     }
 
     /// "Cancel install?" (AlertDialog): Esc and the scrim never stop an install; only "Stop install" does.

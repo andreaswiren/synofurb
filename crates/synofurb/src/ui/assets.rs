@@ -18,7 +18,6 @@ pub const FONT_MONO: &str = "JetBrains Mono";
 /// `(file name, bytes)` of every bundled font.
 pub static FONT_FILES: &[(&str, &[u8])] = &[
     ("Inter-Regular.ttf", include_bytes!("../../assets/fonts/Inter-Regular.ttf")),
-    ("Inter-Medium.ttf", include_bytes!("../../assets/fonts/Inter-Medium.ttf")),
     ("Inter-SemiBold.ttf", include_bytes!("../../assets/fonts/Inter-SemiBold.ttf")),
     ("Inter-Bold.ttf", include_bytes!("../../assets/fonts/Inter-Bold.ttf")),
     ("JetBrainsMono-Regular.ttf", include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf")),
