@@ -40,7 +40,6 @@ const KEY_CONTEXT_NOT_TEXT: &str = "SynoApp && !Input";
 pub fn bind_keys(cx: &mut gpui_kit::App) {
     cx.bind_keys([
         KeyBinding::new("alt-left", GoBack, Some(KEY_CONTEXT)),
-        KeyBinding::new("enter", PrimaryAction, Some(KEY_CONTEXT)),
         KeyBinding::new(modkey!(","), OpenSettings, Some(KEY_CONTEXT)),
         KeyBinding::new("f1", OpenHelp, Some(KEY_CONTEXT)),
         KeyBinding::new("?", OpenHelp, Some(KEY_CONTEXT_NOT_TEXT)),
@@ -541,6 +540,14 @@ impl Render for App {
             .on_action(cx.listener(|this, _: &CheckUpdates, _, cx| this.check_updates_now(cx)))
             .on_action(cx.listener(|this, _: &CopyCommand, window, cx| this.copy_cli_command(window, cx)))
             .on_action(cx.listener(|this, _: &PrimaryAction, window, cx| this.primary_action(window, cx)))
+            // Enter runs the screen's main action only while no control has focus (the page itself is focused). A focused
+            // button, link or field keeps Enter for itself (a bound action would swallow the button's own Enter), and the
+            // Erase button swallows it on purpose (see `page_confirm`).
+            .on_key_down(cx.listener(|this, ev: &gpui_kit::KeyDownEvent, window, cx| {
+                if ev.keystroke.key == "enter" && ev.keystroke.modifiers == gpui_kit::Modifiers::default() && this.focus.is_focused(window) {
+                    this.primary_action(window, cx);
+                }
+            }))
             .size_full()
             .flex()
             .flex_col()

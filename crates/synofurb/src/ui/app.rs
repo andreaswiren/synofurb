@@ -516,6 +516,13 @@ impl App {
             self.rebuild_plan();
         }
         match t.screen {
+            Screen::Confirm if std::env::var("SYNOFURB_DEMO_GATE").as_deref() == Ok("ready") => {
+                self.ack_backup = true;
+                self.ack_loss = true;
+                self.ack_unit = true;
+                let phrase = self.phrase(cx);
+                self.set_input(&self.inp.typed.clone(), &phrase, window, cx);
+            }
             Screen::Confirm => {
                 self.ack_backup = true;
                 let partial: String = self.phrase(cx).chars().take(9).collect();
