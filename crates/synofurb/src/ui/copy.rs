@@ -244,7 +244,7 @@ mod strings {
         QUICK_HYBRID_LABEL: Label, "Hybrid 1-disk", "", "", "";
         QUICK_HYBRID_CAUTION: Prose, "Hybrid is built by synofurb; DSM may not adopt it.", "", "", "";
         QUICK_INTRO: Prose, "Recommended defaults for this unit:", "", "", "";
-        QUICK_NOTES: Prose, "The password is generated and shown once on Done. Confirm shows what is erased before anything changes.", "", "", "";
+        QUICK_NOTES: Dialog, "Notes", "", "", "The password is generated and shown once on Done. Confirm shows what is erased before anything changes.";
         QUICK_CHOOSE: Label, "Why unavailable", "Choose a layout first.", "", "";
         GOAL_PLAN_INSTALL: Button, "Plan install", "Debian 13 cannot run on this hardware.", "", "";
         GOAL_RECOVER: Label, "Restore / Recover", "Reads the unit's state before offering anything.", "recovery", "";

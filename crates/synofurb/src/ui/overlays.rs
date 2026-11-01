@@ -403,7 +403,7 @@ impl gpui_kit::Render for QuickView {
                 .child(div().w(px(72.0)).flex_none().text_sm().text_color(muted).child(*k))
                 .child(div().flex_1().min_w_0().text_sm().child(v.clone()))
         })));
-        col.child(div().text_sm().text_color(muted).child(copy::QUICK_NOTES.short))
+        col.child(div().text_sm().text_color(muted).child(copy::QUICK_NOTES.body))
     }
 }
 
