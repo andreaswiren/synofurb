@@ -107,7 +107,8 @@ def build_unit(key: str) -> dict:
                   node("sdj", "disk", 4000787030016, model="WD40EFRX-68N32N0", serial="WD-WCC7K7ABC3", tran="sata", rota=True),
                   node("sdk", "disk", int(0.93 * TiB), model="My Passport 25E1", serial="WX21A12B3C4D", tran="usb", rota=True, children=[
                       node("sdk1", "part", int(0.93 * TiB), "ntfs", pk="sdk", label="Backup", uuid="1234567890ABCDEF")]),
-                  node("sdl", "disk", 8001563222016, model="ST8000VN004-2M2101", serial="ZR5X7782", tran="sata", rota=True)]
+                  node("sdl", "disk", 8001563222016, model="ST8000VN004-2M2101", serial="ZR5X7782", tran="sata", rota=True),
+                  node("sdm", "disk", 4000787030016, model="WD40EFRX-68N32N0", serial="WD-WCC7K7ABC4", tran="sata", rota=True)]
     if amd:
         syno = node("vg1000-lv", "lvm", int(3.1 * TiB), "btrfs", pk="sdh", label="1.42.6-25556", uuid="5d0c4a1e-77b1-4f3b-a2d8-0f1c9e6b7a44", kname="dm-9")
         extra.append(node("sdh", "disk", int(3.64 * TiB), model="WD40EFRX-68WT0N0", serial="WD-WCC4E0XYZ12", tran="sata", rota=True, children=[syno]))

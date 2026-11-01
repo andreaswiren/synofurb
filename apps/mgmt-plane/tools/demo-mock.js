@@ -380,6 +380,241 @@
     return {ok: true, entry: id, message: 'Default set to ' + id + '; rebooting in 5 s.'};
   };
 
+
+  /* ---------- RAID (simulated: plans mirror the server's wording and rules; state changes and syncs tick in the browser) ---------- */
+  const RA = () => U.raid.arrays;
+  const GIBn = 1073741824, MIBn = 1048576;
+  const BUSY = ['resync', 'recovery', 'recover', 'reshape', 'check', 'repair'];
+  const step = (desc, argv, kind) => ({desc, argv: argv || null, kind: kind || 'cmd', cmd: argv ? argv.join(' ') : ''});
+  const sysStep = (name, f, v) => ({desc: 'Write ' + f, argv: null, kind: 'sysfs', cmd: 'echo ' + v + ' > /sys/block/' + name + '/md/' + f});
+  const minActive = (lvl, n) => ({raid0: n, raid1: 1, raid4: n - 1, raid5: n - 1, raid6: n - 2, raid10: Math.max(1, Math.floor(n / 2))}[lvl] ?? n);
+  function startSync(a, action, rate, onDone, p0) {
+    a._sync = {action, p0: p0 || 0, t0: Date.now(), rate, onDone};
+    a.sync = {action, percent: p0 || 0, finish_min: Math.round((100 - (p0 || 0)) / rate / 60), speed_kbs: 88000}; a.busy = true;
+  }
+  function tickSync(a) {
+    const y = a._sync;
+    if (!y) return;
+    const p = Math.min(100, y.p0 + (Date.now() - y.t0) / 1000 * y.rate);
+    if (p >= 100) { const f = y.onDone; a._sync = null; a.sync = null; a.busy = false; if (f) f(a); a.state = a.degraded ? 'degraded' : 'clean'; return; }
+    a.sync.percent = Math.round(p * 10) / 10; a.sync.finish_min = Math.round((100 - p) / y.rate / 60); a.busy = true;
+  }
+  U.raid.arrays.forEach(a => {
+    if (a.sync && a.sync.percent != null) { a._sync = {action: a.sync.action, p0: a.sync.percent, t0: Date.now(), rate: 0.15, onDone: null}; }
+  });
+  const need = (a, what) => { if (a.busy) throw bad(409, a.name + ' is ' + (a.sync && a.sync.action) + '; wait until it is idle before ' + what); };
+  function arrByName(n) {
+    if (typeof n !== 'string' || !/^md\d{1,4}$/.test(n)) throw bad(400, 'invalid array name (expected md0, md127, ...)');
+    const a = RA().find(x => x.name === n);
+    if (!a) throw bad(404, 'no such array ' + n);
+    return a;
+  }
+  function freeDev(p, minB) {
+    const c = U.raid.candidates.find(x => x.path === p);
+    if (!c) { const x = U.raid.excluded.find(y => y.path === p); throw bad(x ? 409 : 400, x ? p + ' cannot be used: ' + x.reason : p + ': no such block device'); }
+    if (minB && c.size < minB) throw bad(409, p + ' is smaller than the array members (' + (Math.floor(minB / GIBn) + 1) + ' GiB needed)');
+    return c;
+  }
+  const memberMin = a => Math.min(...a.members.map(m => m.size || Infinity));
+  const mdadmM = (a, ...rest) => ['mdadm', '--manage', a.device].concat(rest);
+  const devsOf = v => { if (v === undefined || v === null || v === '') return []; if (!Array.isArray(v)) throw bad(400, 'devices must be a list'); return v; };
+  function raidPlan(op, b) {
+    const warn = [], follow = [];
+    let steps = [], confirm = null, title = '', arr = null, info = {};
+    if (!U.raid.available && op !== 'assemble') throw bad(409, 'mdadm is not installed (apt install mdadm)');
+    if (op === 'assemble') {
+      return {arr: null, plan: {op, title: 'Assemble arrays', steps: [step('Assemble arrays', ['mdadm', '--assemble', '--scan']), step('Scan LVM', ['vgscan']), step('Activate logical volumes', ['vgchange', '-ay'])], warnings: [], confirm: null, array: null, follow_ups: [], destructive: false}};
+    }
+    if (op === 'tuning' && !b.array) {
+      if (!['enable', 'disable'].includes(b.scrub_schedule)) throw bad(400, 'nothing to change');
+      steps = b.scrub_schedule === 'enable' ? [step('Write the monthly timer', null, 'unitfile'), step('Enable the monthly check', ['systemctl', 'enable', '--now', 'synofurb-raid-scrub.timer'])] : [step('Disable the monthly check', ['systemctl', 'disable', '--now', 'synofurb-raid-scrub.timer'])];
+      return {arr: null, plan: {op, title: 'Tune RAID checks', steps, warnings: [], confirm: null, array: null, follow_ups: [], destructive: false}};
+    }
+    if (op === 'create') {
+      const label = b.name;
+      if (typeof label !== 'string' || !/^[a-z][a-z0-9_]{0,23}$/.test(label)) throw bad(400, 'array name must match [a-z][a-z0-9_]{0,23}');
+      const level = b.level, devs = devsOf(b.devices), spares = devsOf(b.spares);
+      if (!['raid0', 'raid1', 'raid5', 'raid6', 'raid10'].includes(level)) throw bad(400, 'level must be one of: raid0, raid1, raid5, raid6, raid10');
+      const sizes = devs.concat(spares).map(d => freeDev(d).size);
+      if (devs.length < RAID_MIN[level]) throw bad(400, level + ' needs at least ' + RAID_MIN[level] + ' devices (got ' + devs.length + ')');
+      if (level === 'raid10' && devs.length % 2) throw bad(400, 'raid10 needs an even number of devices');
+      if (RA().some(x => x.label === label || x.name === label)) throw bad(409, 'an array named ' + label + ' already exists');
+      devs.concat(spares).forEach(d => steps.push(step('Wipe old signatures on ' + d, ['wipefs', '-a', d])));
+      steps.push(step('Create ' + level + ' array /dev/md/' + label + ' from ' + devs.length + ' devices', ['mdadm', '--create', '/dev/md/' + label, '--run', '--level=' + level, '--raid-devices=' + devs.length, '--metadata=1.2', '--name=' + label].concat(level === 'raid0' ? [] : ['--bitmap=internal'], devs, spares)));
+      steps.push(step('Wait for device nodes', ['udevadm', 'settle', '--timeout=30']), step('Record arrays in /etc/mdadm/mdadm.conf', ['mdadm', '--detail', '--scan'], 'mdconf'), step('Update initramfs so the arrays assemble at boot', ['update-initramfs', '-u']));
+      if (b.volume) { const fs = b.volume.fs || 'xfs'; steps.push(step('Create LVM physical volume', ['pvcreate', '--yes', '/dev/md/' + label]), step('Create volume group vg_' + label, ['vgcreate', 'vg_' + label, '/dev/md/' + label]), step('Create logical volume ' + label, ['lvcreate', '--yes', '-n', label, '-l', '100%FREE', 'vg_' + label]), step('Create ' + fs + ' filesystem', ['mkfs.' + fs, '/dev/vg_' + label + '/' + label]), step('Mount /srv/' + label, ['mount', '/srv/' + label])); }
+      const mn = Math.min(...sizes.slice(0, devs.length));
+      warn.push('ALL DATA ON THE SELECTED DEVICES WILL BE DESTROYED.');
+      if (Math.max(...sizes) > mn * 1.1) warn.push('Devices differ in size; only the smallest size is used per member.');
+      if (level === 'raid0') warn.push('RAID0 has no redundancy.');
+      confirm = label; title = 'Create ' + level + ' array ' + label; info = {usable_bytes: usable(level, sizes.slice(0, devs.length)), label, level, devs, spares};
+    } else if (op === 'shr-create') {
+      const name = b.name, mode = b.mode || b.level, devs = devsOf(b.devices);
+      if (typeof name !== 'string' || !reVol.test(name)) throw bad(400, 'volume name must match [a-z][a-z0-9_]{0,23}');
+      if (!['shr1', 'shr2'].includes(mode)) throw bad(400, 'mode must be shr1 or shr2');
+      if (devs.length < (mode === 'shr1' ? 2 : 4)) throw bad(400, (mode === 'shr1' ? 'SHR-1 needs at least 2' : 'SHR-2 needs at least 4') + ' disks (got ' + devs.length + ')');
+      const sizes = {};
+      devs.forEach(d => { const c = freeDev(d); if (c.type !== 'disk') throw bad(400, d + ' is a partition; SHR needs whole disks'); sizes[d] = Math.max(0, c.size - 2 * MIBn); });
+      if (U.volumes.vgs.some(g => g.vg_name === 'vg_' + name) || RA().some(a => a.vgs.includes('vg_' + name))) throw bad(409, 'volume group vg_' + name + ' already exists');
+      const r = window.shrSlices(sizes, mode), us = r.slices.filter(s => s.level);
+      if (!us.length) throw bad(400, 'these disks give no usable SHR capacity');
+      const per = {};
+      us.forEach(s => s.members.forEach(d => { (per[d] = per[d] || []).push(s); }));
+      Object.keys(per).forEach(d => { steps.push(step('Wipe ' + d, ['wipefs', '-a', d]), step('Create a GPT on ' + d, ['parted', '-s', d, 'mklabel', 'gpt'])); per[d].forEach((s, k) => steps.push(step('Create partition ' + name + '_' + s.index + ' on ' + d, ['parted', '-s', '-a', 'optimal', d, 'mkpart', name + '_' + s.index, (1 + s.start / MIBn) + 'MiB', (1 + (s.start + s.length) / MIBn) + 'MiB']))); });
+      steps.push(step('Re-read partition tables', ['partprobe'].concat(Object.keys(per))), step('Wait for device nodes', ['udevadm', 'settle', '--timeout=30']));
+      const pvs = [];
+      us.forEach(s => { const parts = s.members.map(d => d + (per[d].indexOf(s) + 1)); steps.push(step('Create ' + s.level + ' array /dev/md/' + name + '_' + s.index + ' from ' + parts.length + ' devices', ['mdadm', '--create', '/dev/md/' + name + '_' + s.index, '--run', '--level=' + s.level, '--raid-devices=' + parts.length, '--metadata=1.2', '--name=' + name + '_' + s.index].concat(parts))); pvs.push('/dev/md/' + name + '_' + s.index); s._parts = parts; });
+      steps.push(step('Record arrays in /etc/mdadm/mdadm.conf', ['mdadm', '--detail', '--scan'], 'mdconf'), step('Update initramfs so the arrays assemble at boot', ['update-initramfs', '-u']),
+        step('Create LVM physical volumes', ['pvcreate', '--yes'].concat(pvs)), step('Create volume group vg_' + name, ['vgcreate', 'vg_' + name].concat(pvs)), step('Create logical volume ' + name, ['lvcreate', '--yes', '-n', name, '-l', '100%FREE', 'vg_' + name]),
+        step('Create ' + (b.fs || 'xfs') + ' filesystem', ['mkfs.' + (b.fs || 'xfs'), '/dev/vg_' + name + '/' + name]), step('Mount /srv/' + name, ['mount', '/srv/' + name]));
+      warn.push('ALL DATA ON THE SELECTED DISKS WILL BE DESTROYED.', ...r.slices.filter(s => s.unusable).map(s => 'Slice ' + s.index + ': ' + Math.floor(s.length / GIBn) + ' GiB on ' + s.members[0] + ' has no partner disk and stays unused.'), 'SHR-style layout managed by Debian; DSM will not adopt it.');
+      confirm = name; title = 'Create ' + (mode === 'shr1' ? 'SHR-1' : 'SHR-2') + ' volume ' + name;
+      info = {shr: {mode, slices: r.slices, usable_bytes: r.usable, warnings: []}, usable_bytes: r.usable, name, mountpoint: '/srv/' + name, level: mode, _slices: us, _name: name};
+    } else if (op === 'shr-add-disk' || op === 'shr-replace-disk') {
+      const vol = b.volume, arrs = RA().filter(a => new RegExp('^' + vol + '_\\d+$').test(a.label) && a.vgs.includes('vg_' + vol)).sort((x, y) => x.label.localeCompare(y.label, undefined, {numeric: true}));
+      if (!arrs.length) throw bad(404, 'no SHR volume ' + vol + ' created here');
+      arrs.forEach(a => { if (a.busy || a.degraded) throw bad(409, 'array ' + a.name + ' is ' + (a.degraded ? 'degraded' : 'busy') + '; wait until it is healthy'); });
+      const dev = b.device, c = U.raid.candidates.find(x => x.path === dev);
+      if (!c || c.type !== 'disk') throw bad(400, dev + ' must be a whole disk');
+      if (op === 'shr-add-disk') {
+        let free = Math.max(0, c.size - 2 * MIBn), n = 0; const joined = [];
+        arrs.forEach(a => { const len = Math.floor(memberMin(a) / MIBn) * MIBn; if (free >= len) { n++; joined.push([a, dev + n]); free -= len; } });
+        if (joined.length) steps.push(step('Wipe ' + dev, ['wipefs', '-a', dev]), step('Create a GPT on ' + dev, ['parted', '-s', dev, 'mklabel', 'gpt']));
+        joined.forEach(([a, p]) => { steps.push(step('Create partition ' + vol + ' on ' + dev, ['parted', '-s', '-a', 'optimal', dev, 'mkpart', a.label, '1MiB', '1MiB'])); });
+        steps.push(step('Re-read partition tables', ['partprobe', dev]));
+        joined.forEach(([a, p]) => { const nn = a.raid_devices + 1; steps.push(step('Add ' + p + ' to ' + a.name, mdadmM(a, '--add', p)), step('Reshape ' + a.name + ' to ' + nn + ' devices', ['mdadm', '--grow', a.device, '--raid-devices=' + nn, '--backup-file=/var/lib/synofurb-mgmt/md-' + a.name + '.backup'])); });
+        if (!steps.length) throw bad(409, dev + ' adds no usable capacity to this volume');
+        follow.push(step('Grow the physical volumes', ['pvresize'].concat(joined.map(([a]) => a.device))), step('Extend the logical volume into the new space', ['lvextend', '-l', '+100%FREE', '/dev/vg_' + vol + '/' + vol]));
+        warn.push('Reshaping runs for hours; the volume stays usable but slower. Do not remove disks meanwhile.');
+        info = {volume: vol, joined: joined.map(([a, p]) => [a.name, p, dev]), after_reshape: true}; title = 'Add ' + dev + ' to volume ' + vol;
+      } else {
+        const old = b.old, oldk = (old || '').replace('/dev/', ''), mine = arrs.filter(a => a.members.some(m => m.disk === oldk));
+        if (!mine.length) throw bad(409, old + ' is not part of volume ' + vol);
+        steps.push(step('Wipe ' + dev, ['wipefs', '-a', dev]), step('Create a GPT on ' + dev, ['parted', '-s', dev, 'mklabel', 'gpt']));
+        mine.forEach((a, k) => { const mb = a.members.find(m => m.disk === oldk); steps.push(step('Create partition ' + a.label + ' on ' + dev, ['parted', '-s', '-a', 'optimal', dev, 'mkpart', a.label, '1MiB', '1MiB']), step('Add ' + dev + (k + 1) + ' to ' + a.name + ' as a spare', mdadmM(a, '--add', dev + (k + 1))), step('Replace ' + mb.device + ' by ' + dev + (k + 1) + ' in ' + a.name, mdadmM(a, '--replace', mb.device, '--with', dev + (k + 1)))); follow.push(step('When ' + a.name + ' has finished: remove ' + mb.device, mdadmM(a, '--remove', mb.device))); });
+        warn.push('Rebuilding takes hours; keep the other disks healthy until it finishes.');
+        info = {volume: vol, old, new: dev, _mine: mine.map(a => a.name)}; title = 'Replace ' + old + ' by ' + dev + ' in ' + vol;
+      }
+      confirm = vol;
+    } else {
+      arr = arrByName(b.array);
+      const a = arr, dev = b.device;
+      if (op === 'add-spare') {
+        freeDev(dev, memberMin(a)); steps = [step('Add ' + dev + ' to ' + a.name + ' as a spare', mdadmM(a, '--add', dev))]; warn.push(dev + ' will be overwritten.'); confirm = a.name; title = 'Add spare to ' + a.name;
+      } else if (op === 'fail' || op === 'remove') {
+        const m = a.members.find(x => x.device === dev); if (!m) throw bad(400, dev + ' is not a member of ' + a.name);
+        if (op === 'fail') { need(a, 'failing a disk'); if (['faulty', 'removed'].includes(m.state)) throw bad(409, dev + ' has already failed; remove it instead'); if (m.state === 'active' && a.members.filter(x => x.state === 'active').length - 1 < minActive(a.level, a.raid_devices)) throw bad(409, 'failing ' + dev + ' would make ' + a.name + ' unreadable'); steps = [step('Mark ' + dev + ' as failed in ' + a.name, mdadmM(a, '--fail', dev))]; title = 'Fail ' + dev + ' in ' + a.name; }
+        else { if (['active', 'rebuilding'].includes(m.state)) throw bad(409, dev + ' is working; fail it first'); steps = [step('Remove ' + dev + ' from ' + a.name, mdadmM(a, '--remove', dev))]; title = 'Remove ' + dev + ' from ' + a.name; }
+        confirm = a.name;
+      } else if (op === 'replace') {
+        const old = b.old, nw = b.new, m = a.members.find(x => x.device === old); if (!m) throw bad(400, old + ' is not a member of ' + a.name);
+        need(a, 'replacing a disk'); if (a.level === 'raid0') throw bad(409, 'RAID0 has no redundancy to replace from'); freeDev(nw, memberMin(a));
+        if (m.state === 'faulty') { steps = [step('Remove ' + old + ' from ' + a.name, mdadmM(a, '--remove', old)), step('Add ' + nw + ' to ' + a.name, mdadmM(a, '--add', nw))]; warn.push('The new disk is rebuilt from the others; the array is exposed until it finishes.'); info.mode = 'failed'; }
+        else { if (a.degraded) throw bad(409, a.name + ' is degraded; replace the failed disk first'); steps = [step('Add ' + nw + ' to ' + a.name + ' as a spare', mdadmM(a, '--add', nw)), step('Copy ' + old + ' onto ' + nw, mdadmM(a, '--replace', old, '--with', nw))]; follow.push(step('When the copy has finished: remove ' + old, mdadmM(a, '--remove', old))); warn.push('Redundancy is kept during the copy. ' + old + ' becomes a failed member when it is done.'); info.mode = 'healthy'; }
+        confirm = a.name; title = 'Replace ' + old + ' in ' + a.name; info.old = old; info.nw = nw;
+      } else if (op === 'grow') {
+        need(a, 'growing'); if (a.degraded) throw bad(409, a.name + ' is degraded; rebuild it before growing'); if (!['raid1', 'raid5', 'raid6'].includes(a.level)) throw bad(409, a.level + ' cannot be grown');
+        const add = devsOf(b.add); if (add.length && b.size_max) throw bad(400, 'add disks and use all space in two separate steps'); if (!add.length && !b.size_max && !a.spares.length) throw bad(400, 'choose disks to add, or use all space');
+        add.forEach(d => freeDev(d, memberMin(a)));
+        if (b.size_max) { steps = [step('Use all space on the members of ' + a.name, ['mdadm', '--grow', a.device, '--size=max'])]; warn.push('Only useful after every member was replaced by a larger disk.'); }
+        else { const nn = a.raid_devices + add.length; steps = add.map(d => step('Add ' + d + ' to ' + a.name, mdadmM(a, '--add', d))); steps.push(step('Reshape ' + a.name + ' to ' + nn + ' devices', ['mdadm', '--grow', a.device, '--raid-devices=' + nn].concat(a.level === 'raid1' ? [] : ['--backup-file=/var/lib/synofurb-mgmt/md-' + a.name + '.backup']))); warn.push('The reshape runs for hours; the array stays usable but slower.'); }
+        follow.push(step('Grow the physical volume on ' + a.name, ['pvresize', a.device])); a.lvs.forEach(l => follow.push(step('Extend ' + l, ['lvextend', '-l', '+100%FREE', '/dev/' + l])));
+        confirm = a.name; title = 'Grow ' + a.name; info = {add, after_reshape: true, size_max: !!b.size_max};
+      } else if (op === 'change-level') {
+        need(a, 'changing the level'); if (a.degraded) throw bad(409, a.name + ' is degraded; rebuild it first');
+        const tr = {'raid1>raid5': 0, 'raid5>raid6': 1, 'raid6>raid5': -1, 'raid0>raid5': 1}[a.level + '>' + b.target];
+        if (tr === undefined) throw bad(409, 'mdadm cannot convert ' + a.level + ' to ' + b.target + '. Supported: raid0 to raid5; raid1 to raid5; raid5 to raid6; raid6 to raid5');
+        const add = devsOf(b.add); if ((tr === 1) && add.length + a.spares.length < 1) throw bad(409, 'add 1 more disk(s) first'); if (a.level === 'raid1' && a.raid_devices !== 2) throw bad(409, 'raid1 to raid5 needs exactly 2 members (this array has ' + a.raid_devices + ')');
+        add.forEach(d => freeDev(d, memberMin(a)));
+        steps = add.map(d => step('Add ' + d + ' to ' + a.name, mdadmM(a, '--add', d)));
+        const nn = a.raid_devices + tr + (a.level === 'raid1' ? add.length : 0);
+        steps.push(step('Convert ' + a.name + ' from ' + a.level + ' to ' + b.target, ['mdadm', '--grow', a.device, '--level=' + b.target.slice(4)].concat(nn !== a.raid_devices ? ['--raid-devices=' + nn] : [], ['--backup-file=/var/lib/synofurb-mgmt/md-' + a.name + '.backup'])));
+        warn.push('The conversion rewrites all data and runs for hours; do not power off.'); confirm = a.name; title = 'Change ' + a.name + ' to ' + b.target; info = {to: b.target, add, n: nn, after_reshape: true};
+      } else if (op === 'scrub') {
+        const act = b.action || 'check'; if (!['check', 'repair', 'idle'].includes(act)) throw bad(400, 'action must be one of: check, repair, idle');
+        if (a.inactive) throw bad(409, a.name + ' is inactive');
+        if (act !== 'idle') { if (a.level === 'raid0') throw bad(409, a.name + ' has no redundancy to check'); need(a, 'starting a check'); if (a.degraded && act === 'repair') throw bad(409, 'repair on a degraded array is refused; rebuild first'); }
+        steps = [sysStep(a.name, 'sync_action', act)]; title = (act === 'idle' ? 'Stop the running task on ' : act === 'check' ? 'Check ' : 'Repair ') + a.name; info = {action: act, writes: act === 'repair'};
+        if (act === 'repair') warn.push('Repair rewrites blocks that disagree; use it only after a check found mismatches.');
+      } else if (op === 'stop') {
+        if (a.mounts.length) throw bad(409, a.name + ' is mounted at ' + a.mounts.join(', ')); if (a.holds_system) throw bad(409, a.name + ' holds the system'); if (a.lvs.length) throw bad(409, a.name + ' is in use by ' + a.lvs.join(', ')); if (a.busy) throw bad(409, a.name + ' is ' + a.sync.action + '; stopping now would interrupt it');
+        steps = [step('Stop ' + a.name, ['mdadm', '--stop', a.device])]; confirm = a.name; title = 'Stop ' + a.name;
+      } else if (op === 'tuning') {
+        ['speed_min', 'speed_max'].forEach(k => { const v = b[k]; if (v === undefined || v === null || v === '') return; if (v !== 'system' && !(Number.isInteger(v) && v >= 0 && v <= 4000000)) throw bad(400, k + " must be 'system' or a whole number of KiB/s up to 4000000"); steps.push(sysStep(a.name, 'sync_' + k.replace('_', '_speed_').replace('speed_speed', 'speed').replace('sync_speed_', 'sync_speed_'), v)); });
+        steps.forEach(s => { s.cmd = s.cmd.replace('sync_speed_speed_', 'sync_speed_'); });
+        if (!steps.length) throw bad(400, 'nothing to change'); title = 'Tune ' + a.name;
+      } else throw bad(404, 'unknown RAID operation');
+    }
+    if (arr && arr.foreign && !(['scrub', 'assemble'].includes(op) && !info.writes)) {
+      warn.unshift('This array was not created by synofurb (' + arr.foreign_reasons.join('; ') + '). Changes can make DSM unable to use it.'); confirm = confirm || arr.name; info.needs_foreign_ack = true;
+    }
+    return {arr, plan: Object.assign({op, title, steps, warnings: warn, confirm, array: arr ? arr.name : null, follow_ups: follow, destructive: confirm !== null}, info)};
+  }
+  function raidApply(op, p, b) {
+    const a = p.arr, pl = p.plan, now = Date.now();
+    const mem = (dev, state, extra) => { const c = U.raid.candidates.find(x => x.path === dev); return Object.assign({device: dev, name: dev.replace('/dev/', ''), slot: null, state, write_mostly: false, disk: dev.replace(/^\/dev\//, '').replace(/p?\d+$/, ''), model: c && c.model, serial: c && c.serial, size: c && c.size}, extra || {}); };
+    const take = d => { const i = U.raid.candidates.findIndex(c => c.path === d); if (i >= 0) { const c = U.raid.candidates.splice(i, 1)[0]; U.raid.excluded.push(Object.assign(c, {reason: 'already a RAID member'})); } };
+    if (op === 'create') {
+      const n = 'md' + (st.mdn++), sizes = pl.devs.map(d => (U.raid.candidates.find(c => c.path === d) || {}).size);
+      const arr = {name: n, device: '/dev/' + n, label: pl.label, level: pl.level, state: 'clean', flags: [], degraded: false, size: pl.usable_bytes, used_dev_size: Math.min(...sizes), raid_devices: pl.devs.length, chunk_bytes: 524288, layout: null,
+        bitmap: pl.level === 'raid0' ? null : 'internal', members: pl.devs.map((d, i) => mem(d, 'active', {slot: i})).concat(pl.spares.map(d => mem(d, 'spare'))), spares: pl.spares.slice(), failed: [], sync: null, busy: false, mismatch_cnt: 0, last_sync_action: null,
+        sync_speed_min: 'system', sync_speed_max: 'system', stripe_cache_size: null, uuid: null, events: 1, foreign: false, foreign_reasons: [], vgs: [], lvs: [], mounts: [], in_use: false, holds_system: false, inactive: false};
+      pl.devs.concat(pl.spares).forEach(take); U.raid.arrays.push(arr); if (pl.level !== 'raid0') startSync(arr, 'resync', 0.4, null);
+    } else if (op === 'shr-create') {
+      const name = pl._name;
+      pl._slices.forEach(s => {
+        const n = 'md' + (st.mdn++), parts = s._parts;
+        const arr = {name: n, device: '/dev/' + n, label: name + '_' + s.index, level: s.level, state: 'clean', flags: [], degraded: false, size: s.usable, used_dev_size: s.length, raid_devices: parts.length, chunk_bytes: 524288, layout: null, bitmap: 'internal',
+          members: parts.map((p, i) => Object.assign(mem(p, 'active', {slot: i}), {disk: p.replace('/dev/', '').replace(/\d+$/, ''), size: s.length})), spares: [], failed: [], sync: null, busy: false, mismatch_cnt: 0, sync_speed_min: 'system', sync_speed_max: 'system', foreign: false, foreign_reasons: [], vgs: ['vg_' + name], lvs: [], mounts: [], in_use: false, holds_system: false, inactive: false};
+        U.raid.arrays.push(arr); startSync(arr, 'resync', 0.3, null);
+      });
+      Object.keys(b.devices.reduce((o, d) => (o[d] = 1, o), {})).forEach(take); U.raid.shr_volumes.push(name);
+    } else if (op === 'add-spare') { a.members.push(mem(b.device, 'spare')); a.spares.push(b.device); take(b.device); if (a.degraded) { const m = a.members.find(x => x.device === b.device); m.state = 'rebuilding'; a.spares = []; startSync(a, 'recovery', 0.5, x => { m.state = 'active'; x.degraded = false; }); } }
+    else if (op === 'fail') { const m = a.members.find(x => x.device === b.device); m.state = 'faulty'; a.failed.push(b.device); a.degraded = true; a.state = 'degraded'; }
+    else if (op === 'remove') { const m = a.members.find(x => x.device === b.device); m.state = 'removed'; m.device = null; m.name = null; a.failed = a.failed.filter(x => x !== b.device); a.spares = a.spares.filter(x => x !== b.device); }
+    else if (op === 'replace') {
+      const old = a.members.find(x => x.device === b.old), nm = mem(b.new, 'rebuilding'); take(b.new); a.members.push(nm);
+      if (pl.mode === 'failed') { a.members = a.members.filter(x => x !== old || x.state === 'removed'); old.state = 'removed'; old.device = null; old.name = null; }
+      startSync(a, 'recovery', 0.5, x => { nm.state = 'active'; if (pl.mode === 'failed') { x.degraded = false; x.failed = []; } else { old.state = 'faulty'; x.failed = [b.old]; } });
+    } else if (op === 'grow') {
+      if (pl.size_max) { startSync(a, 'reshape', 1, null); }
+      else { pl.add.forEach(d => { a.members.push(mem(d, 'active', {slot: a.members.length})); take(d); }); const old = a.raid_devices; a.raid_devices += pl.add.length; startSync(a, 'reshape', 0.4, x => { x.size = Math.round(x.size / (old - 1) * (x.raid_devices - 1)); }); }
+    } else if (op === 'change-level') {
+      pl.add.forEach(d => { a.members.push(mem(d, 'active', {slot: a.members.length})); take(d); }); startSync(a, 'reshape', 0.4, x => { x.level = pl.to; x.raid_devices = pl.n; });
+    } else if (op === 'scrub') {
+      if (pl.action === 'idle') { a._sync = null; a.sync = null; a.busy = false; }
+      else startSync(a, pl.action, pl.action === 'check' ? 1.2 : 0.6, x => { if (pl.action === 'repair') x.mismatch_cnt = 0; });
+    } else if (op === 'stop') { U.raid.arrays = U.raid.arrays.filter(x => x !== a); }
+    else if (op === 'tuning') { if (b.speed_min !== undefined && b.speed_min !== null && b.speed_min !== '') a.sync_speed_min = b.speed_min; if (b.speed_max !== undefined && b.speed_max !== null && b.speed_max !== '') a.sync_speed_max = b.speed_max; }
+    else if (op === 'shr-add-disk') {
+      pl.joined.forEach(([name, part, dev]) => { const x = RA().find(y => y.name === name); x.members.push(Object.assign(mem(part, 'active', {slot: x.members.length}), {disk: dev.replace('/dev/', ''), size: memberMin(x)})); const old = x.raid_devices; x.raid_devices += 1; startSync(x, 'reshape', 0.35, y => { y.size = Math.round(y.size / Math.max(1, old - 1) * (y.raid_devices - 1)); }); });
+      take(b.device);
+    } else if (op === 'shr-replace-disk') {
+      pl._mine.forEach(name => { const x = RA().find(y => y.name === name), old = x.members.find(m => m.disk === pl.old.replace('/dev/', '')); const nm = Object.assign(mem(b.device + '1', 'rebuilding'), {disk: b.device.replace('/dev/', ''), size: old.size}); x.members.push(nm); startSync(x, 'recovery', 0.45, () => { nm.state = 'active'; old.state = 'faulty'; }); });
+      take(b.device);
+    }
+    U.raid.arrays.forEach(x => { x.state = x.sync ? x.state : (x.degraded ? 'degraded' : 'clean'); x.spares = x.members.filter(m => m.state === 'spare').map(m => m.device); x.failed = x.members.filter(m => m.state === 'faulty').map(m => m.device); });
+    U.volumes.candidates = U.volumes.candidates.filter(c => U.raid.candidates.some(r => r.path === c.path));
+  }
+  function raidRun(op, b, execute) {
+    const p = raidPlan(op, b);
+    if (!execute) return Object.assign({ok: true}, p.plan);
+    if (p.plan.confirm) needConfirm(b, p.plan.confirm);
+    if (p.plan.needs_foreign_ack && b.foreign_ack !== true) throw bad(400, "this array was not created here: tick 'I understand this is not mine' to change it");
+    raidApply(op, p, b);
+    const results = p.plan.steps.map(s => ({desc: s.desc, cmd: s.cmd, rc: 0, out: s.cmd.startsWith('mdadm --create') ? 'mdadm: array started.' : s.cmd.startsWith('mdadm --manage') ? 'mdadm: hot added.' : '', err: ''}));
+    return {ok: true, op, results, follow_ups: p.plan.follow_ups, title: p.plan.title};
+  }
+  R['GET /api/raid'] = () => { U.raid.arrays.forEach(tickSync); const o = clone(U.raid); o.arrays.forEach(a => { delete a._sync; }); return o; };
+  R['POST /api/raid/plan'] = b => { if (typeof b.op !== 'string') throw bad(400, 'op is required'); return raidRun(b.op, b, false); };
+  ['create', 'add-spare', 'fail', 'remove', 'replace', 'grow', 'change-level', 'scrub', 'stop', 'assemble', 'tuning', 'shr-create', 'shr-add-disk', 'shr-replace-disk'].forEach(op => {
+    R['POST /api/raid/' + op] = b => {
+      if (op === 'tuning' && b.scrub_schedule && !b.array) { U.raid.scrub_timer.enabled = b.scrub_schedule === 'enable' ? 'enabled' : 'disabled'; U.raid.scrub_timer.installed = true; return {ok: true, op, results: raidRun(op, b, false).steps.map(s => ({desc: s.desc, cmd: s.cmd, rc: 0, out: '', err: ''})), follow_ups: []}; }
+      return raidRun(op, b, true);
+    };
+  });
+  R['POST /api/raid/after-grow'] = b => { const a = arrByName(b.array); need(a, 'extending the volume'); needConfirm(b, a.name); return {ok: true, results: [{desc: 'Grow the physical volume on ' + a.name, cmd: 'pvresize ' + a.device, rc: 0, out: '', err: ''}].concat(a.lvs.map(l => ({desc: 'Extend ' + l, cmd: 'lvextend -l +100%FREE /dev/' + l, rc: 0, out: '', err: ''})))}; };
+
   window.fetch = async function (url, opt) {
     const u = new URL(typeof url === 'string' ? url : url.url, location.href);
     if (!/\/api\//.test(u.pathname)) return origFetch ? origFetch(url, opt) : Promise.reject(new Error('offline demo'));

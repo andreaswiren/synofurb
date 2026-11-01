@@ -1,5 +1,11 @@
 # The desktop interface (GPUI Kit)
 
+> **v2 rebuild in progress.** The architecture below describes the first GPUI version. Phase 1 of the rebuild is done
+> (bundled Inter and JetBrains Mono, Lucide roles, the designer's theme set, themed scrollbars, `copy.rs` with word-budget
+> tests, info icons / Help sheet / About page, the logo); the screens are being redone on stock widgets after the owner approves
+> the new mockups. See `docs/GUI-COMPONENTS.md` for the widget map and the list of defects of the old UI. `widgets.rs` is gone;
+> `kit.rs`, `disclosure.rs`, `icons.rs`, `brand.rs`, `copy.rs` and `tokens.rs` (generated from `design/v2/tokens-v2.json`) replace it.
+
 `synofurb` (no arguments) and `synofurb gui` open the graphical wizard. It is written with **GPUI Kit** (`gpui-kit` 0.8.1:
 GPUI plus the gpui-component widget set), so one Rust codebase runs on Windows, macOS and Linux. The egui version
 (`gui.rs`, `eframe`, `rfd`) is gone. All decisions (scanning, inspection, planning, installing, recovery, updates, the

@@ -5483,7 +5483,7 @@ function raidWizard(host, R) {
         W.plan ? pv.node : (W.perr ? banner('err', W.perr, '') : null), h('div', {class: 'row'}, btn(T('btn.back'), {icon: 'arrow-l', onclick: () => { W.step--; draw(); }}), btn(T('btn.cancel'), {onclick: () => { host.hidden = !!R.arrays.length; W.step = 1; W.devs.clear(); draw(); }}), go)];
       setTimeout(upd);
     }
-    stage.replaceChildren(stepsBar(), c);
+    stage.replaceChildren(stepsBar(), ...[c].flat(Infinity).filter(Boolean));
   }
   const infoBtnInline = l => (l === 'shr1' || l === 'shr2') ? infoBtn('shr', 'Hybrid RAID') : null;
   function shrTable(r) {
