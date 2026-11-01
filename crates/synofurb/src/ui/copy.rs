@@ -378,6 +378,12 @@ mod strings {
         FAIL_FLASH_UNTOUCHED: Label, "Flash untouched", "No boot entry was written.", "backups", "";
         FAIL_RESCUE_IN: Label, "Rescue shell closes in", "Then DSM becomes the default and the NAS reboots.", "recovery", "";
         FAIL_DSM_IN: Label, "DSM returns in", "The installer's failure handler sets DSM as default and reboots.", "recovery", "";
+        FAIL_WAITING: Label, "Waiting for DSM", "", "", "";
+        FAIL_DSM_BACK: Label, "DSM is back.", "The NAS answered on its DSM address.", "", "";
+        FAIL_DSM_LOADER: Prose, "The NAS is in the DSM loader.", "DSM's own system may be gone; reinstall it from find.synology.com.", "recovery", "";
+        FAIL_DSM_AGENT_UP: Prose, "The boot agent is up.", "The unit is in the agent, not in DSM; reboot it into DSM from the agent.", "recovery", "";
+        FAIL_DSM_NOTBACK: Label, "DSM did not return.", "Power-cycle the NAS and check again.", "recovery", "";
+        FAIL_DSM_NOTBACK_AGENT: Label, "DSM not back.", "The agent may never have run, so use the manual recovery.", "recovery", "";
         FAIL_OPEN_RESCUE: Button, "Open rescue shell", "", "", "";
         FAIL_WAIT_DSM: Button, "Wait for DSM", "", "", "";
         FAIL_EXPORT: Button, "Export diagnostics", "Do this before the clock ends; secrets are removed.", "troubleshooting", "";
@@ -496,6 +502,12 @@ mod strings {
         REC_RESTORE_FLASH: Label, "Restore flash", "Writes the saved boot-flash image back; needs a working Linux on the unit.", "recovery", "";
         REC_REMOVE: Label, "Remove our entries", "Takes the agent out of the boot flash again.", "recovery", "";
         REC_REINSTALL: Label, "Reinstall DSM", "Use Synology's page; no data promise.", "recovery", "";
+        REC_SUB_READ: Subtitle, "Read from the unit.", "", "", "";
+        REC_READING: Label, "Reading the unit", "", "", "";
+        REC_READ_FAILED: Label, "Unit not read", "The unit did not answer, so the facts below come from this session.", "", "";
+        REC_NOT_READ: Label, "Boot flash not read", "", "", "";
+        REC_TOOL_MISSING: Label, "Why not read", "synofurb-dom is not on the unit, so its boot menu could not be read.", "", "";
+        REC_NOTHING_READ: Label, "Nothing to recover.", "The boot menu was read: DSM is the default and none of our entries are on it.", "", "";
         REC_BOOT_RUNNING: Label, "Setting default to DSM", "", "", "";
         REC_BOOT_DONE: Label, "Default set to DSM", "Reboot the NAS to start DSM; this app does not reboot it.", "recovery", "";
         REC_BOOT_DSM_OK: Button, "Set default", "", "", "";

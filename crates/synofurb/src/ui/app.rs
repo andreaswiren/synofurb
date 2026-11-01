@@ -38,6 +38,22 @@ pub enum Goal {
     Recover,
 }
 
+/// Waiting for the unit's DSM to answer after a failed install (probed every few seconds, `recovery::wait_for_dsm`).
+#[derive(Clone, Debug, Default)]
+pub enum DsmWaitState {
+    #[default]
+    Idle,
+    Waiting {
+        secs: u64,
+        last: Option<synofurb_core::recovery::ProbeResult>,
+    },
+    Done {
+        last: synofurb_core::recovery::ProbeResult,
+        timed_out: bool,
+        secs: u64,
+    },
+}
+
 /// A background job with a result.
 pub enum Job<T> {
     Idle,
@@ -186,6 +202,14 @@ pub struct App {
     pub log_selected_all: bool,
     pub log_scroll: gpui_kit::UniformListScrollHandle,
     pub recover: Job<String>,
+    /// The unit's boot state as read over SSH when Recovery opened (never this session's memory), or why it was not read.
+    pub unit_state: Option<synofurb_core::recovery::UnitBootState>,
+    pub unit_state_err: Option<String>,
+    pub unit_state_loading: bool,
+    /// A failure before the first write to the boot flash (typed `FlashBackupFailed`): the flash is untouched.
+    pub flash_untouched: bool,
+    pub dsm_wait: DsmWaitState,
+    pub dsm_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub rec_result: Option<crate::ui::screens::recover::RecResult>,
     pub bootmgr: Job<()>,
     pub update: UpdateState,
@@ -397,6 +421,12 @@ impl App {
             log_selected_all: false,
             log_scroll: gpui_kit::UniformListScrollHandle::new(),
             recover: Job::Idle,
+            unit_state: None,
+            unit_state_err: None,
+            unit_state_loading: false,
+            flash_untouched: false,
+            dsm_wait: DsmWaitState::Idle,
+            dsm_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             rec_result: None,
             bootmgr: Job::Idle,
             update: UpdateState::Unknown,
@@ -464,6 +494,9 @@ impl App {
         }
         self.screen = screen;
         self.error = None;
+        if screen == Screen::Recover {
+            self.read_unit_state(cx);
+        }
         window.focus(&self.focus, cx);
         self.page_scroll.set_offset(gpui_kit::point(gpui_kit::px(0.0), gpui_kit::px(0.0)));
         cx.notify();
@@ -681,14 +714,40 @@ impl App {
             }
             Msg::Finished(r) => {
                 if let Err(e) = &r {
-                    self.agent_unknown = super::facts::is_agent_timeout(e);
+                    // the typed flag from `FailureKind` is authoritative; the text is only a fallback
+                    self.agent_unknown |= super::facts::is_agent_timeout(e);
                 }
                 let ok = r.is_ok();
                 self.result = Some(r);
                 self.screen = if ok { Screen::Done } else { Screen::Failed };
                 window.focus(&self.focus, cx);
             }
-            Msg::Recovered(r) => self.recover = Job::Done(r),
+            Msg::FailureKind { agent_timeout, flash_untouched } => {
+                self.agent_unknown = agent_timeout;
+                self.flash_untouched = flash_untouched;
+            }
+            Msg::Recovered(r) => {
+                self.recover = Job::Done(r);
+                // the default boot entry just changed: read the unit again
+                self.read_unit_state(cx);
+            }
+            Msg::UnitState(r) => {
+                self.unit_state_loading = false;
+                match r {
+                    Ok(s) => {
+                        self.unit_state = Some(*s);
+                        self.unit_state_err = None;
+                    }
+                    Err(e) => {
+                        self.unit_state = None;
+                        self.unit_state_err = Some(e);
+                    }
+                }
+            }
+            Msg::DsmProbe { last, secs } => self.dsm_wait = DsmWaitState::Waiting { secs, last: Some(last) },
+            Msg::DsmWaitDone(w) => {
+                self.dsm_wait = DsmWaitState::Done { last: w.last, timed_out: w.timed_out, secs: w.waited_s };
+            }
             Msg::ManageHealth(r) => {
                 self.manage_loading = false;
                 match r {
@@ -817,6 +876,12 @@ impl App {
         self.bootmgr = Job::Idle;
         self.recover = Job::Idle;
         self.rec_result = None;
+        self.unit_state = None;
+        self.unit_state_err = None;
+        self.unit_state_loading = false;
+        self.flash_untouched = false;
+        self.dsm_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.dsm_wait = DsmWaitState::Idle;
     }
 
     pub fn select_host(&mut self, host: &str, window: &mut Window, cx: &mut Context<App>) {
@@ -1157,20 +1222,70 @@ impl App {
         self.start_scan(cx);
     }
 
+    /// Boot DSM next: set the default boot entry to DSM on the unit (the engine reads it back; it does not reboot).
     pub fn start_recover(&mut self, cx: &mut Context<App>) {
         if self.recover.running() {
             return;
         }
         if self.demo.is_some() {
-            self.recover = Job::Done(Ok("Boot flash default set to DSM (demo).".into()));
+            self.recover = Job::Done(Ok("The default boot entry is DSM. The unit was not rebooted (demo).".into()));
             return;
         }
         match self.target(cx) {
             Ok(t) => {
                 self.recover = Job::Running;
-                worker::spawn_recover(self.tx.clone(), t, self.cfg_dir.join("logs"));
+                worker::spawn_boot_dsm(self.tx.clone(), t);
             }
             Err(e) => self.recover = Job::Done(Err(e)),
+        }
+        cx.notify();
+    }
+
+    /// Read the unit's boot state (Recovery opens, and after a recovery action). Demo and unreachable units read nothing.
+    pub fn read_unit_state(&mut self, cx: &mut Context<App>) {
+        if self.demo.is_some() || self.unit_state_loading {
+            return;
+        }
+        match self.target(cx) {
+            Ok(t) => {
+                self.unit_state_loading = true;
+                worker::spawn_unit_state(self.tx.clone(), t);
+            }
+            Err(e) => self.unit_state_err = Some(e),
+        }
+        cx.notify();
+    }
+
+    /// "Wait for DSM": probe the unit's address until DSM answers or `DSM_WAIT_MIN` minutes pass. Demo: a scripted wait.
+    pub fn start_wait_dsm(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        if matches!(self.dsm_wait, DsmWaitState::Waiting { .. }) {
+            return;
+        }
+        self.dsm_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.dsm_wait = DsmWaitState::Waiting { secs: 0, last: None };
+        if self.demo.is_some() {
+            cx.spawn_in(window, async move |this, cx| {
+                for secs in [2u64, 4, 6] {
+                    cx.background_executor().timer(std::time::Duration::from_millis(900)).await;
+                    let _ = this.update(cx, |t, cx| {
+                        t.dsm_wait = DsmWaitState::Waiting { secs, last: Some(synofurb_core::recovery::ProbeResult::Unreachable) };
+                        cx.notify();
+                    });
+                }
+                let _ = this.update(cx, |t, cx| {
+                    t.dsm_wait = DsmWaitState::Done {
+                        last: synofurb_core::recovery::ProbeResult::DsmBack { ssh_banner: "SSH-2.0-OpenSSH_8.2".into(), web_port: 5000 },
+                        timed_out: false,
+                        secs: 8,
+                    };
+                    cx.notify();
+                });
+            })
+            .detach();
+        } else {
+            let host = self.input_value(&self.inp.host, cx).trim().to_string();
+            let host = if host.is_empty() { self.selected_ip.clone().unwrap_or_default() } else { host };
+            worker::spawn_wait_dsm(self.tx.clone(), host, self.dsm_cancel.clone());
         }
         cx.notify();
     }

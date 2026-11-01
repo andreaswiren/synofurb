@@ -86,6 +86,43 @@ impl App {
                     ))
             }));
 
+        let dsm_status: gpui_kit::AnyElement = {
+            use crate::ui::app::DsmWaitState;
+            use synofurb_core::recovery::ProbeResult as P;
+            let clock = |s: u64| format!("{}:{:02}", s / 60, s % 60);
+            match &self.dsm_wait {
+                DsmWaitState::Idle => gpui_kit::div().into_any_element(),
+                DsmWaitState::Waiting { secs, .. } => Alert::info("dsm-wait", format!("{} {}", copy::FAIL_WAITING.short, clock(*secs)))
+                    .small()
+                    .icon(icons::icon(role::RUNNING))
+                    .into_any_element(),
+                DsmWaitState::Done { last, .. } => match last {
+                    P::DsmBack { .. } => Alert::success("dsm-back", copy::FAIL_DSM_BACK.tip)
+                        .title(copy::FAIL_DSM_BACK.short)
+                        .small()
+                        .icon(icons::icon(role::OK))
+                        .into_any_element(),
+                    P::LoaderOnly { .. } => Alert::warning("dsm-loader", copy::FAIL_DSM_LOADER.tip)
+                        .title(copy::FAIL_DSM_LOADER.short)
+                        .small()
+                        .icon(icons::icon(role::WARN))
+                        .into_any_element(),
+                    P::AgentStillUp { .. } => Alert::warning("dsm-agent", copy::FAIL_DSM_AGENT_UP.tip)
+                        .title(copy::FAIL_DSM_AGENT_UP.short)
+                        .small()
+                        .icon(icons::icon(role::WARN))
+                        .into_any_element(),
+                    _ => Alert::error(
+                        "dsm-notback",
+                        if self.agent_unknown { copy::FAIL_DSM_NOTBACK_AGENT.tip } else { copy::FAIL_DSM_NOTBACK.tip },
+                    )
+                    .title(copy::FAIL_DSM_NOTBACK.short)
+                    .small()
+                    .icon(icons::icon(role::ERR))
+                    .into_any_element(),
+                },
+            }
+        };
         let status: gpui_kit::AnyElement = match &self.recover {
             Job::Done(Ok(_)) => Alert::info("rec-ok", copy::REC_BOOT_DONE.tip)
                 .title(copy::REC_BOOT_DONE.short)
@@ -129,6 +166,7 @@ impl App {
                         .on_click(cx.listener(|this, _, window, cx| this.open_next_dialog(window, cx))),
                 ),
             )
+            .child(dsm_status)
             .child(status)
             .child(acc);
 
@@ -151,8 +189,8 @@ impl App {
                 Button::new("wait-dsm")
                     .primary()
                     .label(copy::FAIL_WAIT_DSM.short)
-                    .loading(self.recover.running())
-                    .on_click(cx.listener(|this, _, _, cx| this.start_recover(cx))),
+                    .loading(matches!(self.dsm_wait, crate::ui::app::DsmWaitState::Waiting { .. }))
+                    .on_click(cx.listener(|this, _, window, cx| this.start_wait_dsm(window, cx))),
                 (!dom).then(|| "Nothing was written; DSM comes back when the NAS restarts.".to_string()),
             )
         };

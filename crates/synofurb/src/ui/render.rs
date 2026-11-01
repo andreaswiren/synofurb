@@ -150,13 +150,26 @@ impl App {
         let debian = matches!(self.result, Some(Ok(_))) || self.screen == Screen::Manage;
         let agent = matches!(self.bootmgr, super::app::Job::Running | super::app::Job::Done(Ok(())));
         let fail = self.screen == Screen::Failed || matches!(self.result, Some(Err(_)));
-        UnitFacts {
-            flash: agent || (self.install_started && dom) || self.agent_unknown,
-            disks: self.install.past_no_return,
-            debian,
-            fail,
-            agent_unknown: self.agent_unknown,
-            default_not_dsm: debian || self.agent_unknown,
+        // The unit's own boot state, when it was read over SSH, beats this session's memory.
+        let read = self.unit_state.as_ref().filter(|s| s.read == synofurb_core::recovery::ReadOutcome::Read);
+        let session_flash = (agent || (self.install_started && dom) || self.agent_unknown) && !self.flash_untouched;
+        match read {
+            Some(s) => UnitFacts {
+                flash: !s.our_entries.is_empty(),
+                disks: self.install.past_no_return,
+                debian: debian || s.running == synofurb_core::recovery::RunningSystem::Debian,
+                fail,
+                agent_unknown: false,
+                default_not_dsm: !s.default_entry.is_dsm(),
+            },
+            None => UnitFacts {
+                flash: session_flash,
+                disks: self.install.past_no_return,
+                debian,
+                fail,
+                agent_unknown: self.agent_unknown,
+                default_not_dsm: debian || self.agent_unknown,
+            },
         }
     }
 

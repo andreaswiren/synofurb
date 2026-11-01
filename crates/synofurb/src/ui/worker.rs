@@ -32,7 +32,22 @@ pub enum Msg {
     ManageHealth(Result<Box<synofurb_core::manage::Health>, String>),
     Inspected(Result<(Box<DeviceFacts>, String), String>),
     Ev(Event),
+    /// What kind of failure the install ended with (typed, from the engine), sent just before `Finished(Err)`.
+    FailureKind {
+        /// `SessionError::AgentTimeout`: the agent never answered, so the unit's default boot entry is not confirmed.
+        agent_timeout: bool,
+        /// `SessionError::FlashBackupFailed`: nothing was written to the boot flash.
+        flash_untouched: bool,
+    },
     Finished(Result<Outcome, String>),
+    /// The unit's real boot state, read over SSH when Recovery opens.
+    UnitState(Result<Box<synofurb_core::recovery::UnitBootState>, String>),
+    /// One look at the unit's DSM address while waiting for DSM, with the seconds waited.
+    DsmProbe {
+        last: synofurb_core::recovery::ProbeResult,
+        secs: u64,
+    },
+    DsmWaitDone(Box<synofurb_core::recovery::DsmWait>),
     Recovered(Result<String, String>),
     BootManagerDone(Result<(), String>),
     /// Progress (0..=100) of a management-plane update or rollback.
@@ -149,18 +164,36 @@ pub fn spawn_inspect(tx: Tx, t: SshTarget) {
     });
 }
 
-/// Restore the NAS to boot DSM again (`session::recover_to_dsm`), with the log streamed to the UI.
-pub fn spawn_recover(tx: Tx, t: SshTarget, log_dir: PathBuf) {
+/// Read the unit's boot flash state (`recovery::read_unit_boot_state`): the real menu, never this session's memory.
+pub fn spawn_unit_state(tx: Tx, t: SshTarget) {
     std::thread::spawn(move || {
-        let (etx, erx) = channel::<Event>();
-        forward_events(erx, tx.clone());
-        let r = match Logger::to_dir(&log_dir, Some(etx)) {
-            Ok(logger) => {
-                logger.add_secret(&auth_secret(&t));
-                session::recover_to_dsm(&t, &logger).map_err(|e| format!("{e:#}"))
-            }
-            Err(e) => Err(format!("cannot create log file: {e}")),
-        };
+        let log = Logger::memory(None);
+        let r = synofurb_core::recovery::read_unit_boot_state(&t, &log).map(Box::new).map_err(|e| format!("{e:#}"));
+        send(&tx, Msg::UnitState(r));
+    });
+}
+
+/// Probe the unit's DSM address every few seconds until DSM answers or `DSM_WAIT_MIN` minutes pass.
+pub fn spawn_wait_dsm(tx: Tx, host: String, cancel: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        let tx2 = tx.clone();
+        let w = synofurb_core::recovery::wait_for_dsm(
+            &host,
+            Duration::from_secs(synofurb_core::timing::DSM_WAIT_MIN as u64 * 60),
+            &cancel,
+            &synofurb_core::recovery::ProbeOptions::default(),
+            Duration::from_secs(5),
+            &mut |r, d| send(&tx2, Msg::DsmProbe { last: r.clone(), secs: d.as_secs() }),
+        );
+        send(&tx, Msg::DsmWaitDone(Box::new(w)));
+    });
+}
+
+/// Set the unit's default boot entry to DSM (`recovery::boot_dsm`, no reboot), read it back, and report the engine's sentence.
+pub fn spawn_boot_dsm(tx: Tx, t: SshTarget) {
+    std::thread::spawn(move || {
+        let log = Logger::memory(None);
+        let r = synofurb_core::recovery::boot_dsm(&t, false, false, &log).map(|o| o.message).map_err(|e| e.to_string());
         send(&tx, Msg::Recovered(r));
     });
 }
@@ -212,6 +245,16 @@ pub fn spawn_install(tx: Tx, job: InstallJob, log_dir: &Path, cancel: Arc<Atomic
         let progress = lg.clone();
         let r =
             session::run_install(&job, &lg, cancel, &mut |what, f| progress.emit(Event::Progress { what: what.to_string(), fraction: f }));
+        if let Err(e) = &r {
+            let t = session::SessionError::find(e);
+            send(
+                &tx,
+                Msg::FailureKind {
+                    agent_timeout: t.is_some_and(|t| t.boot_default_unconfirmed()),
+                    flash_untouched: t.is_some_and(|t| t.flash_untouched()),
+                },
+            );
+        }
         send(&tx, Msg::Finished(r.map_err(|e| format!("{e:#}"))));
     });
     Ok(logger)

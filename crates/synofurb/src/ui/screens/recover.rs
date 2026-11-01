@@ -81,6 +81,27 @@ impl App {
             ));
 
         let mut body = v_flex().w_full().max_w(px(720.0)).gap(px(12.0)).child(chips);
+        // What was read from the unit, or why nothing was (the chips fall back to this session's memory then).
+        use synofurb_core::recovery::ReadOutcome;
+        if self.unit_state_loading {
+            body = body.child(Alert::info("rec-reading", copy::REC_READING.short).small().icon(icons::icon(role::RUNNING)));
+        } else if let Some(e) = &self.unit_state_err {
+            body = body.child(
+                Alert::warning("rec-readerr", format!("{} {}", copy::REC_READ_FAILED.tip, e))
+                    .title(copy::REC_READ_FAILED.short)
+                    .small()
+                    .icon(icons::icon(role::WARN)),
+            );
+        } else if let Some(s) = &self.unit_state {
+            let why = match &s.read {
+                ReadOutcome::Read => None,
+                ReadOutcome::ToolMissing => Some(copy::REC_TOOL_MISSING.tip.to_string()),
+                ReadOutcome::Refused(t) | ReadOutcome::Failed(t) => Some(format!("{} {}", copy::REC_READ_FAILED.tip, t)),
+            };
+            if let Some(w) = why {
+                body = body.child(Alert::warning("rec-notread", w).title(copy::REC_NOT_READ.short).small().icon(icons::icon(role::WARN)));
+            }
+        }
         if uf.agent_unknown {
             body = body.child(
                 h_flex()
@@ -102,7 +123,14 @@ impl App {
                     }),
             );
         } else if !uf.flash && !uf.disks {
-            body = body.child(Alert::info("rec-none", copy::REC_NOTHING.tip).title(copy::REC_NOTHING.short).icon(icons::icon(role::INFO)));
+            let read = self.unit_state.as_ref().is_some_and(|s| s.read == synofurb_core::recovery::ReadOutcome::Read);
+            body = if read {
+                body.child(
+                    Alert::info("rec-none", copy::REC_NOTHING_READ.tip).title(copy::REC_NOTHING_READ.short).icon(icons::icon(role::INFO)),
+                )
+            } else {
+                body.child(Alert::info("rec-none", copy::REC_NOTHING.tip).title(copy::REC_NOTHING.short).icon(icons::icon(role::INFO)))
+            };
         }
         if let Some(r) = &self.rec_result {
             body = body.child(Alert::info("rec-res", r.detail.clone()).title(r.title.clone()).icon(icons::icon(role::INFO)));
@@ -169,14 +197,21 @@ impl App {
             ),
         ));
         body = body.child(Accordion::new("rec-acc").bordered(true).item(|i| i.title(copy::REC_SAVED.short).child(saved)));
-        Page::new(copy::REC_TITLE.short, body).subtitle(copy::REC_SUB.short).subtitle_tip(&copy::REC_SUB).left(vec![
-            Button::new("back")
-                .ghost()
-                .icon(icons::icon(role::BACK))
-                .label(copy::BTN_BACK.short)
-                .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Goal, window, cx)))
-                .into_any_element(),
-        ])
+        Page::new(copy::REC_TITLE.short, body)
+            .subtitle(if self.unit_state.as_ref().is_some_and(|s| s.read == ReadOutcome::Read) {
+                copy::REC_SUB_READ.short
+            } else {
+                copy::REC_SUB.short
+            })
+            .subtitle_tip(&copy::REC_SUB)
+            .left(vec![
+                Button::new("back")
+                    .ghost()
+                    .icon(icons::icon(role::BACK))
+                    .label(copy::BTN_BACK.short)
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Goal, window, cx)))
+                    .into_any_element(),
+            ])
     }
 
     /// Run one Recovery row. Boot DSM asks first and then really calls the engine (it only sets the default; the unit

@@ -49,7 +49,7 @@ impl App {
         h_flex()
             .gap(px(4.0))
             .items_center()
-            .child(kit::mono(cx, value.clone()).flex_1().min_w_0().truncate())
+            .child(kit::mono(cx, value.clone()).flex_1().min_w_0())
             .child(Clipboard::new(id).value(value).tooltip("Copy").on_copied(move |_, _, _| {
                 let _ = what;
             }))
