@@ -29,6 +29,7 @@ pub mod icons;
 pub mod kit;
 pub mod logview;
 mod overlays;
+pub mod raid;
 mod render;
 pub mod screens;
 pub mod settings;

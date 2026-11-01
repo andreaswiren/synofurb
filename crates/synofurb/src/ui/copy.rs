@@ -139,7 +139,7 @@ mod strings {
         RISK_FAILED_SAFELY: Label, "Failed safely", "DSM boots again by itself.", "recovery", "";
         RISK_DEBIAN_RUNNING: Label, "Debian running", "Recovery stays under Manage.", "recovery", "";
         WAY_BACK: Button, "Way back", "What returns the unit to DSM from here.", "recovery", "";
-        TAG_DEMO: Label, "Demo", "Built-in sample unit. Nothing touches the network or any disk.", "", "";
+        TAG_DEMO: Label, "Demo", "Built-in sample unit; nothing touches the network or any disk.", "", "";
         TAG_OFFLINE: Label, "Offline", "Compatibility list is {n} days old; LAN scan still works.", "offline-mode", "";
         MENU_HELP: Label, "Help", "Help for this screen.", "", "";
         MENU_SETTINGS: Label, "Settings", "Theme, text size, updates, data.", "", "";
@@ -488,6 +488,52 @@ mod strings {
             "The boot-flash technique is documented by the synodeb project (GPL-2.0). synofurb contains none of its code and is MIT licensed.";
         ABOUT_LICENCE: Label, "Licence", "", "", "";
 
+
+        // ===================================================================== RAID (D5 additions, D6, D18)
+        PLAN_USABLE: Label, "Usable", "What the data volume holds after redundancy.", "raid-levels", "";
+        PLAN_SURVIVES: Label, "Survives", "How many disks may fail without losing data.", "raid-levels", "";
+        PLAN_SLICES: Button, "Slices", "Each slice becomes one array.", "hybrid-raid", "";
+        PLAN_WEAKER: Label, "Weaker slice", "A slice with fewer than four disks survives fewer failures.", "hybrid-raid", "";
+        PLAN_HYBRID_TIP: Label, "Hybrid (SHR-style)", "Same technique as Synology SHR; DSM may not adopt it.", "hybrid-raid", "";
+        SLICE_COL_SLICE: Label, "Slice", "", "", "";
+        SLICE_COL_DISKS: Label, "Disks", "", "", "";
+        SLICE_COL_LEVEL: Label, "Level", "RAID level and minimum disks.", "raid-levels", "";
+        SLICE_COL_USABLE: Label, "Usable", "", "", "";
+        DLG_SLICES: Dialog, "Hybrid slices", "Each slice becomes one array.", "hybrid-raid",
+            "Hybrid (SHR-style) cuts your disks' data space into slices at the sizes of the different disks. Each slice present on two or more disks becomes one array: RAID 1 for two members, RAID 5 for three or more (Hybrid 2-disk: RAID 6 for four or more). A slice on one disk has no partner and stays unused.\n\nThe arrays are joined by LVM into one volume. This is built by synofurb with mdadm and LVM; DSM may not adopt it, and nothing here has run on a real Synology.";
+        SYS_DATA_LAYOUT: Label, "Data layout", "Chosen on the Plan screen.", "raid-levels", "";
+        MAN_STORAGE: Label, "Storage", "", "", "";
+        RAID_ARRAY: Label, "Array", "", "", "";
+        RAID_LEVEL: Label, "Level", "RAID level and minimum disks.", "raid-levels", "";
+        RAID_STATE: Label, "State", "Clean, degraded, rebuilding or foreign.", "replace-disk", "";
+        RAID_SIZE: Label, "Size", "", "", "";
+        RAID_PROGRESS: Label, "Progress", "Speed and time left; the array stays usable.", "replace-disk", "";
+        RAID_CLEAN: Label, "Clean", "", "", "";
+        RAID_DEGRADED_TAG: Label, "Degraded", "", "", "";
+        RAID_REBUILDING: Label, "Rebuilding", "Speed and time left; the array stays usable.", "replace-disk", "";
+        RAID_FOREIGN: Label, "Foreign", "Created by DSM or another system; you can assemble and scrub it.", "hybrid-raid", "";
+        RAID_INACTIVE: Label, "Inactive", "", "", "";
+        RAID_CREATE: Button, "Create array", "Opens the plan; the web UI runs it.", "raid-levels", "";
+        RAID_CREATE_RAID: Label, "RAID array", "", "", "";
+        RAID_CREATE_HYBRID: Label, "Hybrid array", "", "", "";
+        RAID_ACTIONS: Label, "Actions", "Changes run in the web UI.", "raid-levels", "";
+        RAID_ADD_SPARE: Label, "Add spare", "", "", "";
+        RAID_REPLACE: Button, "Replace disk", "Swap a failed or old member.", "replace-disk", "";
+        RAID_GROW: Label, "Grow", "", "", "";
+        RAID_CHANGE_LEVEL: Label, "Change level", "RAID 1 to 5 and 5 to 6 only.", "raid-levels", "";
+        RAID_SCRUB: Label, "Scrub", "", "scrubbing", "";
+        RAID_STOP: Label, "Stop", "", "", "";
+        RAID_TUNE: Label, "Tune", "", "", "";
+        RAID_OPEN_WEB: Button, "Open web UI", "Full array detail and history.", "raid-levels", "";
+        RAID_DEGRADED_ALERT: Label, "Array degraded", "One more failure may lose data on RAID 5.", "replace-disk", "";
+        RAID_NONE: Label, "No arrays", "", "", "";
+        RAID_UNREACHABLE: Label, "Cannot reach unit", "", "troubleshooting", "";
+        RAID_READ: Button, "Read arrays", "Reads /proc/mdstat over SSH.", "", "";
+        DLG_OPERATION: Dialog, "Operation plan", "Review the steps and exact commands first.", "raid-levels",
+            "Shows the ordered steps for this operation, re-derived on the server when you run it, and the exact commands (collapsed). Destructive steps ask you to type a phrase such as REPLACE sdc.\n\nIt refuses to touch a device that is mounted, holds the system or swap, belongs to another array, or while the array is resyncing or reshaping.";
+        RAID_COMMANDS: Label, "Commands", "", "", "";
+        RAID_RUN: Button, "Run", "Run it from the web UI.", "", "";
+
         // ===================================================================== Help topics (bodies: markdown, at most 150 words)
         T_FIRST_INSTALL: Topic, "First install", "Scan, connect, inspect, plan, confirm.", "",
             "1. Scan, pick your unit and connect. Enable SSH in DSM first (Control Panel, Terminal and SNMP).\n2. Inspect is read-only.\n3. Choose Boot manager to try the agent, or Install Debian.\n4. Plan storage, set the system options, then confirm.\n\nThe install takes about 25 minutes. Kernel: Stable is Debian's 6.12 LTS; Newest is 7.x from trixie-backports and falls back to Stable if it cannot be installed. Source: Online needs Internet on the NAS; Offline uses a bundle you downloaded in Settings. Afterwards the data array syncs for about 9 hours; the NAS works meanwhile with reduced protection. Copy the generated password on the last screen: synofurb does not keep it.";
@@ -509,6 +555,14 @@ mod strings {
             "**No units found**: wrong network or VLAN, NAS still booting, firewall (UDP 9999, mDNS 5353, TCP 22). Use Add by IP.\n\n**SSH is off**: enable it in DSM, Control Panel, Terminal and SNMP.\n\n**Login failed**: DSM may auto-block this computer after a few failures; check the account is an administrator.\n\n**Installer did not come up**: DSM is already the default; wait, then power-cycle.\n\n**Boot flash write failed**: the tool restores the flash and verifies it; use the rescue shell within 15 minutes.\n\nLogs: `~/.local/share/synofurb/logs` (secrets removed). Settings, Logs opens the folder; About copies diagnostics.";
         T_REPORT_RESULT: Topic, "Report a result", "How a model moves from Untested to Verified.", "",
             "Reports move a model from Untested towards Verified. After an install, press Report result on the Done screen. It opens a pre-filled GitHub issue (compat report template) with the model, DSM version, synofurb version, result, boot method and a log excerpt without secrets. The serial number is left out. Nothing is sent without your click, and Settings, Privacy has an off switch. A maintainer checks the log and changes the status through a reviewed pull request.";
+        T_RAID_LEVELS: Topic, "RAID levels", "What each level costs and survives.", "",
+            "RAID combines disks into one array. **None**: one disk, no protection. **RAID 0**: striped and fast; any failure loses everything (2+ disks). **RAID 1**: mirror, survives all but one disk (2+). **RAID 5**: survives one failed disk; usable space is (n-1) disks (3+). **RAID 6**: survives two; usable (n-2) disks (4+). **RAID 10**: mirrored stripes, survives one disk per mirror, half the capacity (4+).\n\nEqual-size levels use the smallest disk's size on every member, so larger disks waste space; Hybrid avoids that. RAID is not a backup: it does not protect against deletion, corruption or fire. A new array syncs for hours and works meanwhile with reduced protection.";
+        T_HYBRID_RAID: Topic, "Hybrid RAID", "Mixed disk sizes, SHR-style.", "",
+            "Hybrid (SHR-style) mixes disk sizes. synofurb cuts the disks' data space into slices at the sizes of the different disks; every slice on two or more disks becomes an array (RAID 1 for two members, RAID 5 for three or more; Hybrid 2-disk uses RAID 6 for four or more). LVM joins the arrays into one volume.\n\nExample: 4, 4 and 8 TB with Hybrid 1-disk gives 8 TB usable; the extra 4 TB on the large disk has no partner and stays unused. Hybrid 1-disk survives any one disk; Hybrid 2-disk any two where a slice has four or more members. It is built with mdadm and LVM, so Debian manages it. DSM may not adopt it, and DSM-made volumes import read-only. Nothing here has run on a real Synology.";
+        T_REPLACE_DISK: Topic, "Replacing a failed disk", "Degraded arrays and rebuilds.", "",
+            "A failed member leaves the array degraded: it works, but one more failure may lose data (RAID 5).\n\n1. Check the disk on the Dashboard or RAID page.\n2. Choose the new disk; it is erased and must be at least as large.\n3. The tool marks the old member failed, removes it and adds the new one.\n4. The rebuild runs for hours; progress and speed are shown, and other operations wait. Do not power off.\n\nTo upgrade a healthy member, the tool adds a spare and uses a replace operation, so redundancy is kept during the swap. Each step shows its exact commands and asks you to type REPLACE and the disk name.";
+        T_SCRUBBING: Topic, "Scrubbing", "Find silent errors before they matter.", "",
+            "A scrub reads every block and compares copies or parity to find silent errors. Check only counts mismatches; Repair also rewrites them and needs a typed confirmation. Debian's mdcheck timer runs a scrub monthly; you can start one or stop it (idle) from the RAID page.\n\nThe array stays usable but slower while it runs, and speed limits can be tuned. A non-zero mismatch count on a healthy array deserves attention: check SMART on every member. A scrub cannot start while the array is resyncing or reshaping.";
     }
 }
 
@@ -524,6 +578,10 @@ pub static TOPICS: &[(&str, &Item, &str)] = &[
     ("cli", &T_CLI, "docs/CLI.md"),
     ("troubleshooting", &T_TROUBLESHOOTING, "docs/RECOVERY.md"),
     ("report-result", &T_REPORT_RESULT, "docs/COMPAT.md"),
+    ("raid-levels", &T_RAID_LEVELS, "docs/RAID.md"),
+    ("hybrid-raid", &T_HYBRID_RAID, "docs/RAID.md"),
+    ("replace-disk", &T_REPLACE_DISK, "docs/RAID.md"),
+    ("scrubbing", &T_SCRUBBING, "docs/RAID.md"),
 ];
 
 /// The topic with this id.
@@ -829,6 +887,20 @@ pub static SCREENS: &[ScreenCopy] = &[
             &MAN_PW_NOT_KEPT,
         ],
     },
+    ScreenCopy {
+        name: "storage",
+        visible: &[
+            &MAN_STORAGE,
+            &RAID_ARRAY,
+            &RAID_LEVEL,
+            &RAID_STATE,
+            &RAID_SIZE,
+            &RAID_PROGRESS,
+            &RAID_CREATE,
+            &RAID_ACTIONS,
+            &RAID_OPEN_WEB,
+        ],
+    },
     ScreenCopy { name: "help", visible: &[&HELP_TITLE, &HELP_SEARCH, &HELP_TOPICS, &HELP_SHORTCUTS, &HELP_DOCS, &BTN_BACK] },
     ScreenCopy {
         name: "about",
@@ -865,6 +937,7 @@ mod tests {
 
     #[test]
     fn every_item_stays_inside_its_word_budget() {
+        let mut bad: Vec<String> = vec![];
         for it in ALL {
             let n = words(it.short);
             let max = match it.kind {
@@ -876,21 +949,30 @@ mod tests {
                 Kind::Topic => 4,
                 Kind::Dialog => 4,
             };
-            assert!(n <= max, "{}: {:?} has {n} words (max {max} for {:?})", it.key, it.short, it.kind);
+            if n > max {
+                bad.push(format!("{}: {:?} has {n} words (max {max} for {:?})", it.key, it.short, it.kind));
+            }
             if !it.tip.is_empty() {
-                assert!(words(it.tip) <= 24, "{}: tooltip has {} words (max 24)", it.key, words(it.tip));
-                assert_eq!(sentences(it.tip), 1, "{}: a tooltip is exactly one sentence: {:?}", it.key, it.tip);
+                if words(it.tip) > 24 {
+                    bad.push(format!("{}: tooltip has {} words (max 24)", it.key, words(it.tip)));
+                }
+                if sentences(it.tip) != 1 {
+                    bad.push(format!("{}: a tooltip is exactly one sentence: {:?}", it.key, it.tip));
+                }
             }
             let body_max = match it.kind {
                 Kind::Topic => 150,
                 Kind::Dialog => 90,
                 _ => 40,
             };
-            assert!(words(it.body) <= body_max, "{}: body has {} words (max {body_max})", it.key, words(it.body));
-            if it.kind == Kind::Topic {
-                assert!(it.short.len() > 2 && !it.body.is_empty(), "{}: a topic needs a title and a body", it.key);
+            if words(it.body) > body_max {
+                bad.push(format!("{}: body has {} words (max {body_max})", it.key, words(it.body)));
+            }
+            if it.kind == Kind::Topic && (it.short.len() <= 2 || it.body.is_empty()) {
+                bad.push(format!("{}: a topic needs a title and a body", it.key));
             }
         }
+        assert!(bad.is_empty(), "copy budget violations:\n{}", bad.join("\n"));
     }
 
     #[test]
@@ -909,7 +991,7 @@ mod tests {
                 assert!(topic(it.topic).is_some(), "{}: unknown help topic {:?}", it.key, it.topic);
             }
         }
-        assert_eq!(TOPICS.len(), 10);
+        assert_eq!(TOPICS.len(), 14);
         for (id, it, docs) in TOPICS {
             assert_eq!(it.kind, Kind::Topic, "{id}");
             assert!(docs.starts_with("docs/"), "{id}");
@@ -942,8 +1024,7 @@ mod tests {
                 })
                 .map(|i| words(i.short))
                 .sum();
-            let side_page = matches!(s.name, "settings" | "about" | "help" | "manage" | "update");
-            let total = own + if side_page { 0 } else { shell };
+            let total = own + shell;
             assert!(total <= 60, "screen {}: {total} words of static prose (own {own}, shell {shell}; max 60)", s.name);
             let titles = s.visible.iter().filter(|i| i.kind == Kind::Title).count();
             assert!(titles <= 1, "screen {}: more than one title", s.name);
@@ -977,7 +1058,7 @@ mod tests {
 
     #[test]
     fn help_search_finds_titles_and_bodies() {
-        assert_eq!(search_topics("").len(), 10);
+        assert_eq!(search_topics("").len(), 14);
         assert!(search_topics("rescue shell").iter().any(|(id, _, _)| *id == "recovery"));
         assert!(search_topics("kexec").iter().any(|(id, _, _)| *id == "boot-manager"));
         assert!(search_topics("zzzzqq").is_empty());

@@ -183,7 +183,64 @@ impl App {
                 plan.preserved.iter().map(|d| format!("{} \u{00b7} {}", d.what, d.detail)).collect(),
             ));
 
-        let mut body = v_flex().w_full().gap(px(16.0)).child(controls).child(diagram_box).child(summary);
+        let surv = crate::ui::raid::survives(&plan);
+        let hybrid = crate::ui::raid::is_hybrid(self.form.req.data_raid);
+        let preview = h_flex()
+            .gap(px(8.0))
+            .items_center()
+            .flex_wrap()
+            .child(
+                h_flex()
+                    .gap(px(2.0))
+                    .items_center()
+                    .child(kit::tag(
+                        &p,
+                        Tone::Neutral,
+                        None,
+                        format!("{} \u{00b7} {}", copy::PLAN_USABLE.short, size_2dp(plan.sizes.data_usable_bytes)),
+                    ))
+                    .child(crate::ui::disclosure::info_tip("usable-info", &copy::PLAN_USABLE, &app)),
+            )
+            .when_some(surv, |d, n| {
+                d.child(
+                    h_flex()
+                        .gap(px(2.0))
+                        .items_center()
+                        .child(kit::tag(
+                            &p,
+                            Tone::Neutral,
+                            None,
+                            format!("{} \u{00b7} {}", copy::PLAN_SURVIVES.short, crate::ui::raid::survives_text(n)),
+                        ))
+                        .child(crate::ui::disclosure::info_tip("survives-info", &copy::PLAN_SURVIVES, &app)),
+                )
+            })
+            .when(hybrid, |d| {
+                d.child(
+                    Button::new("slices")
+                        .link()
+                        .small()
+                        .label(copy::PLAN_SLICES.short)
+                        .tooltip(copy::PLAN_SLICES.tip)
+                        .on_click(cx.listener(|this, _, window, cx| this.open_slices_dialog(window, cx))),
+                )
+            })
+            .when(hybrid, |d| {
+                d.child(
+                    h_flex()
+                        .gap(px(2.0))
+                        .items_center()
+                        .child(kit::chip(&p, copy::PLAN_HYBRID_TIP.short))
+                        .child(crate::ui::disclosure::info_tip("hybrid-info", &copy::PLAN_HYBRID_TIP, &app)),
+                )
+            });
+        let mut body = v_flex().w_full().gap(px(16.0)).child(controls).child(preview).child(diagram_box).child(summary);
+        if let Some(shr) = &plan.shr {
+            for (i, w) in shr.layout.warnings.iter().enumerate() {
+                body = body
+                    .child(Alert::warning(("shr-warn", i), w.clone()).title(copy::PLAN_WEAKER.short).small().icon(icons::icon(role::WARN)));
+            }
+        }
         for e in &plan.errors {
             body = body.child(Alert::error(("plan-err", e.len()), e.clone()).title(copy::PLAN_ERROR.short).icon(icons::icon(role::ERR)));
         }

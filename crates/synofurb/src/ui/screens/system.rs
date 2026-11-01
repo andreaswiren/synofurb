@@ -219,6 +219,8 @@ impl App {
                     }),
             ));
         }
+        let layout_text = self.form.plan.as_ref().map(|pl| crate::ui::raid::raid_label(pl.request.data_raid)).unwrap_or("Auto");
+        form = form.child(kit::field("f-layout", &copy::SYS_DATA_LAYOUT, &app, kit::chip(&p, layout_text)));
         form = form.child(kit::field("f-via", &copy::SYS_BOOT_VIA, &app, kit::tag(&p, Tone::Info, Some(role::CABLE), via)));
 
         // options most people never touch: collapsed

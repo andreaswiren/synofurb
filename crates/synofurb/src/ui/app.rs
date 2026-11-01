@@ -273,11 +273,11 @@ impl App {
         }));
 
         // Plan form widgets.
-        let raid_items: Vec<SharedString> = DataRaid::ALL.iter().map(|r| SharedString::from(r.label())).collect();
+        let raid_items: Vec<SharedString> = DataRaid::ALL.iter().map(|r| SharedString::from(super::raid::raid_label(*r))).collect();
         let raid_select = cx.new(|cx| SelectState::new(raid_items, Some(IndexPath::default().row(0)), window, cx));
         subs.push(cx.subscribe(&raid_select, |this: &mut App, _, ev: &SelectEvent<Vec<SharedString>>, cx| {
             let SelectEvent::Confirm(Some(v)) = ev else { return };
-            if let Some(r) = DataRaid::ALL.iter().find(|r| r.label() == v.as_ref()) {
+            if let Some(r) = DataRaid::ALL.iter().find(|r| super::raid::raid_label(**r) == v.as_ref()) {
                 this.form.req.data_raid = *r;
                 this.rebuild_plan();
                 cx.notify();

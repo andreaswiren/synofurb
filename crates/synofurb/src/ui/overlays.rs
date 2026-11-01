@@ -233,3 +233,37 @@ impl App {
         cx.notify();
     }
 }
+
+impl App {
+    /// "Hybrid slices": the slices table of the current plan (Slice, Disks, Level, Usable).
+    pub fn open_slices_dialog(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
+        let Some(shr) = self.form.plan.as_ref().and_then(|p| p.shr.clone()) else { return };
+        let rows: Vec<_> = shr.layout.slices.iter().map(|s| super::raid::slice_row(s, &shr.disks)).collect();
+        window.open_dialog(cx, move |d, _, cx| {
+            let table = Table::new()
+                .child(
+                    TableHeader::new().child(
+                        TableRow::new()
+                            .child(TableHead::new().child(copy::SLICE_COL_SLICE.short))
+                            .child(TableHead::new().child(copy::SLICE_COL_DISKS.short))
+                            .child(TableHead::new().child(copy::SLICE_COL_LEVEL.short))
+                            .child(TableHead::new().text_right().child(copy::SLICE_COL_USABLE.short)),
+                    ),
+                )
+                .child(TableBody::new().children(rows.iter().map(|(a, b, c, e)| {
+                    TableRow::new()
+                        .child(TableCell::new().child(a.clone()))
+                        .child(TableCell::new().child(super::kit::mono_sm(cx, b.clone())))
+                        .child(TableCell::new().child(c.clone()))
+                        .child(TableCell::new().text_right().child(super::kit::mono(cx, e.clone())))
+                })));
+            d.title(copy::DLG_SLICES.short)
+                .w(px(layout::DIALOG_W_WIDE))
+                .child(v_flex().gap(px(12.0)).child(table).child(paragraphs(copy::DLG_SLICES.body, cx)))
+                .footer(DialogFooter::new().child(
+                    Button::new("sl-close").primary().label(copy::BTN_CLOSE.short).on_click(|_, window, cx| window.close_dialog(cx)),
+                ))
+        });
+    }
+}
