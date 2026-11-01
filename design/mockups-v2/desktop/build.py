@@ -18,7 +18,7 @@ tokens_css = f':root{{{vars_("light")}{extra}color-scheme:light}}:root[data-them
 def ff(name, weight, f, fmt='woff'): return f'@font-face{{font-family:"{name}";font-weight:{weight};font-style:normal;src:url(data:font/woff;base64,{base64.b64encode(open(os.path.join(SRC,f),"rb").read()).decode()}) format("woff")}}'
 fonts_css = ''.join([ff('Inter', 400, 'inter-400.woff'), ff('Inter', 600, 'inter-600.woff'), ff('Inter', 700, 'inter-700.woff'), ff('JetBrains Mono', 400, 'jbm-400.woff'), ff('JetBrains Mono', 700, 'jbm-700.woff')])
 # ---- JS
-js = '\n'.join(rd(os.path.join(SRC, f)) for f in ('js1.js', 'js2.js', 'js3.js', 'js4.js', 'js5.js', 'js6.js'))
+js = '\n'.join(rd(os.path.join(SRC, f)) for f in ('js1.js', 'js2.js', 'js3.js', 'js4.js', 'js5.js', 'js6.js', 'js7.js'))
 # ---- icons (Lucide, ISC, from gpui-kit-assets)
 icon_dir = glob.glob(os.path.expanduser('~/.cargo/registry/src/*/gpui-kit-assets-0.8.1/assets/icons'))[0]
 have = {f[:-4] for f in os.listdir(icon_dir) if f.endswith('.svg')}
@@ -57,7 +57,10 @@ def md(body):
             items = []
             while i < len(lines) and lines[i].startswith('- '): items.append(lines[i][2:]); i += 1
             out.append('<ul>' + ''.join(f'<li>{inline(x)}</li>' for x in items) + '</ul>'); continue
-        if l.strip(): out.append(f'<p>{inline(l)}</p>')
+        if l.strip():
+            # review N4: no wall of text; at most two sentences per paragraph, the first one is the lead
+            sents = re.split(r'(?<=[.!?])\s+(?=[A-Z0-9(])', l.strip()); step = 2
+            for k in range(0, len(sents), step): out.append(f'<p>{inline(" ".join(sents[k:k + step]))}</p>')
         i += 1
     return ''.join(out)
 help_ = []

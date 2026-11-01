@@ -15,18 +15,37 @@ document.addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]')
 document.addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))hideTip()});
 document.addEventListener('focusin',e=>{const t=e.target.closest('[data-tip]');if(t&&e.target.matches(':focus-visible'))showTip(t)});
 document.addEventListener('focusout',hideTip);
-/* popover */
+/* popover (and Select popup): GPUI tooltips are hover-only, so anything needed to act or stay safe is a focusable trigger that opens a popover */
 let popEl=null,popAnchor=null;
-function closePop(ret=true){if(popEl){popEl.remove();popEl=null;if(ret&&popAnchor&&document.contains(popAnchor))popAnchor.focus({preventScroll:true})}popAnchor=null}
-function openPop(anchor,key){
+function closePop(ret=true){if(popEl){popEl.remove();popEl=null;if(popAnchor&&popAnchor.getAttribute&&popAnchor.hasAttribute('aria-expanded'))popAnchor.setAttribute('aria-expanded','false');if(ret&&popAnchor&&document.contains(popAnchor))popAnchor.focus({preventScroll:true})}popAnchor=null}
+function showPop(anchor,P){
   if(popEl&&popAnchor===anchor){closePop();return}
-  closePop(false);hideTip();const P=POP[key]?POP[key]():null;if(!P)return;
+  closePop(false);hideTip();
   popEl=document.createElement('div');popEl.className='pop';popEl.setAttribute('role','dialog');popEl.setAttribute('aria-label',P.title);popAnchor=anchor;
   popEl.innerHTML=`<h3>${P.title}</h3><div>${P.body}</div>${P.help?`<div class="row"><button class="link" data-help-open="${P.help}">Open Help</button></div>`:''}`;
   L().appendChild(popEl);place(popEl,anchor,'below');
-  const f=$('button,[tabindex]',popEl);if(f&&f.dataset.helpOpen!==undefined)f.focus();
+  const f=$('button,[tabindex]',popEl);if(f)f.focus();
 }
-document.addEventListener('click',e=>{if(popEl&&!e.target.closest('.pop')&&!e.target.closest('[data-pop]'))closePop(false)},true);
+function openPop(anchor,key){const P=POP[key]?POP[key]():null;if(P)showPop(anchor,P)}
+function openText(anchor,title,text,help){showPop(anchor,{title,body:`<p>${esc(text)}</p>`,help})}
+document.addEventListener('click',e=>{if(popEl&&!e.target.closest('.pop,.lb')&&!e.target.closest('[data-pop],[data-select],[data-ptext],[data-reason]'))closePop(false)},true);
+/* Select: closed = input-like button, open = popup list with check on the selected item; Up/Down/Enter/Esc */
+const SEL={};
+function selectH(id,{opts,get,set,label,disabled,w}){SEL[id]={opts,get,set};const o=opts(),c=o.find(x=>x[0]===get())||o[0];
+  return `<button type="button" class="inp sel" id="${id}" data-select="${id}" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-label="${label}"${disabled?' aria-disabled="true" data-reason="Not available in Keep mode."':''}${w?` style="width:${w}"`:''}><span class="grow">${c[1]}</span>${ic('chevron-down')}</button>`}
+function openSelect(btn){
+  if(popEl&&popAnchor===btn){closePop();return}
+  closePop(false);hideTip();const C=SEL[btn.dataset.select],o=C.opts(),v=C.get();
+  const m=document.createElement('div');m.className='lb';m.setAttribute('role','listbox');m.setAttribute('aria-label',btn.getAttribute('aria-label'));
+  m.innerHTML=o.map(([k,l])=>`<button type="button" class="opt" role="option" aria-selected="${k===v}" data-v="${k}">${l}${ic('check','s')}</button>`).join('');
+  const r=btn.getBoundingClientRect();m.style.minWidth=r.width+'px';L().appendChild(m);place(m,btn,'below');
+  m.style.left=Math.max(8,r.left-WIN().getBoundingClientRect().left)+'px';popEl=m;popAnchor=btn;btn.setAttribute('aria-expanded','true');
+  const ops=$$('.opt',m);(ops.find(b=>b.getAttribute('aria-selected')==='true')||ops[0]).focus();
+  m.addEventListener('click',e=>{const b=e.target.closest('.opt');if(!b)return;const val=b.dataset.v;closePop();C.set(val)});
+  m.addEventListener('keydown',e=>{const i=ops.indexOf(document.activeElement);
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();ops[(i+(e.key==='ArrowDown'?1:-1)+ops.length)%ops.length].focus()}
+    else if(e.key==='Home'){e.preventDefault();ops[0].focus()}else if(e.key==='End'){e.preventDefault();ops[ops.length-1].focus()}
+    else if(e.key==='Tab'){e.preventDefault();closePop()}})}
 /* dialog and sheet with focus trap */
 const dlgStack=[];
 function trap(root,ev){if(ev.key!=='Tab')return;const f=$$('button:not([aria-disabled=true]),a[href],input:not([type=hidden]),select,[tabindex]:not([tabindex="-1"])',root).filter(x=>x.offsetParent!==null);if(!f.length)return;const a=f[0],z=f[f.length-1];
@@ -71,10 +90,13 @@ const POP={
  phases:()=>({title:'Phases',body:`<ol>${PHASES.map((p,i)=>`<li${i===phaseIdx()?' style="font-weight:700"':''}>${p}</li>`).join('')}</ol>`,help:'first-install'}),
  cert:()=>({title:'Certificate',body:`<p class="mono" style="word-break:break-all">5E:91:C4:0B:7A:D2:38:F6:19:AC:63:E0:B4:27:8D:55:F1:0A:9C:42:E7:3B:68:D0:14:AF:C9:76:2D:83:3C:A1</p><button class="btn sm" data-copy="5E:91:C4:0B:7A:D2:38:F6:19:AC:63:E0:B4:27:8D:55:F1:0A:9C:42:E7:3B:68:D0:14:AF:C9:76:2D:83:3C:A1">${ic('copy')}Copy</button>`,help:'troubleshooting'}),
  wayback:()=>({title:'Way back',body:`<p>${wayBack()}</p>`,help:'recovery'}),
+ backup:()=>({title:'Backup',body:`<p>${esc(cur().bk==='none found'?'No Hyper Backup, USB Copy or rsync task was found on this NAS.':'A backup task exists. Test a restore before you erase.')}</p><p>Copy everything you need to another device first. After step 3 DSM and its data may be gone.</p>`,help:'backups'}),
+ bootrisk:()=>({title:'Boot flash',body:'<p>The whole flash is saved on this computer first, then entries and the agent are added. DSM stays the default entry.</p>',help:'boot-manager'}),
  oneshot:()=>({title:'One-shot agent',body:'<p>It resets the default to DSM when it starts. kexec starts Linux kernels only.</p>',help:'boot-manager'}),
  level:()=>({title:'Level',body:'<p>RAID level and minimum disks.</p>',help:'raid-levels'}),
  mgmtv:()=>({title:'Management app',body:'<p>The web UI on the unit. This app bundles a newer build and can update it over SSH.</p>',help:'first-install'}),
  diskcard:()=>({title:'Disks',body:'<p>SMART status and temperature, read over SSH from <span class="mono">synofurb-cli manage health</span>.</p>',help:'troubleshooting'})};
 const PHASES=['Connecting','Inspecting','Staging','Booting installer','Installing','Waiting for reboot','Verifying'];
 function phaseIdx(){const s=S.inst.step;return s<0?2:s<4?(s<3?2:3):s<16?4:s<17?5:6}
-function wayBack(){const r=risk();return {'Read-only':'Nothing to undo.','Plan only':'Nothing to undo.','Flash changed':'Cancel or power-cycle: DSM boots.','Disks changed':'Rescue shell 15 min, then the DSM loader; no data promise.','Failed safely':'DSM boots again by itself.','Debian running':'Recovery stays under Manage.'}[r.t]}
+function wayBack(){const r=risk(),pl=['setup','plan','system','confirm'].includes(S.screen);
+  return {'Read-only':'Nothing to undo.','Plan only':pl?'Nothing is written yet. From installer step 3 there is no undo: a failure opens a 15-minute rescue shell, then the DSM loader. No data promise.':'Nothing to undo.','Flash changed':'Power-cycle or Cancel: DSM boots. Our entries stay until removed.','Disks changed':'Rescue shell 15 min, then the DSM loader; no data promise.','Failed safely':'DSM boots again by itself.','Debian running':'Recovery stays under Manage.','Needs attention':'Recovery stays under Manage. Repairs happen in the web UI.','Critical':'Recovery stays under Manage. Repairs happen in the web UI.','Unreachable':'Check power and network, then Retry.'}[r.t]||''}

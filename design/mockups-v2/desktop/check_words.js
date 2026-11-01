@@ -6,12 +6,14 @@ const H = __dirname, list = JSON.parse(fs.readFileSync(path.join(H, 'screens.jso
 const size = (process.argv.find(a => a.startsWith('--size=')) || '--size=1280x800').slice(7).split('x').map(Number);
 const BUDGET = 60, LIM = { title: 4, sub: 12, btn: 3, lab: 4, dlg: 90, pop: 60, sheetTopic: 150 };
 const countJS = () => {
+  const PROSE = /\b(is|are|was|were|has|have|will|can|may|stay|stays|return|returns|erased|changed|failed|refused|installed|needs|keeps|runs|closes|opens|timed|rolled|answers|expects)\b/i;
   const LIM = { title: 4, sub: 12, btn: 3, lab: 4 };
   const W = s => (s.replace(/[·—–×+\/|•]/g, ' ').match(/[^\s]*[A-Za-z0-9][^\s]*/g) || []).length;
   const vis = e => { for (let n = e; n && n !== document.body; n = n.parentElement) { const c = getComputedStyle(n); if (c.display === 'none' || c.visibility === 'hidden') return false } const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 };
   function words(root, skip) {
     let n = 0; const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (let t = w.nextNode(); t; t = w.nextNode()) { const p = t.parentElement; if (!p || p.closest('.d,.mockmark,.dev,.toasts,.tip,.pop,script,style,svg,[data-skip]') || (skip && p.closest(skip))) continue; if (!vis(p)) continue; n += W(t.nodeValue) }
+    for (let t = w.nextNode(); t; t = w.nextNode()) { const p = t.parentElement; if (p && p.closest('.d') && !p.closest('.mockmark,.dev,.toasts,.tip,.pop,script,style,svg,[data-skip]') && (!skip || !p.closest(skip)) && vis(p)) { const dd = p.closest('.d'); if (!dd.__pw) { const tx = dd.textContent.trim(); dd.__pw = (W(tx) > 3 && PROSE.test(tx)) ? 1 : 2; } if (dd.__pw === 1 && !dd.__c) { dd.__c = 1; n += W(dd.textContent); } continue; }
+    if (!p || p.closest('.d,.mockmark,.dev,.toasts,.tip,.pop,script,style,svg,[data-skip]') || (skip && p.closest(skip))) continue; if (!vis(p)) continue; n += W(t.nodeValue) }
     root.querySelectorAll('input[placeholder]').forEach(i => { if (!i.value && vis(i) && !i.closest(skip || '.none')) n += W(i.placeholder) });
     root.querySelectorAll('select').forEach(s => { if (vis(s) && !s.closest(skip || '.none')) n += W(s.options[s.selectedIndex].text) });
     return n }
@@ -26,7 +28,7 @@ const countJS = () => {
   const b = await chromium.launch({ executablePath: process.env.CHROME || '/usr/bin/google-chrome', args: ['--no-sandbox'] });
   let bad = 0; const rows = [];
   for (const s of list) {
-    if (s.n === 'dev-menu') continue;
+    if (s.n === 'dev-menu' || s.n === 'specimens') continue;
     const p = await b.newPage({ viewport: { width: size[0], height: size[1] } });
     await p.goto(`file://${H}/index.html?bare=1&theme=light&${s.q}#${s.h}`); await p.waitForTimeout(250);
     const r = await p.evaluate(countJS); await p.close();

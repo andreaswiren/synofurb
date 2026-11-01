@@ -19,9 +19,14 @@ const UNITS=[
 const TWIN={id:'ds918b',model:'DS918+',sn:'1930PDN557710',ip:'192.168.1.58',dsm:'7.2.1',found:['mDNS'],compat:'untested',cpu:'Celeron J3455',ram:'8 GiB',fw:'BIOS',flash:'editable',con:'ttyS0 115200',bk:'none found',disks:UNITS[1].disks,vol:'volume1',used:'1 TiB'};
 const DEBIAN_UNITS=[{id:'attic',model:'DS218+',ip:'192.168.1.33',os:'Debian 13.2',kernel:'6.12.57'}];
 const COMPAT={verified:['shield-check','ok','Verified'],community:['users','info','Community-reported'],untested:['circle-dashed','','Untested'],issues:['triangle-alert','warn','Known issues'],unsupported:['ban','err','Unsupported']};
-const tag=(txt,{v='',i='',fill=false,rd=false,lg=false,t='',attrs=''}={})=>`<span class="tag ${v} ${fill?'fill':''} ${rd?'rd':''} ${lg?'lg':''}"${t?tip(t):''}${attrs}>${i?ic(i,'s'):''}${txt}</span>`;
-const compatTag=(k,o={})=>{const[c,v,l]=COMPAT[k];return tag(l,{v,i:c,...o})};
+const tag=(txt,{v='',i='',fill=false,rd=false,lg=false,t='',attrs=''}={})=>{const c=`tag ${v} ${fill?'fill':''} ${rd?'rd':''} ${lg?'lg':''}`,inner=`${i?ic(i,'s'):''}${txt}`;
+  return t?`<button type="button" class="${c}" data-tip="${esc(t)}" data-ptext="${esc(t)}"${attrs}>${inner}</button>`:`<span class="${c}"${attrs}>${inner}</span>`};
+const compatTag=(k,o={})=>{const[c,v,l]=COMPAT[k];return tag(l,{v,i:c,t:{untested:'No one has reported this model; your install is the test.',community:'One report, from another project.',verified:'Confirmed by maintainers.',issues:'Known problems; read the report first.',unsupported:'Debian 13 cannot run on this hardware.'}[k],...o})};
 const cur=()=>S.unit||UNITS[1];
+const DSN=['K7P2','M3Q9','R5T1','H8D4','L2N6','B9V3'];const dsn=(u,i)=>DSN[(i+(u.sn.charCodeAt(2)||0))%6];
+const allUnits=()=>S.twin?[UNITS[0],UNITS[1],TWIN,UNITS[2]]:UNITS;
+const twinOf=u=>allUnits().find(x=>x!==u&&x.model===u.model&&x.sn!==u.sn);
+const snTail=u=>'…'+u.sn.slice(-4);
 
 /* ---------- RAID capacity engine (docs/RAID.md rules; sample data only) ---------- */
 const RAID_OPTS=[['auto','Auto'],['none','None'],['raid0','RAID 0'],['raid1','RAID 1'],['raid5','RAID 5'],['raid6','RAID 6'],['raid10','RAID 10'],['hyb1','Hybrid 1-disk'],['hyb2','Hybrid 2-disk']];
@@ -53,10 +58,13 @@ const LEVEL_LABEL={none:'None',raid0:'RAID 0',raid1:'RAID 1',raid5:'RAID 5',raid
 
 /* ---------- state ---------- */
 const S={screen:'find',unit:null,theme:'light',units:UNITS,twin:false,offline:false,scan:'done',filter:'',sel:null,update:null,
-  plan:{mode:'wipe',sys:32,copies:3,raid:'auto',free:20},
-  sys:{host:'ds918',user:'andreas',pw:'tundra-ember-Sage-4471',key:'Generate',tz:'Europe/Stockholm',web:true,kernel:'Stable',source:'Online'},
-  conn:{port:'22',user:'admin',auth:'Password',pw:'',sudo:true,keep:false,state:'idle',err:null,trusted:false},
-  gate:{b1:false,b2:false,b3:false,phrase:''},
-  inst:{step:-1,frozen:false,t0:0},fail:null,done:{copied:false},
-  manage:{tab:'overview',health:'ok',mgmt:'idle',mgmtPct:0},
-  settings:{page:'General'},help:{topic:null,q:''},mark:true,dev:false,lastFocus:null,boot:{key:'Generate',done:false},seenFirst:false};
+  plan:{mode:'wipe',sys:32,copies:3,raid:'auto',free:20},setup:{tab:'storage'},
+  sys:{host:'ds918',user:'andreas',pw:'tundra-ember-Sage-4471',key:'Generate',tz:'Europe/Stockholm',web:true,kernel:'Stable',source:'Online',pubkey:''},
+  opt:{tz:'Europe/Stockholm',auto:'Ask',arch:'x86_64'},
+  conn:{port:'22',user:'admin',auth:'Password',pw:'',sudo:true,keep:false,state:'idle',err:null,trusted:false,field:null},
+  gate:{b1:false,b2:false,b3:false,phrase:'',touched:false},
+  inst:{step:-1,frozen:false,t0:0,lost:false},fail:null,done:{copied:false,show:false},
+  F:{flash:false,disks:false,debian:false,dflt:'dsm',fail:false},   // unit facts: the risk Tag and the Recovery rows are pure functions of these
+  rec:{result:null,restored:false},bootm:{phase:'idle',pct:0},
+  manage:{tab:'overview',health:'ok',mgmt:'idle',mgmtPct:0,svcFixed:false,layout:'raid5',name:''},
+  settings:{page:'General'},help:{topic:null,q:'',tab:'Topics'},mark:true,dev:false,lastFocus:null,boot:{key:'Generate',done:false,pub:''},seenFirst:false,textSize:'Default'};

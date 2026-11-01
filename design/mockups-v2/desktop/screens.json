@@ -1,55 +1,462 @@
 [
- {"n":"find","h":"find","q":"nofirst=1&unit=ds918"},
- {"n":"find-loading","h":"find","q":"nofirst=1&scan=loading"},
- {"n":"find-empty","h":"find","q":"nofirst=1&filter=zzz"},
- {"n":"find-update","h":"find","q":"nofirst=1&update=1&dlg=update"},
- {"n":"find-firstlaunch","h":"find","q":"dlg=firstlaunch&nofirst=1"},
- {"n":"connect","h":"connect","q":"unit=ds918"},
- {"n":"connect-hostkey","h":"connect","q":"unit=ds918&dlg=hostkey"},
- {"n":"inspect","h":"inspect","q":"unit=ds918"},
- {"n":"goal","h":"goal","q":"unit=ds918"},
- {"n":"goal-community","h":"goal","q":"unit=ds923"},
- {"n":"plan","h":"plan","q":"unit=ds918"},
- {"n":"plan-hybrid","h":"plan","q":"unit=ds1621&raid=hyb1"},
- {"n":"plan-slices","h":"plan","q":"unit=ds1621&raid=hyb2&dlg=slices"},
- {"n":"plan-keep-error","h":"plan","q":"unit=ds918&keep=1"},
- {"n":"system","h":"system","q":"unit=ds918"},
- {"n":"confirm","h":"confirm","q":"unit=ds918"},
- {"n":"confirm-partial","h":"confirm","q":"unit=ds918&gate=part"},
- {"n":"confirm-ready","h":"confirm","q":"unit=ds918&gate=ready"},
- {"n":"confirm-recovery","h":"confirm","q":"unit=ds918&gate=ready&dlg=recovery"},
- {"n":"install-flash","h":"install","q":"unit=ds918&step=2"},
- {"n":"install","h":"install","q":"unit=ds918&step=12"},
- {"n":"install-log","h":"install","q":"unit=ds918&step=12&acc=ilog"},
- {"n":"install-cancel","h":"install","q":"unit=ds918&step=6&dlg=cancelinst"},
- {"n":"failed-pre","h":"failed","q":"unit=ds918&fail=pre"},
- {"n":"failed-post","h":"failed","q":"unit=ds918&fail=post"},
- {"n":"failed-post-next","h":"failed","q":"unit=ds918&fail=postkeep&dlg=next"},
- {"n":"done","h":"done","q":"unit=ds918"},
- {"n":"done-copied","h":"done","q":"unit=ds918&copied=1&show=1"},
- {"n":"boot","h":"boot","q":"unit=ds918"},
- {"n":"recovery","h":"recovery","q":"unit=ds918"},
- {"n":"recovery-restore","h":"recovery","q":"unit=ds918&dlg=restore"},
- {"n":"manage-health-ok","h":"manage","q":"unit=ds918"},
- {"n":"manage-health-rebuild","h":"manage","q":"unit=ds918&health=rebuild"},
- {"n":"manage-health-faildisk","h":"manage","q":"unit=ds918&health=faildisk"},
- {"n":"manage-health-services","h":"manage","q":"unit=ds918&health=svcdown"},
- {"n":"manage-health-unreachable","h":"manage","q":"unit=ds918&health=unreachable"},
- {"n":"manage-health-update","h":"manage","q":"unit=ds918&dlg=mgmtupdate"},
- {"n":"manage-health-updating","h":"manage","q":"unit=ds918&mgmt=updating"},
- {"n":"manage-health-failed","h":"manage","q":"unit=ds918&mgmt=failed"},
- {"n":"manage-health-updated","h":"manage","q":"unit=ds918&mgmt=updated"},
- {"n":"manage-storage","h":"manage","q":"unit=ds918&tab=storage&health=faildisk"},
- {"n":"manage-logins","h":"manage","q":"unit=ds918&tab=logins"},
- {"n":"settings","h":"settings","q":"unit=ds918"},
- {"n":"settings-data","h":"settings","q":"page=Data"},
- {"n":"help","h":"find","q":"nofirst=1&sheet=help"},
- {"n":"help-topic","h":"plan","q":"unit=ds1621&raid=hyb1&sheet=help&topic=hybrid-raid"},
- {"n":"help-search","h":"find","q":"nofirst=1&sheet=help&hq=raid"},
- {"n":"help-shortcuts","h":"find","q":"nofirst=1&sheet=help&htab=Shortcuts"},
- {"n":"about","h":"about","q":""},
- {"n":"about-credits","h":"about","q":"acc=credits"},
- {"n":"popover-raid","h":"plan","q":"unit=ds918&pop=raid"},
- {"n":"tooltip-erase","h":"confirm","q":"unit=ds918&gate=part&tip=%23f-erase"},
- {"n":"dev-menu","h":"find","q":"nofirst=1&dev=1"}
+{
+"n": "find-none",
+"h": "find",
+"q": "nofirst=1"
+},
+{
+"n": "find",
+"h": "find",
+"q": "nofirst=1&unit=ds918"
+},
+{
+"n": "find-loading",
+"h": "find",
+"q": "nofirst=1&scan=loading"
+},
+{
+"n": "find-empty",
+"h": "find",
+"q": "nofirst=1&filter=zzz"
+},
+{
+"n": "find-update",
+"h": "find",
+"q": "nofirst=1&update=1&dlg=update"
+},
+{
+"n": "find-firstlaunch",
+"h": "find",
+"q": "nofirst=1&dlg=firstlaunch"
+},
+{
+"n": "find-twin",
+"h": "find",
+"q": "nofirst=1&twin=1&unit=ds918"
+},
+{
+"n": "connect",
+"h": "connect",
+"q": "nofirst=1&unit=ds918"
+},
+{
+"n": "connect-hostkey",
+"h": "connect",
+"q": "nofirst=1&unit=ds918&dlg=hostkey"
+},
+{
+"n": "connect-empty",
+"h": "connect",
+"q": "nofirst=1&unit=ds918&conn=empty"
+},
+{
+"n": "connect-login",
+"h": "connect",
+"q": "nofirst=1&unit=ds918&conn=login"
+},
+{
+"n": "connect-off",
+"h": "connect",
+"q": "nofirst=1&unit=ds918&conn=off"
+},
+{
+"n": "connect-unreach",
+"h": "connect",
+"q": "nofirst=1&unit=ds918&conn=unreach"
+},
+{
+"n": "connect-hostchanged",
+"h": "connect",
+"q": "nofirst=1&unit=ds918&conn=hostchanged&dlg=hostchanged"
+},
+{
+"n": "inspect",
+"h": "inspect",
+"q": "nofirst=1&unit=ds918"
+},
+{
+"n": "goal",
+"h": "goal",
+"q": "nofirst=1&unit=ds918"
+},
+{
+"n": "goal-community",
+"h": "goal",
+"q": "nofirst=1&unit=ds923"
+},
+{
+"n": "goal-quick",
+"h": "goal",
+"q": "nofirst=1&unit=ds918&dlg=quick"
+},
+{
+"n": "plan",
+"h": "plan",
+"q": "nofirst=1&unit=ds918"
+},
+{
+"n": "plan-hybrid",
+"h": "plan",
+"q": "nofirst=1&unit=ds1621&raid=hyb1"
+},
+{
+"n": "plan-hybrid-suggest",
+"h": "plan",
+"q": "nofirst=1&unit=ds1621&pop=hybsug"
+},
+{
+"n": "plan-slices",
+"h": "plan",
+"q": "nofirst=1&unit=ds1621&raid=hyb1&dlg=slices"
+},
+{
+"n": "plan-keep-error",
+"h": "plan",
+"q": "nofirst=1&unit=ds918&keep=1&sys=16"
+},
+{
+"n": "plan-select-open",
+"h": "plan",
+"q": "nofirst=1&unit=ds918&select=pl-raid"
+},
+{
+"n": "system",
+"h": "system",
+"q": "nofirst=1&unit=ds918"
+},
+{
+"n": "system-select-open",
+"h": "system",
+"q": "nofirst=1&unit=ds918&select=s-tz"
+},
+{
+"n": "confirm",
+"h": "confirm",
+"q": "nofirst=1&unit=ds918"
+},
+{
+"n": "confirm-partial",
+"h": "confirm",
+"q": "nofirst=1&unit=ds918&gate=part"
+},
+{
+"n": "confirm-ready",
+"h": "confirm",
+"q": "nofirst=1&unit=ds918&gate=ready"
+},
+{
+"n": "confirm-twin-a",
+"h": "confirm",
+"q": "nofirst=1&twin=1&unit=ds918&gate=ready"
+},
+{
+"n": "confirm-twin-b",
+"h": "confirm",
+"q": "nofirst=1&twin=1&unit=ds918b&gate=ready"
+},
+{
+"n": "confirm-recovery",
+"h": "confirm",
+"q": "nofirst=1&unit=ds918&gate=ready&dlg=recovery"
+},
+{
+"n": "confirm-command",
+"h": "confirm",
+"q": "nofirst=1&unit=ds1621&raid=hyb2&copies=2&gate=ready&dlg=cmd"
+},
+{
+"n": "confirm-locked-reason",
+"h": "confirm",
+"q": "nofirst=1&unit=ds918&gate=part&reason=%23f-erase"
+},
+{
+"n": "install-flash",
+"h": "install",
+"q": "nofirst=1&unit=ds918&step=2"
+},
+{
+"n": "install",
+"h": "install",
+"q": "nofirst=1&unit=ds918&step=9"
+},
+{
+"n": "install-pnr",
+"h": "install",
+"q": "nofirst=1&unit=ds918&step=5&acc=isteps"
+},
+{
+"n": "install-log",
+"h": "install",
+"q": "nofirst=1&unit=ds918&step=9&acc=ilog"
+},
+{
+"n": "install-lost",
+"h": "install",
+"q": "nofirst=1&unit=ds918&step=9&lost=1"
+},
+{
+"n": "install-cancel",
+"h": "install",
+"q": "nofirst=1&unit=ds918&step=2&dlg=cancelinst"
+},
+{
+"n": "failed-stopped",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=stopped"
+},
+{
+"n": "failed-pre",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=pre"
+},
+{
+"n": "failed-pre-waiting",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=pre&phase=waiting&el=7"
+},
+{
+"n": "failed-pre-back",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=pre&phase=back"
+},
+{
+"n": "failed-pre-notback",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=pre&phase=notback"
+},
+{
+"n": "failed-post",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=post"
+},
+{
+"n": "failed-post-keep",
+"h": "failed",
+"q": "nofirst=1&unit=ds1621&fail=postkeep"
+},
+{
+"n": "failed-post-next",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=post&dlg=next"
+},
+{
+"n": "failed-post-notes",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=post&dlg=rescuenotes"
+},
+{
+"n": "failed-post-waiting",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=post&phase=waiting&el=12"
+},
+{
+"n": "failed-post-loader",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=post&phase=loader"
+},
+{
+"n": "failed-post-lost",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=post&phase=lost&clock=640"
+},
+{
+"n": "done",
+"h": "done",
+"q": "nofirst=1&unit=ds918"
+},
+{
+"n": "done-copied",
+"h": "done",
+"q": "nofirst=1&unit=ds918&copied=1"
+},
+{
+"n": "boot",
+"h": "boot",
+"q": "nofirst=1&unit=ds918"
+},
+{
+"n": "boot-confirm",
+"h": "boot",
+"q": "nofirst=1&unit=ds918&dlg=bootconfirm"
+},
+{
+"n": "boot-progress",
+"h": "boot",
+"q": "nofirst=1&unit=ds918&boot=progress"
+},
+{
+"n": "boot-result",
+"h": "boot",
+"q": "nofirst=1&unit=ds918&boot=result"
+},
+{
+"n": "recovery",
+"h": "recovery",
+"q": "nofirst=1&unit=ds918"
+},
+{
+"n": "recovery-fresh",
+"h": "recovery",
+"q": "nofirst=1&unit=ds918&nofacts=1"
+},
+{
+"n": "recovery-debian",
+"h": "recovery",
+"q": "nofirst=1&unit=ds918&facts=flash,debian&reason=%5Bdata-act%3D%22rec-remove%22%5D"
+},
+{
+"n": "recovery-restore",
+"h": "recovery",
+"q": "nofirst=1&unit=ds918&dlg=restore"
+},
+{
+"n": "recovery-remove",
+"h": "recovery",
+"q": "nofirst=1&unit=ds918&dlg=remove"
+},
+{
+"n": "recovery-result",
+"h": "recovery",
+"q": "nofirst=1&unit=ds918&rec=result"
+},
+{
+"n": "manage-health-ok",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&health=ok"
+},
+{
+"n": "manage-health-rebuild",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&health=rebuild"
+},
+{
+"n": "manage-health-faildisk",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&health=faildisk"
+},
+{
+"n": "manage-health-services",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&health=svcdown"
+},
+{
+"n": "manage-health-unreachable",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&health=unreachable"
+},
+{
+"n": "manage-health-update",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&health=ok&dlg=mgmtupdate"
+},
+{
+"n": "manage-health-update-degraded",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&health=rebuild&dlg=mgmtupdate"
+},
+{
+"n": "manage-health-updating",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&mgmt=updating"
+},
+{
+"n": "manage-health-failed",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&mgmt=failed"
+},
+{
+"n": "manage-health-updated",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&mgmt=updated"
+},
+{
+"n": "manage-storage",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&tab=storage"
+},
+{
+"n": "manage-storage-degraded",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&health=faildisk&tab=storage"
+},
+{
+"n": "manage-storage-hybrid",
+"h": "manage",
+"q": "nofirst=1&unit=ds1621&layout=hyb&tab=storage"
+},
+{
+"n": "manage-recovery",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&tab=recovery&nofacts=1&facts=debian,flash"
+},
+{
+"n": "manage-logins",
+"h": "manage",
+"q": "nofirst=1&unit=ds918&tab=logins"
+},
+{
+"n": "settings",
+"h": "settings",
+"q": "nofirst=1"
+},
+{
+"n": "settings-data",
+"h": "settings",
+"q": "nofirst=1&page=Data"
+},
+{
+"n": "settings-largest",
+"h": "settings",
+"q": "nofirst=1&size=largest"
+},
+{
+"n": "help",
+"h": "find",
+"q": "nofirst=1&sheet=help"
+},
+{
+"n": "help-topic",
+"h": "plan",
+"q": "nofirst=1&unit=ds1621&sheet=help&topic=hybrid-raid"
+},
+{
+"n": "help-search",
+"h": "find",
+"q": "nofirst=1&sheet=help&hq=raid"
+},
+{
+"n": "help-shortcuts",
+"h": "find",
+"q": "nofirst=1&sheet=help&htab=Shortcuts"
+},
+{
+"n": "about",
+"h": "about",
+"q": "nofirst=1"
+},
+{
+"n": "about-credits",
+"h": "about",
+"q": "nofirst=1&acc=credits"
+},
+{
+"n": "popover-raid",
+"h": "plan",
+"q": "nofirst=1&unit=ds918&pop=raid"
+},
+{
+"n": "tooltip-erase",
+"h": "confirm",
+"q": "nofirst=1&unit=ds918&gate=part&tip=%23f-erase"
+},
+{
+"n": "dev-menu",
+"h": "find",
+"q": "nofirst=1&dev=1"
+},
+{
+"n": "specimens",
+"h": "specimens",
+"q": "nofirst=1"
+}
 ]
