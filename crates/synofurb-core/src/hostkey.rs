@@ -280,11 +280,9 @@ pub fn repin_after_install(host: &str, port: u16, fingerprint: &str) -> bool {
 pub fn pin_from_arg(arg: &str) -> Result<String> {
     if let Some(file) = arg.strip_prefix('@') {
         let text = std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?;
-        for l in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
-            if let Some(w) = l.split_whitespace().find(|w| w.starts_with("SHA256:")) {
-                return parse_fingerprint(w);
-            }
-            return parse_fingerprint(l);
+        if let Some(l) = text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#')) {
+            let word = l.split_whitespace().find(|w| w.starts_with("SHA256:")).unwrap_or(l);
+            return parse_fingerprint(word);
         }
         bail!("{file} holds no fingerprint");
     }

@@ -44,7 +44,7 @@ mod tests {
             "docs/BOOT.md, docs/RECOVERY.md and the GUI copy quote these"
         );
         assert_eq!((FAIL_REBOOT_BEFORE_PONR_SECS, FAIL_REBOOT_AFTER_PONR_SECS), (60, 900));
-        assert!(AGENT_WAIT_MIN < INSTALL_WATCHDOG_MIN && INSTALL_WATCHDOG_MIN < BOOT_MANAGER_WATCHDOG_MIN);
+        const { assert!(AGENT_WAIT_MIN < INSTALL_WATCHDOG_MIN && INSTALL_WATCHDOG_MIN < BOOT_MANAGER_WATCHDOG_MIN) };
         assert_eq!(watchdog_minutes_possibly_left(30, 10), 20);
         assert_eq!(watchdog_minutes_possibly_left(5, 10), 0);
     }

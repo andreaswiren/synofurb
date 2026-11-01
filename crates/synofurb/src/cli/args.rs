@@ -1206,7 +1206,7 @@ mod tests {
             ok(&["recover", "remove", "--host", "h"]).cmd,
             Cmd::Recover(RecoverArgs { action: Some(RecoverCmd::Remove { .. }), .. })
         ));
-        assert!(err(&["recover", "--host", "h", "status"]).len() > 0, "plain recover flags do not mix with a subcommand");
+        assert!(!err(&["recover", "--host", "h", "status"]).is_empty(), "plain recover flags do not mix with a subcommand");
         let Cmd::BootManager { action: BootManagerCmd::Install { arm, backup_dir, .. } } =
             ok(&["boot-manager", "install", "--host", "h", "--arm", "--backup-dir", "/b"]).cmd
         else {

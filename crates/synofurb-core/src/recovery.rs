@@ -356,7 +356,7 @@ fn with_privileged_on<R>(sh: &mut dyn RemoteShell, sudo: Option<String>, f: impl
 /// Connect to the unit and read its boot state (DSM, the installed Debian or the boot agent). An unreachable unit is an `Err`; a
 /// reachable one whose boot flash cannot be read is an `Ok` state that says so.
 pub fn read_unit_boot_state(t: &SshTarget, log: &Logger) -> Result<UnitBootState> {
-    with_privileged(t, log, |p| read_boot_state(p))
+    with_privileged(t, log, read_boot_state)
 }
 
 /// Flash backups on this computer that belong to `unit` (the serial number or host name `backup_dom` used), newest first.
@@ -548,8 +548,7 @@ pub fn check_backup_file(path: &Path) -> Result<(String, u64, bool), RecoveryErr
 pub fn restore_flash(t: &SshTarget, backup: &Path, confirmed: bool, log: &Logger) -> Result<RestoreOutcome, RecoveryError> {
     need(confirmed, "restoring the boot flash")?;
     let checks = check_backup_file(backup)?;
-    let r = with_privileged(t, log, |p| restore_flash_on(p, backup, checks, log)).map_err(RecoveryError::transport)?;
-    r
+    with_privileged(t, log, |p| restore_flash_on(p, backup, checks, log)).map_err(RecoveryError::transport)?
 }
 
 /// [`restore_flash`] on an open session (tests use a scripted one). The file has been checked.
@@ -593,7 +592,7 @@ pub fn restore_flash_on(
         Ok(r) => tool_result(r, "restore the boot flash")?,
         Err(e) => return Err(RecoveryError::transport(e)),
     };
-    log.info(out.trim().to_string());
+    log.info(out.trim());
     let state_after = read_boot_state(p);
     Ok(RestoreOutcome {
         backup: backup.to_path_buf(),
@@ -620,7 +619,7 @@ pub fn remove_our_entries(t: &SshTarget, confirmed: bool, log: &Logger) -> Resul
 
 pub fn remove_our_entries_on(p: &mut Privileged<'_>, log: &Logger) -> Result<RemoveOutcome, RecoveryError> {
     let out = tool_result(p.run(&dom_tool_command("remove --yes")).map_err(RecoveryError::transport)?, "remove the entries")?;
-    log.info(out.trim().to_string());
+    log.info(out.trim());
     let state_after = read_boot_state(p);
     match (&state_after.read, state_after.our_entries.is_empty(), state_after.default_entry.is_dsm()) {
         (ReadOutcome::Read, true, true) => Ok(RemoveOutcome { output: out, state_after }),
@@ -665,7 +664,7 @@ pub fn boot_dsm(t: &SshTarget, reboot: bool, confirmed: bool, log: &Logger) -> R
 
 pub fn boot_dsm_on(p: &mut Privileged<'_>, reboot: bool, log: &Logger) -> Result<BootDsmOutcome, RecoveryError> {
     let out = tool_result(p.run(&dom_tool_command("default dsm --yes")).map_err(RecoveryError::transport)?, "set the default to DSM")?;
-    log.info(out.trim().to_string());
+    log.info(out.trim());
     let state_after = read_boot_state(p);
     let default_is_dsm = state_after.read == ReadOutcome::Read && state_after.default_entry.is_dsm();
     if !default_is_dsm {
