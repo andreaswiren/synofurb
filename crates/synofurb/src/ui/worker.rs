@@ -30,6 +30,9 @@ pub enum Msg {
     ScanDone(Inventory),
     /// The unit's `health --json` (read-only), or why there is none.
     ManageHealth(Result<Box<synofurb_core::manage::Health>, String>),
+    /// A result of work started for one unit context (`App::unit_gen`): the UI drops it when the page now shows another unit
+    /// (or, for Manage results, when the user left Manage), so one unit's answer never lands on another unit's page.
+    Scoped { epoch: u64, msg: Box<Msg> },
     Inspected(Result<(Box<DeviceFacts>, String), String>),
     Ev(Event),
     /// What kind of failure the install ended with (typed, from the engine), sent just before `Finished(Err)`.
@@ -73,6 +76,8 @@ pub enum Msg {
 
 /// What `push_update` / `push_rollback` report, reduced to what the UI shows.
 pub struct MgmtDone {
+    /// The target the update ran against: the health read afterwards uses THIS, never whatever the page holds by then.
+    pub target: SshTarget,
     pub outcome: synofurb_core::manage::UpdateOutcome,
     pub headline: String,
 }
@@ -85,6 +90,11 @@ pub struct CompatRefresh {
 
 fn send(tx: &Tx, m: Msg) {
     let _ = tx.unbounded_send(m);
+}
+
+/// Send `m` tagged with the unit context it was started for.
+fn send_scoped(tx: &Tx, epoch: u64, m: Msg) {
+    send(tx, Msg::Scoped { epoch, msg: Box::new(m) });
 }
 
 /// A connection failed because a pinned unit now shows another host key: tell the UI (it opens the danger dialog).
@@ -186,7 +196,7 @@ pub fn spawn_inspect(tx: Tx, t: SshTarget) {
 }
 
 /// Probe the unit's DSM address every few seconds until DSM answers or `DSM_WAIT_MIN` minutes pass.
-pub fn spawn_wait_dsm(tx: Tx, host: String, cancel: Arc<AtomicBool>) {
+pub fn spawn_wait_dsm(tx: Tx, epoch: u64, host: String, cancel: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         let tx2 = tx.clone();
         let w = synofurb_core::recovery::wait_for_dsm(
@@ -195,9 +205,9 @@ pub fn spawn_wait_dsm(tx: Tx, host: String, cancel: Arc<AtomicBool>) {
             &cancel,
             &synofurb_core::recovery::ProbeOptions::default(),
             Duration::from_secs(5),
-            &mut |r, d| send(&tx2, Msg::DsmProbe { last: r.clone(), secs: d.as_secs() }),
+            &mut |r, d| send_scoped(&tx2, epoch, Msg::DsmProbe { last: r.clone(), secs: d.as_secs() }),
         );
-        send(&tx, Msg::DsmWaitDone(Box::new(w)));
+        send_scoped(&tx, epoch, Msg::DsmWaitDone(Box::new(w)));
     });
 }
 
@@ -292,13 +302,12 @@ fn recovery_session(t: &SshTarget, unit: &str, log: &Logger) -> anyhow::Result<(
 }
 
 /// Run one recovery action on a worker thread (`unit` names the agent key: the serial number, else the address).
-pub fn spawn_recovery(tx: Tx, t: SshTarget, unit: String, action: RecAction) {
+pub fn spawn_recovery(tx: Tx, epoch: u64, t: SshTarget, unit: String, action: RecAction, cancel: Arc<AtomicBool>) {
     use synofurb_core::recovery as rec;
     std::thread::spawn(move || {
         let log = Logger::memory(None);
         let out = (|| -> RecOutcome {
             if let RecAction::Agent = action {
-                let cancel = AtomicBool::new(false);
                 return match rec::enter_agent(&t, &cancel, true, &log) {
                     Ok(a) => RecOutcome {
                         level: RecLevel::Done,
@@ -386,12 +395,12 @@ pub fn spawn_recovery(tx: Tx, t: SshTarget, unit: String, action: RecAction) {
             ssh.close();
             out
         })();
-        send(&tx, Msg::RecoveryDone(Box::new(out)));
+        send_scoped(&tx, epoch, Msg::RecoveryDone(Box::new(out)));
     });
 }
 
 /// Unit state read: the agent is reached with its key, the rest with the page's sign-in.
-pub fn spawn_unit_state_for(tx: Tx, t: SshTarget, unit: String) {
+pub fn spawn_unit_state_for(tx: Tx, epoch: u64, t: SshTarget, unit: String) {
     std::thread::spawn(move || {
         let log = Logger::memory(None);
         let r = (|| -> anyhow::Result<synofurb_core::recovery::UnitBootState> {
@@ -406,11 +415,11 @@ pub fn spawn_unit_state_for(tx: Tx, t: SshTarget, unit: String) {
         if let Err(e) = &r {
             note_changed_key(&tx, e);
         }
-        send(&tx, Msg::UnitState(r.map(Box::new).map_err(|e| format!("{e:#}"))));
+        send_scoped(&tx, epoch, Msg::UnitState(r.map(Box::new).map_err(|e| format!("{e:#}"))));
     });
 }
 
-pub fn spawn_boot_manager(tx: Tx, t: SshTarget, hostname: String, arm: bool, backup_dir: PathBuf, log_dir: PathBuf) {
+pub fn spawn_boot_manager(tx: Tx, epoch: u64, t: SshTarget, hostname: String, arm: bool, backup_dir: PathBuf, log_dir: PathBuf) {
     std::thread::spawn(move || {
         let (etx, erx) = channel::<Event>();
         forward_events(erx, tx.clone());
@@ -425,7 +434,7 @@ pub fn spawn_boot_manager(tx: Tx, t: SshTarget, hostname: String, arm: bool, bac
             }
             Err(e) => Err(format!("cannot create log file: {e}")),
         };
-        send(&tx, Msg::BootManagerDone(r));
+        send_scoped(&tx, epoch, Msg::BootManagerDone(r));
     });
 }
 
@@ -517,7 +526,7 @@ pub fn spawn_update_download(tx: Tx, info: UpdateInfo, dest: PathBuf) {
 pub const DEMO_TICK: Duration = Duration::from_millis(220);
 
 /// Read the converted unit's health over SSH (`synofurb_core::manage::fetch_health`). Read-only.
-pub fn spawn_manage_health(tx: Tx, t: SshTarget) {
+pub fn spawn_manage_health(tx: Tx, epoch: u64, t: SshTarget) {
     std::thread::spawn(move || {
         let log = Logger::memory(None);
         let r = (|| -> Result<Box<synofurb_core::manage::Health>, String> {
@@ -531,13 +540,13 @@ pub fn spawn_manage_health(tx: Tx, t: SshTarget) {
             ssh.close();
             h.map(Box::new)
         })();
-        send(&tx, Msg::ManageHealth(r));
+        send_scoped(&tx, epoch, Msg::ManageHealth(r));
     });
 }
 
 /// Update the converted unit's management plane (or roll it back) with the engine's `push_update` / `push_rollback`.
 /// The unit goes back to the old version by itself if the new one does not answer; the report says which state it is in.
-pub fn spawn_mgmt_update(tx: Tx, t: SshTarget, rollback: bool) {
+pub fn spawn_mgmt_update(tx: Tx, epoch: u64, t: SshTarget, rollback: bool) {
     use synofurb_core::manage::{ManageEvent, MgmtBundle, UpdateOptions, push_rollback, push_update};
     std::thread::spawn(move || {
         let log = Logger::memory(None);
@@ -552,7 +561,7 @@ pub fn spawn_mgmt_update(tx: Tx, t: SshTarget, rollback: bool) {
             let tx2 = tx.clone();
             let mut emit = move |e: ManageEvent| {
                 if let ManageEvent::Step { n, total, .. } = e {
-                    send(&tx2, Msg::MgmtProgress((n.saturating_sub(1) * 100 / total.max(1)).min(99) as u8));
+                    send_scoped(&tx2, epoch, Msg::MgmtProgress((n.saturating_sub(1) * 100 / total.max(1)).min(99) as u8));
                 }
             };
             let rep = if rollback {
@@ -561,9 +570,9 @@ pub fn spawn_mgmt_update(tx: Tx, t: SshTarget, rollback: bool) {
                 push_update(&mut p, &MgmtBundle::embedded(), &opts, &mut emit)
             };
             ssh.close();
-            rep.map(|r| MgmtDone { outcome: r.outcome, headline: r.headline() }).map_err(|e| format!("{e:#}"))
+            rep.map(|r| MgmtDone { target: t.clone(), outcome: r.outcome, headline: r.headline() }).map_err(|e| format!("{e:#}"))
         })();
-        send(&tx, Msg::MgmtDone(r));
+        send_scoped(&tx, epoch, Msg::MgmtDone(r));
     });
 }
 

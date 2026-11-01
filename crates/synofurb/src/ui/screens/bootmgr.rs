@@ -134,7 +134,12 @@ impl App {
                         Alert::info("bm-back-run", copy::REC_BOOT_RUNNING.short).icon(icons::icon(role::RUNNING)).into_any_element()
                     }),
                 )
-                .children(self.rec_result.as_ref().map(|r| kit::rec_alert("bm-back", r.level, &r.title, &r.detail)))
+                .children(
+                    self.rec_result
+                        .as_ref()
+                        .filter(|r| r.kind == Some(crate::ui::facts::RecKind::BootDsm))
+                        .map(|r| kit::rec_alert("bm-back", r.level, &r.title, &r.detail)),
+                )
                 .into_any_element()
         };
         body = body.child(card);
@@ -174,7 +179,7 @@ impl App {
                 began.then(|| copy::BM_CANCEL_WHY.short.to_string()),
             )]);
         } else if done {
-            let returned = self.rec_result.as_ref().is_some_and(|r| r.level == crate::ui::worker::RecLevel::Done);
+            let returned = self.rec_result.as_ref().is_some_and(|r| r.kind == Some(crate::ui::facts::RecKind::BootDsm) && r.level == crate::ui::worker::RecLevel::Done);
             page = page.right(vec![
                 if returned {
                     Button::new("bm-rec")

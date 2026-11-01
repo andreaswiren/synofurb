@@ -531,6 +531,7 @@ mod strings {
         DLG_AGENT: Dialog, "Reboot into the agent?", "The unit reboots once into the SSH agent.", "boot-manager", "The unit reboots into the boot agent and this app waits up to 10 minutes for it. The agent resets the default to DSM when it starts. If it does not answer, the default is not confirmed.";
         DLG_AGENT_DEBIAN: Dialog, "Reboot into the agent?", "This unit runs Debian; the agent makes DSM the default.", "boot-manager", "This unit runs Debian. The agent makes DSM the default boot entry. After the agent's watchdog or any reboot the unit starts DSM's loader instead of Debian, until you choose Debian again from the agent. Your Debian stays on the disks. The app waits up to 10 minutes for the agent.";
         REC_AGENT_OK: Button, "Reboot", "", "", "";
+        REC_STOP_WAITING: Button, "Stop waiting", "The unit may still boot the agent; use Recovery to check.", "", "";
         REC_AGENT_RUNNING: Label, "Waiting for the agent", "", "", "";
         REC_RESTORE_RUNNING: Label, "Restoring the flash", "", "", "";
         REC_REMOVE_RUNNING: Label, "Removing our entries", "", "", "";
@@ -576,8 +577,7 @@ mod strings {
         REC_MANUAL: Button, "Manual recovery", "Steps that work without the unit answering.", "recovery", "";
         REC_NOTHING: Label, "Nothing known to recover.", "This session changed nothing; the app cannot read earlier changes.", "", "";
         DLG_MANUAL: Dialog, "Manual recovery", "Steps that work without the unit answering.", "recovery",
-            "Both ways need physical access to the NAS.\n\n1. On a serial or VGA console, choose SYNOLOGY_2 in the boot menu. When DSM runs, run the first command on the NAS.\n\n2. Or put the boot flash in another Linux computer: with synofurb-dom there run the second command, without it the third. Replace /dev/sdX with the 128 MB flash; check twice.\n\nYour disks are untouched. No promise about your data.";
-        REC_TYPE: Label, "Type {phrase} to continue.", "", "", "";
+            "Both ways need physical access to the NAS.\n\n1. On a serial or VGA console, choose SYNOLOGY_2 in the boot menu. When DSM runs, run the first command on the NAS. synofurb-dom is there only if the app installed the agent; if not, use route 2.\n\n2. Or put the boot flash in another Linux computer: with synofurb-dom there run the second command, without it the third. Replace /dev/sdX with the 128 MB flash; check twice.\n\nThese steps do not touch your disks. No promise about your data.";        REC_TYPE: Label, "Type {phrase} to continue.", "", "", "";
         REC_COPY_CMD: Button, "Copy command", "", "", "";
         REC_UNAVAILABLE: Label, "Unavailable", "", "", "";
         DLG_REINSTALL: Dialog, "Reinstall DSM", "Use Synology's page; no data promise.", "recovery",

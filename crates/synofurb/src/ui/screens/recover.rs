@@ -27,6 +27,8 @@ use gpui_kit::{AppContext, Context, Entity, IntoElement, Render, Window, div, px
 /// command shown for the user to run is `Info`, never success.
 #[derive(Clone, Debug)]
 pub struct RecResult {
+    /// Which recovery action produced it (`None` for a note such as "Show command").
+    pub kind: Option<RecKind>,
     pub level: RecLevel,
     pub title: String,
     pub detail: String,
@@ -36,7 +38,7 @@ pub struct RecResult {
 
 impl RecResult {
     pub fn error(title: &str, detail: String) -> RecResult {
-        RecResult { level: RecLevel::Error, title: title.into(), detail, commands: vec![] }
+        RecResult { kind: None, level: RecLevel::Error, title: title.into(), detail, commands: vec![] }
     }
 }
 
@@ -157,7 +159,21 @@ impl App {
                 RecKind::RemoveEntries => copy::REC_REMOVE_RUNNING.short,
                 RecKind::ReinstallDsm => "",
             };
-            body = body.child(Alert::info("rec-run", what).small().icon(icons::icon(role::RUNNING)));
+            body = body.child(
+                h_flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .child(Alert::info("rec-run", what).small().icon(icons::icon(role::RUNNING)).flex_1().min_w_0())
+                    // Open agent waits up to the agent's start time: the user can stop waiting (the unit may still boot the agent)
+                    .children((k == RecKind::Agent).then(|| {
+                        let flag = self.rec_cancel.clone();
+                        Button::new("rec-cancel")
+                            .outline()
+                            .label(copy::REC_STOP_WAITING.short)
+                            .tooltip(copy::REC_STOP_WAITING.tip)
+                            .on_click(move |_, _, _| flag.store(true, std::sync::atomic::Ordering::Relaxed))
+                    })),
+            );
         }
         if let Some(r) = &self.rec_result {
             body = body.child(kit::rec_alert("rec-res", r.level, &r.title, &r.detail));
@@ -376,9 +392,10 @@ impl App {
                 vec![facts::agent_command(&host, &user)],
             ),
             RecKind::RestoreFlash => {
-                let unit = self.unit_key_name(cx);
+                // only an image made for this unit (same serial); an unknown unit gets the placeholder, never "the newest of anything"
+                let id = self.unit_id(cx);
                 let image =
-                    synofurb_core::recovery::find_local_backups(&backups, &unit).into_iter().next().map(|b| b.path.display().to_string());
+                    synofurb_core::recovery::backups_for_unit(&backups, &id).into_iter().next().map(|b| b.path.display().to_string());
                 (
                     "Run on this computer, or on another Linux computer",
                     "Writes the saved image back. On another computer use the second line and replace /dev/sdX with the 128 MB flash; check twice.",
@@ -402,15 +419,13 @@ impl App {
             ),
             RecKind::ReinstallDsm => return,
         };
-        self.rec_result = Some(RecResult { level: RecLevel::Done, title: title.into(), detail: detail.into(), commands });
-        self.rec_result.as_mut().unwrap().level = RecLevel::Info;
+        self.rec_result = Some(RecResult { kind: None, level: RecLevel::Info, title: title.into(), detail: detail.into(), commands });
         cx.notify();
     }
 
     pub fn open_manual_recovery(&mut self, window: &mut Window, cx: &mut Context<App>) {
-        let unit = self.unit_key_name(cx);
-        let backup =
-            synofurb_core::recovery::find_local_backups(&self.cfg_dir.join("dom-backups"), &unit).into_iter().next().map(|b| b.path);
+        let id = self.unit_id(cx);
+        let backup = synofurb_core::recovery::backups_for_unit(&self.cfg_dir.join("dom-backups"), &id).into_iter().next().map(|b| b.path);
         let cmds = facts::manual_recovery_commands(backup.as_ref().map(|p| p.display().to_string()).as_deref());
         let app = cx.entity();
         window.open_dialog(cx, move |d, _, cx| {

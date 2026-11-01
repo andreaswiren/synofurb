@@ -216,6 +216,11 @@ pub struct App {
     pub dsm_wait: DsmWaitState,
     /// `(host, port, pinned fingerprint)` as last read from the known-hosts file (read again after every connection).
     /// Open host-key questions: ended when a connection attempt fails, so a late Trust is not offered.
+    /// Bumped whenever another unit is opened or selected (or the session starts over): worker results carry the number they were
+    /// started with and are dropped when it no longer matches.
+    pub unit_gen: u64,
+    /// Set by "Cancel" while Open agent waits for the agent; a fresh flag per action.
+    pub rec_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub open_trust: Vec<super::trust::TrustWatch>,
     pub pin_cache: Option<(String, u16, Option<String>)>,
     pub dsm_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -456,6 +461,8 @@ impl App {
             unit_state_loading: false,
             flash_untouched: false,
             dsm_wait: DsmWaitState::Idle,
+            unit_gen: 0,
+            rec_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             open_trust: vec![],
             pin_cache: None,
             dsm_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -752,8 +759,33 @@ impl App {
     // ------------------------------------------------------------------------------------------ messages
 
     pub fn on_msg(&mut self, m: Msg, window: &mut Window, cx: &mut Context<App>) {
+        // Results of work started for a unit only count while that unit is the one on screen.
+        let m = match m {
+            Msg::Scoped { epoch, msg } => {
+                let manage_result = matches!(*msg, Msg::ManageHealth(_) | Msg::MgmtProgress(_) | Msg::MgmtDone(_));
+                if !super::mgmt::accepts_result(epoch, self.unit_gen, manage_result, self.manage_bound()) {
+                    if manage_result && epoch == self.unit_gen {
+                        // same unit, but the user left Manage: forget what was in flight; opening Manage again reads afresh
+                        self.manage_loading = false;
+                        if matches!(self.mgmt, super::screens::manage::MgmtState::Updating(_)) {
+                            self.mgmt = super::screens::manage::MgmtState::Idle;
+                        }
+                    }
+                    return;
+                }
+                *msg
+            }
+            other => other,
+        };
         // A connection that failed ends any open "Trust this NAS?" question: Trust would no longer do anything.
-        if matches!(&m, Msg::Inspected(Err(_)) | Msg::ManageHealth(Err(_)) | Msg::UnitState(Err(_)) | Msg::Finished(Err(_))) {
+        let failed = match &m {
+            Msg::Inspected(Err(_)) | Msg::ManageHealth(Err(_)) | Msg::UnitState(Err(_)) | Msg::Finished(Err(_)) => true,
+            Msg::BootManagerDone(Err(_)) | Msg::MgmtDone(Err(_)) => true,
+            Msg::RecoveryDone(o) => o.level != worker::RecLevel::Done && o.level != worker::RecLevel::Info,
+            Msg::DsmWaitDone(w) => w.timed_out,
+            _ => false,
+        };
+        if failed {
             for w in self.open_trust.drain(..) {
                 w.end();
             }
@@ -799,6 +831,7 @@ impl App {
                 self.screen = if ok { Screen::Done } else { Screen::Failed };
                 window.focus(&self.focus, cx);
             }
+            Msg::Scoped { .. } => {}
             Msg::HostKeyAsk(ask) => {
                 self.open_trust.retain(|w| matches!(w.state(std::time::Instant::now()), super::trust::TrustState::Waiting { .. }));
                 self.open_trust.push(ask.watch());
@@ -810,14 +843,14 @@ impl App {
                 self.flash_untouched = flash_untouched;
             }
             Msg::RecoveryDone(o) => {
-                self.rec_running = None;
+                let kind = self.rec_running.take();
                 let o = *o;
                 if let Some(st) = o.state {
                     self.unit_state = Some(st);
                     self.unit_state_err = None;
                 }
                 self.rec_result =
-                    Some(super::screens::recover::RecResult { level: o.level, title: o.title, detail: o.detail, commands: o.commands });
+                    Some(super::screens::recover::RecResult { kind, level: o.level, title: o.title, detail: o.detail, commands: o.commands });
             }
             Msg::UnitState(r) => {
                 self.unit_state_loading = false;
@@ -859,8 +892,10 @@ impl App {
             Msg::MgmtDone(r) => {
                 use super::screens::manage::MgmtState;
                 use synofurb_core::manage::UpdateOutcome as O;
+                let mut reread: Option<SshTarget> = None;
                 match r {
                     Ok(d) => {
+                        reread = Some(d.target.clone());
                         self.mgmt = match d.outcome {
                             O::Updated | O::UpToDate | O::RolledBack => MgmtState::Updated,
                             O::Refused | O::Failed => MgmtState::Failed,
@@ -872,7 +907,12 @@ impl App {
                         self.mgmt_note = Some(e);
                     }
                 }
-                self.read_manage_health(cx);
+                // the health after the update is read with the target the update ran against, never with `target()`
+                if let Some(t) = reread {
+                    self.manage_loading = true;
+                    self.manage_err = None;
+                    worker::spawn_manage_health(self.tx.clone(), self.unit_gen, t);
+                }
             }
             Msg::CompatRefreshed(r) => {
                 self.compat_refreshing = false;
@@ -965,6 +1005,7 @@ impl App {
     /// Facts that belong to one unit's session (the app cannot read them from the unit yet): cleared when another unit
     /// is selected and on "start over", so one unit's failed agent never shows on the next unit.
     pub fn reset_unit_session(&mut self) {
+        self.unit_gen += 1;
         self.agent_unknown = false;
         self.install_started = false;
         self.bootmgr = Job::Idle;
@@ -1435,6 +1476,7 @@ impl App {
             return;
         }
         self.rec_result = None;
+        self.rec_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         if self.demo.is_some() {
             self.rec_running = Some(kind);
             let (title, detail) = match &action {
@@ -1464,7 +1506,7 @@ impl App {
             Ok(t) => {
                 self.rec_running = Some(kind);
                 let unit = self.unit_key_name(cx);
-                worker::spawn_recovery(self.tx.clone(), t, unit, action);
+                worker::spawn_recovery(self.tx.clone(), self.unit_gen, t, unit, action, self.rec_cancel.clone());
             }
             Err(e) => {
                 self.rec_result = Some(super::screens::recover::RecResult::error("Not done", e));
@@ -1482,7 +1524,7 @@ impl App {
             Ok(t) => {
                 self.unit_state_loading = true;
                 let unit = self.unit_key_name(cx);
-                worker::spawn_unit_state_for(self.tx.clone(), t, unit);
+                worker::spawn_unit_state_for(self.tx.clone(), self.unit_gen, t, unit);
             }
             Err(e) => self.unit_state_err = Some(e),
         }
@@ -1518,7 +1560,7 @@ impl App {
         } else {
             let host = self.active_host(cx);
             let host = if host.is_empty() { self.selected_ip.clone().unwrap_or_default() } else { host };
-            worker::spawn_wait_dsm(self.tx.clone(), host, self.dsm_cancel.clone());
+            worker::spawn_wait_dsm(self.tx.clone(), self.unit_gen, host, self.dsm_cancel.clone());
         }
         cx.notify();
     }
@@ -1536,7 +1578,7 @@ impl App {
         match self.target(cx) {
             Ok(t) => {
                 self.bootmgr = Job::Running;
-                worker::spawn_boot_manager(self.tx.clone(), t, hostname, arm, self.cfg_dir.join("dom-backups"), self.cfg_dir.join("logs"));
+                worker::spawn_boot_manager(self.tx.clone(), self.unit_gen, t, hostname, arm, self.cfg_dir.join("dom-backups"), self.cfg_dir.join("logs"));
             }
             Err(e) => self.bootmgr = Job::Done(Err(e)),
         }

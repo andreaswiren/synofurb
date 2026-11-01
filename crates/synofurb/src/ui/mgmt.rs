@@ -149,6 +149,13 @@ pub fn unit_key(serial: &str, addr: Option<std::net::IpAddr>) -> String {
     if serial.is_empty() { addr.map(|a| a.to_string()).unwrap_or_default() } else { serial.to_string() }
 }
 
+/// Does a worker result still belong on the page? `msg_gen` is the unit context the work was started for, `now_gen` the current
+/// one (bumped whenever another unit is opened or selected or the session starts over); a Manage result also needs Manage to be
+/// the page (or Recovery opened from it). A result that fails this is dropped: it must never change another unit's page.
+pub fn accepts_result(msg_gen: u64, now_gen: u64, manage_result: bool, manage_page: bool) -> bool {
+    msg_gen == now_gen && (!manage_result || manage_page)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +211,19 @@ mod tests {
         assert!(b.bind("A"), "and so does going back: no credential survives a switch");
         assert_eq!(unit_key("SN1", None), "SN1");
         assert_eq!(unit_key("", "10.0.0.2".parse().ok()), "10.0.0.2");
+    }
+
+    #[test]
+    fn a_result_of_unit_a_never_lands_on_unit_b() {
+        // start on A (epoch 1), a read is under way; the user opens B (epoch 2); A's answer arrives
+        let a_gen = 1;
+        let b_gen = 2;
+        assert!(accepts_result(a_gen, a_gen, true, true), "A's answer while A is on screen");
+        assert!(!accepts_result(a_gen, b_gen, true, true), "A's answer after B was opened is dropped");
+        assert!(!accepts_result(a_gen, b_gen, false, false));
+        // the user left Manage: a Manage result is dropped even for the same unit
+        assert!(!accepts_result(b_gen, b_gen, true, false));
+        // a recovery result needs no Manage page
+        assert!(accepts_result(b_gen, b_gen, false, false));
     }
 }

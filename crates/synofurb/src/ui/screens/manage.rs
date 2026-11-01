@@ -589,7 +589,7 @@ impl App {
             Ok(t) => {
                 self.manage_loading = true;
                 self.manage_err = None;
-                crate::ui::worker::spawn_manage_health(self.tx.clone(), t);
+                crate::ui::worker::spawn_manage_health(self.tx.clone(), self.unit_gen, t);
             }
             Err(e) => {
                 self.manage_report = None;
@@ -619,7 +619,7 @@ impl App {
             match self.target(cx) {
                 Ok(t) => {
                     self.mgmt = MgmtState::Updating(4);
-                    crate::ui::worker::spawn_mgmt_update(self.tx.clone(), t, false);
+                    crate::ui::worker::spawn_mgmt_update(self.tx.clone(), self.unit_gen, t, false);
                 }
                 Err(e) => {
                     self.mgmt = MgmtState::Failed;
@@ -661,7 +661,7 @@ impl App {
                     match a.target(cx) {
                         Ok(t) => {
                             a.mgmt = MgmtState::Updating(4);
-                            crate::ui::worker::spawn_mgmt_update(a.tx.clone(), t, true);
+                            crate::ui::worker::spawn_mgmt_update(a.tx.clone(), a.unit_gen, t, true);
                         }
                         Err(e) => {
                             a.mgmt = MgmtState::Failed;
