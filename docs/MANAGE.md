@@ -141,10 +141,21 @@ engine reports the state it finds when it looks again. Ctrl-C before the update 
 
 `--from-bundle DIR` takes the files from a folder instead of the copy built into the program. `DIR` is either the files themselves
 (`synofurb_mgmt.py`, `VERSION`, `README.md`, optionally `synofurb-mgmt.service`; `python3 apps/mgmt-plane/tools/make-update-bundle.py OUT`
-makes such a folder, including its `MANIFEST.sha256`) or an offline bundle / release folder that keeps them in `mgmt/`. A `MANIFEST.sha256`
-in the folder is verified before anything is contacted (mismatch: usage error, exit 2); symbolic links and files outside that list are
-refused/ignored. The unit verifies the manifest again after the upload. `bundle create` does not yet put a `mgmt/` folder into offline bundles;
-until it does, copy `apps/mgmt-plane` files there by hand or point `--from-bundle` at a folder made with the tool above.
+makes such a folder, including its `MANIFEST.sha256`) or an **offline bundle** made by `synofurb bundle create`, which carries the same files in `mgmt/`
+([OFFLINE.md](OFFLINE.md#the-management-app-mgmt)). Give either the bundle or its `mgmt/` folder:
+
+```
+synofurb manage update --host 10.0.0.5 --from-bundle /media/usb/bundle        # same as .../bundle/mgmt
+```
+
+For a real offline bundle (a `manifest.json` next to `mgmt/`) the engine opens the bundle and checks `mgmt/MANIFEST.sha256` **and** every file against the bundle's `manifest.json` before anything is
+contacted (mismatch: usage error, exit 2), so the update that reaches the unit is exactly the one that was bundled; a bundle built before `mgmt/` existed is refused with the
+hint to run `bundle create` again on the same directory. For a plain folder a `MANIFEST.sha256` in it is verified (same exit); symbolic links are refused and files outside the list ignored. The
+unit verifies the manifest again after the upload. Nothing here needs the Internet. Without `--from-bundle` the copy built into the program is used.
+
+**Fresh installs write `VERSION`.** The installer puts `VERSION` next to `synofurb_mgmt.py` in `/opt/synofurb-mgmt` (from `apps/mgmt-plane/VERSION`, the one source of the version for the installer
+payload, the built-in copy and the bundle's `mgmt/`). Without it the script would report its built-in default, so `health --json`, `manage health` and `manage version` show the installed version
+from the first boot and `manage update` can tell an old copy from the current one. Units installed by earlier builds lack the file; they report the script's built-in default version (the same number for the same script) until a `manage update` replaces the files (`--force` reinstalls identical ones) and writes `VERSION`.
 
 ## Engine API (for the desktop app)
 
@@ -154,7 +165,7 @@ until it does, copy `apps/mgmt-plane` files there by hand or point `--from-bundl
 |---|---|
 | `Health`, `parse_health`, `fetch_health(p)` | the report; `ManageError::{NotInstalled, HealthUnsupported, BadOutput, Command, Transport}` say why there is none |
 | `Health::summary() -> HealthSummary` | `overall`, `headline`, `bullets[{level,text}]`, `problems`, counts: the whole Manage screen needs this |
-| `bundled_mgmt_version()`, `MgmtBundle::embedded()`, `MgmtBundle::from_dir(dir)` | the management plane shipped in this program (same files the installer's payload carries, plus `VERSION`), or a folder |
+| `bundled_mgmt_version()`, `MgmtBundle::embedded()`, `MgmtBundle::from_dir(dir)` | the management plane shipped in this program (same files the installer's payload carries, including `VERSION`), or a folder / offline bundle (`offline::Bundle::mgmt()` does the bundle checks) |
 | `compare(nas, bundled) -> VersionRelation`, `read_installed(sh)`, `status(p, &bundle) -> ManageStatus` | version, health and plan in one call, never fails because of the unit's own state |
 | `plan_update(&installed, &bundle, force) -> UpdatePlan` | what an update would do (`UpdateDecision`, files with hashes, a sentence) |
 | `push_update(p, &bundle, &opts, &mut emit) -> UpdateReport`, `push_rollback(...)` | the flows; `emit` gets `ManageEvent`s live |
@@ -178,6 +189,8 @@ Done in the development sandbox:
   (`update --from ... --dry-run --root`), its live NDJSON and its exit codes 2/3/4 are parsed and mapped to the right failure text.
 * **Shell scripts run for real** with `sh`: the staging script (unpack, pinned hash, manifest) and the built-in swap script (in a sandbox root:
   replace, `.prev` copy, `unit.backup`, first install, refusal on a bad checksum).
+* **Offline bundle `mgmt/`**: `bundle create` against a fake archive writes it and `bundle verify` accepts it; damage (changed file, script and `mgmt/MANIFEST.sha256` edited together, missing manifest, symbolic link) is found by `verify`, by an install check and by `manage update --from-bundle`; a bundle without `mgmt/` still verifies with a note; the folder equals the output of `make-update-bundle.py`; `tests/cli/smoke.sh` pushes `--from-bundle <bundle>` over the real `sshd` through the real updater.
+* **Fresh-install `VERSION`**: the payload carries `mgmt/VERSION` identical to `apps/mgmt-plane/VERSION`, and the management-plane block of the real `payload/chroot-setup.sh` is run with `sh` in a scratch root (files, modes of the install, `VERSION` next to the script); `sh -n`, `dash -n` and `shellcheck -s dash` on that script. Not run: the installer on a real unit.
 * **Over a real `sshd`** (`tests/cli/smoke.sh`): the CLI uploads and stages over SSH to a fake unit whose commands are redirected to
   the repository's script in a sandbox, `manage health` (exit 8/9, JSON), `version`, `update --dry-run`, a refused update, a real update that
   ends in the unit's failure/rollback path with NDJSON, `rollback`, and the staging directory being removed.

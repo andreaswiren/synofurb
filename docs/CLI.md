@@ -250,7 +250,8 @@ root. They read or change only `/opt/synofurb-mgmt`, its systemd unit and tempor
 * `update` reads the unit first and prints the plan (`up to date`, `update 0.3.0 -> 0.4.0`, ...). If nothing is to be done it says so and exits 0 without asking. Otherwise it asks once (this is **not** a data-loss
   gate, so `--yes`/`-y` skips it; without a terminal and without `--yes` it exits 3 and changes nothing), uploads the files, has the unit verify, swap and restart, checks the unit again and prints the
   result. `--dry-run` connects, prints the plan and stops. `--force` reinstalls identical files or installs an older version (without it a newer unit is left alone, exit 3).
-  `--from-bundle DIR` uses a folder instead of the built-in copy: the files themselves, or an offline bundle with a `mgmt/` folder; a `MANIFEST.sha256` there is verified first (usage error, exit 2, on a mismatch).
+  `--from-bundle DIR` uses a folder instead of the built-in copy: an offline bundle made by `bundle create` (or its `mgmt/` folder; `MANIFEST.sha256` and the bundle's `manifest.json` are both checked, and a bundle
+  without `mgmt/` is refused with a hint), or a folder with the files themselves (`make-update-bundle.py`; its `MANIFEST.sha256` is verified). A mismatch is a usage error (exit 2) before anything is contacted. Works fully offline.
   A failed update exits **1** and the message says what state the unit is in (back on its old version, a different version, or "could not verify": see MANAGE.md). The web UI is unavailable for a few seconds.
 * `rollback` returns to the version before the last update (confirmation as for `update`).
 * `open` prints `https://H:8443` (IPv6 gets brackets) and connects to nothing. The certificate is self-signed.
@@ -382,6 +383,7 @@ the dependency closure: [OFFLINE.md](OFFLINE.md).
 synofurb-cli bundle create --arch amd64 --kernel-newest --out /srv/synofurb-bundle     # online machine; resumable (Ctrl-C, run it again)
 synofurb-cli bundle info   /srv/synofurb-bundle [--json]                                # what is in it
 synofurb-cli bundle verify /srv/synofurb-bundle                                         # re-hash everything, no network; exit 1 if damaged
+synofurb-cli manage update --host 192.168.1.20 --from-bundle /srv/synofurb-bundle        # update the web UI on a unit from the bundle's mgmt/ folder
 synofurb-cli install --host 192.168.1.20 --source offline --bundle /srv/synofurb-bundle ...   # offline machine
 ```
 
@@ -397,6 +399,10 @@ synofurb-cli install --host 192.168.1.20 --source offline --bundle /srv/synofurb
   A mismatch is exit 2 with the reason; a bundle built without firmware only warns (use `--no-firmware` to silence it). The generated script and preseed then point at the bundle: `install --dry-run` shows the
   rewritten mirror host/directory (JSON field `offline_bundle`).
 * **Needs an IPv4 address** of this computer on the NAS's network (the installer fetches packages from it); pick the LAN interface if the NAS is reached over IPv6.
+* **`mgmt/` in the bundle.** `bundle create` adds the management app (`synofurb_mgmt.py`, `VERSION`, `README.md`, unit file, `MANIFEST.sha256`; [OFFLINE.md](OFFLINE.md#the-management-app-mgmt)).
+  `bundle verify` checks it (extra output lines `MGMT <reason>` when damaged, `note: the bundle has no mgmt/ folder ...` for a bundle from an older build, which still verifies; exit 1 only for damage),
+  `bundle info` prints `Mgmt app:  synofurb-mgmt <version>` and `bundle info --json` has `mgmt_version` (`null` when absent), and `install --bundle` exits 2 when the bundle's `mgmt/` is damaged.
+  The installer itself does not read `mgmt/`; it installs the copy built into the program. `manage update --from-bundle` is the consumer.
 * The wizard asks "Use an offline bundle?" in step 6 and runs the same checks, asking again when the bundle does not fit.
 * `bundle create|verify|info` print their own progress and results (not the event stream); errors exit 1.
 

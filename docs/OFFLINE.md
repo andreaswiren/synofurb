@@ -32,6 +32,7 @@ bundle/
   installer/<arch>/        kernel, initrd.gz (+ DTBs), and the InRelease + SHA256SUMS the hashes were checked against
   installer/firmware.cpio.gz   optional; non-free firmware for the installer, shared by all architectures
   agent/agent-<arch>.{vmlinuz,initrd}   boot agent for units with an internal boot flash (DOM), optional
+  mgmt/                    management-app update bundle: MANIFEST.sha256, synofurb_mgmt.py, VERSION, README.md, synofurb-mgmt.service
   mirror/debian/
     dists/<suite>/{InRelease,Release,Release.gpg}
     dists/<suite>/<comp>/binary-<arch>/Packages.{gz,xz}   (+ binary-all, + debian-installer/binary-<arch>)
@@ -42,6 +43,30 @@ bundle/
 The `dists/` files are copied **verbatim** from `deb.debian.org`. Debian's own signatures therefore stay valid and
 `debootstrap`, `apt` and the installer's `anna` verify the packages exactly as they do online. The pool keeps the
 upstream relative paths. A package that is not part of the bundle simply answers `404`.
+
+### The management app (`mgmt/`)
+
+`bundle create` also writes `mgmt/`: the web management app (`apps/mgmt-plane`, see [MANAGE.md](MANAGE.md)) in exactly the layout `synofurb_mgmt.py update --from DIR` takes
+(`MANIFEST.sha256` in `sha256sum` format, `synofurb_mgmt.py`, `VERSION`, `README.md`, `synofurb-mgmt.service`; identical to what
+`python3 apps/mgmt-plane/tools/make-update-bundle.py` writes, which a unit test compares). The files are the copy built into the synofurb that built the bundle, so the bundle
+can later update a unit's web UI with no Internet and no repository checkout:
+
+```
+synofurb manage update --host <ip> --from-bundle ./bundle          # or ./bundle/mgmt
+```
+
+It is a few hundred KiB and is always rewritten, also when you resume or extend a bundle. The **installer does not use it**: a fresh install always gets the management app that is built into the
+synofurb doing the install (the payload), with its `VERSION`. Only `manage update` reads `mgmt/` from a bundle.
+
+Checks: `bundle verify` hashes every `mgmt/` file against `manifest.json` (like all files) and additionally loads the folder as the update would: `mgmt/MANIFEST.sha256` must exist, list and match every
+file, `VERSION` must be a plain version number, no link may stand in for a file, and every file plus `MANIFEST.sha256` must be exactly what `manifest.json` recorded. A script edited together with
+`mgmt/MANIFEST.sha256` is therefore still caught. Problems print as `MGMT  <reason>` and exit 1. `bundle info` prints `Mgmt app:  synofurb-mgmt <version>` (`mgmt_version` in `--json`),
+an install with `--bundle` refuses a bundle whose `mgmt/` is damaged, and `manage update --from-bundle` runs the same checks before it connects.
+
+**Older bundles** (built before `mgmt/` existed) have no such folder in `manifest.json`. They verify, serve and install exactly as before; `bundle verify` adds the line
+`note: the bundle has no mgmt/ folder ...`, `bundle info` says `Mgmt app:  not included`, and `manage update --from-bundle <bundle>` fails with exit 2 and the hint to run
+`synofurb bundle create` again with the same `--out` (only `mgmt/` and the manifest are rewritten; downloaded files are kept). Without `--from-bundle`, `manage update` uses the copy built into synofurb as always.
+A `mgmt/` folder that someone copied into such a bundle by hand is reported as `EXTRA` and ignored.
 
 Components: `main`, `contrib`, `non-free-firmware` (what the installer asks `debootstrap` for).
 
@@ -124,7 +149,7 @@ shares the `all` packages and indexes, so the total is less than the sum.
 ## How the bundle is verified (`synofurb bundle verify`)
 
 Everything is re-hashed against `manifest.json` (no network): missing, changed and unexpected files are reported,
-and each `Packages` index is compared with the `InRelease` that lists it. Before an install the engine additionally
+each `Packages` index is compared with the `InRelease` that lists it, and the management app in `mgmt/` is checked as described above. Before an install the engine additionally
 re-hashes the installer kernel, initrd and firmware it is about to serve.
 
 ## How the app serves it to the NAS
@@ -240,6 +265,8 @@ three architectures.
 | Symptom | Cause / fix |
 |---|---|
 | `unfinished bundle` | the build was interrupted. Run `synofurb bundle create --out <same dir> ...` again. |
+| `bundle verify` prints `MGMT ...` | `mgmt/` was changed or is incomplete; copy it again or run `bundle create` on the same directory (it rewrites `mgmt/`). |
+| `bundle verify` prints `note: the bundle has no mgmt/ folder` | the bundle comes from an older synofurb. Nothing is wrong; run `bundle create` on it again to add `mgmt/`. |
 | `bundle verify` prints `CHANGED`/`MISSING` | the copy (USB stick) is damaged; copy again, or rebuild (only broken files are fetched). |
 | `the bundle has no arm64 support` | build it with `--arch arm64` (you can add architectures to a bundle by running `create` again with all of them). |
 | `the bundle was built for the Newest kernel ...` | install with the same kernel channel, or build another bundle. |

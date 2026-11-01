@@ -59,6 +59,7 @@ synofurb backup-dom|disk-backup --host IP                     # boot flash image
 synofurb logs list|show [N]|path   synofurb config show|paths   synofurb fetch-installer ARCH
 synofurb bundle create --arch amd64 --out DIR                 # offline bundle: amd64 ~440 MiB (+ ~470 MiB installer firmware shared by all architectures)
 synofurb bundle verify|info DIR   synofurb install --host IP --source offline --bundle DIR ...   # no Internet needed on either side (docs/OFFLINE.md)
+synofurb manage update --host IP --from-bundle DIR                                           # the bundle's mgmt/ folder updates the web UI offline (docs/MANAGE.md)
 synofurb self-update [--check]   synofurb completions bash|zsh|fish|powershell   synofurb version [--json]
 ```
 Machine-friendly: `--log-format json` (NDJSON events), `--json` documents, stable exit codes (0 ok, 2 usage, 3 refused by the safety gate, 4 plan errors,
