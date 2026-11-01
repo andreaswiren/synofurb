@@ -52,6 +52,9 @@ pub struct InstallJob {
     pub verbose_installer: bool,
     /// Plain-text password for the final summary only (never logged).
     pub display_password: String,
+    /// Directory of an offline bundle (see `offline.rs`): when set, the installer files, boot agent and the Debian packages are
+    /// served from it and nothing is downloaded from the Internet. `None` = online install.
+    pub offline_bundle: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]

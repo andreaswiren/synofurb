@@ -590,6 +590,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 with_firmware: !no_firmware,
                 verbose_installer: true,
                 display_password: password.clone(),
+                offline_bundle: None,
             };
             let out = run_install(&job, &log, Arc::new(AtomicBool::new(false)), &mut |_, _| {})?;
             println!("\n=== INSTALLED ===");

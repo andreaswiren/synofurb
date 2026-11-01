@@ -17,6 +17,20 @@ Because the firmware never looks at the disks first, Debian on the disks alone w
 from this menu. This is the technique the [synodeb](https://github.com/rylos/synodeb) project documents for the DS923+
 (AMD Ryzen R1600), and it is why `synofurb` adds menu entries instead of installing GRUB to the disks on these units.
 
+### Where does the operating system live? (DSM and Debian are built the same way)
+
+The boot flash holds **only the boot loader, the kernel and the initial ramdisk**. It is not where the OS lives.
+
+| | DSM (Synology) | Debian as installed by synofurb |
+|---|---|---|
+| Boot flash (about 128 MB) | loader menu, `zImage` (kernel), `rd.gz` (initial ramdisk) | the same menu plus our entries; Debian's kernel and a small initramfs |
+| System (root filesystem, packages, settings) | on the **disks**: a RAID1 mirrored across all drives (`md0`, partition 1 of each disk) | on the **disks**: an LVM volume group `vg_sys` on a RAID1 across 2 to 3 disks (xfs root + swap) |
+| Your data | data volumes on `md2` and up (SHR or RAID, LVM, btrfs or ext4) | `vg_data` on a RAID of your choice, xfs |
+
+So in both cases the flash module only gets the system started: the initial ramdisk assembles the RAID and LVM and hands over to the root
+filesystem on the disks. That is also why the flash is small and rarely written, and why the installed system's initramfs is kept small
+(explicit module list, `xz`). Updating Debian's kernel writes about 25 to 30 MB to the flash, not the whole OS.
+
 What `synofurb` writes there, and how safely ([boot/dom](../boot/dom/README.md)):
 
 * **Before the first write** the whole flash is streamed to your computer and hashed, and the hash is compared with one computed on

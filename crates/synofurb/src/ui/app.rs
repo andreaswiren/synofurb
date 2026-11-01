@@ -865,6 +865,7 @@ impl App {
             with_firmware: self.sys.with_firmware,
             verbose_installer: self.sys.verbose,
             display_password: password,
+            offline_bundle: None,
         })
     }
 
