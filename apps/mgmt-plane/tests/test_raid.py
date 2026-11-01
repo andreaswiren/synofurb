@@ -1028,5 +1028,94 @@ class StatusIntegration(unittest.TestCase):
             self.assertEqual(app.mdstat()[0]["sync"]["action"], "check")
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# UI copy module: word budgets (design/BRIEF-v2.md) and wiring
+# ---------------------------------------------------------------------------------------------------------------------
+
+def words(text):
+    return len([w for w in text.replace("{n}", "N").replace("{name}", "NAME").split() if w])
+
+
+class CopyBudgetTests(unittest.TestCase):
+    LIMITS = {"title": 4, "label": 4, "button": 3, "safety": 12, "tip": 12}
+
+    def test_every_string_obeys_its_kind(self):
+        for key, e in m.COPY.items():
+            kind = e["kind"]
+            self.assertIn(kind, ("title", "label", "button", "tip", "prose", "safety"), key)
+            if kind in self.LIMITS:
+                self.assertLessEqual(words(e["short"]), self.LIMITS[kind], "%s: %r" % (key, e["short"]))
+            if kind == "prose":
+                self.assertLessEqual(words(e["short"]), 12, key)
+            if "tip" in e:
+                self.assertLessEqual(words(e["tip"]), 25, "%s tip" % key)
+                self.assertTrue(e["tip"].endswith("."), key)
+                self.assertEqual(e["tip"].count(". "), 0, "one sentence only: %s" % key)
+
+    def test_buttons_start_with_a_verb_or_are_short(self):
+        for key, e in m.COPY.items():
+            if e["kind"] == "button":
+                self.assertLessEqual(words(e["short"]), 3, key)
+
+    def test_default_screens_stay_under_60_words_of_prose(self):
+        for screen, keys in m.COPY_SCREENS.items():
+            prose = sum(words(m.COPY[k]["short"]) for k in keys if m.COPY[k]["kind"] == "prose")
+            self.assertLessEqual(prose, 60, screen)
+            for k in keys:
+                self.assertIn(k, m.COPY)
+            for k in keys:                                          # page titles at most 4 words, labels at most 4
+                if m.COPY[k]["kind"] == "title":
+                    self.assertLessEqual(words(m.COPY[k]["short"]), 4)
+
+    def test_help_topics(self):
+        ids = [t["id"] for t in m.HELP_TOPICS]
+        self.assertEqual(len(ids), len(set(ids)))
+        for t in m.HELP_TOPICS:
+            self.assertLessEqual(words(t["title"]), 4, t["id"])
+            self.assertLessEqual(words(t["body"]), 150, t["id"])
+            self.assertLessEqual(len(t["body"].split("\n\n")), 4, t["id"])
+        for needed in ("raid-levels", "shr", "scrub", "replace", "grow", "foreign"):
+            self.assertIn(needed, ids)
+
+    def test_every_copy_key_used_by_the_ui_exists(self):
+        import re
+        html = m.INDEX_HTML
+        used = set(re.findall(r"""\bT\('([a-z0-9_.]+)'""", html)) | set(re.findall(r"""TIP\('([a-z0-9_.]+)'""", html))
+        used |= {"state." + k for k in ("clean", "degraded", "rebuilding", "resyncing", "reshaping", "checking", "repairing", "inactive")}
+        used |= {"ms." + k for k in ("active", "spare", "faulty", "rebuilding", "removed", "replacement")}
+        used |= {"lv." + k for k in ("raid0", "raid1", "raid5", "raid6", "raid10", "shr1", "shr2")}
+        missing = sorted(k for k in used if k not in m.COPY and not k.endswith("."))
+        self.assertEqual(missing, [])
+        for hid in re.findall(r"infoBtn\('([a-z0-9-]+)'", html):
+            self.assertIn(hid, [t["id"] for t in m.HELP_TOPICS])
+
+    def test_ui_has_raid_and_help_pages_and_accessible_widgets(self):
+        html = m.INDEX_HTML
+        for needle in ("PAGES.raid", "PAGES.help", "['raid', 'RAID', 'layers']", "role: 'tooltip'", "role: 'menu'", "'aria-haspopup': 'menu'", "role: 'menuitem'", "ArrowDown",
+                       "scrollbar-width:thin", "::-webkit-scrollbar-thumb", "function shrSlices", "Open RAID"):
+            self.assertIn(needle, html)
+        self.assertNotIn("show('storage')", html.split("PAGES.dashboard", 1)[1].split("/* ---------- Storage", 1)[0])    # the dashboard badge links to RAID now
+
+    def test_js_shr_matches_python_vectors(self):
+        """Run the browser implementation of the slice algorithm against the shared vectors (skipped when node is missing)."""
+        import shutil
+        import subprocess
+        import re
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available")
+        src = re.search(r"const GIBN = .*?\n(function shrSlices.*?\n\})\n", m.INDEX_HTML, re.S)
+        self.assertIsNotNone(src)
+        vec = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shr_vectors.json")
+        js = ("const GIBN=1073741824,MIBN=1048576;" + src.group(1) + ";const V=JSON.parse(require('fs').readFileSync(process.argv[1])).vectors;let bad=[];"
+              "for(const v of V){const d={};for(const[k,x]of Object.entries(v.disks))d[k]=x*MIBN;const r=shrSlices(d,v.mode);"
+              "const got=JSON.stringify(r.slices.map(s=>({m:s.members,l:s.length/MIBN,lv:s.level,u:s.usable/MIBN})));"
+              "const exp=JSON.stringify(v.slices.map(s=>({m:s.members,l:s.length,lv:s.level,u:s.usable})));"
+              "if(got!==exp||r.usable!==v.usable*MIBN)bad.push(v.name)}console.log(JSON.stringify(bad));")
+        out = subprocess.run([node, "-e", js, vec], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(json.loads(out.stdout.strip().splitlines()[-1]), [])
+
+
 if __name__ == "__main__":
     unittest.main()

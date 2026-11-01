@@ -1,0 +1,79 @@
+/* ---- D13 Boot manager ---- */
+function boot(){const b=S.boot;
+ return {html:`<div class="page narrow"><div class="ph"><div><h1 class="t-title">Boot manager ${infoBtn('oneshot','One-shot agent')}</h1><div class="sub t-sub">SSH agent on the boot flash.</div></div></div>
+ <div class="row wrap">${tag('Flash changes',{v:'warn',i:'triangle-alert',t:'Entries and files are added; DSM’s entry stays.'})}${tag('Disks untouched',{v:'ok',i:'shield-check',t:'No partition table is written.'})}</div>
+ <div class="card"><div class="card-b col gap16"><div class="fld"><span class="lab"><span${tip('The key pair is created on this computer.')}>SSH key</span></span><div class="seg" role="group" style="align-self:flex-start">${['Generate','Paste'].map(k=>`<button aria-pressed="${b.key===k}" data-boot-key="${k}">${k}</button>`).join('')}</div></div>
+ <div class="fld"><span class="lab"><span${tip('The agent reboots to DSM after 30 minutes without a login.')}>Login timeout</span></span><div class="inp mono" aria-disabled="true"><input class="mono" readonly value="30 min" aria-label="Login timeout"></div></div>
+ ${alertH('warn','triangle-alert',`<span${tip('After kexec nothing of ours runs; power-cycling returns to the default.')}>Other OS: power cycle returns.</span>`)}</div></div></div>`,
+ foot:F(back('goal'),btn('Install agent',{cls:'primary',act:'bootinstall',icon:'download'}))}}
+/* ---- D14 Recovery ---- */
+function recovery(){const rows=[['Boot DSM next','Makes the unit boot DSM next time.','rotate-ccw',''],['Open agent','Boots the SSH agent; returns to DSM by itself.','terminal',''],['Restore flash','Writes the saved image back to the boot flash.','hard-drive','restore'],['Remove our entries','Leaves only Synology’s own files on the flash.','trash',''],['Reinstall DSM','Use Synology’s page; no data promise.','life-buoy','reinstall']];
+ const first=0;
+ return {html:`<div class="page narrow" style="max-width:760px"><div class="ph"><div><h1 class="t-title">Recovery</h1><div class="sub t-sub">State read from the unit.</div></div></div>
+ <div class="row wrap">${tag('Flash: ours present',{i:'hard-drive'})}${tag('Default: DSM',{i:'server'})}${tag('Disks: modified 14:25',{v:'warn',i:'triangle-alert'})}</div>
+ <div class="card cardtbl"><ul class="help-list" style="padding:4px 8px">${rows.map((r,i)=>`<li><div class="row" style="padding:6px 8px;gap:12px;border-bottom:${i<4?'1px solid var(--border)':'0'}"><span class="ib" style="background:var(--surface-2)">${ic(r[2],'s')}</span><span class="grow" style="font-weight:500"${tip(r[1])}>${r[0]}</span><button class="btn sm ${i===first?'primary':''}" data-rec="${r[3]||i}">Run</button></div></li>`).join('')}</ul></div>
+ ${acc('saved','Saved here',`<div class="col"><div class="row">${mono('dom-backups/DS918plus-20261101-1402.img')}<button class="btn ghost icon sm" data-copy="dom-backups/DS918plus-20261101-1402.img" aria-label="Copy">${ic('copy','s')}</button></div><div><button class="btn sm" data-act="openfolder">${ic('folder-open')}Open folder</button></div></div>`,false,'')}</div>`,
+ foot:F(back(S.manage.from||'goal'),'')}}
+/* ---- D15 Manage: health ---- */
+const HS={ok:'Healthy',rebuild:'Needs attention',faildisk:'Critical',svcdown:'Needs attention',unreachable:'Unreachable'};
+function healthData(h){
+  const base={overall:'ok',warnings:[],arrays:[{n:'md0',l:'RAID 1 ×3',st:'Clean',v:'ok',sz:'32 GiB'},{n:'md1',l:'RAID 5 ×4',st:'Clean',v:'ok',sz:'10.82 TiB'}],
+   disks:[['sda',37,'ok','OK'],['sdb',36,'ok','OK'],['sdc',38,'ok','OK'],['sdd',34,'ok','OK']],vols:[['/',41],['/srv/data',16]],svc:[['ssh',1],['synofurb-mgmt',1],['smartd',1],['mdadm',1],['unattended-upgrades',1]],upd:{n:12,sec:3,reboot:false},boot:'Debian 13 · 6.12.57'};
+  if(h==='rebuild'){base.overall='warn';base.warnings=['md1 rebuilding 24%'];base.arrays[1]={n:'md1',l:'RAID 5 ×4',st:'Rebuilding',v:'info',sz:'10.82 TiB',pct:24};base.disks[2]=['sdc',38,'warn','8 realloc.'];}
+  if(h==='faildisk'){base.overall='crit';base.warnings=['sdc failed','md1 degraded'];base.arrays[1]={n:'md1',l:'RAID 5 ×4',st:'Degraded',v:'err',sz:'10.82 TiB'};base.arrays[0]={n:'md0',l:'RAID 1 ×3',st:'Degraded',v:'warn',sz:'32 GiB'};base.disks[2]=['sdc','—','err','Failed'];}
+  if(h==='svcdown'){base.overall='warn';base.warnings=['2 services down'];base.svc[1][1]=0;base.svc[3][1]=0;base.upd.reboot=true}
+  if(h==='unreachable'){base.overall='unknown'}
+  return base}
+function mgmtRow(){const m=S.manage.mgmt,h=S.manage.health==='unreachable',unit='0.9.1',app='0.9.2',cur_=m==='updated'?app:unit;
+ const stat=m==='updated'?tag('Up to date',{v:'ok',i:'circle-check'}):m==='updating'?tag('Updating',{v:'info',i:'loader-circle'}):m==='failed'?tag('Rolled back',{v:'warn',i:'undo-2'}):unit!==app?tag('Update available',{v:'info',i:'download'}):tag('Up to date',{v:'ok',i:'circle-check'});
+ const steps=['Upload','Install','Restart','Health check'];const k=Math.floor(S.manage.mgmtPct/26);
+ return `<div class="card"><div class="mgmt"><div class="row gap12 grow wrap"><b>Management app</b>${infoBtn('mgmtv','Management app')}<span class="sub">On unit</span>${mono(cur_)}<span class="sub">In this app</span>${mono(app)}${stat}</div>
+  ${m==='updated'?btn('Roll back',{cls:'ghost',icon:'undo-2',dlg:'',act:'rollback',tipT:'Restores 0.9.1 within about 10 s.'}):''}${btn('Update',{cls:'primary',icon:'download',act:'mgmtupdate',off:h?'Unit unreachable.':(m==='updating'?'Updating now.':(cur_===app?'Already up to date.':''))})}${btn('Open web UI',{icon:'external-link',act:'openweb',off:h?'Unit unreachable.':''})}</div>
+  ${m==='updating'?`<div class="card-b" style="border-top:1px solid var(--border);padding:12px 16px" role="status"><div class="prog" role="progressbar" aria-valuenow="${S.manage.mgmtPct}"><i style="width:${S.manage.mgmtPct}%"></i></div><div class="row gap16 sub" style="margin-top:8px">${steps.map((s,i)=>`<span style="${i===k?'font-weight:700;color:var(--fg)':''}">${i<k?ic('check','s'):''} ${s}</span>`).join('')}</div></div>`:''}
+  ${m==='failed'?`<div style="padding:0 16px 16px">${alertH('warn','undo-2','<b>Update failed.</b> '+d('Rolled back to 0.9.1'),`<button class="btn sm" data-act="mgmtupdate">Retry</button>`)}</div>`:''}</div>`}
+function manage(){const t=S.manage.tab,u=cur(),hs=S.manage.health,H=healthData(hs);
+ const tabs=[['overview','Overview'],['storage','Storage'],['logins','Logins'],['recovery','Recovery'],['history','History']];
+ let body='';
+ if(t==='overview'){
+  const ov={ok:['Healthy','ok','circle-check',false],warn:['Needs attention','warn','triangle-alert',false],crit:['Critical','err','octagon-x',true],unknown:['Unreachable','','wifi-off',false]}[H.overall];
+  const un=H.overall==='unknown';
+  const card=(t_,ico,inner,pop)=>`<section class="card"><div class="card-h">${ic(ico,'s')}${t_}${pop?infoBtn(pop,t_):''}</div><div class="card-b" style="padding:8px 16px">${un?'<div class="skel" style="margin:10px 0;width:70%"></div><div class="skel" style="margin:10px 0;width:50%"></div>':inner}</div></section>`;
+  const dsk=H.disks.map(x=>`<div class="mini"><span class="nm">${x[0]}</span>${mono(x[1]==='—'?'—':x[1]+' °C')}<span class="grow"></span>${tag(x[3],{v:x[2],i:x[2]==='ok'?'circle-check':x[2]==='err'?'circle-x':'triangle-alert',t:x[2]==='ok'?'SMART passed.':'SMART reports a problem; plan a replacement.'})}</div>`).join('');
+  const arr=H.arrays.map(a=>`<div class="mini" style="height:auto;padding:4px 0;flex-wrap:wrap"><span class="nm">${a.n}</span>${d(a.l)}<span class="grow"></span>${tag(a.st,{v:a.v,i:{ok:'circle-check',info:'refresh-cw',warn:'triangle-alert',err:'octagon-x'}[a.v]})}${a.pct!==undefined?`<div style="flex:0 0 100%" class="row gap12"><div class="prog grow" role="progressbar" aria-valuenow="${a.pct}"><i style="width:${a.pct}%"></i></div>${mono(a.pct+'%')}</div>`:''}</div>`).join('');
+  const vol=H.vols.map(v=>`<div class="mini"><span class="nm" style="min-width:84px">${v[0]}</span><div class="prog grow ${v[1]>85?'warn':''}" role="progressbar" aria-valuenow="${v[1]}"><i style="width:${v[1]}%"></i></div>${mono(v[1]+'%')}</div>`).join('');
+  const svc=`<div class="row wrap" style="padding:8px 0;gap:6px">${H.svc.map(s=>`<span class="tag ${s[1]?'ok':'err'}"${tip(s[1]?'Running.':'Not running; check the journal over SSH.')}>${ic(s[1]?'circle-check':'circle-x','s')}${s[0]}</span>`).join('')}</div>`;
+  const upd=`<div class="mini"><span class="grow">${d(H.upd.n+' pending')}</span>${tag(H.upd.sec+' security',{v:'warn',i:'shield-alert'})}</div>${H.upd.reboot?`<div class="mini">${tag('Reboot needed',{v:'warn',i:'rotate-ccw'})}</div>`:''}`;
+  body=`<div class="row gap12 wrap">${tag(ov[0],{v:ov[1],i:ov[2],lg:true,fill:ov[3],t:'Overall health is the worst component.'})}${H.warnings.map(w=>tag(w,{v:H.overall==='crit'?'err':'warn',i:'triangle-alert'})).join('')}<span class="sp"></span><button class="btn ghost icon" data-act="recheck" aria-label="Check again"${tip('Check again.')}>${ic('refresh-cw')}</button></div>
+  ${un?alertH('err','wifi-off','<b>Cannot reach unit</b>',`<button class="btn sm" data-act="recheck">Retry</button>`):''}
+  <div class="hcards">${card('Disks','hard-drive',dsk,'diskcard')}${card('Arrays','layers',arr,'level')}${card('Volumes','database',vol)}${card('Services','activity',svc)}${card('Updates','package',upd)}${card('Boot default','power',`<div class="mini"><span class="grow">${d(H.boot)}</span></div><div class="mini">${d('DSM loader entry remains')}</div>`)}</div>${mgmtRow()}`;
+ } else if(t==='storage'){
+  const A=healthData(hs).arrays;
+  body=`${hs==='faildisk'?alertH('warn','triangle-alert','<b>Array degraded</b>',`<button class="btn sm" data-dlg="oplan">Replace disk</button>`):''}<div class="card cardtbl"><table class="tbl"><thead><tr><th>Array</th><th>Level ${infoBtn('level','Level')}</th><th>State</th><th class="r">Size</th><th style="width:200px">Progress</th></tr></thead><tbody>${A.map(a=>`<tr><td>${mono(a.n)}</td><td>${d(a.l)}</td><td>${tag(a.st,{v:a.v,i:{ok:'circle-check',info:'refresh-cw',warn:'triangle-alert',err:'octagon-x'}[a.v],t:'Clean, degraded, rebuilding or foreign.'})}</td><td class="r">${mono(a.sz)}</td><td>${a.pct!==undefined?`<div class="row gap12"><div class="prog grow"><i style="width:${a.pct}%"></i></div>${mono(a.pct+'%')}</div>`:d('—')}</td></tr>`).join('')}</tbody></table></div>
+  <div class="row"><button class="btn" data-act="openweb"${tip('Full array detail and history.')}>${ic('external-link')}Open web UI</button><span class="sp"></span><button class="btn primary" aria-disabled="true"${tip('Use the web UI to change arrays.')}>${ic('plus')}Create array</button></div>`;
+ } else if(t==='logins'){
+  body=`<div class="card"><div class="card-b" style="padding:8px 16px"><dl class="dl" style="grid-template-columns:140px 1fr"><dt>SSH command</dt><dd>${mono('ssh andreas@'+u.ip)}<span class="grow"></span><button class="btn ghost icon sm" data-copy="ssh andreas@${u.ip}" aria-label="Copy">${ic('copy','s')}</button></dd><dt>Web UI</dt><dd>${mono('https://'+u.ip+':8443')}</dd><dt>Password</dt><dd><span${tip('synofurb does not store it; the NAS keeps a hash.')}>${tag('Password not kept',{i:'lock'})}</span></dd></dl></div></div>`;
+ } else {
+  body=`<div class="card"><ul class="help-list" style="padding:4px 8px">${[['14:41','circle-check','Debian 13 verified'],['14:25','triangle-alert','Point of no return passed'],['14:20','hard-drive','Boot flash backed up'],['14:02','search','Inspected']].map(x=>`<li><div class="row" style="padding:6px 8px;gap:12px">${ic(x[1],'s')}${mono(x[0])}${d(x[2])}</div></li>`).join('')}</ul></div>`;
+ }
+ return {html:`<div class="page"><div class="ph"><div><h1 class="t-title">${d(S.manage.name||u.model)}</h1><div class="sub t-sub">Running Debian 13.</div></div></div>
+  <div class="tabs" role="tablist">${tabs.map(([k,l])=>`<button role="tab" aria-selected="${t===k}" data-mtab="${k}">${l}</button>`).join('')}</div>${body}</div>`,
+  foot:F(`<button class="btn ghost" data-act="diag"${tip('Copies version, OS and state; no secrets.')}>${ic('copy')}Diagnostics</button>`,btn('Open web UI',{cls:'primary',icon:'external-link',act:'openweb',off:hs==='unreachable'?'Unit unreachable.':''}))}}
+/* ---- D16 Help ---- */
+function helpBody(){const h=S.help,topics=HELP;
+  if(h.topic){const t=topics.find(x=>x.id===h.topic);return `<div class="row"><button class="btn ghost sm" data-help-back>${ic('arrow-left')}Back</button></div><h2>${t.title}</h2><div class="md">${t.html}</div><div class="row"><button class="link" data-act="docs">${ic('external-link','s')} More</button></div>`}
+  if(h.tab==='Shortcuts')return `<table class="tbl sm"><tbody>${SHORTCUTS.map(s=>`<tr><td>${s[0].split(' / ').map(k=>`<span class="kbd">${k}</span>`).join(' ')}</td><td>${s[1]}</td></tr>`).join('')}</tbody></table>`;
+  const q=h.q.toLowerCase(),l=topics.filter(t=>!q||(t.title+' '+t.text).toLowerCase().includes(q));
+  return l.length?`<ul class="help-list">${l.map(t=>`<li><button data-help-topic="${t.id}">${ic('book-open','s')}${t.title}${ic('chevron-right','s r')}</button></li>`).join('')}</ul>`:`<div class="empty"><div class="big">${ic('search','xl')}</div>No topics match</div>`}
+const SHORTCUTS=[['F1','Help for the focused control'],['Ctrl+,','Settings'],['Ctrl+F','Search'],['Alt+Left / Alt+Right','Previous / next completed step'],['F6','Jump between regions'],['Ctrl+Shift+C','Copy command'],['Esc','Close popover or dialog; never cancels an install'],['Space','Press the focused erase button (Enter does not)']];
+function openHelp(topic){S.help.topic=topic||null;S.help.q=S.help.q||'';S.help.tab=S.help.tab||'Topics';
+  const sc=openSheet({title:'Help',body:'<div id="hb-top"></div><div id="hb"></div>',foot:`<button class="link" data-act="docs">${ic('external-link','s')} Open docs</button>`});
+  S.help.open=true;paintHelp();const i=$('#hq');(topic?$('[data-help-back]',sc):i)&&(topic?$('[data-help-back]',sc):i).focus()}
+function paintHelp(){const top=$('#hb-top');if(!top)return;const h=S.help;
+  top.innerHTML=h.topic?'':`<div class="inp">${ic('search','s')}<input id="hq" placeholder="Search help" value="${esc(h.q)}" aria-label="Search help"></div><div class="tabs" role="tablist" style="margin-top:8px">${['Topics','Shortcuts'].map(t=>`<button role="tab" aria-selected="${h.tab===t}" data-help-tab="${t}">${t}</button>`).join('')}</div>`;
+  $('#hb').innerHTML=helpBody();}
+/* ---- D17 About ---- */
+function about(){const cr=[['Debian','DFSG licences'],['Lucide','ISC'],['Inter','OFL 1.1'],['JetBrains Mono','OFL 1.1'],['Montserrat','OFL 1.1'],['GPUI Kit, gpui-component','Apache-2.0'],['synodeb note','GPL-2.0, technique only']];
+ return {html:`<div class="page narrow" style="align-items:center;text-align:center;max-width:560px"><div class="ph" style="width:100%"><h1 class="t-title">About</h1></div>
+ <div class="col" style="align-items:center;gap:12px;padding:12px 0"><div style="width:280px">${LOGO_FULL}</div><div class="sub">Reinstall Synology NAS units with Debian.</div>${tag('0.9.2 · build 4c1e9d2',{rd:true})}</div>
+ <div class="row wrap" style="justify-content:center"><button class="btn primary" data-act="diag"${tip('Version, OS, settings; no secrets.')}>${ic('copy')}Copy diagnostics</button><button class="btn ghost" data-act="docs">${ic('book-open')}Documentation</button><button class="btn ghost" data-act="docs">${ic('external-link')}Source code</button><button class="btn ghost" data-act="docs">${ic('bug')}Report issue</button></div>
+ <div style="width:100%;text-align:left">${acc('credits','Credits',`<ul class="help-list">${cr.map(c=>`<li><div class="row" style="padding:6px 8px">${d(c[0])}<span class="sp"></span><button class="link" data-dlg="licence">${c[1]}</button></div></li>`).join('')}</ul>`)}</div></div>`,foot:F('',btn('Close',{go:S.back||'find'}))}}

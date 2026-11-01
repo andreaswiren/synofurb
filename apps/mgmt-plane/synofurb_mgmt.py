@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Iterable
 
-DEFAULT_VERSION = "0.2.0"
+DEFAULT_VERSION = "0.4.0"
 
 
 def read_version() -> str:
@@ -3912,6 +3912,423 @@ def make_ssl_context(cert: str, key: str) -> ssl.SSLContext:
 
 
 # ============================================================================
+# 18a. CLI contract for the desktop app (no server, usable over SSH as root)
+#      synofurb_mgmt.py health --json
+#      synofurb_mgmt.py update --from DIR [--force] [--json]  /  update --rollback [--json]
+# ============================================================================
+
+HEALTH_SCHEMA = 1
+HEALTH_SERVICES = ("synofurb-mgmt", "ssh", "systemd-networkd", "systemd-resolved")
+INSTALL_DIR = "/opt/synofurb-mgmt"
+UNIT_PATH = "/etc/systemd/system/synofurb-mgmt.service"
+BUNDLE_REQUIRED = ("synofurb_mgmt.py", "VERSION", "README.md")
+BUNDLE_OPTIONAL_UNIT = "synofurb-mgmt.service"
+MANIFEST_NAME = "MANIFEST.sha256"
+MAX_BUNDLE_FILE = 8 * 1024 * 1024
+EXIT_OK, EXIT_REFUSED, EXIT_ROLLED_BACK, EXIT_ROLLBACK_FAILED = 0, 2, 3, 4
+
+
+def _pct(used: float, total: float) -> int | None:
+    return int(round(100.0 * used / total)) if total else None
+
+
+def collect_health(app: App, quick: bool = False, budget_s: float = 40.0) -> dict:
+    """One JSON-serialisable health document. Every section is independent: a failing part becomes null plus a warning."""
+    t_end = time.monotonic() + budget_s
+    warnings: list[str] = []
+    crit: list[str] = []
+    cfg = app.cfg
+
+    def part(name: str, fn: Callable[[], Any], default: Any = None) -> Any:
+        try:
+            return fn()
+        except Exception:                                   # noqa: BLE001 - the contract is "never raise"
+            warnings.append("%s unavailable" % name)
+            return default
+
+    def uptime() -> float | None:
+        t = read_text("/proc/uptime").split()
+        return round(float(t[0])) if t else None
+
+    def load() -> list[float] | None:
+        return [round(x, 2) for x in os.getloadavg()]
+
+    def mem() -> dict | None:
+        mi = parse_meminfo(read_text(cfg.proc_root + "/meminfo"))
+        return {"total": mi.get("MemTotal"), "avail": mi.get("MemAvailable")} if mi else None
+
+    def osname() -> str | None:
+        o = parse_os_release(app.read("/etc/os-release") or read_text("/etc/os-release"))
+        return o.get("PRETTY_NAME") or o.get("NAME")
+
+    def root_fs() -> dict | None:
+        sv = os.statvfs("/")
+        used = sv.f_blocks - sv.f_bfree
+        return {"used_pct": _pct(used, used + sv.f_bavail)}
+
+    def arrays() -> list[dict]:
+        out = []
+        for a in app.mdstat():
+            sync = a["sync"] or {}
+            state = "inactive" if a["state"] == "inactive" else "degraded" if a["degraded"] else "resyncing" if sync else "clean"
+            out.append({"name": a["name"], "level": a["level"], "state": state, "degraded": bool(a["degraded"]),
+                        "sync_pct": sync.get("percent"), "sync_action": sync.get("action")})
+        return out
+
+    def disks() -> list[dict]:
+        devs = [d for d in app.lsblk() if d["type"] == "disk" and not d["kname"].startswith(("loop", "zram", "ram", "sr", "nbd"))]
+        have = bool(app.runner.which("smartctl")) and not quick
+        out = []
+        for d in devs:
+            smart, temp = "unknown", None
+            if have and time.monotonic() < t_end:
+                r = app.run(["smartctl", "-H", "-j", d["path"]], timeout=10)       # rc is a bitmask; parse regardless
+                info = parse_smart(r.out) if r.out.strip() else {}
+                if info.get("passed") is True:
+                    smart = "passed"
+                elif info.get("passed") is False:
+                    smart = "failed"
+                temp = info.get("temp")
+            out.append({"dev": d["path"], "model": d["model"], "size": d["size"], "smart": smart, "temp_c": temp})
+        return out
+
+    def volumes() -> list[dict]:
+        return [{"mount": r["target"], "used_pct": _pct(r["used"], r["size"]), "fstype": r["fstype"]} for r in app.findmnt()
+                if r["real"] and (r["target"] == "/" or str(r["target"]).startswith(("/srv/", "/mnt/")))]
+
+    def services() -> list[dict]:
+        names = list(HEALTH_SERVICES) + (["mdmonitor"] if app.mdstat() else [])
+        return [{"name": n, "active": app.run(["systemctl", "is-active", n + ".service"], timeout=8).out.strip() == "active"} for n in names]
+
+    def boot() -> dict:
+        present = os.path.isfile(cfg.p(DOM_TOOL))
+        default = None
+        if present and not quick:
+            st, _ = _dom_status(app)
+            default = boot_view(st)["default_id"] if st else None
+        return {"default": default, "flash_present": present}
+
+    def updates() -> dict | None:
+        if quick or time.monotonic() >= t_end or not app.runner.which("apt-get"):
+            return None
+        r = app.run(["apt-get", "-s", "-o", "Debug::NoLocking=1", "upgrade"], timeout=30)
+        if not r.ok:
+            raise RuntimeError("apt")
+        inst = [ln for ln in r.out.splitlines() if ln.startswith("Inst ")]
+        return {"apt_pending": len(inst), "security_pending": sum(1 for ln in inst if re.search(r"-security|Debian-Security", ln))}
+
+    doc: dict[str, Any] = {"schema": HEALTH_SCHEMA, "version": VERSION, "hostname": part("hostname", socket.gethostname),
+                           "uptime_s": part("uptime", uptime), "load": part("load", load), "mem": part("memory", mem), "os": part("os", osname),
+                           "kernel": part("kernel", lambda: os.uname().release), "root_fs": part("root fs", root_fs), "arrays": part("arrays", arrays),
+                           "disks": part("disks", disks), "volumes": part("volumes", volumes), "services": part("services", services),
+                           "boot": part("boot", boot), "updates": part("updates", updates)}
+    for a in doc["arrays"] or []:
+        if a["degraded"]:
+            crit.append("%s degraded" % a["name"])
+        elif a["state"] == "inactive":
+            warnings.append("%s inactive" % a["name"])
+        elif a["sync_action"]:
+            warnings.append("%s %s %s%%" % (a["name"], a["sync_action"], a["sync_pct"] if a["sync_pct"] is not None else "?"))
+    for d in doc["disks"] or []:
+        if d["smart"] == "failed":
+            crit.append("%s SMART failed" % d["dev"].replace("/dev/", ""))
+        if d["temp_c"] is not None and d["temp_c"] >= 60:
+            (crit if d["temp_c"] >= 70 else warnings).append("%s %d C" % (d["dev"].replace("/dev/", ""), d["temp_c"]))
+    for v in ([{"mount": "root", "used_pct": (doc["root_fs"] or {}).get("used_pct")}] + (doc["volumes"] or [])):
+        if v["used_pct"] is not None and v["used_pct"] >= 85:
+            (crit if v["used_pct"] >= 95 else warnings).append("%s %d%% full" % (v["mount"], v["used_pct"]))
+    for sv in doc["services"] or []:
+        if not sv["active"]:
+            warnings.append("%s not running" % sv["name"])
+    if doc["updates"] and doc["updates"]["security_pending"]:
+        warnings.append("%d security updates pending" % doc["updates"]["security_pending"])
+    mm = doc["mem"] or {}
+    if mm.get("total") and mm.get("avail") is not None and mm["avail"] < mm["total"] * 0.05:
+        warnings.append("memory almost full")
+    doc["overall"] = "crit" if crit else "warn" if warnings else "ok"
+    doc["warnings"] = (crit + warnings)[:20]
+    return doc
+
+
+# ---- update ------------------------------------------------------------------
+
+def parse_version(v: str) -> tuple[int, int, int]:
+    m_ = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.]+)?", v.strip())
+    if not m_:
+        raise ValidationError("not a version: %r" % v[:40])
+    return int(m_.group(1)), int(m_.group(2)), int(m_.group(3))
+
+
+def sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_bundle(src: str) -> tuple[dict[str, str], str]:
+    """Check a local update directory against its MANIFEST.sha256. Returns ({name: sha256}, new version). Raises ValidationError."""
+    if "://" in src:
+        raise ValidationError("update takes a local directory; network sources are not supported")
+    if not os.path.isdir(src) or os.path.islink(src):
+        raise ValidationError("%s is not a directory" % src)
+    man = os.path.join(src, MANIFEST_NAME)
+    if not os.path.isfile(man) or os.path.islink(man):
+        raise ValidationError("%s is missing: refusing to install unverified code" % MANIFEST_NAME)
+    expected: dict[str, str] = {}
+    for ln in read_text(man).splitlines():
+        if not ln.strip():
+            continue
+        mm = re.fullmatch(r"([0-9a-f]{64})\s+\*?([A-Za-z0-9._-]{1,64})", ln.strip())
+        if not mm or mm.group(2) == MANIFEST_NAME or mm.group(2) in expected:
+            raise ValidationError("bad manifest line: %r" % ln[:80])
+        expected[mm.group(2)] = mm.group(1)
+    present = set(os.listdir(src)) - {MANIFEST_NAME}
+    for name in sorted(present):
+        p = os.path.join(src, name)
+        if os.path.islink(p) or not os.path.isfile(p):
+            raise ValidationError("%s is not a regular file" % name)
+        if os.path.getsize(p) > MAX_BUNDLE_FILE:
+            raise ValidationError("%s is too large" % name)
+    if present != set(expected):
+        raise ValidationError("files and manifest differ (unlisted: %s; missing: %s)" % (", ".join(sorted(present - set(expected))) or "none", ", ".join(sorted(set(expected) - present)) or "none"))
+    for name in BUNDLE_REQUIRED:
+        if name not in expected:
+            raise ValidationError("%s is missing from the update" % name)
+    if set(expected) - set(BUNDLE_REQUIRED) - {BUNDLE_OPTIONAL_UNIT}:
+        raise ValidationError("unexpected file(s): %s" % ", ".join(sorted(set(expected) - set(BUNDLE_REQUIRED) - {BUNDLE_OPTIONAL_UNIT})))
+    for name, digest in expected.items():
+        if not hmac.compare_digest(sha256_file(os.path.join(src, name)), digest):
+            raise ValidationError("checksum mismatch for %s" % name)
+    version = read_text(os.path.join(src, "VERSION")).strip().splitlines()[0] if read_text(os.path.join(src, "VERSION")).strip() else ""
+    parse_version(version)
+    try:
+        compile(read_text(os.path.join(src, "synofurb_mgmt.py")), "synofurb_mgmt.py", "exec")      # syntax only; never executed here
+    except SyntaxError as e:
+        raise ValidationError("synofurb_mgmt.py does not compile: %s" % e)
+    return expected, version
+
+
+def swap_dirs(a: str, b: str) -> None:
+    """Atomically exchange two directories (renameat2 RENAME_EXCHANGE); falls back to three renames."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.renameat2(-100, a.encode(), -100, b.encode(), 2) == 0:
+            return
+    except (OSError, AttributeError):
+        pass
+    tmp = a + ".swap"
+    os.rename(a, tmp)
+    os.rename(b, a)
+    os.rename(tmp, b)
+
+
+def default_probe(cfg: Config) -> bool:
+    for host in ("127.0.0.1", "::1"):
+        try:
+            with socket.create_connection((host, cfg.port), timeout=2):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+class Updater:
+    """update --from DIR: verify, stage, swap, restart, poll health, roll back on failure. Emits NDJSON-able progress."""
+
+    def __init__(self, cfg: Config, runner: Runner, emit: Callable[[str, str, str], None], probe: Callable[[Config], bool] | None = None,
+                 health_timeout: float = 30.0, sleep: Callable[[float], None] = time.sleep):
+        self.cfg, self.runner, self.emit = cfg, runner, emit
+        self.probe, self.health_timeout, self.sleep = probe or default_probe, health_timeout, sleep
+        self.inst, self.new, self.prev = cfg.p(INSTALL_DIR), cfg.p(INSTALL_DIR + ".new"), cfg.p(INSTALL_DIR + ".prev")
+
+    def installed_version(self) -> str | None:
+        t = read_text(os.path.join(self.inst, "VERSION")).strip()
+        return t.splitlines()[0] if t else None
+
+    def restart(self, reload_units: bool) -> bool:
+        if reload_units:
+            self.runner.run(["systemctl", "daemon-reload"], timeout=30)
+        return self.runner.run(["systemctl", "restart", "synofurb-mgmt.service"], timeout=60).ok
+
+    def healthy(self, expect_version: str | None) -> tuple[bool, str]:
+        t_end = time.monotonic() + self.health_timeout
+        last = "no answer"
+        while True:
+            active = self.runner.run(["systemctl", "is-active", "synofurb-mgmt.service"], timeout=10).out.strip() == "active"
+            if not active:
+                last = "service is not active"
+            elif not self.probe(self.cfg):
+                last = "port %d is not listening" % self.cfg.port
+            else:
+                script = os.path.join(self.inst, "synofurb_mgmt.py")
+                argv = [sys.executable or "/usr/bin/python3", script, "health", "--json", "--quick"] + (["--root", self.cfg.root] if self.cfg.root else [])
+                r = self.runner.run(argv, timeout=25)
+                try:
+                    h = json.loads(r.out.strip().splitlines()[-1]) if r.out.strip() else {}
+                except ValueError:
+                    h = {}
+                if h.get("schema") == HEALTH_SCHEMA and (expect_version is None or h.get("version") == expect_version):
+                    return True, "version %s answers" % h.get("version")
+                last = "health check failed (%s)" % (("version %s" % h.get("version")) if h.get("schema") else "no valid answer")
+            if time.monotonic() >= t_end:
+                return False, last
+            self.sleep(1.0)
+
+    def _unit_swap(self, content: str | None) -> bool:
+        """Install the packaged unit file (if any); remember the previous one for a rollback. Returns True if it changed."""
+        path = self.cfg.p(UNIT_PATH)
+        old = read_text(path) if os.path.isfile(path) else None
+        if content is None or content == old:
+            return False
+        if old is not None:
+            write_atomic(os.path.join(self.prev, "unit.backup"), old)
+        write_atomic(path, content)
+        return True
+
+    def update(self, src: str, force: bool = False) -> int:
+        emit = self.emit
+        emit("verify", "start", "checking %s" % src)
+        try:
+            files, new_v = verify_bundle(src)
+            cur = self.installed_version()
+            if cur and parse_version(new_v) < parse_version(cur) and not force:
+                raise ValidationError("version %s is older than the installed %s (use --force to downgrade)" % (new_v, cur))
+        except (ValidationError, OSError) as e:
+            emit("verify", "fail", str(e))
+            return EXIT_REFUSED
+        emit("verify", "ok", "manifest verified, version %s%s" % (new_v, " (installed %s)" % cur if cur else ""))
+        emit("stage", "start", "copying to %s" % INSTALL_DIR + ".new")
+        try:
+            if os.path.lexists(self.new):
+                shutil.rmtree(self.new)
+            os.makedirs(self.new)
+            for name in files:
+                shutil.copyfile(os.path.join(src, name), os.path.join(self.new, name))
+                os.chmod(os.path.join(self.new, name), 0o644)
+                if sha256_file(os.path.join(self.new, name)) != files[name]:
+                    raise OSError("copy of %s differs from the manifest" % name)
+        except OSError as e:
+            emit("stage", "fail", str(e))
+            shutil.rmtree(self.new, ignore_errors=True)
+            return EXIT_REFUSED
+        emit("stage", "ok", "%d files staged" % len(files))
+        emit("swap", "start", "swapping %s" % INSTALL_DIR)
+        had_prev_before = os.path.isdir(self.inst)
+        try:
+            if had_prev_before:
+                if os.path.lexists(self.prev):
+                    shutil.rmtree(self.prev)
+                swap_dirs(self.inst, self.new)                      # inst = new code, .new = old code
+                os.rename(self.new, self.prev)
+            else:
+                os.rename(self.new, self.inst)
+            unit_changed = self._unit_swap(read_text(os.path.join(self.inst, BUNDLE_OPTIONAL_UNIT)) if BUNDLE_OPTIONAL_UNIT in files else None)
+        except OSError as e:
+            emit("swap", "fail", str(e))
+            return self._rollback_after_failure(new_v, had_prev_before, False)
+        emit("swap", "ok", "previous version kept in %s" % INSTALL_DIR + ".prev" if had_prev_before else "installed")
+        emit("restart", "start", "restarting synofurb-mgmt.service")
+        if not self.restart(unit_changed):
+            emit("restart", "fail", "systemctl restart failed")
+            return self._rollback_after_failure(new_v, had_prev_before, unit_changed)
+        emit("restart", "ok", "service restarted")
+        emit("health", "start", "waiting up to %d s for the new version" % int(self.health_timeout))
+        ok, why = self.healthy(new_v)
+        if not ok:
+            emit("health", "fail", why)
+            return self._rollback_after_failure(new_v, had_prev_before, unit_changed)
+        emit("health", "ok", why)
+        emit("result", "ok", "updated %s -> %s" % (cur or "none", new_v))
+        return EXIT_OK
+
+    def _restore(self, had_prev: bool, unit_changed: bool) -> bool:
+        """Put the previous install back (inst <-> prev exchange) and its unit file."""
+        try:
+            bpath = os.path.join(self.prev, "unit.backup")
+            backup = read_text(bpath) if (unit_changed and os.path.isfile(bpath)) else None      # read before the directories move
+            if had_prev and os.path.isdir(self.prev):
+                swap_dirs(self.inst, self.prev)
+            if backup is not None:
+                write_atomic(self.cfg.p(UNIT_PATH), backup)
+            for d in (self.inst, self.prev):
+                if os.path.isfile(os.path.join(d, "unit.backup")):
+                    os.unlink(os.path.join(d, "unit.backup"))
+            return True
+        except OSError as e:
+            self.emit("rollback", "fail", str(e))
+            return False
+
+    def _rollback_after_failure(self, failed_v: str, had_prev: bool, unit_changed: bool) -> int:
+        self.emit("rollback", "start", "restoring the previous version")
+        if not had_prev:
+            self.emit("rollback", "fail", "there was no previous install to restore")
+            self.emit("result", "fail", "update failed; nothing to roll back to")
+            return EXIT_ROLLBACK_FAILED
+        if not self._restore(had_prev, unit_changed):
+            self.emit("result", "fail", "update failed and the rollback failed")
+            return EXIT_ROLLBACK_FAILED
+        self.restart(unit_changed)
+        ok, why = self.healthy(None)
+        if not ok:
+            self.emit("rollback", "fail", "previous version does not answer: " + why)
+            self.emit("result", "fail", "update failed and the previous version does not answer")
+            return EXIT_ROLLBACK_FAILED
+        self.emit("rollback", "ok", "previous version %s is running again" % (self.installed_version() or "?"))
+        self.emit("result", "fail", "update to %s failed; rolled back" % failed_v)
+        return EXIT_ROLLED_BACK
+
+    def rollback(self) -> int:
+        """update --rollback: exchange the installed and the .prev version."""
+        self.emit("rollback", "start", "restoring %s" % INSTALL_DIR + ".prev")
+        if not os.path.isfile(os.path.join(self.prev, "synofurb_mgmt.py")):
+            self.emit("rollback", "fail", "no previous version is kept")
+            return EXIT_REFUSED
+        unit_changed = os.path.isfile(os.path.join(self.prev, "unit.backup"))
+        if not self._restore(True, unit_changed):
+            return EXIT_ROLLBACK_FAILED
+        self.restart(unit_changed)
+        ok, why = self.healthy(None)
+        if not ok:
+            self.emit("rollback", "fail", why)
+            self.emit("result", "fail", "rolled back but the service does not answer: " + why)
+            return EXIT_ROLLBACK_FAILED
+        self.emit("rollback", "ok", "version %s is running" % (self.installed_version() or "?"))
+        self.emit("result", "ok", "rolled back to %s" % (self.installed_version() or "?"))
+        return EXIT_OK
+
+
+def run_cli(args: argparse.Namespace, cfg: Config, runner: Runner) -> int:
+    """Dispatch ``health`` and ``update``. Exit codes: 0 ok, 2 refused/bad input, 3 failed and rolled back, 4 failed and rollback failed."""
+    if args.command == "health":
+        app = App(cfg, runner)
+        try:
+            doc = collect_health(app, quick=args.quick)
+        except Exception as e:                                       # noqa: BLE001
+            doc = {"schema": HEALTH_SCHEMA, "version": VERSION, "overall": "warn", "warnings": ["health collection failed: %s" % type(e).__name__]}
+        print(json.dumps(doc, separators=(",", ":")) if args.json else "overall: %s\n%s" % (doc["overall"], "\n".join("- " + w for w in doc.get("warnings", []))), flush=True)
+        return 0
+
+    def emit(step: str, status: str, message: str) -> None:
+        if args.json:
+            print(json.dumps({"step": step, "status": status, "message": message}, separators=(",", ":")), flush=True)
+        else:
+            print("[%s] %s: %s" % (step, status, message), flush=True)
+
+    if not cfg.root and os.geteuid() != 0:
+        emit("verify", "fail", "must run as root")
+        return EXIT_REFUSED
+    upd = Updater(cfg, runner, emit, health_timeout=args.health_timeout)
+    if args.rollback:
+        return upd.rollback()
+    if not args.src:
+        emit("verify", "fail", "update needs --from DIR or --rollback")
+        return EXIT_REFUSED
+    return upd.update(args.src, force=args.force)
+
+
+# ============================================================================
 # 18. Startup / CLI
 # ============================================================================
 
@@ -3943,6 +4360,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--dry-run", action="store_true", help="never modify the system; record commands only")
     ap.add_argument("--no-tls", action="store_true", help="plain HTTP (development only, requires --dry-run)")
     ap.add_argument("--net-rollback", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("command", nargs="?", choices=("health", "update"), help="health --json | update --from DIR | update --rollback (no server is started)")
+    ap.add_argument("--json", action="store_true", help="machine-readable output (health, update)")
+    ap.add_argument("--quick", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--from", dest="src", help="update: directory with the new version and MANIFEST.sha256")
+    ap.add_argument("--force", action="store_true", help="update: allow installing an older version")
+    ap.add_argument("--rollback", action="store_true", help="update: restore the previous version")
+    ap.add_argument("--health-timeout", type=float, default=30.0, help=argparse.SUPPRESS)
     ap.add_argument("--raid-scrub", action="store_true", help=argparse.SUPPRESS)
     return ap.parse_args(argv)
 
@@ -3955,17 +4379,20 @@ def main(argv: list[str] | None = None) -> int:
     cfg = Config(root=args.root, dry_run=args.dry_run)
     if args.dry_run and not cfg.root:
         cfg.root = tempfile.mkdtemp(prefix="synofurb-dry-")
-        print("dry-run: sandbox root is %s" % cfg.root, file=sys.stderr)
+        if not args.command:
+            print("dry-run: sandbox root is %s" % cfg.root, file=sys.stderr)
     cfg.load_file()
     if args.port:
         cfg.port = args.port
     if args.bind:
         cfg.bind = args.bind
     cfg.tls = not args.no_tls
-    if not args.dry_run and not cfg.root and os.geteuid() != 0:
+    if not args.dry_run and not cfg.root and os.geteuid() != 0 and args.command != "health":
         print("error: must run as root (or use --dry-run)", file=sys.stderr)
         return 2
-    runner: Runner = DryRunRunner(passthrough=True, verbose=True) if args.dry_run else RealRunner()
+    runner: Runner = DryRunRunner(passthrough=True, verbose=not args.command) if args.dry_run else RealRunner()
+    if args.command:
+        return run_cli(args, cfg, runner)
     if args.dry_run:
         seed_dev_accounts(cfg)
     app = App(cfg, runner)
@@ -4131,7 +4558,7 @@ def theme_css() -> str:
 _ICON_SPRITE = '''<symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></symbol><symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></symbol><symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z"></path><path d="m9 12 2 2 4-4"></path></symbol><symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"></path></symbol><symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-dasharray="3 3"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"></path></symbol><symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"></path><path d="M12 9v4M12 17h.01"></path></symbol><symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="m4.9 4.9 14.2 14.2"></path></symbol><symbol id="i-octagon-x" viewBox="0 0 24 24"><path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9z"></path><path d="m15 9-6 6M9 9l6 6"></path></symbol><symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></symbol><symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="8" rx="2"></rect><rect x="2" y="13" width="20" height="8" rx="2"></rect><path d="M6 7h.01M6 17h.01"></path></symbol><symbol id="i-disk" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="12" cy="12" r="4"></circle><path d="M12 12h.01M17 7h.01"></path></symbol><symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"></path></symbol><symbol id="i-mem" viewBox="0 0 24 24"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9"></path><path d="M2 15h20M2 7a1 1 0 0 1 1-1h18a1 1 0 0 1 1 1v8H2z"></path></symbol><symbol id="i-network" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"></rect><rect x="2" y="16" width="6" height="6" rx="1"></rect><rect x="9" y="2" width="6" height="6" rx="1"></rect><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"></path></symbol><symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"></path></symbol><symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"></path><path d="M3.3 19a10 10 0 1 1 17.4 0"></path></symbol><symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z"></path><path d="m2 12 10 5 10-5M2 17l10 5 10-5"></path></symbol><symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"></path></symbol><symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></symbol><symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M9.9 4.2A10 10 0 0 1 12 4c6.4 0 10 8 10 8a17 17 0 0 1-2.2 3.2M6.6 6.6A17 17 0 0 0 2 12s3.6 8 10 8a9.7 9.7 0 0 0 5.4-1.6M14.1 14.1a3 3 0 1 1-4.2-4.2M2 2l20 20"></path></symbol><symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></symbol><symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path></symbol><symbol id="i-chev-d" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></symbol><symbol id="i-arrow-r" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"></path></symbol><symbol id="i-arrow-l" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"></path></symbol><symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z"></path></symbol><symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"></path></symbol><symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"></path></symbol><symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></symbol><symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"></path></symbol><symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></symbol><symbol id="i-thermo" viewBox="0 0 24 24"><path d="M14 4v10.5a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0z"></path></symbol><symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></symbol><symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"></path></symbol><symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></symbol><symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"></path></symbol><symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-15-6.7L3 13"></path></symbol><symbol id="i-lifebuoy" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4"></circle><path d="m4.9 4.9 4.3 4.3M14.8 14.8l4.3 4.3M14.8 9.2l4.3-4.3M4.9 19.1l4.3-4.3"></path></symbol><symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 22V4M4 4h13l-2 4 2 4H4"></path></symbol><symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"></path></symbol><symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"></path></symbol><symbol id="i-package" viewBox="0 0 24 24"><path d="m7.5 4.3 9 5.2M21 8v8a2 2 0 0 1-1 1.7l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.7l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"></path><path d="M3.3 7 12 12l8.7-5M12 22V12"></path></symbol><symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></symbol><symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M9 21V9"></path></symbol><symbol id="i-logo" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="8" fill="currentColor"></rect><rect x="7" y="8" width="18" height="4" rx="1.6" fill="var(--on-accent)"></rect><rect x="7" y="14" width="18" height="4" rx="1.6" fill="var(--on-accent)" opacity=".7"></rect><rect x="7" y="20" width="18" height="4" rx="1.6" fill="var(--on-accent)" opacity=".45"></rect><circle cx="22" cy="10" r="1.2" fill="currentColor"></circle></symbol><symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></symbol><symbol id="i-hard-drive" viewBox="0 0 24 24"><path d="M22 12H2"></path><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path><path d="M6 16h.01M10 16h.01"></path></symbol><symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"></path></symbol>'''
 
 # ---- copy module: every visible string of the RAID and Help pages (short / tip / help, with word budgets enforced by tests) ----
-# kind: title (<=4 words), label (<=4), button (<=3), prose (counted against the 60-word page budget), safety (<=12, may stay visible)
+# kind: title (<=4 words), label (<=4), button (<=3), tip (<=12, only shown in tooltips), prose (counted against the 60-word page budget), safety (<=12, may stay visible)
 def _c(short: str, kind: str = "label", tip: str | None = None) -> dict:
     d = {"short": short, "kind": kind}
     if tip:
@@ -4145,29 +4572,29 @@ COPY: dict[str, dict] = {
     "raid.arrays": _c("Arrays"), "raid.hybrid": _c("Hybrid volumes"), "raid.empty": _c("No arrays yet.", "prose"),
     "raid.members": _c("Members"), "raid.size": _c("Size"), "raid.usedby": _c("Used by"), "raid.level": _c("Level"), "raid.usable": _c("Usable"),
     "raid.survives": _c("Survives {n}"), "raid.none": _c("No protection", "label", "Losing any disk loses the data."),
-    "raid.imported": _c("Imported", "label", "Created by another system. Changes need extra confirmation."),
+    "raid.imported": _c("Imported", "label", "Made by another system; changes need extra confirmation."),
     "raid.actions": _c("Actions", "button"), "raid.monthly": _c("Monthly check", "label", "Checks every array once a month, in the background."),
     "raid.mismatch": _c("{n} mismatches", "label", "The last check found blocks that differ between members."), "raid.bitmap": _c("Bitmap", "label", "A write-intent bitmap shortens rebuilds after a crash."),
-    "state.clean": _c("Clean", "label", "All members are in sync."), "state.degraded": _c("Degraded", "label", "A member is missing or failed. Replace it soon."),
+    "state.clean": _c("Clean", "label", "All members are in sync."), "state.degraded": _c("Degraded", "label", "A member is missing or failed, so replace it soon."),
     "state.rebuilding": _c("Rebuilding", "label", "A disk is being filled with data again."), "state.resyncing": _c("Syncing", "label", "Members are being brought in sync."),
-    "state.reshaping": _c("Reshaping", "label", "The array is changing size or level. Do not power off."), "state.checking": _c("Checking", "label", "Reading all blocks to compare members."),
-    "state.repairing": _c("Repairing", "label", "Rewriting blocks that differ."), "state.inactive": _c("Inactive", "label", "Not started. Assemble it or check the disks."),
+    "state.reshaping": _c("Reshaping", "label", "The array is changing size or level; do not power off."), "state.checking": _c("Checking", "label", "Reading all blocks to compare members."),
+    "state.repairing": _c("Repairing", "label", "Rewriting blocks that differ."), "state.inactive": _c("Inactive", "label", "Not started: assemble it or check the disks."),
     "ms.active": _c("Active"), "ms.spare": _c("Spare"), "ms.faulty": _c("Failed"), "ms.rebuilding": _c("Rebuilding"), "ms.removed": _c("Missing"), "ms.replacement": _c("Replacing"),
     "act.add_spare": _c("Add spare", "button"), "act.replace": _c("Replace disk", "button"), "act.grow": _c("Grow", "button"), "act.level": _c("Change level", "button"),
     "act.check": _c("Check now", "button"), "act.repair": _c("Repair", "button"), "act.stoptask": _c("Stop task", "button"), "act.tune": _c("Tune", "button"), "act.stop": _c("Stop array", "button"),
     "raid.disk": _c("Disk"), "raid.disks": _c("Disks to add"), "raid.old": _c("Disk to replace"), "raid.new": _c("New disk"), "raid.target": _c("New level"), "raid.allspace": _c("Use all space"),
-    "raid.nofree": _c("No free disks.", "prose"), "raid.noredundancy": _c("RAID 0 has no redundancy."), "raid.cantgrow": _c("This level cannot grow."), "raid.cantlevel": _c("No conversion available."),
-    "raid.norepair": _c("Not on a degraded array."), "raid.inuse": _c("Array is in use."), "raid.busy": _c("Wait until it is idle."),
+    "raid.nofree": _c("No free disks.", "prose"), "raid.noredundancy": _c("RAID 0 has no redundancy.", "tip"), "raid.cantgrow": _c("This level cannot grow.", "tip"), "raid.cantlevel": _c("No conversion available.", "tip"),
+    "raid.norepair": _c("Not on a degraded array.", "tip"), "raid.inuse": _c("Array is in use.", "tip"), "raid.busy": _c("Wait until it is idle.", "tip"),
     "raid.done": _c("Done."), "raid.failed": _c("A step failed."), "raid.started": _c("Check started."), "raid.type": _c("Type {name} to confirm", "safety"),
     "raid.commands": _c("Commands that will run"), "raid.later": _c("Run when finished"), "raid.ack": _c("I understand this is not mine", "safety"),
-    "raid.speedmin": _c("Min speed KiB/s"), "raid.speedmax": _c("Max speed KiB/s"), "raid.name": _c("Name"), "raid.fs": _c("Filesystem"), "raid.withvol": _c("Create a volume on it"),
+    "raid.speedmin": _c("Min speed KiB/s"), "raid.speedmax": _c("Max speed KiB/s"), "raid.name": _c("Name"), "raid.fs": _c("Filesystem"), "raid.withvol": _c("Add a volume"),
     "raid.createrun": _c("Erase and create", "button"),
     "btn.next": _c("Next", "button"), "btn.back": _c("Back", "button"), "btn.cancel": _c("Cancel", "button"), "btn.preview": _c("Preview", "button"), "btn.run": _c("Run", "button"),
     "btn.close": _c("Close", "button"), "btn.save": _c("Save", "button"),
     "wiz.disks": _c("Disks"), "wiz.level": _c("Level"), "wiz.review": _c("Review"),
-    "lv.raid0": _c("RAID 0", "label", "Fastest. Any failed disk loses everything."), "lv.raid1": _c("RAID 1", "label", "Mirror. Every disk holds a full copy."),
-    "lv.raid5": _c("RAID 5", "label", "One disk of parity. Survives one failure."), "lv.raid6": _c("RAID 6", "label", "Two disks of parity. Survives two failures."),
-    "lv.raid10": _c("RAID 10", "label", "Mirrored pairs, striped. Needs an even disk count."),
+    "lv.raid0": _c("RAID 0", "label", "Fastest, but any failed disk loses everything."), "lv.raid1": _c("RAID 1", "label", "Mirror: every disk holds a full copy."),
+    "lv.raid5": _c("RAID 5", "label", "One disk of parity; survives one failure."), "lv.raid6": _c("RAID 6", "label", "Two disks of parity; survives two failures."),
+    "lv.raid10": _c("RAID 10", "label", "Mirrored pairs, striped; needs an even disk count."),
     "lv.shr1": _c("Hybrid 1", "label", "Like Synology SHR: mixes disk sizes, survives one failure."), "lv.shr2": _c("Hybrid 2", "label", "Like Synology SHR-2: mixes disk sizes, survives two failures."),
     "shr.add": _c("Add disk", "button"), "shr.replace": _c("Replace disk", "button"), "shr.slice": _c("Slice"), "shr.slices": _c("Slices"), "shr.unused": _c("Unused"),
     "help.title": _c("Help", "title"), "help.search": _c("Search help"), "help.none": _c("No topic found.", "prose"),
@@ -4425,7 +4852,7 @@ details>summary{cursor:pointer}
  input[type=range]{height:44px}
  .tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.tile{padding:12px}.tile .val{font-size:24px;line-height:30px}
  .grid2{grid-template-columns:1fr}
- .ph h1{font-size:22px}.ph .row,.ph .btn{width:100%}
+ .ph h1{font-size:22px}.ph>.row{width:100%}.ph .row>.btn:not(.icon-btn){flex:1}
  .steps div{padding:8px 4px}
  .rb{flex-direction:column;align-items:stretch;gap:12px;padding:12px}.rb .acts{flex-direction:column}.rb .acts .btn{width:100%}
  .rb .row0{display:flex;gap:12px;align-items:center}

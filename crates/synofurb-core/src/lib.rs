@@ -19,3 +19,4 @@ pub mod diskbackup;
 pub mod domboot;
 pub mod offline;
 pub mod updater;
+pub mod manage;

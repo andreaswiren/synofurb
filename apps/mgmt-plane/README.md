@@ -8,7 +8,7 @@ Needs these Debian packages for the features that use them: `openssl` (first-sta
 `iproute2`, `util-linux`, `mdadm`, `lvm2`, `xfsprogs`/`e2fsprogs`/`btrfs-progs`, `ntfs-3g`, `exfatprogs`,
 `smartmontools` (optional), `openssh-server` (optional).
 
-Version: the `VERSION` file next to this README (currently 0.2.0) is the single source; it is packaged with the script, read at start-up,
+Version: the `VERSION` file next to this README (currently 0.4.0) is the single source; it is packaged with the script, read at start-up,
 shown in the UI (login and sidebar footer) and returned by `GET /api/me`, `/api/status`, `/api/services` and `/api/tls-fingerprint`.
 
 ## What it does
@@ -16,12 +16,54 @@ shown in the UI (login and sidebar footer) and returned by `GET /api/me`, `/api/
 | Page | Features |
 | --- | --- |
 | Dashboard | tiles for health, storage, memory, load, CPU vendor (Intel/AMD), kernel (flagged when >= 7), microcode package state, network; RAID/LVM/mount tables; disks with role, SMART fetched lazily; unit model (from `/proc/sys/kernel/syno_hw_version` or `/var/lib/synofurb/dsm-inspect.txt`); serial console (`console=` on the kernel command line) |
+| RAID | array inventory (level, state, members with slot/model/serial, spares, bitmap, resync/reshape/check progress and speed, mismatch count, what uses it), create (RAID 0/1/5/6/10 and **Hybrid / SHR-style 1 and 2**), add spare, fail/remove, replace (failed or healthy with `--replace --with`), grow, change level, check/repair/stop task, stop/assemble, tuning, monthly check timer, SHR add/replace disk; every change is plan, typed confirmation, commands, audit |
 | Storage | free-device detection, 4-step create-volume wizard (devices, RAID layout, volume, review) with a live plan preview (exact commands, nothing executed), typed-name confirm to execute; extend LV + grow fs; delete |
 | Imported volumes | "Scan RAID and LVM" (mdadm assemble + vgchange), mount unmounted filesystems (xfs/ext4/btrfs/vfat/exfat/ntfs) **read-only by default for foreign volumes**, optional fstab persistence, unmount, fstab view, signatures that need activation or unlocking |
 | Network | per-interface DHCP (v4+v6+SLAAC) or static config written to `/etc/systemd/network/10-synofurb-<if>.network`; safe apply with a 90 s automatic rollback and a countdown banner on every page; hostname |
 | Users | list local accounts (uid>=1000 + root marker), create/delete, set password, lock/unlock, add SSH key |
 | Boot manager | units that boot through the internal boot flash (`/usr/local/sbin/synofurb-dom`): entries (DSM, Debian, previous kernel, boot agent), current default, DSM fail-safe note, **Return to DSM**, set default, reboot into an entry, boot-flash free space and DOM backup location. Other units get a "not a boot-flash unit" notice |
 | System | sshd state and host key fingerprints, serial-getty units, restart of an allow-list of services, reboot/poweroff, version and unit info |
+
+## RAID and Hybrid RAID (SHR)
+
+The RAID page implements `docs/RAID.md`. Hybrid RAID is mdadm plus LVM: the data space of the disks is cut into slices at the disk sizes
+(`shr_slices()`, vectors in `tests/shr_vectors.json`, the browser and the Rust planner use the same algorithm), every slice with two or more
+members becomes an md array (`<volume>_<n>`), all arrays are physical volumes of `vg_<volume>` and the volume is one linear logical volume.
+Volumes built here are SHR-style and Debian-managed; DSM does not adopt them. Imported DSM arrays are shown as *Imported*: assemble and check
+are free, anything else needs the extra "I understand this is not mine" acknowledgement and the typed array name.
+
+Safety rules (enforced by the server, not only the UI): devices must be free (not mounted, not a member, not holding `/`, `/boot` or swap);
+no change while an array is resyncing, reshaping or checking (stopping the task and tuning are allowed); a disk cannot be failed if that would
+lose data; an array in use by LVM or a mount cannot be stopped; only conversions mdadm supports (RAID1 to 5, 5 to 6, 6 to 5, 0 to 5);
+the plan is re-derived at execution time; the typed phrase is the array (or volume) name. After a grow the follow-up steps (`pvresize`,
+`lvextend`, filesystem grow) are offered and run through `POST /api/raid/after-grow` once the array is idle.
+The monthly check is a pair of units the service writes on request (`synofurb-raid-scrub.timer`, runs `synofurb_mgmt.py --raid-scrub`).
+
+## Command-line contract (for the desktop app and SSH)
+
+No server is started; run as root over SSH (`health` works without root). Exit code 0 unless stated.
+
+```sh
+python3 /opt/synofurb-mgmt/synofurb_mgmt.py health --json
+python3 /opt/synofurb-mgmt/synofurb_mgmt.py update --from /tmp/bundle --json      # --force allows a downgrade
+python3 /opt/synofurb-mgmt/synofurb_mgmt.py update --rollback --json
+```
+
+`health --json` prints one JSON object (`schema` 1): `version`, `hostname`, `uptime_s`, `load[3]`, `mem{total,avail}`, `os`, `kernel`,
+`root_fs{used_pct}`, `arrays[{name,level,state,degraded,sync_pct,sync_action}]`, `disks[{dev,model,size,smart: passed|failed|unknown,temp_c}]`,
+`volumes[{mount,used_pct,fstype}]`, `services[{name,active}]`, `boot{default,flash_present}`, `updates{apt_pending,security_pending}`,
+`overall` (`ok|warn|crit`) and short `warnings`. A part that cannot be read is `null` plus a warning, commands have timeouts and the whole
+collection has a time budget, so it never hangs and never fails. Degraded arrays, failed SMART, 95 % full volumes and 70 C disks are `crit`;
+syncing arrays, stopped services, 85 % full volumes and pending security updates are `warn`. (`--quick` skips SMART and apt.)
+
+`update --from DIR`: DIR holds `synofurb_mgmt.py`, `VERSION`, `README.md`, optionally `synofurb-mgmt.service`, and `MANIFEST.sha256`
+(`sha256sum` format, every file listed, nothing else in the directory). Steps (one NDJSON line each with `--json`: `{"step","status","message"}`,
+status `start|ok|fail`, final line `step: "result"`): `verify` (manifest, files are regular, VERSION is not older unless `--force`, the script compiles; it is never executed
+before this passes), `stage` (copy to `/opt/synofurb-mgmt.new`, re-hash), `swap` (atomic exchange, previous install kept as `/opt/synofurb-mgmt.prev`,
+unit file replaced if packaged), `restart`, `health` (up to 30 s: service active, port listening, the new code answers `health --json` with its version),
+and on any failure `rollback` (previous install and unit file back, restart, same health check). No network access. Exit codes: 0 updated, 2 refused
+(nothing changed), 3 failed and rolled back, 4 failed and the rollback failed. `update --rollback` exchanges the installed and the `.prev` version (running it twice rolls forward).
+Build a bundle with `python3 tools/make-update-bundle.py OUT_DIR`.
 
 ## Look and feel
 
@@ -59,10 +101,14 @@ public routes needs the session cookie; every POST also needs `X-CSRF-Token` and
 | POST | `/api/network/rollback` | roll back right now |
 | POST | `/api/hostname` | `{hostname}` |
 | GET | `/api/volumes` | VGs, LVs, PVs, free candidate devices (+ why others are excluded), md arrays |
-| POST | `/api/volumes/plan` | `{name,devices[],level,fs,mountpoint?,size_gib?}` -> steps with exact commands, runs nothing |
+| POST | `/api/volumes/plan` | `{name,devices[],level,fs,mountpoint?,size_gib?}` -> steps with exact commands, runs nothing; `level` may be `shr1`/`shr2` (whole disks) |
 | POST | `/api/volumes/create` | same body + `confirm` = volume name; executes the re-derived plan |
 | POST | `/api/volumes/extend` | `{vg,lv,add_gib?}` (empty = all free space) |
 | POST | `/api/volumes/delete` | `{vg,lv,confirm=lv,remove_vg?}` |
+| GET | `/api/raid` | arrays, free disks, SHR volumes, speed limits, check timer |
+| POST | `/api/raid/plan` | `{op, ...}` for any operation below: returns title, warnings, exact commands, follow-ups, `confirm` phrase; runs nothing |
+| POST | `/api/raid/<op>` | `create`, `add-spare`, `fail`, `remove`, `replace`, `grow`, `change-level`, `scrub`, `stop`, `assemble`, `tuning`, `shr-create`, `shr-add-disk`, `shr-replace-disk`: same body as the plan plus `confirm` (and `foreign_ack` for imported arrays) |
+| POST | `/api/raid/after-grow` | `{array, confirm}`: pvresize + lvextend + filesystem grow when the array is idle |
 | GET | `/api/mounts` | mounts, fstab entries, mountable unmounted filesystems |
 | POST | `/api/mounts/mount` | `{device,mountpoint,ro?,persist?,owner?}`; `ro` defaults to true for imported (non-`vg_*`) volumes |
 | POST | `/api/mounts/unmount` | `{mountpoint,confirm=mountpoint,remove_fstab?}` |

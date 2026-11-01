@@ -1412,7 +1412,7 @@ class VersionAndUiTests(HttpTestCase):
             v = fh.read().strip()
         self.assertRegex(v, r"^\d+\.\d+\.\d+$")
         self.assertEqual(m.VERSION, v)
-        self.assertEqual(v, "0.2.0")
+        self.assertEqual(v, "0.4.0")
 
     def test_version_in_api_and_footer(self):
         st, obj, _ = self.cl.raw("GET", "/api/tls-fingerprint")
