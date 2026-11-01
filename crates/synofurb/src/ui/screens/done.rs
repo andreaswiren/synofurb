@@ -15,7 +15,7 @@ use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::description_list::{DescriptionItem, DescriptionList};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::{Disableable, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, IntoElement, Window, div, px};
 use synofurb_core::model::Firmware;
@@ -203,13 +203,14 @@ impl App {
                     .tooltip(copy::DONE_REPORT.tip)
                     .on_click(cx.listener(|this, _, window, cx| this.open_report_dialog(window, cx)))
                     .into_any_element(),
-                Button::new("finish")
-                    .primary()
-                    .label(copy::DONE_FINISH.short)
-                    .disabled(!copied)
-                    .tooltip(if copied { "" } else { copy::DONE_FINISH.tip })
-                    .on_click(cx.listener(|this, _, window, cx| this.start_over(window, cx)))
-                    .into_any_element(),
+                kit::with_reason(
+                    "finish-why",
+                    Button::new("finish")
+                        .primary()
+                        .label(copy::DONE_FINISH.short)
+                        .on_click(cx.listener(|this, _, window, cx| this.start_over(window, cx))),
+                    (!copied).then(|| copy::DONE_FINISH.tip.to_string()),
+                ),
             ])
     }
 

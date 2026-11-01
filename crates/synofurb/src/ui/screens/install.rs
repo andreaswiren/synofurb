@@ -16,7 +16,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, IntoElement, Role, Window, div, px};
 
@@ -190,13 +190,14 @@ impl App {
                     .into_any_element(),
             ])
             .right(vec![
-                Button::new("cancel-install")
-                    .outline()
-                    .label(copy::INSTALL_CANCEL.short)
-                    .disabled(!can_cancel)
-                    .tooltip(if can_cancel { "" } else { copy::INSTALL_CANCEL.tip })
-                    .on_click(cx.listener(|this, _, window, cx| this.confirm_cancel(window, cx)))
-                    .into_any_element(),
+                kit::with_reason(
+                    "cancel-why",
+                    Button::new("cancel-install")
+                        .outline()
+                        .label(copy::INSTALL_CANCEL.short)
+                        .on_click(cx.listener(|this, _, window, cx| this.confirm_cancel(window, cx))),
+                    (!can_cancel).then(|| copy::INSTALL_CANCEL.tip.to_string()),
+                ),
             ])
     }
 

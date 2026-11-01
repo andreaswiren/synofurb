@@ -357,6 +357,7 @@ mod strings {
         INSTALL_NO_RETURN: Label, "No return", "From step 3 the first disk changes; cancel is free before.", "recovery", "";
         INSTALL_LOG: Label, "Log", "", "", "";
         INSTALL_CANCEL: Button, "Cancel", "Not possible after step 3.", "recovery", "";
+        CONN_HOST_WHY: Label, "Enter the NAS address first.", "", "", "";
         INSTALL_OPEN_LOG: Label, "Open log file", "Opens the log folder.", "", "";
         INSTALL_CANCEL_DIALOG: Dialog, "Cancel install?", "The NAS returns to DSM within 60 seconds.", "recovery", "The NAS returns to DSM within 60 seconds.";
         INSTALL_STOP: Button, "Stop install", "", "", "";
@@ -441,6 +442,9 @@ mod strings {
         SET_REFRESH: Button, "Refresh", "", "", "";
         SET_BUNDLE: Label, "Offline bundle", "Installer files for one CPU architecture.", "offline-mode", "";
         SET_BUNDLE_DOWNLOAD: Button, "Download", "", "", "";
+        SET_BUNDLE_WHY: Label, "Not built into the app yet: run synofurb-cli bundle to build or download one.", "", "", "";
+        UPD_DOWNLOAD_KEY_WHY: Label, "This build cannot verify updates: its signing key is a placeholder.", "", "", "";
+        UPD_DOWNLOAD_ASSET_WHY: Label, "This release has no signed package for this system.", "", "", "";
         SET_LOG_FOLDER: Label, "Log folder", "", "", "";
         SET_OPEN: Button, "Open", "", "", "";
         SET_SEND_RESULTS: Label, "Send results", "Asks before every report; serial numbers are left out.", "report-result", "";

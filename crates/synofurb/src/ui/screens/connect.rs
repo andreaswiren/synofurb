@@ -101,13 +101,16 @@ impl App {
                     .into_any_element(),
             ])
             .right(vec![
-                Button::new("inspect")
-                    .primary()
-                    .label(copy::INV_CONNECT.short)
-                    .loading(inspecting)
-                    .disabled(inspecting || host_empty)
-                    .on_click(cx.listener(|this, _, window, cx| this.start_inspect(window, cx)))
-                    .into_any_element(),
+                kit::with_reason(
+                    "inspect-why",
+                    Button::new("inspect")
+                        .primary()
+                        .label(copy::INV_CONNECT.short)
+                        .loading(inspecting)
+                        .disabled(inspecting)
+                        .on_click(cx.listener(|this, _, window, cx| this.start_inspect(window, cx))),
+                    host_empty.then(|| copy::CONN_HOST_WHY.short.to_string()),
+                ),
             ])
     }
 

@@ -210,14 +210,11 @@ impl App {
                                 app.update(cx, |a, cx| a.browse_dir(input, window, cx))
                             }),
                     )
-                    .child(
-                        Button::new("bundle-dl")
-                            .ghost()
-                            .small()
-                            .label(copy::SET_BUNDLE_DOWNLOAD.short)
-                            .disabled(true)
-                            .tooltip("Run `synofurb-cli bundle` to build or download one."),
-                    )
+                    .child(kit::with_reason(
+                        "bundle-why",
+                        Button::new("bundle-dl").ghost().small().label(copy::SET_BUNDLE_DOWNLOAD.short),
+                        Some(copy::SET_BUNDLE_WHY.short.to_string()),
+                    ))
                     .into_any_element()
             },
         )));

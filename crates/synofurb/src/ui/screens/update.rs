@@ -12,7 +12,7 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
-use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AppContext, Context, Entity, IntoElement, Render, Window, div, px};
 use synofurb_core::updater;
@@ -120,13 +120,14 @@ impl Render for UpdateView {
                         .child(crate::ui::disclosure::info_tip("sig-info", &copy::UPD_SIGNATURE, &app))
                         .into_any_element(),
                     vec![
-                        Button::new("upd-apply")
-                            .primary()
-                            .label(copy::UPD_RESTART.short)
-                            .disabled(install_running)
-                            .tooltip(if install_running { copy::UPD_RESTART.tip } else { "" })
-                            .on_click(move |_, _, cx| app2.update(cx, |a, cx| a.apply_update(cx)))
-                            .into_any_element(),
+                        kit::with_reason(
+                            "apply-why",
+                            Button::new("upd-apply")
+                                .primary()
+                                .label(copy::UPD_RESTART.short)
+                                .on_click(move |_, _, cx| app2.update(cx, |a, cx| a.apply_update(cx))),
+                            install_running.then(|| copy::UPD_RESTART.tip.to_string()),
+                        ),
                     ],
                 )
             }
@@ -165,13 +166,17 @@ impl Render for UpdateView {
                                 window.close_dialog(cx);
                             })
                             .into_any_element(),
-                        Button::new("upd-download")
-                            .primary()
-                            .icon(icons::icon(role::DOWNLOAD))
-                            .label(copy::UPD_DOWNLOAD.short)
-                            .disabled(dis)
-                            .on_click(move |_, _, cx| a3.update(cx, |a, cx| a.start_update_download(cx)))
-                            .into_any_element(),
+                        kit::with_reason(
+                            "download-why",
+                            Button::new("upd-download")
+                                .primary()
+                                .icon(icons::icon(role::DOWNLOAD))
+                                .label(copy::UPD_DOWNLOAD.short)
+                                .on_click(move |_, _, cx| a3.update(cx, |a, cx| a.start_update_download(cx))),
+                            dis.then(|| {
+                                if key_missing { copy::UPD_DOWNLOAD_KEY_WHY.short } else { copy::UPD_DOWNLOAD_ASSET_WHY.short }.to_string()
+                            }),
+                        ),
                     ],
                 )
             }

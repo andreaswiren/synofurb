@@ -6,7 +6,7 @@ use super::app::App;
 use super::copy::Item;
 use super::disclosure::info_tip;
 use super::icons::{self, role};
-use super::theme::{self, Palette, Tone};
+use super::theme::{self, Palette, Themed, Tone};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme, h_flex};
@@ -105,22 +105,53 @@ pub fn labelled(id: impl Into<ElementId>, item: &'static Item, app: &Entity<App>
 
 // ------------------------------------------------------------------------------------------------ segmented choice
 
-/// A segmented choice (stock `ToggleGroup`): exactly one option is on; clicking another selects it.
-pub fn segmented<I: Into<ElementId>, F: Fn(usize, &mut gpui_kit::Window, &mut GpuiApp) + 'static>(
+/// A segmented choice (stock `ToggleGroup`, outline variant): exactly one option is on; clicking another selects it.
+///
+/// Rendering (UI review B2): a visible container border in `border_strong`, and the selected segment filled with the
+/// accent (white label, 700 weight), which is at least 3:1 against its neighbours and is told apart without colour by
+/// the weight. Unselected segments keep the surface fill and a regular label.
+#[derive(IntoElement)]
+pub struct Segmented {
+    id: ElementId,
+    labels: Vec<SharedString>,
+    selected: usize,
+    on_select: std::rc::Rc<dyn Fn(usize, &mut gpui_kit::Window, &mut GpuiApp)>,
+}
+
+pub fn segmented<I: Into<ElementId>, L: Into<SharedString> + Clone, F: Fn(usize, &mut gpui_kit::Window, &mut GpuiApp) + 'static>(
     id: I,
-    labels: &[&'static str],
+    labels: &[L],
     selected: usize,
     on_select: F,
-) -> impl IntoElement + use<I, F> {
-    use gpui_kit::component::button::{Toggle, ToggleGroup};
-    ToggleGroup::new(id)
-        .segmented()
-        .children(labels.iter().enumerate().map(|(i, l)| Toggle::new(i).label(*l).checked(i == selected)))
-        .on_click(move |checks: &Vec<bool>, window, cx| {
-            if let Some(ix) = checks.iter().enumerate().find(|(i, on)| **on && *i != selected).map(|(i, _)| i) {
-                on_select(ix, window, cx);
-            }
-        })
+) -> Segmented {
+    Segmented {
+        id: id.into(),
+        labels: labels.iter().cloned().map(Into::into).collect(),
+        selected,
+        on_select: std::rc::Rc::new(on_select),
+    }
+}
+
+impl RenderOnce for Segmented {
+    fn render(self, _window: &mut gpui_kit::Window, cx: &mut GpuiApp) -> impl IntoElement {
+        use gpui_kit::component::button::{Toggle, ToggleGroup, ToggleVariants as _};
+        let p = cx.pal();
+        let (on_bg, on_fg) = (cx.theme().primary, cx.theme().primary_foreground);
+        let selected = self.selected;
+        let on_select = self.on_select;
+        ToggleGroup::new(self.id)
+            .segmented()
+            .outline()
+            .children(self.labels.into_iter().enumerate().map(|(i, l)| {
+                let t = Toggle::new(i).label(l).checked(i == selected).border_color(p.border_strong);
+                if i == selected { t.bg(on_bg).text_color(on_fg).font_weight(FontWeight::BOLD) } else { t.text_color(p.fg) }
+            }))
+            .on_click(move |checks: &Vec<bool>, window, cx| {
+                if let Some(ix) = checks.iter().enumerate().find(|(i, on)| **on && *i != selected).map(|(i, _)| i) {
+                    on_select(ix, window, cx);
+                }
+            })
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ forms
