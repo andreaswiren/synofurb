@@ -180,6 +180,14 @@ pub struct BundleInfo {
     pub mgmt_version: Option<String>,
 }
 
+/// The `--kernel` value of a channel.
+fn kernel_flag(k: KernelChannel) -> &'static str {
+    match k {
+        KernelChannel::Stable => "stable",
+        KernelChannel::Newest => "newest",
+    }
+}
+
 pub fn human_bytes(b: u64) -> String {
     const MIB: f64 = 1024.0 * 1024.0;
     if b as f64 >= 1024.0 * MIB { format!("{:.2} GiB", b as f64 / (1024.0 * MIB)) } else { format!("{:.1} MiB", b as f64 / MIB) }
@@ -2288,9 +2296,12 @@ impl Bundle {
         }
         if kernel != self.manifest.kernel {
             bail!(
-                "the bundle was built for the {} kernel but the install asks for the {} kernel; choose the same one or build another bundle",
+                "the bundle was built for the {} kernel but the install asks for the {} kernel. Either install with `--kernel {}` (the GUI: set Kernel to {} on the System tab), or build a bundle for the kernel you want: `synofurb bundle create --kernel {} --out <dir>` (a bundle holds one kernel and has no fallback to the other one)",
                 self.manifest.kernel.label(),
-                kernel.label()
+                kernel.label(),
+                kernel_flag(self.manifest.kernel),
+                kernel_flag(self.manifest.kernel),
+                kernel_flag(kernel),
             );
         }
         if self.has_mgmt() {
@@ -2880,7 +2891,13 @@ mod tests {
             b.check_for_install(Arch::Arm64, "trixie", KernelChannel::Stable, &[], false).unwrap_err().to_string().contains("no arm64")
         );
         assert!(b.check_for_install(Arch::X86_64, "bookworm", KernelChannel::Stable, &[], false).is_err());
-        assert!(b.check_for_install(Arch::X86_64, "trixie", KernelChannel::Newest, &[], false).unwrap_err().to_string().contains("kernel"));
+        let e = b.check_for_install(Arch::X86_64, "trixie", KernelChannel::Newest, &[], false).unwrap_err().to_string();
+        // actionable: both ways out are named, with the exact flags
+        assert!(
+            e.contains("Stable") && e.contains("Newest") && e.contains("--kernel stable") && e.contains("bundle create --kernel newest"),
+            "{e}"
+        );
+        assert!(e.contains("no fallback"), "{e}");
         assert!(
             b.check_for_install(Arch::X86_64, "trixie", KernelChannel::Stable, &["vim".into()], false)
                 .unwrap_err()

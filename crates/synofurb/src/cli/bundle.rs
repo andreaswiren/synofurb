@@ -1,7 +1,7 @@
 //! `bundle create|verify|info`: front end over `crate::bundle_cmd` (the offline-mode engine in `synofurb_core::offline`), plus the checks
 //! `install` and the wizard run on a bundle before anything touches the NAS.
 
-use super::args::{BundleCmd, BundleCreateArgs};
+use super::args::{BundleCmd, BundleCreateArgs, KernelArg};
 use super::exit::{CliError, CliResult};
 use super::out::Out;
 use crate::bundle_cmd as backend;
@@ -27,11 +27,18 @@ fn validate_create(a: &BundleCreateArgs) -> CliResult<()> {
     Ok(())
 }
 
+/// Does `bundle create` build for the Newest kernel? The default is yes, the same as the install default, so a plain `bundle create`
+/// followed by a plain `install --bundle` fits. `--kernel stable` opts out; the old `--kernel-newest` still means newest.
+pub fn wants_newest(a: &BundleCreateArgs) -> bool {
+    a.kernel_newest || a.kernel == KernelArg::Newest
+}
+
 pub fn bundle(_out: &Out, action: BundleCmd) -> CliResult<()> {
     match action {
         BundleCmd::Create(a) => {
             validate_create(&a)?;
-            backend::create(a.archs, a.suite, a.kernel_newest, a.no_firmware, a.extra, a.out, a.no_agent)?;
+            let newest = wants_newest(&a);
+            backend::create(a.archs, a.suite, newest, a.no_firmware, a.extra, a.out, a.no_agent)?;
         }
         BundleCmd::Verify { dir } => backend::verify(dir)?,
         BundleCmd::Info { dir, json } => backend::info(dir, json)?,
@@ -68,12 +75,23 @@ mod tests {
         BundleCreateArgs {
             archs: archs.iter().map(|s| s.to_string()).collect(),
             suite: suite.into(),
+            kernel: KernelArg::Newest,
             kernel_newest: false,
             no_firmware: false,
             extra: vec![],
             out: "o".into(),
             no_agent: false,
         }
+    }
+
+    #[test]
+    fn a_plain_bundle_create_builds_what_a_plain_install_asks_for() {
+        let mut a = args(&["amd64"], "trixie");
+        assert!(wants_newest(&a), "default: newest, like `install --kernel newest`");
+        a.kernel = KernelArg::Stable;
+        assert!(!wants_newest(&a));
+        a.kernel_newest = true; // the old spelling
+        assert!(wants_newest(&a));
     }
 
     #[test]

@@ -708,6 +708,12 @@ fn offline_install_is_checked_against_the_bundle_before_the_nas_is_touched() {
     let r = s.run(&["install", "--facts", "demo", "--dry-run", "--bundle", stable.to_str().unwrap()]);
     assert_eq!(r.code, 2);
     assert!(r.stderr.contains("kernel"), "{}", r.stderr);
+    // the error names both ways out, with the flags to use
+    assert!(r.stderr.contains("--kernel stable") && r.stderr.contains("bundle create --kernel newest"), "{}", r.stderr);
+    // and the default bundle (newest) is accepted by a default install
+    let newest = s.path("newest-default");
+    fake_bundle(&newest, &["amd64"], KernelChannel::Newest, &[], true);
+    assert_eq!(s.run(&["install", "--facts", "demo", "--dry-run", "--bundle", newest.to_str().unwrap()]).code, 0);
     assert_eq!(s.run(&["install", "--facts", "demo", "--dry-run", "--bundle", stable.to_str().unwrap(), "--kernel", "stable"]).code, 0);
     let r = s.run(&["install", "--facts", "demo", "--dry-run", "--bundle", ok.to_str().unwrap(), "--package", "vim"]);
     assert_eq!(r.code, 2);

@@ -91,7 +91,7 @@ on units that boot in UEFI mode **but that has not been tested** and depends on 
 
 Debian 13 "trixie" ships Linux 6.12 LTS. The kernel option **Newest** installs `linux-image-<arch>` from `trixie-backports`, where Debian
 currently packages Linux 7.2 for amd64, arm64 and armhf (checked against the archive when this was written); **Stable** installs 6.12.
-If the backports kernel cannot be installed, the installer falls back to Stable and logs a warning. The boot agent defaults to the same suite
+If the backports kernel cannot be installed, the installer falls back to Stable and logs a warning (online only: an offline bundle holds one kernel, Newest by default, and has no fallback; see [OFFLINE.md](OFFLINE.md)). The boot agent defaults to the same suite
 (`--suite trixie` for 6.12). Bear in mind that md RAID superblocks written by a newer kernel are compatible with older ones for the on-disk
 formats used here, but ZFS and some out-of-tree drivers lag behind new kernels.
 

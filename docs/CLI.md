@@ -305,7 +305,7 @@ synofurb-cli completions bash|zsh|fish|powershell
 
 ```sh
 synofurb-cli fetch-installer amd64|arm64|armhf [--suite trixie] [--firmware] [--dtb FILE.dtb] [--json]
-synofurb-cli bundle create [--arch amd64[,arm64,armhf]|all] --out DIR [--suite trixie] [--kernel-newest] [--no-firmware] [--package PKG] [--no-agent]
+synofurb-cli bundle create [--arch amd64[,arm64,armhf]|all] --out DIR [--suite trixie] [--kernel newest|stable] [--no-firmware] [--package PKG] [--no-agent]
 synofurb-cli bundle verify DIR
 synofurb-cli bundle info DIR [--json]
 synofurb-cli self-update [--check [--json]] [--channel stable|prerelease]
@@ -409,7 +409,7 @@ For networks without Internet access: build a **bundle** where there is Internet
 the dependency closure: [OFFLINE.md](OFFLINE.md).
 
 ```sh
-synofurb-cli bundle create --arch amd64 --kernel-newest --out /srv/synofurb-bundle     # online machine; resumable (Ctrl-C, run it again)
+synofurb-cli bundle create --arch amd64 --out /srv/synofurb-bundle                      # online machine; resumable (Ctrl-C, run it again); newest kernel, like the install default
 synofurb-cli bundle info   /srv/synofurb-bundle [--json]                                # what is in it
 synofurb-cli bundle verify /srv/synofurb-bundle                                         # re-hash everything, no network; exit 1 if damaged
 synofurb-cli manage update --host 192.168.1.20 --from-bundle /srv/synofurb-bundle        # update the web UI on a unit from the bundle's mgmt/ folder
@@ -419,12 +419,12 @@ synofurb-cli install --host 192.168.1.20 --source offline --bundle /srv/synofurb
 * **Sizes.** The bundle holds the installer files, the boot agent (a few MiB per architecture, for units with an internal boot flash) and only the Debian packages an install needs.
   amd64 is about **440 MiB** without installer firmware (405.7 MiB of it specific to amd64, 466 files); arm64 about 342 MiB and armhf about 234 MiB; arm64 + armhf in one bundle is about 608 MiB. The installer
   firmware (`firmware.cpio.gz`, **about 470 MiB**, shared by all architectures) is included unless you pass `--no-firmware`. Several architectures can go into one bundle (`--arch amd64,arm64`, or `all`).
-* **`bundle create`** options: `--arch ARCH[,ARCH]|all` (default amd64), `--suite trixie`, `--kernel-newest` (adds trixie-backports and its kernel; without it the 6.12 LTS kernel),
+* **`bundle create`** options: `--arch ARCH[,ARCH]|all` (default amd64), `--suite trixie`, `--kernel newest|stable` (default **newest**, the same as `install --kernel`: Linux 7.x from trixie-backports; `stable` is the 6.12 LTS kernel; the old `--kernel-newest` still works and means newest). A bundle holds **one** kernel and has no fallback to the other,
   `--no-firmware`, `--package PKG` (extra packages), `--no-agent`. It needs the Internet and refuses invalid architectures, suites and package names before starting (exit 2).
 * **`install --bundle DIR`** (alias `--offline-bundle`; `--source offline` needs it, `--bundle` alone implies offline, `--source online --bundle` contradicts and exits 2) sets the job's `offline_bundle`:
   this computer serves the installer files, the boot agent and a Debian mirror made from the bundle, and neither side needs the Internet.
   Before the NAS is touched the CLI checks that DIR is a finished bundle (before even connecting) and that it **fits**: it contains the unit's architecture, the suite matches, the bundle's kernel channel
-  equals `--kernel` (a bundle made with `--kernel-newest` needs the default `--kernel newest`; without it use `--kernel stable`), and every `--package` was baked in with `--package` at creation.
+  equals `--kernel` (a default `bundle create` and a default `install` both mean newest; a bundle made with `--kernel stable` needs `install --kernel stable`). On a mismatch the message names both ways out: `install --kernel <the bundle's kernel>` or `bundle create --kernel <the install's kernel>`, and every `--package` was baked in with `--package` at creation.
   A mismatch is exit 2 with the reason; a bundle built without firmware only warns (use `--no-firmware` to silence it). The generated script and preseed then point at the bundle: `install --dry-run` shows the
   rewritten mirror host/directory (JSON field `offline_bundle`).
 * **Needs an IPv4 address** of this computer on the NAS's network (the installer fetches packages from it); pick the LAN interface if the NAS is reached over IPv6.

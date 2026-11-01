@@ -40,6 +40,7 @@
 - **All time limits in one module** (`synofurb_core::timing`): install watchdog 30 min, boot manager 60, agent default 20, app wait 10, installer failure reboot 60 s / 15 min.
 
 ### Changed
+- `bundle create` now builds for the **Newest** kernel by default (`--kernel newest|stable`; `--kernel-newest` still accepted), the same default as `install`, so a plain bundle fits a plain install. A kernel mismatch between bundle and install names both ways out (`--kernel <bundle's>` or `bundle create --kernel <install's>`). A bundle holds one kernel and has no offline fallback to the other.
 - Installer failure handling: on units with a boot flash a failed or cancelled install reboots into DSM (60 s before the point of no return, 15 min after).
 - ARM boards: the installer prints the exact U-Boot commands before the reboot.
 

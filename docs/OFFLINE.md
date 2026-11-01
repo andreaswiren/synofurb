@@ -14,7 +14,7 @@ NAS and the whole install works without any Internet connection, on either side.
 build it on one machine, copy it to another by USB stick, and install from there.
 
 ```
-synofurb bundle create --arch amd64 --out ./bundle     # needs Internet, resumable
+synofurb bundle create --arch amd64 --out ./bundle     # needs Internet, resumable; newest kernel, like the install default
 synofurb bundle info   ./bundle
 synofurb bundle verify ./bundle                        # re-hashes everything, no network
 synofurb install ... --offline-bundle ./bundle         # no Internet needed from here on
@@ -173,7 +173,7 @@ GET|HEAD /<token>/mirror/<path>      serves <bundle>/mirror/<path>
 During `session::stage` an offline job:
 
 1. opens the bundle, checks it against the job (architecture, suite, kernel channel, extra packages; a mismatch is a
-   clear error, e.g. "the bundle was built for the Stable kernel but the install asks for the Newest kernel"),
+   clear error, e.g. "the bundle was built for the Stable kernel but the install asks for the Newest kernel. Either install with `--kernel stable` ..., or build a bundle for the kernel you want: `synofurb bundle create --kernel newest --out <dir>`"),
 2. sets `mirror_host = <desktop-ipv4>:<port>` and `mirror_dir = /<token>/mirror/debian` for this job only, so the
    preseed (installer `anna`), the stage-2 script (`wget` preflight, `debootstrap`) and `env.sh` (apt) all use it,
 3. serves the installer kernel/initrd from the bundle (hashes verified), and the boot agent from the bundle for
@@ -200,9 +200,12 @@ During `session::stage` an offline job:
   bundle has no `-updates` or `-security` suite.
 * Other architectures than the ones you chose, `contrib`/`non-free` packages beyond the closure, packages you did
   not name with `--extra`, `Recommends`.
-* The Newest-kernel fallback: if the backports kernel fails to install, `chroot-setup.sh` falls back to the suite's
-  kernel, which an offline bundle built for the Newest kernel does not contain (the install then fails instead of
-  silently using another kernel).
+* **One kernel per bundle, no fallback.** `bundle create` builds for the Newest kernel by default (`--kernel newest`, the same default as `install`);
+  `--kernel stable` builds the 6.12 LTS kernel instead (`--kernel-newest` is the old spelling of the default). If the backports kernel fails to install,
+  `chroot-setup.sh` online falls back to the suite's kernel; an offline bundle built for Newest does not contain it (the install then fails instead of
+  silently using another kernel). The Stable kernel is deliberately not added to Newest bundles: it would add a second kernel and its modules (roughly 100 MiB per
+  architecture, not measured) to make a fallback that has not been exercised offline. A mismatch between bundle and install is caught before the NAS is touched,
+  with the flags for both ways out (see below).
 
 ## Limits
 
@@ -269,7 +272,7 @@ three architectures.
 | `bundle verify` prints `note: the bundle has no mgmt/ folder` | the bundle comes from an older synofurb. Nothing is wrong; run `bundle create` on it again to add `mgmt/`. |
 | `bundle verify` prints `CHANGED`/`MISSING` | the copy (USB stick) is damaged; copy again, or rebuild (only broken files are fetched). |
 | `the bundle has no arm64 support` | build it with `--arch arm64` (you can add architectures to a bundle by running `create` again with all of them). |
-| `the bundle was built for the Newest kernel ...` | install with the same kernel channel, or build another bundle. |
+| `the bundle was built for the ... kernel but the install asks for ...` | install with `--kernel <the bundle's kernel>`, or build a bundle for the install's kernel with `bundle create --kernel newest\|stable` (default newest). |
 | `these extra packages are not in the bundle` | add them with `bundle create --extra <pkg>`. |
 | `checksum mismatch ... archive may have changed` while building | Debian published an update during the build. Run the command again. |
 | `not found on the server ... superseded packages are removed` | same: the archive changed under the index; run again. |

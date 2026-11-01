@@ -852,8 +852,12 @@ pub struct BundleCreateArgs {
     /// Debian suite
     #[arg(long, default_value = "trixie")]
     pub suite: String,
-    /// include the newest (backports) kernel as well as the stable one
-    #[arg(long)]
+    /// which kernel the bundle carries: `newest` (Linux 7.x from trixie-backports, the install default) or `stable` (6.12 LTS). A bundle
+    /// holds one kernel; install with the same `--kernel`
+    #[arg(long, value_enum, default_value = "newest", conflicts_with = "kernel_newest")]
+    pub kernel: KernelArg,
+    /// (old spelling of `--kernel newest`, which is the default now)
+    #[arg(long, hide = true)]
     pub kernel_newest: bool,
     /// leave out non-free firmware packages
     #[arg(long)]
@@ -1264,6 +1268,15 @@ mod tests {
         );
         let Cmd::Bundle { action: BundleCmd::Create(d) } = ok(&["bundle", "create", "--out", "o"]).cmd else { panic!() };
         assert!(d.archs.is_empty(), "--arch is optional: the bundle code defaults to amd64");
+        // the default bundle matches the default install (`--kernel newest`)
+        let Cmd::Install(i) = ok(&["install", "--host", "h"]).cmd else { panic!() };
+        assert_eq!((d.kernel, d.kernel.channel()), (i.system.kernel, i.system.kernel.channel()));
+        assert_eq!(d.kernel, KernelArg::Newest);
+        let Cmd::Bundle { action: BundleCmd::Create(s) } = ok(&["bundle", "create", "--out", "o", "--kernel", "stable"]).cmd else {
+            panic!()
+        };
+        assert_eq!(s.kernel, KernelArg::Stable);
+        assert!(err(&["bundle", "create", "--out", "o", "--kernel", "stable", "--kernel-newest"]).contains("cannot be used with"));
         let Cmd::Install(i) = ok(&["install", "--host", "h", "--offline-bundle", "/b"]).cmd else { panic!() };
         assert_eq!(i.source.bundle.as_deref(), Some(std::path::Path::new("/b")), "alias used in the bundle command's own hint");
         assert!(matches!(ok(&["bundle", "verify", "d"]).cmd, Cmd::Bundle { action: BundleCmd::Verify { .. } }));
