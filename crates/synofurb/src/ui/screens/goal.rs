@@ -48,6 +48,7 @@ impl App {
         item: &'static Item,
         line: &'static Item,
         tag: Option<gpui_kit::component::tag::Tag>,
+        effect: gpui_kit::component::tag::Tag,
         buttons: Vec<AnyElement>,
     ) -> impl IntoElement {
         GroupBox::new()
@@ -63,7 +64,13 @@ impl App {
                     .child(info_tip(gpui_kit::SharedString::from(format!("goal-info-{id}")), item, app))
                     .children(tag),
             )
-            .child(v_flex().gap(px(12.0)).child(kit::muted(cx, line.short)).child(h_flex().gap(px(8.0)).children(buttons)))
+            .child(
+                v_flex()
+                    .gap(px(12.0))
+                    .child(kit::muted(cx, line.short))
+                    .child(h_flex().child(effect))
+                    .child(h_flex().gap(px(8.0)).children(buttons)),
+            )
     }
 
     pub(crate) fn page_goal(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
@@ -115,9 +122,39 @@ impl App {
             .w_full()
             .items_start()
             .gap(px(16.0))
-            .child(div_flex(self.goal_card(cx, &app, "bm", role::TERMINAL, &copy::GOAL_BOOTMGR, &copy::GOAL_BOOTMGR_LINE, rec_tag, bm_btn)))
-            .child(div_flex(self.goal_card(cx, &app, "inst", role::DISK, &copy::GOAL_INSTALL, &copy::GOAL_INSTALL_LINE, None, inst_btn)))
-            .child(div_flex(self.goal_card(cx, &app, "rec", role::HELP, &copy::GOAL_RECOVER, &copy::GOAL_RECOVER_LINE, None, rec_btn)));
+            .child(div_flex(self.goal_card(
+                cx,
+                &app,
+                "bm",
+                role::TERMINAL,
+                &copy::GOAL_BOOTMGR,
+                &copy::GOAL_BOOTMGR_LINE,
+                rec_tag,
+                kit::tag(&p, Tone::Ok, Some(role::SAFE), copy::GOAL_TAG_SAFE.short),
+                bm_btn,
+            )))
+            .child(div_flex(self.goal_card(
+                cx,
+                &app,
+                "inst",
+                role::DISK,
+                &copy::GOAL_INSTALL,
+                &copy::GOAL_INSTALL_LINE,
+                None,
+                kit::tag(&p, Tone::Err, Some(role::DELETE), copy::GOAL_TAG_ERASE.short),
+                inst_btn,
+            )))
+            .child(div_flex(self.goal_card(
+                cx,
+                &app,
+                "rec",
+                role::HELP,
+                &copy::GOAL_RECOVER,
+                &copy::GOAL_RECOVER_LINE,
+                None,
+                kit::tag(&p, Tone::Neutral, Some(role::SEARCH), copy::GOAL_TAG_READS.short),
+                rec_btn,
+            )));
         Page::new(copy::GOAL_TITLE.short, body).subtitle(copy::GOAL_SUB.short).left(vec![
             Button::new("back")
                 .ghost()

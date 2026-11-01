@@ -23,6 +23,16 @@ use gpui_kit::{Anchor, App as GpuiApp, Context, IntoElement, WeakEntity, Window,
 use synofurb_core::compat::Status;
 use synofurb_core::discovery::Found;
 
+/// Column widths of the Find table for a table `avail` px wide (0 = unknown) at text factor `scale`: shares of the available width, so
+/// the columns always add up to the table and never produce a horizontal scroll. The shares are weights of the content the columns
+/// hold (model + Twin tag, address, DSM version, sources, status tag); the sum is clamped so it never exceeds `avail`.
+pub fn column_widths(avail: f32, _scale: f32) -> [f32; 5] {
+    const W: [f32; 5] = [2.0, 2.0, 1.4, 2.0, 2.4];
+    let total: f32 = W.iter().sum();
+    let avail = if avail > 0.0 { avail } else { 880.0 };
+    W.map(|w| (avail * w / total).floor())
+}
+
 /// One row of the units table.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnitRow {
@@ -40,6 +50,8 @@ pub struct InventoryTable {
     selected: Option<usize>,
     /// Text-size factor: the columns are in rem, so they grow with the text.
     scale: f32,
+    /// Width of the table in px (the window minus the page padding), so the columns can share it.
+    avail: f32,
     app: Option<WeakEntity<App>>,
 }
 
@@ -49,9 +61,10 @@ impl InventoryTable {
         self.rows = rows;
         changed
     }
-    pub fn set_scale(&mut self, s: f32) -> bool {
-        let changed = (self.scale - s).abs() > f32::EPSILON;
+    pub fn set_scale(&mut self, s: f32, avail: f32) -> bool {
+        let changed = (self.scale - s).abs() > f32::EPSILON || (self.avail - avail).abs() > 0.5;
         self.scale = s;
+        self.avail = avail;
         changed
     }
     pub fn set_selected(&mut self, ix: Option<usize>) {
@@ -77,14 +90,9 @@ impl TableDelegate for InventoryTable {
     }
     fn column(&self, ix: usize, _: &GpuiApp) -> Column {
         // Zero cell padding: every cell pads itself, so the selected row can draw its accent border edge to edge.
-        let k = if self.scale > 0.0 { self.scale } else { 1.0 };
-        match ix {
-            0 => Column::new("model", copy::INV_COL_MODEL.short).width(px(150.0 * k)).p_0(),
-            1 => Column::new("addr", copy::INV_COL_ADDR.short).width(px(150.0 * k)).p_0(),
-            2 => Column::new("dsm", copy::INV_COL_DSM.short).width(px(104.0 * k)).p_0(),
-            3 => Column::new("found", copy::INV_COL_FOUND.short).width(px(150.0 * k)).p_0(),
-            _ => Column::new("status", copy::INV_COL_STATUS.short).width(px(212.0 * k)).p_0(),
-        }
+        let w = column_widths(self.avail, self.scale)[ix.min(4)];
+        let label = [&copy::INV_COL_MODEL, &copy::INV_COL_ADDR, &copy::INV_COL_DSM, &copy::INV_COL_FOUND, &copy::INV_COL_STATUS][ix.min(4)];
+        Column::new(["model", "addr", "dsm", "found", "status"][ix.min(4)], label.short).width(px(w)).p_0()
     }
     fn render_th(&mut self, ix: usize, _: &mut Window, _cx: &mut Context<TableState<Self>>) -> impl IntoElement {
         let item = match ix {
@@ -171,10 +179,11 @@ impl App {
         let n_rows = rows.len();
         let weak = cx.weak_entity();
         let scale = self.settings.text_scale.factor();
+        let avail = f32::from(_window.viewport_size().width) - 2.0 * crate::ui::theme::layout::PAGE_PAD - 24.0;
         self.inv_table.update(cx, |t, cx| {
             t.delegate_mut().set_app(weak);
             t.delegate_mut().set_selected(sel_ix);
-            let scaled = t.delegate_mut().set_scale(scale);
+            let scaled = t.delegate_mut().set_scale(scale, avail);
             if t.delegate_mut().set_rows(rows) || scaled {
                 t.refresh(cx);
             }
@@ -334,5 +343,22 @@ impl App {
             .as_ref()
             .map(|f| if f.model.is_empty() { f.hostname.clone() } else { f.model.clone() })
             .unwrap_or_else(|| "the NAS".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::column_widths;
+
+    #[test]
+    fn the_find_columns_always_fit_the_table() {
+        for avail in [560.0, 700.0, 890.0, 1130.0] {
+            for scale in [1.0, 1.15, 1.3] {
+                let w = column_widths(avail, scale);
+                assert!(w.iter().sum::<f32>() <= avail, "{avail} at {scale}: {w:?}");
+                assert!(w.iter().all(|c| *c > 60.0), "{w:?}");
+            }
+        }
+        assert!(column_widths(0.0, 1.0).iter().sum::<f32>() <= 880.0, "unknown width falls back to a safe 880");
     }
 }

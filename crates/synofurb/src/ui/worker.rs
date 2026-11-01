@@ -207,7 +207,7 @@ pub enum RecAction {
     /// Set the default boot entry to DSM; `reboot` also asks the unit to reboot (the user chose it).
     BootDsm { reboot: bool },
     /// Write a saved flash image back through `synofurb-dom restore` on the unit.
-    Restore { backup: PathBuf },
+    Restore { backup: PathBuf, unit: synofurb_core::domboot::UnitIdentity },
     /// Take our entries out of the boot menu.
     Remove,
     /// Arm the boot agent for one boot, reboot and wait for it.
@@ -349,8 +349,12 @@ pub fn spawn_recovery(tx: Tx, t: SshTarget, unit: String, action: RecAction) {
                     },
                     Err(e) => outcome_of_error(&e),
                 },
-                RecAction::Restore { backup } => {
-                    match rec::check_backup_file(backup).and_then(|checks| rec::restore_flash_on(&mut p, backup, checks, &log)) {
+                RecAction::Restore { backup, unit: id } => {
+                    // the image must be this unit's (checked here again, not only when the dialog was built)
+                    match rec::check_backup_belongs(backup, id, false)
+                        .and_then(|_| rec::check_backup_file(backup))
+                        .and_then(|checks| rec::restore_flash_on(&mut p, backup, checks, &log))
+                    {
                         Ok(o) => RecOutcome {
                             level: RecLevel::Done,
                             title: "Boot flash restored".into(),

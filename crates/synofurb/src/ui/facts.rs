@@ -630,15 +630,22 @@ mod tests {
 
     #[test]
     fn only_the_images_of_one_unit_are_listed() {
+        use synofurb_core::domboot::UnitIdentity;
         let dir = std::env::temp_dir().join(format!("fv-bk-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for n in ["synofurb-dom-backup-SN1-20260101.img", "synofurb-dom-backup-SN12-20260202.img", "synofurb-dom-backup-SN2-20260303.img"] {
+        for n in [
+            "synofurb-dom-backup-SN1-20260101-120000.img",
+            "synofurb-dom-backup-SN12-20260202-120000.img",
+            "synofurb-dom-backup-SN2-20260303-120000.img",
+        ] {
             std::fs::write(dir.join(n), b"x").unwrap();
         }
-        let mine = synofurb_core::recovery::find_local_backups(&dir, "SN1");
+        let id = |s: &str| UnitIdentity { serial: s.into(), model: "DS918+".into(), host: "10.0.0.1".into() };
+        let mine = synofurb_core::recovery::backups_for_unit(&dir, &id("SN1"));
         assert_eq!(mine.len(), 1, "SN12 and SN2 are other units");
-        assert!(mine[0].path.ends_with("synofurb-dom-backup-SN1-20260101.img"));
-        assert!(synofurb_core::recovery::find_local_backups(&dir, "SN3").is_empty(), "no image for this unit: no fallback to another");
+        assert!(mine[0].path.ends_with("synofurb-dom-backup-SN1-20260101-120000.img"));
+        assert!(synofurb_core::recovery::backups_for_unit(&dir, &id("SN3")).is_empty(), "no image for this unit: no fallback to another");
+        assert!(synofurb_core::recovery::backups_for_unit(&dir, &id("")).is_empty(), "an unknown serial matches nothing");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

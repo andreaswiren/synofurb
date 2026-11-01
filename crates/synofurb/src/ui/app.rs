@@ -1379,6 +1379,12 @@ impl App {
         self.start_scan(cx);
     }
 
+    /// Who the unit on screen is, for matching its saved flash images (the serial number is what separates two units of one model).
+    pub fn unit_id(&self, cx: &gpui_kit::App) -> synofurb_core::domboot::UnitIdentity {
+        let (model, serial) = self.unit_identity(cx);
+        synofurb_core::domboot::UnitIdentity { serial, model, host: self.active_host(cx) }
+    }
+
     /// `(model, serial)` of the unit the current page is about (the managed unit on Manage, else the inspected one).
     pub fn unit_identity(&self, _cx: &gpui_kit::App) -> (String, String) {
         if self.manage_bound() {

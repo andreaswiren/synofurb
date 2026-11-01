@@ -253,32 +253,30 @@ impl App {
                 );
             }
             RecKind::RestoreFlash => {
-                // Only an image made for THIS unit (its serial number, or its address when no serial was known); never "the newest".
-                let unit = self.unit_key_name(cx);
-                let (model, serial) = self.unit_identity(cx);
-                let backup = synofurb_core::recovery::find_local_backups(&backups, &unit).into_iter().next();
+                // Only an image made for THIS unit (same serial number, by the engine's `backups_for_unit`); never "the newest"
+                // of anything else. Without a known serial nothing can be matched, so nothing is offered.
+                let id = self.unit_id(cx);
+                let backup = synofurb_core::recovery::backups_for_unit(&backups, &id).into_iter().next();
                 let Some(backup) = backup else {
-                    self.rec_result = Some(RecResult::error(
-                        copy::REC_NO_BACKUP.short,
-                        format!("{} {} ({})", copy::REC_NO_BACKUP.tip, backups.display(), unit),
-                    ));
+                    let why = if id.serial.is_empty() { copy::REC_NO_SERIAL.tip } else { copy::REC_NO_BACKUP.tip };
+                    self.rec_result = Some(RecResult::error(copy::REC_NO_BACKUP.short, format!("{why} {}", backups.display())));
                     cx.notify();
                     return;
                 };
-                let phrase = facts::restore_phrase(&model, if serial.is_empty() { &unit } else { &serial });
+                let phrase = facts::restore_phrase(&id.model, &id.serial);
                 let name = backup.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 let body = format!(
-                    "{}\n\nUnit: {} {}\nFile: {}\nSaved: {} \u{b7} {} MiB",
+                    "{}\n\nThis unit: {} \u{b7} serial {}\nFile: {}\nSaved: {} \u{b7} {} MiB",
                     copy::DLG_RESTORE.body,
-                    model,
-                    unit,
+                    id.model,
+                    id.serial,
                     name,
                     backup.modified.clone().unwrap_or_else(|| "date unknown".into()),
                     backup.bytes / 1_048_576
                 );
                 let path = backup.path.clone();
                 typed_confirm(window, cx, &copy::DLG_RESTORE, body, phrase, app, move |a, cx| {
-                    a.start_recovery(RecKind::RestoreFlash, RecAction::Restore { backup: path.clone() }, cx)
+                    a.start_recovery(RecKind::RestoreFlash, RecAction::Restore { backup: path.clone(), unit: a.unit_id(cx) }, cx)
                 });
             }
             RecKind::RemoveEntries => {

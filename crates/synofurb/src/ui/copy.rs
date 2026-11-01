@@ -237,6 +237,9 @@ mod strings {
         GOAL_INSTALL: Label, "Install Debian", "Erases disks; needs your backup.", "first-install",
             "Wipe, or the advanced Keep mode. It takes about 25 minutes.";
         GOAL_INSTALL_LINE: Prose, "Replace DSM with Debian.", "", "", "";
+        GOAL_TAG_SAFE: Label, "Disks untouched", "", "", "";
+        GOAL_TAG_ERASE: Label, "Erases disks", "", "", "";
+        GOAL_TAG_READS: Label, "Reads state first", "", "", "";
         GOAL_QUICK: Button, "Quick setup", "Recommended defaults, then straight to Confirm.", "first-install", "";
         GOAL_CUSTOMIZE: Button, "Customize", "", "", "";
         QUICK_TITLE: Dialog, "Quick setup", "Recommended defaults, then straight to Confirm.", "first-install", "";
@@ -530,6 +533,7 @@ mod strings {
         REC_RESTORE_RUNNING: Label, "Restoring the flash", "", "", "";
         REC_REMOVE_RUNNING: Label, "Removing our entries", "", "", "";
         REC_SHOW_COMMAND: Button, "Show command", "", "", "";
+        REC_NO_SERIAL: Label, "Why unavailable", "This unit's serial number is not known, so no saved image can be matched to it; use Manual recovery.", "", "";
         REC_NO_BACKUP: Label, "No saved image", "No saved boot-flash image is in this folder.", "", "";
         DLG_RESTORE: Dialog, "Restore boot flash?", "Writes the saved image back to the boot flash.", "backups", "This writes the saved image back to the boot flash through the unit. The engine checks the file, snapshots the flash, writes, reads back and compares. File:";
         DLG_REMOVE: Dialog, "Remove our entries?", "Leaves only Synology's own files on the flash.", "boot-manager", "This removes our entries from the boot flash and sets DSM as the default. The result is read back from the unit.";
@@ -813,6 +817,9 @@ pub static SCREENS: &[ScreenCopy] = &[
             &GOAL_CUSTOMIZE,
             &GOAL_RECOVER,
             &GOAL_RECOVER_LINE,
+            &GOAL_TAG_SAFE,
+            &GOAL_TAG_ERASE,
+            &GOAL_TAG_READS,
             &GOAL_OPEN_RECOVERY,
         ],
     },
