@@ -224,6 +224,10 @@ pub enum RaidArg {
     R6,
     #[value(name = "10")]
     R10,
+    /// Synology-Hybrid-RAID-like (mdadm slices + LVM), any 1 disk may fail, 2+ disks of any size
+    Shr1,
+    /// Hybrid RAID with RAID 6 slices, any 2 disks may fail, 4+ disks of any size
+    Shr2,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -281,7 +285,7 @@ pub struct PlanOpts {
     /// number of disks carrying a copy of the system (default: automatic)
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..=64))]
     pub copies: Option<u64>,
-    /// RAID level of the new data volume
+    /// RAID level of the new data volume; shr1/shr2 = Synology-Hybrid-RAID-like layout (mixed disk sizes, wiped disks only)
     #[arg(long, value_enum, default_value = "auto")]
     pub raid: RaidArg,
     /// percent of the data volume group left unallocated (0-90)
@@ -309,6 +313,8 @@ impl PlanOpts {
                 RaidArg::R5 => DataRaid::Raid5,
                 RaidArg::R6 => DataRaid::Raid6,
                 RaidArg::R10 => DataRaid::Raid10,
+                RaidArg::Shr1 => DataRaid::Shr1,
+                RaidArg::Shr2 => DataRaid::Shr2,
             },
             data_free_percent: self.free_percent,
             keep_arrays: if self.keep.is_empty() { None } else { Some(self.keep.clone()) },
@@ -882,6 +888,9 @@ mod tests {
             ("1", DataRaid::Raid1),
             ("5", DataRaid::Raid5),
             ("6", DataRaid::Raid6),
+            ("10", DataRaid::Raid10),
+            ("shr1", DataRaid::Shr1),
+            ("shr2", DataRaid::Shr2),
         ] {
             let Cmd::Plan(a) = ok(&["plan", "--host", "h", "--raid", v]).cmd else { panic!() };
             assert_eq!(a.opts.request().data_raid, want, "--raid {v}");

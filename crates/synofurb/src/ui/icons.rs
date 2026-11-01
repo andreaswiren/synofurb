@@ -7,7 +7,8 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::{Hsla, Pixels, px};
+use gpui_kit::prelude::*;
+use gpui_kit::{Hsla, px};
 
 macro_rules! roles {
     ($($(#[$m:meta])* $role:ident => $icon:ident,)*) => {
@@ -120,8 +121,8 @@ pub fn icon(name: IconName) -> Icon {
 }
 
 /// A Lucide icon with an explicit size and colour (status icons take the tone's colour).
-pub fn icon_sized(name: IconName, size: impl Into<Pixels>, color: Hsla) -> Icon {
-    Icon::new(name).size(size).text_color(color)
+pub fn icon_sized(name: IconName, size: f32, color: Hsla) -> Icon {
+    Icon::new(name).size(px(size)).text_color(color)
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ use crate::ui::render::Page;
 use crate::ui::state::{BootChoice, Screen};
 use crate::ui::theme::{Themed, Tone};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::{ActiveTheme, Disableable, h_flex, v_flex};
@@ -50,9 +51,20 @@ impl App {
         tag: Option<gpui_kit::component::tag::Tag>,
         button: Button,
     ) -> impl IntoElement {
-        GroupBox::new().outline().id(id).title(
-            h_flex().gap(px(8.0)).items_center().text_color(cx.theme().foreground).child(icons::icon_sized(icon, 18.0, cx.theme().foreground)).child(kit::heading(item.short)).child(info_tip(("goal-info", id), item, app)).children(tag),
-        ).child(v_flex().gap(px(12.0)).child(kit::muted(cx, line.short)).child(h_flex().child(button)))
+        GroupBox::new()
+            .outline()
+            .id(id)
+            .title(
+                h_flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .text_color(cx.theme().foreground)
+                    .child(icons::icon_sized(icon, 18.0, cx.theme().foreground))
+                    .child(kit::heading(item.short))
+                    .child(info_tip(gpui_kit::SharedString::from(format!("goal-info-{id}")), item, app))
+                    .children(tag),
+            )
+            .child(v_flex().gap(px(12.0)).child(kit::muted(cx, line.short)).child(h_flex().child(button)))
     }
 
     pub(crate) fn page_goal(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
@@ -76,17 +88,22 @@ impl App {
             kit::tag(&p, Tone::Info, Some(role::SPARKLES), copy::GOAL_RECOMMENDED.short)
         });
         let inst_btn = {
-            let b = Button::new("goal-install").label(copy::GOAL_PLAN_INSTALL.short).disabled(!install_ok).tooltip(if install_ok { "" } else { copy::GOAL_PLAN_INSTALL.tip });
+            let b = Button::new("goal-install").label(copy::GOAL_PLAN_INSTALL.short).disabled(!install_ok).tooltip(if install_ok {
+                ""
+            } else {
+                copy::GOAL_PLAN_INSTALL.tip
+            });
             let b = if try_first { b.outline() } else { b.primary() };
             b.on_click(cx.listener(|this, _, window, cx| {
                 this.goal = Goal::Install;
                 this.continue_from_goal(window, cx);
             }))
         };
-        let rec_btn = Button::new("goal-recover").outline().label(copy::GOAL_OPEN_RECOVERY.short).on_click(cx.listener(|this, _, window, cx| {
-            this.goal = Goal::Recover;
-            this.continue_from_goal(window, cx);
-        }));
+        let rec_btn =
+            Button::new("goal-recover").outline().label(copy::GOAL_OPEN_RECOVERY.short).on_click(cx.listener(|this, _, window, cx| {
+                this.goal = Goal::Recover;
+                this.continue_from_goal(window, cx);
+            }));
 
         let body = h_flex()
             .w_full()
@@ -95,9 +112,14 @@ impl App {
             .child(div_flex(self.goal_card(cx, &app, "bm", role::TERMINAL, &copy::GOAL_BOOTMGR, &copy::GOAL_BOOTMGR_LINE, rec_tag, bm_btn)))
             .child(div_flex(self.goal_card(cx, &app, "inst", role::DISK, &copy::GOAL_INSTALL, &copy::GOAL_INSTALL_LINE, None, inst_btn)))
             .child(div_flex(self.goal_card(cx, &app, "rec", role::HELP, &copy::GOAL_RECOVER, &copy::GOAL_RECOVER_LINE, None, rec_btn)));
-        Page::new(copy::GOAL_TITLE.short, body)
-            .subtitle(copy::GOAL_SUB.short)
-            .left(vec![Button::new("back").ghost().icon(icons::icon(role::BACK)).label(copy::BTN_BACK.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Inspect, window, cx))).into_any_element()])
+        Page::new(copy::GOAL_TITLE.short, body).subtitle(copy::GOAL_SUB.short).left(vec![
+            Button::new("back")
+                .ghost()
+                .icon(icons::icon(role::BACK))
+                .label(copy::BTN_BACK.short)
+                .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Inspect, window, cx)))
+                .into_any_element(),
+        ])
     }
 }
 

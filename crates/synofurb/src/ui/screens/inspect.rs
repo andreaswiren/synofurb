@@ -10,6 +10,7 @@ use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::state::Screen;
 use crate::ui::theme::{Themed, Tone};
+use gpui_kit::component::Sizable;
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -29,8 +30,13 @@ impl App {
         let p = cx.pal();
         let app = cx.entity();
         let Some(f) = self.facts.clone() else {
-            return Page::new(copy::INSPECT_TITLE.short, kit::muted(cx, "-"))
-                .left(vec![Button::new("back").ghost().label(copy::BTN_BACK.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Connect, window, cx))).into_any_element()]);
+            return Page::new(copy::INSPECT_TITLE.short, kit::muted(cx, "-")).left(vec![
+                Button::new("back")
+                    .ghost()
+                    .label(copy::BTN_BACK.short)
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Connect, window, cx)))
+                    .into_any_element(),
+            ]);
         };
         let verdict = self.compat_for_facts(&f);
         let name = if f.model.is_empty() { f.hostname.clone() } else { f.model.clone() };
@@ -41,32 +47,52 @@ impl App {
         };
         let flash = match f.firmware {
             Firmware::Dom => match &f.dom {
-                Some(d) => format!("{} \u{00b7} {}", human_bytes(d.sectors * SECTOR), if d.is_editable() { "editable" } else { "not editable" }),
+                Some(d) => {
+                    format!("{} \u{00b7} {}", human_bytes(d.sectors * SECTOR), if d.is_editable() { "editable" } else { "not editable" })
+                }
                 None => "-".into(),
             },
             _ => "none".into(),
         };
-        let compat_row = h_flex().gap(px(2.0)).items_center().child(kit::compat_tag(&p, verdict.status)).child(info_tip("compat-info", &copy::INSPECT_COMPAT, &app)).into_any_element();
+        let compat_row = h_flex()
+            .gap(px(2.0))
+            .items_center()
+            .child(kit::compat_tag(&p, verdict.status))
+            .child(info_tip("compat-info", &copy::INSPECT_COMPAT, &app))
+            .into_any_element();
         let facts = DescriptionList::horizontal()
             .columns(2)
             .bordered(false)
-            .child(gpui_kit::component::description_list::DescriptionItem::new(label("l-model", &copy::INSPECT_MODEL, &app)).value(kit::strong(format!("{name} ({})", f.unique)).into_any_element()))
-            .child(gpui_kit::component::description_list::DescriptionItem::new(label("l-comp", &copy::INSPECT_COMPAT, &app)).value(compat_row))
+            .child(
+                gpui_kit::component::description_list::DescriptionItem::new(label("l-model", &copy::INSPECT_MODEL, &app))
+                    .value(kit::strong(format!("{name} ({})", f.unique)).into_any_element()),
+            )
+            .child(
+                gpui_kit::component::description_list::DescriptionItem::new(label("l-comp", &copy::INSPECT_COMPAT, &app)).value(compat_row),
+            )
             .item(copy::INSPECT_CPU.short, f.cpu.clone(), 1)
             .item(copy::INSPECT_RAM.short, format!("{:.1} GiB", f.mem_gib()), 1)
             .item(copy::INSPECT_FIRMWARE.short, f.firmware.label().to_string(), 1)
             .child(gpui_kit::component::description_list::DescriptionItem::new(label("l-flash", &copy::INSPECT_FLASH, &app)).value(flash))
-            .child(gpui_kit::component::description_list::DescriptionItem::new(label("l-console", &copy::INSPECT_CONSOLE, &app)).value(kit::mono_sm(cx, console).into_any_element()))
-            .child(gpui_kit::component::description_list::DescriptionItem::new(label("l-backups", &copy::INSPECT_BACKUPS, &app)).value(kit::chip(&p, "not checked").into_any_element()));
+            .child(
+                gpui_kit::component::description_list::DescriptionItem::new(label("l-console", &copy::INSPECT_CONSOLE, &app))
+                    .value(kit::mono_sm(cx, console).into_any_element()),
+            )
+            .child(
+                gpui_kit::component::description_list::DescriptionItem::new(label("l-backups", &copy::INSPECT_BACKUPS, &app))
+                    .value(kit::chip(&p, "not checked").into_any_element()),
+            );
 
         let disks = Table::new()
-            .child(TableHeader::new().child(
-                TableRow::new()
-                    .child(TableHead::new().child(copy::INSPECT_DISK.short))
-                    .child(TableHead::new().child(copy::INSPECT_COL_MODEL.short))
-                    .child(TableHead::new().child(copy::INSPECT_COL_SERIAL.short))
-                    .child(TableHead::new().text_right().child(copy::INSPECT_COL_SIZE.short)),
-            ))
+            .child(
+                TableHeader::new().child(
+                    TableRow::new()
+                        .child(TableHead::new().child(copy::INSPECT_DISK.short))
+                        .child(TableHead::new().child(copy::INSPECT_COL_MODEL.short))
+                        .child(TableHead::new().child(copy::INSPECT_COL_SERIAL.short))
+                        .child(TableHead::new().text_right().child(copy::INSPECT_COL_SIZE.short)),
+                ),
+            )
             .child(TableBody::new().children(f.disks.iter().map(|d| {
                 TableRow::new()
                     .child(TableCell::new().child(kit::mono(cx, d.name.clone())))
@@ -76,7 +102,15 @@ impl App {
             })));
 
         let arrays = Table::new()
-            .child(TableHeader::new().child(TableRow::new().child(TableHead::new().child("md")).child(TableHead::new().child("RAID")).child(TableHead::new().child(copy::INSPECT_COL_USE.short)).child(TableHead::new().text_right().child(copy::INSPECT_COL_SIZE.short))))
+            .child(
+                TableHeader::new().child(
+                    TableRow::new()
+                        .child(TableHead::new().child("md"))
+                        .child(TableHead::new().child("RAID"))
+                        .child(TableHead::new().child(copy::INSPECT_COL_USE.short))
+                        .child(TableHead::new().text_right().child(copy::INSPECT_COL_SIZE.short)),
+                ),
+            )
             .child(TableBody::new().children(f.arrays.iter().map(|a| {
                 let role_text = match a.role {
                     ArrayRole::DsmSystem => "DSM system".to_string(),
@@ -90,7 +124,8 @@ impl App {
                     .child(TableCell::new().text_right().child(kit::mono(cx, size_2dp(a.sectors * SECTOR))))
             })));
         let layout = v_flex().gap(px(4.0)).children(f.disks.iter().map(|d| {
-            let parts = d.parts.iter().map(|pt| format!("{} {}", pt.name, size_2dp(pt.sectors * SECTOR))).collect::<Vec<_>>().join("  \u{00b7}  ");
+            let parts =
+                d.parts.iter().map(|pt| format!("{} {}", pt.name, size_2dp(pt.sectors * SECTOR))).collect::<Vec<_>>().join("  \u{00b7}  ");
             h_flex().gap(px(12.0)).child(kit::mono_sm(cx, d.name.clone()).w(px(48.0))).child(kit::mono_sm(cx, parts))
         }));
         let accordion = Accordion::new("inspect-acc")
@@ -101,7 +136,8 @@ impl App {
 
         let mut body = v_flex().w_full().gap(px(16.0));
         if verdict.blocking {
-            body = body.child(Alert::error("blocked", verdict.headline.clone()).title(copy::INSPECT_BLOCKED.short).icon(icons::icon(role::ERR)));
+            body = body
+                .child(Alert::error("blocked", verdict.headline.clone()).title(copy::INSPECT_BLOCKED.short).icon(icons::icon(role::ERR)));
         }
         if f.candidate_disks().is_empty() {
             body = body.child(Alert::error("no-disks", "No disks visible").icon(icons::icon(role::ERR)));
@@ -111,7 +147,22 @@ impl App {
         let _ = Tone::Ok;
         Page::new(copy::INSPECT_TITLE.short, body)
             .subtitle(copy::INSPECT_SUB.short)
-            .left(vec![Button::new("back").ghost().icon(icons::icon(role::BACK)).label(copy::BTN_BACK.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Connect, window, cx))).into_any_element()])
-            .right(vec![Button::new("next").primary().icon(icons::icon(role::NEXT)).label(copy::INSPECT_CHOOSE.short).disabled(blocked).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Goal, window, cx))).into_any_element()])
+            .left(vec![
+                Button::new("back")
+                    .ghost()
+                    .icon(icons::icon(role::BACK))
+                    .label(copy::BTN_BACK.short)
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Connect, window, cx)))
+                    .into_any_element(),
+            ])
+            .right(vec![
+                Button::new("next")
+                    .primary()
+                    .icon(icons::icon(role::NEXT))
+                    .label(copy::INSPECT_CHOOSE.short)
+                    .disabled(blocked)
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Goal, window, cx)))
+                    .into_any_element(),
+            ])
     }
 }

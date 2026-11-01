@@ -277,7 +277,9 @@ fn style_scrollbars(cx: &mut App) {
         .track(|s| s.bg(gpui_kit::transparent_black()))
         .track_hover(|s| s.bg(gpui_kit::transparent_black()))
         .track_active(|s| s.bg(gpui_kit::transparent_black()).border_color(border))
-        .thumb(|s| s.bg(thumb).width(px(SCROLLBAR_THUMB)).inset(px(SCROLLBAR_INSET)).radius(px(SCROLLBAR_RADIUS)).min_length(px(SCROLLBAR_MIN)))
+        .thumb(|s| {
+            s.bg(thumb).width(px(SCROLLBAR_THUMB)).inset(px(SCROLLBAR_INSET)).radius(px(SCROLLBAR_RADIUS)).min_length(px(SCROLLBAR_MIN))
+        })
         .thumb_hover(|s| s.bg(thumb_hover).width(px(SCROLLBAR_THUMB_HOT)).inset(px(SCROLLBAR_INSET - 1.0)).radius(px(SCROLLBAR_RADIUS)))
         .thumb_active(|s| s.bg(thumb_hover).width(px(SCROLLBAR_THUMB_HOT)).inset(px(SCROLLBAR_INSET - 1.0)).radius(px(SCROLLBAR_RADIUS)));
     let base = cx.global_mut::<BaseTheme>();

@@ -13,7 +13,9 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::table::{Column, DataTable, Table, TableBody, TableCell, TableDelegate, TableHead, TableHeader, TableRow, TableState};
+use gpui_kit::component::table::{
+    Column, DataTable, Table, TableBody, TableCell, TableDelegate, TableHead, TableHeader, TableRow, TableState,
+};
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Anchor, App as GpuiApp, Context, IntoElement, SharedString, WeakEntity, Window, div, px};
@@ -79,9 +81,12 @@ impl TableDelegate for InventoryTable {
             _ => &copy::INV_COL_STATUS,
         };
         let app = self.app.as_ref().and_then(|a| a.upgrade());
-        h_flex().items_center().gap(px(2.0)).child(item.short).when_some(app.filter(|_| item.has_more() || !item.tip.is_empty()), |d, app| {
-            d.child(info_tip(("th-info", ix), item, &app))
-        }).when(false, |d| d.child(cx.theme().foreground.to_string()))
+        h_flex()
+            .items_center()
+            .gap(px(2.0))
+            .child(item.short)
+            .when_some(app.filter(|_| item.has_more() || !item.tip.is_empty()), |d, app| d.child(info_tip(("th-info", ix), item, &app)))
+            .when(false, |d| d.child(cx.theme().foreground.to_string()))
     }
     fn render_td(&mut self, row: usize, col: usize, _: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
         let p = cx.pal();
@@ -153,104 +158,157 @@ impl App {
         }
 
         let methods: Vec<(String, bool)> = self.scan.methods.iter().map(|(n, r)| (n.to_string(), r.is_ok())).collect();
-        let details = Popover::new("scan-details").anchor(Anchor::TopLeft).trigger(Button::new("scan-info").ghost().xsmall().icon(icons::icon(role::TIP)).tooltip(copy::INV_RESCAN.tip).accessibility_label(copy::INV_RESCAN.tip)).content({
-            let p = p;
-            move |_, _, cx| {
-                v_flex()
-                    .w(px(300.0))
-                    .gap(px(6.0))
-                    .text_sm()
-                    .child(kit::strong("Scan details"))
-                    .child(copy::INV_RESCAN.body)
-                    .children(methods.iter().map(|(n, ok)| {
-                        let (tone, icon) = if *ok { (crate::ui::theme::Tone::Ok, role::OK) } else { (crate::ui::theme::Tone::Warn, role::WARN) };
-                        kit::tag(&p, tone, Some(icon), n.clone())
-                    }))
-                    .child(div().when(false, |d| d.child(cx.theme().foreground.to_string())))
-            }
-        });
-        let toolbar = h_flex()
-            .w_full()
-            .gap(px(8.0))
-            .items_center()
-            .child(div().w(px(260.0)).child(Input::new(&self.inp.filter).prefix(icons::icon(role::SEARCH)).cleanable(true).aria_label(copy::INV_FILTER.short)))
-            .child(
-                Button::new("rescan")
+        let details = Popover::new("scan-details")
+            .anchor(Anchor::TopLeft)
+            .trigger(
+                Button::new("scan-info")
                     .ghost()
-                    .icon(icons::icon(role::REFRESH))
-                    .label(copy::INV_RESCAN.short)
-                    .loading(scanning)
-                    .disabled(scanning)
-                    .on_click(cx.listener(|this, _, _, cx| this.start_scan(cx))),
+                    .xsmall()
+                    .icon(icons::icon(role::TIP))
+                    .tooltip(copy::INV_RESCAN.tip)
+                    .accessibility_label(copy::INV_RESCAN.tip),
             )
-            .child(details)
-            .child(
-                Button::new("add-ip")
-                    .ghost()
-                    .icon(icons::icon(gpui_kit::assets::IconName::Plus))
-                    .label(copy::INV_ADD.short)
-                    .tooltip(copy::INV_ADD.tip)
-                    .on_click(cx.listener(|this, _, window, cx| this.open_add_dialog(window, cx))),
-            )
-            .when(scanning, |d| d.child(Spinner::new().small()));
+            .content({
+                let p = p;
+                move |_, _, cx| {
+                    v_flex()
+                        .w(px(300.0))
+                        .gap(px(6.0))
+                        .text_sm()
+                        .child(kit::strong("Scan details"))
+                        .child(copy::INV_RESCAN.body)
+                        .children(methods.iter().map(|(n, ok)| {
+                            let (tone, icon) =
+                                if *ok { (crate::ui::theme::Tone::Ok, role::OK) } else { (crate::ui::theme::Tone::Warn, role::WARN) };
+                            kit::tag(&p, tone, Some(icon), n.clone())
+                        }))
+                        .child(div().when(false, |d| d.child(cx.theme().foreground.to_string())))
+                }
+            });
+        let toolbar =
+            h_flex()
+                .w_full()
+                .gap(px(8.0))
+                .items_center()
+                .child(div().w(px(260.0)).child(
+                    Input::new(&self.inp.filter).prefix(icons::icon(role::SEARCH)).cleanable(true).aria_label(copy::INV_FILTER.short),
+                ))
+                .child(
+                    Button::new("rescan")
+                        .ghost()
+                        .icon(icons::icon(role::REFRESH))
+                        .label(copy::INV_RESCAN.short)
+                        .loading(scanning)
+                        .disabled(scanning)
+                        .on_click(cx.listener(|this, _, _, cx| this.start_scan(cx))),
+                )
+                .child(details)
+                .child(
+                    Button::new("add-ip")
+                        .ghost()
+                        .icon(icons::icon(gpui_kit::assets::IconName::Plus))
+                        .label(copy::INV_ADD.short)
+                        .tooltip(copy::INV_ADD.tip)
+                        .on_click(cx.listener(|this, _, window, cx| this.open_add_dialog(window, cx))),
+                )
+                .when(scanning, |d| d.child(Spinner::new().small()));
 
         let converted: Vec<Found> = self.inv.devices.iter().filter(|d| d.synofurb_debian).cloned().collect();
-        let units_ui = if n_rows == 0 && !scanning {
-            Empty::new()
-                .header(
-                    EmptyHeader::new()
-                        .media(EmptyMedia::new().child(icons::icon_sized(role::SEARCH, 24.0, cx.theme().muted_foreground)))
-                        .title(EmptyTitle::new().child(copy::INV_EMPTY.short)),
-                )
-                .content(
-                    EmptyContent::new().child(
-                        h_flex()
-                            .gap(px(8.0))
-                            .child(Button::new("scan-again").outline().label(copy::INV_SCAN_AGAIN.short).on_click(cx.listener(|this, _, _, cx| this.start_scan(cx))))
-                            .child(Button::new("add-ip-2").outline().label(copy::INV_ADD.short).on_click(cx.listener(|this, _, window, cx| this.open_add_dialog(window, cx))))
-                            .child(Button::new("empty-help").link().label("Help").on_click(cx.listener(|this, _, window, cx| this.open_help_topic(Some("troubleshooting"), window, cx)))),
-                    ),
-                )
-                .into_any_element()
-        } else if n_rows == 0 {
-            v_flex().gap(px(6.0)).children((0..3).map(|_| Skeleton::new().h(px(28.0)).w_full())).into_any_element()
-        } else {
-            let h = 36.0 * (n_rows.min(6) as f32 + 1.0) + 8.0;
-            div().w_full().h(px(h)).border_1().border_color(cx.theme().border).rounded(cx.theme().radius).overflow_hidden().child(DataTable::new(&self.inv_table).stripe(false)).into_any_element()
-        };
+        let units_ui =
+            if n_rows == 0 && !scanning {
+                Empty::new()
+                    .header(
+                        EmptyHeader::new()
+                            .media(EmptyMedia::new().child(icons::icon_sized(role::SEARCH, 24.0, cx.theme().muted_foreground)))
+                            .title(EmptyTitle::new().child(copy::INV_EMPTY.short)),
+                    )
+                    .content(
+                        EmptyContent::new().child(
+                            h_flex()
+                                .gap(px(8.0))
+                                .child(
+                                    Button::new("scan-again")
+                                        .outline()
+                                        .label(copy::INV_SCAN_AGAIN.short)
+                                        .on_click(cx.listener(|this, _, _, cx| this.start_scan(cx))),
+                                )
+                                .child(
+                                    Button::new("add-ip-2")
+                                        .outline()
+                                        .label(copy::INV_ADD.short)
+                                        .on_click(cx.listener(|this, _, window, cx| this.open_add_dialog(window, cx))),
+                                )
+                                .child(Button::new("empty-help").link().label("Help").on_click(
+                                    cx.listener(|this, _, window, cx| this.open_help_topic(Some("troubleshooting"), window, cx)),
+                                )),
+                        ),
+                    )
+                    .into_any_element()
+            } else if n_rows == 0 {
+                v_flex().gap(px(6.0)).children((0..3).map(|_| Skeleton::new().h(px(28.0)).w_full())).into_any_element()
+            } else {
+                let h = 36.0 * (n_rows.min(6) as f32 + 1.0) + 8.0;
+                div()
+                    .w_full()
+                    .h(px(h))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .rounded(cx.theme().radius)
+                    .overflow_hidden()
+                    .child(DataTable::new(&self.inv_table).stripe(false))
+                    .into_any_element()
+            };
 
         let mut body = v_flex().w_full().gap(px(12.0)).child(toolbar).child(units_ui);
         if !converted.is_empty() {
             body = body.child(kit::heading(copy::INV_RUNNING.short)).child(
                 Table::new()
-                    .child(TableHeader::new().child(TableRow::new().child(TableHead::new().child(copy::INV_COL_MODEL.short)).child(TableHead::new().child(copy::INV_COL_ADDR.short)).child(TableHead::new().text_right().child(""))))
+                    .child(
+                        TableHeader::new().child(
+                            TableRow::new()
+                                .child(TableHead::new().child(copy::INV_COL_MODEL.short))
+                                .child(TableHead::new().child(copy::INV_COL_ADDR.short))
+                                .child(TableHead::new().text_right().child("")),
+                        ),
+                    )
                     .child(TableBody::new().children(converted.iter().enumerate().map(|(i, d)| {
                         let ip = d.primary_ip().map(|i| i.to_string()).unwrap_or_default();
                         let d2 = d.clone();
                         TableRow::new()
                             .child(TableCell::new().child(kit::strong(if d.model.is_empty() { d.title() } else { d.model.clone() })))
                             .child(TableCell::new().child(kit::mono(cx, ip)))
-                            .child(TableCell::new().text_right().child(Button::new(("manage", i)).ghost().small().label(copy::INV_MANAGE.short).tooltip(copy::INV_MANAGE.tip).on_click(cx.listener(move |this, _, window, cx| {
-                                this.manage_unit = Some(d2.clone());
-                                this.go(crate::ui::state::Screen::Manage, window, cx);
-                            }))))
+                            .child(
+                                TableCell::new().text_right().child(
+                                    Button::new(("manage", i))
+                                        .ghost()
+                                        .small()
+                                        .label(copy::INV_MANAGE.short)
+                                        .tooltip(copy::INV_MANAGE.tip)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.manage_unit = Some(d2.clone());
+                                            this.go(crate::ui::state::Screen::Manage, window, cx);
+                                        })),
+                                ),
+                            )
                     }))),
             );
         }
         let none = selected.is_none();
         let _ = app;
-        Page::new(copy::INV_TITLE.short, body).subtitle(copy::INV_SUB.short).right(vec![Button::new("connect")
-            .primary()
-            .label(copy::INV_CONNECT.short)
-            .icon(icons::icon(role::NEXT))
-            .tooltip(if none { copy::INV_CONNECT.tip } else { "" })
-            .disabled(none)
-            .on_click(cx.listener(|this, _, window, cx| {
-                if let Some(ip) = this.selected_ip.clone() {
-                    this.select_host(&ip, window, cx);
-                }
-            }))
-            .into_any_element()])
+        Page::new(copy::INV_TITLE.short, body).subtitle(copy::INV_SUB.short).right(vec![
+            Button::new("connect")
+                .primary()
+                .label(copy::INV_CONNECT.short)
+                .icon(icons::icon(role::NEXT))
+                .tooltip(if none { copy::INV_CONNECT.tip } else { "" })
+                .disabled(none)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if let Some(ip) = this.selected_ip.clone() {
+                        this.select_host(&ip, window, cx);
+                    }
+                }))
+                .into_any_element(),
+        ])
     }
 
     /// Used by the other screens to name the selected unit.

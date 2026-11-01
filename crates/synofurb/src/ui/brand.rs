@@ -22,8 +22,7 @@ fn image(svg: &'static str) -> Arc<Image> {
     Arc::new(Image::from_bytes(ImageFormat::Svg, svg.as_bytes().to_vec()))
 }
 
-static IMAGES: LazyLock<[Arc<Image>; 4]> =
-    LazyLock::new(|| [image(MARK_LIGHT), image(MARK_DARK), image(LOGO_LIGHT), image(LOGO_DARK)]);
+static IMAGES: LazyLock<[Arc<Image>; 4]> = LazyLock::new(|| [image(MARK_LIGHT), image(MARK_DARK), image(LOGO_LIGHT), image(LOGO_DARK)]);
 
 fn pick(cx: &App, light: usize) -> Arc<Image> {
     IMAGES[if cx.theme().is_dark() { light + 1 } else { light }].clone()
@@ -45,7 +44,9 @@ mod tests {
 
     #[test]
     fn brand_svgs_are_present_and_well_formed() {
-        for (name, s) in [("mark", MARK_LIGHT), ("mark-dark", MARK_DARK), ("logo", LOGO_LIGHT), ("logo-dark", LOGO_DARK), ("icon", APP_ICON_SVG)] {
+        for (name, s) in
+            [("mark", MARK_LIGHT), ("mark-dark", MARK_DARK), ("logo", LOGO_LIGHT), ("logo-dark", LOGO_DARK), ("icon", APP_ICON_SVG)]
+        {
             assert!(s.starts_with("<svg") && s.trim_end().ends_with("</svg>"), "{name}");
             assert!(!s.contains("<text"), "{name}: the logotype must be outlined paths, not live text (no font dependency)");
         }

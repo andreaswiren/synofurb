@@ -166,7 +166,7 @@ programs). The same conversion as one guided terminal session: `synofurb-cli wiz
 
 After the first run `synofurb` is installed in `~/.local/bin`, so later you can call it directly. `--run` hands the terminal to the program (prompts, typed
 confirmations and the live log work) and exits with the program's exit status, so it can be scripted. Add `--version 0.2.0` to pin the release, and
-`--insecure-skip-signature` only if you cannot install `minisign`. Use `synofurb install --help` for every option (RAID level, system size, kernel, method
+`--insecure-skip-signature` only if you cannot install `minisign`. Use `synofurb install --help` for every option (RAID level incl. the hybrid `shr1`/`shr2` for mixed disk sizes, see [RAID.md](RAID.md), system size, kernel, method
 `dom`/`kexec`/`kit`, `--agent-dir`). The boot agent files are also attached to every release for offline use as `synofurb-agent-<amd64|arm64|armhf>-<version>.vmlinuz`
 and `.initrd`; the CLI looks for them as `agent-<arch>.vmlinuz` / `agent-<arch>.initrd` in `--agent-dir`.
 

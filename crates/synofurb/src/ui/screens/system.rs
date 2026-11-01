@@ -74,7 +74,13 @@ impl App {
         let p = cx.pal();
         let app = cx.entity();
         let Some(f) = self.facts.clone() else {
-            return Page::new(copy::SYS_TITLE.short, kit::muted(cx, "-")).left(vec![Button::new("back").ghost().label(copy::BTN_BACK.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Plan, window, cx))).into_any_element()]);
+            return Page::new(copy::SYS_TITLE.short, kit::muted(cx, "-")).left(vec![
+                Button::new("back")
+                    .ghost()
+                    .label(copy::BTN_BACK.short)
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Plan, window, cx)))
+                    .into_any_element(),
+            ]);
         };
         let errors = self.system_form_errors(cx);
         let err_for = |field: &str| errors.iter().find(|(k, _)| *k == field).map(|(_, m)| m.clone());
@@ -84,35 +90,61 @@ impl App {
             .items_center()
             .child(div().flex_1().min_w_0().child(Input::new(&self.inp.new_password).mask_toggle()))
             .child(Clipboard::new("copy-pw").value(self.input_value(&self.inp.new_password, cx)).tooltip("Copy"))
-            .child(Button::new("gen-pw").ghost().icon(icons::icon(role::REFRESH)).tooltip("Generate").accessibility_label("Generate").on_click(cx.listener(|this, _, window, cx| {
-                let st = this.inp.new_password.clone();
-                this.set_input(&st, &generate_password(20), window, cx);
-            })));
+            .child(
+                Button::new("gen-pw")
+                    .ghost()
+                    .icon(icons::icon(role::REFRESH))
+                    .tooltip("Generate")
+                    .accessibility_label("Generate")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let st = this.inp.new_password.clone();
+                        this.set_input(&st, &generate_password(20), window, cx);
+                    })),
+            );
         let key_ix = match self.sys.key_mode {
             KeyMode::Generate => 0,
             KeyMode::Paste => 1,
             KeyMode::None => 2,
         };
-        let key = v_flex().gap(px(8.0)).child(kit::segmented("ssh-key", &[copy::SYS_KEY_GENERATE.short, copy::SYS_KEY_PASTE.short, copy::SYS_KEY_NONE.short], key_ix, {
-            let app = app.clone();
-            move |ix, _, cx| app.update(cx, |a, cx| {
-                a.sys.key_mode = [KeyMode::Generate, KeyMode::Paste, KeyMode::None][ix];
-                cx.notify();
-            })
-        })).when(self.sys.key_mode == KeyMode::Paste, |d| d.child(Input::new(&self.inp.pubkey)));
-        let kernel = kit::segmented("kernel", &[copy::SYS_STABLE.short, copy::SYS_NEWEST.short], usize::from(self.form.kernel == KernelChannel::Newest), {
-            let app = app.clone();
-            move |ix, _, cx| app.update(cx, |a, cx| {
-                a.form.kernel = if ix == 1 { KernelChannel::Newest } else { KernelChannel::Stable };
-                cx.notify();
-            })
-        });
+        let key = v_flex()
+            .gap(px(8.0))
+            .child(kit::segmented(
+                "ssh-key",
+                &[copy::SYS_KEY_GENERATE.short, copy::SYS_KEY_PASTE.short, copy::SYS_KEY_NONE.short],
+                key_ix,
+                {
+                    let app = app.clone();
+                    move |ix, _, cx| {
+                        app.update(cx, |a, cx| {
+                            a.sys.key_mode = [KeyMode::Generate, KeyMode::Paste, KeyMode::None][ix];
+                            cx.notify();
+                        })
+                    }
+                },
+            ))
+            .when(self.sys.key_mode == KeyMode::Paste, |d| d.child(Input::new(&self.inp.pubkey)));
+        let kernel = kit::segmented(
+            "kernel",
+            &[copy::SYS_STABLE.short, copy::SYS_NEWEST.short],
+            usize::from(self.form.kernel == KernelChannel::Newest),
+            {
+                let app = app.clone();
+                move |ix, _, cx| {
+                    app.update(cx, |a, cx| {
+                        a.form.kernel = if ix == 1 { KernelChannel::Newest } else { KernelChannel::Stable };
+                        cx.notify();
+                    })
+                }
+            },
+        );
         let source = kit::segmented("source", &[copy::SYS_ONLINE.short, copy::SYS_OFFLINE.short], usize::from(self.source_offline), {
             let app = app.clone();
-            move |ix, _, cx| app.update(cx, |a, cx| {
-                a.source_offline = ix == 1;
-                cx.notify();
-            })
+            move |ix, _, cx| {
+                app.update(cx, |a, cx| {
+                    a.source_offline = ix == 1;
+                    cx.notify();
+                })
+            }
         });
         let resolved = self.sys.boot.resolve(&f);
         let via = match resolved {
@@ -122,6 +154,7 @@ impl App {
         };
 
         let mut form = Form::vertical()
+            .columns(2)
             .child(kit::field("f-host", &copy::SYS_HOSTNAME, &app, Input::new(&self.inp.hostname)))
             .child(kit::field("f-user", &copy::SYS_USER, &app, Input::new(&self.inp.username)))
             .child(kit::field("f-pw", &copy::SYS_PASSWORD, &app, password))
@@ -131,7 +164,10 @@ impl App {
                 "f-console",
                 &copy::SYS_CONSOLE,
                 &app,
-                h_flex().gap(px(8.0)).child(div().flex_1().min_w_0().child(Input::new(&self.inp.serial_text))).child(div().w(px(110.0)).child(Input::new(&self.inp.serial_speed))),
+                h_flex()
+                    .gap(px(8.0))
+                    .child(div().flex_1().min_w_0().child(Input::new(&self.inp.serial_text)))
+                    .child(div().w(px(110.0)).child(Input::new(&self.inp.serial_speed))),
             ))
             .child(kit::field(
                 "f-web",
@@ -156,13 +192,31 @@ impl App {
                         h_flex()
                             .gap(px(8.0))
                             .child(div().flex_1().min_w_0().child(Input::new(&self.inp.bundle)))
-                            .child(Button::new("browse-bundle").outline().icon(icons::icon(role::FOLDER)).label(copy::CONN_BROWSE.short).on_click(cx.listener(|this, _, window, cx| {
-                                let t = this.inp.bundle.clone();
-                                this.browse_dir(t, window, cx)
-                            })))
-                            .child(Button::new("dl-bundle").ghost().label(copy::SYS_DOWNLOAD.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Settings, window, cx)))),
+                            .child(
+                                Button::new("browse-bundle")
+                                    .outline()
+                                    .icon(icons::icon(role::FOLDER))
+                                    .label(copy::CONN_BROWSE.short)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let t = this.inp.bundle.clone();
+                                        this.browse_dir(t, window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("dl-bundle")
+                                    .ghost()
+                                    .label(copy::SYS_DOWNLOAD.short)
+                                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Settings, window, cx))),
+                            ),
                     )
-                    .when_some(missing, |d, _| d.child(Alert::error("no-bundle", copy::SYS_NO_BUNDLE.tip).title(copy::SYS_NO_BUNDLE.short).small().icon(icons::icon(role::ERR)))),
+                    .when_some(missing, |d, _| {
+                        d.child(
+                            Alert::error("no-bundle", copy::SYS_NO_BUNDLE.tip)
+                                .title(copy::SYS_NO_BUNDLE.short)
+                                .small()
+                                .icon(icons::icon(role::ERR)),
+                        )
+                    }),
             ));
         }
         form = form.child(kit::field("f-via", &copy::SYS_BOOT_VIA, &app, kit::tag(&p, Tone::Info, Some(role::CABLE), via)));
@@ -170,44 +224,73 @@ impl App {
         // options most people never touch: collapsed
         let more = v_flex()
             .gap(px(12.0))
-            .child(Form::vertical().child(kit::field("f-mirror", &copy::SYS_MIRROR, &app, Input::new(&self.inp.mirror))).when(f.arch == Arch::Armhf, |fm| fm.child(kit::field("f-dtb", &copy::SYS_DTB, &app, Input::new(&self.inp.dtb)))))
+            .child(
+                Form::vertical()
+                    .child(kit::field("f-mirror", &copy::SYS_MIRROR, &app, Input::new(&self.inp.mirror)))
+                    .when(f.arch == Arch::Armhf, |fm| fm.child(kit::field("f-dtb", &copy::SYS_DTB, &app, Input::new(&self.inp.dtb)))),
+            )
             .when(resolved == BootChoice::Kit, |d| {
-                d.child(h_flex().gap(px(8.0)).child(div().flex_1().child(kit::field("f-kit", &copy::SYS_KIT_DIR, &app, Input::new(&self.inp.kit_dir)))).child(Button::new("browse-kit").outline().icon(icons::icon(role::FOLDER)).on_click(cx.listener(|this, _, window, cx| {
-                    let t = this.inp.kit_dir.clone();
-                    this.browse_dir(t, window, cx)
-                }))))
+                d.child(
+                    h_flex()
+                        .gap(px(8.0))
+                        .child(div().flex_1().child(kit::field("f-kit", &copy::SYS_KIT_DIR, &app, Input::new(&self.inp.kit_dir))))
+                        .child(Button::new("browse-kit").outline().icon(icons::icon(role::FOLDER)).on_click(cx.listener(
+                            |this, _, window, cx| {
+                                let t = this.inp.kit_dir.clone();
+                                this.browse_dir(t, window, cx)
+                            },
+                        ))),
+                )
             })
             .when(resolved == BootChoice::Kexec, |d| {
-                d.child(h_flex().gap(px(8.0)).child(div().flex_1().child(Input::new(&self.inp.kexec_path))).child(Button::new("browse-kexec").outline().icon(icons::icon(role::FOLDER)).on_click(cx.listener(|this, _, window, cx| {
-                    let t = this.inp.kexec_path.clone();
-                    this.browse_file(t, window, cx)
-                }))))
+                d.child(h_flex().gap(px(8.0)).child(div().flex_1().child(Input::new(&self.inp.kexec_path))).child(
+                    Button::new("browse-kexec").outline().icon(icons::icon(role::FOLDER)).on_click(cx.listener(|this, _, window, cx| {
+                        let t = this.inp.kexec_path.clone();
+                        this.browse_file(t, window, cx)
+                    })),
+                ))
             })
-            .child(Checkbox::new("fw").label(copy::SYS_FIRMWARE.short).checked(self.sys.with_firmware).on_click(cx.listener(|this, v: &bool, _, cx| {
-                this.sys.with_firmware = *v;
-                cx.notify();
-            })))
-            .child(Checkbox::new("verbose").label(copy::SYS_VERBOSE.short).checked(self.sys.verbose).on_click(cx.listener(|this, v: &bool, _, cx| {
-                this.sys.verbose = *v;
-                cx.notify();
-            })));
-        let body = v_flex().w_full().max_w(px(640.0)).gap(px(16.0)).child(form).child(Accordion::new("sys-more").bordered(true).item(|i| i.title(copy::SYS_MORE.short).child(more)));
+            .child(Checkbox::new("fw").label(copy::SYS_FIRMWARE.short).checked(self.sys.with_firmware).on_click(cx.listener(
+                |this, v: &bool, _, cx| {
+                    this.sys.with_firmware = *v;
+                    cx.notify();
+                },
+            )))
+            .child(Checkbox::new("verbose").label(copy::SYS_VERBOSE.short).checked(self.sys.verbose).on_click(cx.listener(
+                |this, v: &bool, _, cx| {
+                    this.sys.verbose = *v;
+                    cx.notify();
+                },
+            )));
+        let body = v_flex()
+            .w_full()
+            .max_w(px(900.0))
+            .gap(px(16.0))
+            .child(form)
+            .child(Accordion::new("sys-more").bordered(true).item(|i| i.title(copy::SYS_MORE.short).child(more)));
 
         let valid = errors.is_empty();
         Page::new(copy::SYS_TITLE.short, body)
             .subtitle(copy::SYS_SUB.short)
             .left(vec![
-                Button::new("back").ghost().icon(icons::icon(role::BACK)).label(copy::BTN_BACK.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Plan, window, cx))).into_any_element(),
+                Button::new("back")
+                    .ghost()
+                    .icon(icons::icon(role::BACK))
+                    .label(copy::BTN_BACK.short)
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Plan, window, cx)))
+                    .into_any_element(),
                 self.copy_command_button(cx),
             ])
-            .right(vec![Button::new("next")
-                .primary()
-                .icon(icons::icon(role::NEXT))
-                .label(copy::SYS_NEXT.short)
-                .disabled(!valid)
-                .tooltip(if valid { "".to_string() } else { errors.iter().map(|(_, m)| m.clone()).collect::<Vec<_>>().join(" ") })
-                .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Confirm, window, cx)))
-                .into_any_element()])
+            .right(vec![
+                Button::new("next")
+                    .primary()
+                    .icon(icons::icon(role::NEXT))
+                    .label(copy::SYS_NEXT.short)
+                    .disabled(!valid)
+                    .tooltip(if valid { "".to_string() } else { errors.iter().map(|(_, m)| m.clone()).collect::<Vec<_>>().join(" ") })
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Confirm, window, cx)))
+                    .into_any_element(),
+            ])
     }
 }
 

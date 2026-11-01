@@ -4,9 +4,11 @@
 //! Every box carries its own text, and warnings/errors are repeated as banners below, so the picture is never the
 //! only carrier of a message.
 
+use super::copy;
 use super::format::size_2dp;
-use super::theme::{self, Palette, radius, space};
-use super::widgets::*;
+use super::kit;
+use super::theme::{Palette, radius, space};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, FontWeight, SharedString, div, px};
@@ -106,7 +108,7 @@ impl DiagramModel {
                     "/boot".to_string()
                 } else if is_esp {
                     "EFI system partition".to_string()
-                } else if plan.vgs.iter().any(|v| v.pv == BlockRef::Md(a.name.clone()) && v.name != "vg_data") {
+                } else if plan.vgs.iter().any(|v| v.pvs.contains(&BlockRef::Md(a.name.clone())) && v.name != "vg_data") {
                     "system (LVM)".to_string()
                 } else {
                     "data (LVM)".to_string()
@@ -124,7 +126,7 @@ impl DiagramModel {
             .iter()
             .map(|v| VgBox {
                 name: v.name.clone(),
-                pv: pv_label(&v.pv),
+                pv: v.pvs.iter().map(pv_label).collect::<Vec<_>>().join(", "),
                 lvs: v
                     .lvs
                     .iter()
@@ -151,18 +153,21 @@ impl DiagramModel {
     }
 }
 
-fn layer_label(p: &Palette, s: &str) -> impl IntoElement {
-    div().w(px(104.0)).flex_none().pt(px(space::S8)).child(caption(p, s.to_string()))
+fn layer_label(cx: &App, s: &'static str) -> impl IntoElement {
+    div().w(px(88.0)).flex_none().pt(px(space::S6)).child(kit::caption(cx, s))
 }
 
 fn part_style(p: &Palette, role: PartRole) -> (gpui_kit::Hsla, gpui_kit::Hsla) {
     match role {
-        PartRole::Data | PartRole::SystemPv => (p.accent_bg, p.accent),
+        PartRole::Data | PartRole::SystemPv => (p.accent_bg, p.accent_border),
         _ => (p.surface_3, p.border_strong),
     }
 }
 
+/// The one hand-made element of the UI (UX spec section 2): no widget draws disk -> partition -> RAID -> LVM stacks.
+/// Every box carries its own text and warnings/errors are repeated as Alerts, so the picture is never the only carrier.
 pub fn render(p: &Palette, m: &DiagramModel, cx: &App) -> impl IntoElement {
+    let border = cx.theme().border;
     let disks_row = h_flex().flex_1().min_w_0().gap(px(space::S8)).children(m.disks.iter().map(|d| {
         v_flex()
             .flex_1()
@@ -174,49 +179,48 @@ pub fn render(p: &Palette, m: &DiagramModel, cx: &App) -> impl IntoElement {
             .border_1()
             .border_color(p.border_strong)
             .bg(p.surface)
-            .child(text(p, theme::BODY_SM, d.name.clone()).font_weight(FontWeight(700.0)))
-            .child(muted(p, format!("{} - {}", d.model, d.size)).text_size(theme::CAPTION.size()).truncate())
+            .child(kit::mono_sm(cx, d.name.clone()).font_weight(FontWeight::SEMIBOLD))
+            .child(kit::caption(cx, format!("{} \u{b7} {}", d.model, d.size)).truncate())
     }));
     let parts_row = h_flex().flex_1().min_w_0().gap(px(space::S8)).children(m.disks.iter().map(|d| {
         h_flex().flex_1().min_w_0().gap(px(space::S4)).flex_wrap().children(d.parts.iter().map(|pt| {
-            let (bg, border) = part_style(p, pt.role);
+            let (bg, edge) = part_style(p, pt.role);
             v_flex()
                 .px(px(space::S6))
                 .py(px(space::S2))
                 .rounded(px(radius::SM))
                 .border_1()
-                .border_color(border)
+                .border_color(edge)
                 .bg(bg)
-                .child(text(p, theme::CAPTION, format!("p{} {}", pt.number, pt.role.label())))
-                .child(muted(p, pt.size.clone()).text_size(theme::CAPTION.size()))
+                .child(div().text_xs().child(format!("p{} {}", pt.number, pt.role.label())))
+                .child(kit::caption(cx, pt.size.clone()))
         }))
     }));
     let arrays_row = h_flex().flex_1().min_w_0().gap(px(space::S8)).flex_wrap().children(m.arrays.iter().map(|a| {
         let mirror = a.level.contains("mirror");
-        let (bg, border) = if mirror { (p.ok_bg, p.ok_solid) } else { (p.accent_bg, p.accent) };
+        let (bg, edge) = if mirror { (p.ok_bg, p.ok_border) } else { (p.accent_bg, p.accent_border) };
         v_flex()
             .px(px(space::S8))
             .py(px(space::S6))
             .rounded(px(radius::MD))
             .border_1()
-            .border_color(border)
+            .border_color(edge)
             .bg(bg)
-            .child(text(p, theme::BODY_SM, format!("{} - {}", a.name, a.level)).font_weight(FontWeight(700.0)))
-            .child(muted(p, format!("{} - {} member(s)", a.holds, a.members.len())).text_size(theme::CAPTION.size()))
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(format!("{} \u{b7} {}", a.name, a.level)))
+            .child(kit::caption(cx, format!("{} \u{b7} {}", a.holds, a.members.len())))
     }));
     let lvm_row = v_flex().flex_1().min_w_0().gap(px(space::S6)).children(m.vgs.iter().map(|v| {
         v_flex()
             .gap(px(space::S4))
             .child(
                 h_flex().child(
-                    mono(p, format!("PV {} -> VG {}", v.pv, v.name), cx)
-                        .text_size(theme::CAPTION.size())
+                    kit::mono_sm(cx, format!("PV {} \u{2192} VG {}", v.pv, v.name))
                         .px(px(space::S6))
                         .py(px(space::S2))
                         .rounded(px(radius::SM))
                         .bg(p.surface_2)
                         .border_1()
-                        .border_color(p.border),
+                        .border_color(border),
                 ),
             )
             .child(h_flex().gap(px(space::S8)).flex_wrap().children(v.lvs.iter().map(|l| {
@@ -225,23 +229,21 @@ pub fn render(p: &Palette, m: &DiagramModel, cx: &App) -> impl IntoElement {
                     .py(px(space::S6))
                     .rounded(px(radius::MD))
                     .border_1()
-                    .border_color(p.accent)
+                    .border_color(p.accent_border)
                     .bg(p.accent_bg)
-                    .child(text(p, theme::BODY_SM, format!("{} - {}", l.name, l.fs)).font_weight(FontWeight(700.0)))
-                    .child(muted(p, format!("{}  {}", l.mountpoint, l.size)).text_size(theme::CAPTION.size()))
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(format!("{} \u{b7} {}", l.name, l.fs)))
+                    .child(kit::caption(cx, format!("{}  {}", l.mountpoint, l.size)))
             })))
     }));
     v_flex()
         .w_full()
         .gap(px(space::S12))
-        .child(h_flex().gap(px(space::S8)).child(layer_label(p, "DISKS")).child(disks_row))
-        .child(h_flex().gap(px(space::S8)).child(layer_label(p, "PARTITIONS")).child(parts_row))
-        .child(h_flex().gap(px(space::S8)).child(layer_label(p, "RAID (mdadm)")).child(arrays_row))
-        .child(h_flex().gap(px(space::S8)).child(layer_label(p, "LVM / FS")).child(lvm_row))
-        .when_some(m.boot_note.clone(), |d, n| d.child(muted(p, SharedString::from(n)).text_size(theme::CAPTION.size())))
-        .when(!m.untouched.is_empty(), |d| {
-            d.child(muted(p, format!("Not modified: {}", m.untouched.join(", "))).text_size(theme::CAPTION.size()))
-        })
+        .child(h_flex().gap(px(space::S8)).child(layer_label(cx, copy::DIAG_DISKS.short)).child(disks_row))
+        .child(h_flex().gap(px(space::S8)).child(layer_label(cx, copy::DIAG_PARTITIONS.short)).child(parts_row))
+        .child(h_flex().gap(px(space::S8)).child(layer_label(cx, copy::DIAG_RAID.short)).child(arrays_row))
+        .child(h_flex().gap(px(space::S8)).child(layer_label(cx, copy::DIAG_LVM.short)).child(lvm_row))
+        .when_some(m.boot_note.clone(), |d, n| d.child(kit::caption(cx, SharedString::from(n))))
+        .when(!m.untouched.is_empty(), |d| d.child(kit::caption(cx, format!("{}: {}", copy::DIAG_UNTOUCHED.short, m.untouched.join(", ")))))
 }
 
 #[cfg(test)]

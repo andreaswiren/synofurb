@@ -49,7 +49,7 @@ synofurb scan [--json]        # discovery only (results stream in; saved to the 
 synofurb inventory list|add --ip IP|forget PATTERN
 synofurb inspect --host IP [--json] [--save facts.json]       # read-only: disks, arrays, firmware, boot flash, serial, compatibility
 synofurb compat DS923+ [--json] [--refresh]                   # look a model up in the compatibility list
-synofurb plan --host IP --mode keep|wipe [--keep md2] [--system-gib N] [--copies N] [--raid R] [--free-percent P] [--json]   # read-only
+synofurb plan --host IP --mode keep|wipe [--keep md2] [--system-gib N] [--copies N] [--raid auto|none|0|1|5|6|10|shr1|shr2] [--free-percent P] [--json]   # read-only
 synofurb install --host IP ... --dry-run [--out DIR]          # render the stage-2 script, payload, plan and preseed; change nothing
 synofurb install --host IP ... --have-backup --accept-data-loss --confirm "ERASE <MODEL>"   # DESTROYS DATA; all three are always required
 synofurb boot-manager install|enter|status --host IP          # remote-controllable boot environment
@@ -70,7 +70,7 @@ Machine-friendly: `--log-format json` (NDJSON events), `--json` documents, stabl
 | OS | Debian 13 trixie for `amd64`, `arm64`, `armhf`. Kernel: **Newest** (Linux 7.x from `trixie-backports`, default) or **Stable** (6.12 LTS) |
 | System | LVM `vg_sys` on md RAID1 (swap + **xfs** root). Selectable size, recommended 32 GiB. **With more than two disks the system is always mirrored** (default 3 copies) |
 | Boot | x86 with a boot flash: entries on the unit's internal flash ([docs/BOOT.md](docs/BOOT.md)). Other x86: GRUB (BIOS/UEFI, mirrored ESP). ARM: U-Boot raw sectors ([docs/ARM.md](docs/ARM.md)) |
-| Data | md RAID (auto none/1/5/6, or choose 0/1/5/6/10) -> LVM `vg_data` -> **xfs** `/srv/data`; 20 % of the group left free by default |
+| Data | md RAID (auto none/1/5/6, or choose 0/1/5/6/10) -> LVM `vg_data` -> **xfs** `/srv/data`; 20 % of the group left free by default. **Hybrid RAID (`--raid shr1` / `shr2`)**: Synology-Hybrid-RAID-like slices of mdadm arrays joined in `vg_data`, so disks of different sizes are used fully (SHR-1 survives 1 failed disk, SHR-2 two). Needs wiped disks; details in [docs/RAID.md](docs/RAID.md) |
 | Filesystems | xfs, btrfs, ext4, exFAT, FAT32, NTFS (ntfs-3g), mdadm, LVM |
 | CPU support | microcode for Intel **and AMD** (`intel-microcode` / `amd64-microcode`), AMD memory-mapped serial consoles |
 | User | your name, generated strong password, `sudo`; root locked, SSH root login off |
@@ -136,7 +136,7 @@ Done for real in the development sandbox (no Synology available):
 **Not verified:**
 
 * Any run on a real Synology; `kexec` on a DSM kernel; the Debian installer's behaviour with the generated preseed on real hardware.
-* md RAID, LVM and `mkfs` steps and `grub-install` to real disks (the sandbox kernel has no md/dm).
+* md RAID, LVM and `mkfs` steps and `grub-install` to real disks (the sandbox kernel has no md/dm). This includes the SHR-like data layout: its slice algorithm, partitioning (real `parted` on loop devices) and generated commands are tested, the `mdadm`/`pvcreate`/`vgcreate` calls are not ([docs/RAID.md](docs/RAID.md#implementation-and-verification)).
 * Windows and macOS builds, MSI/NSIS/DMG packaging, signing and notarisation, the release workflow on GitHub, the updater against a real release.
 * Screen-reader behaviour of the native app; real users (the test plan is in `design/mockups/ux/RECOMMENDATION.md`).
 * Synology's UDP 9999 discovery format (from third-party sources) and mDNS field names.

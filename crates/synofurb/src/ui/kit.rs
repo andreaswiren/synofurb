@@ -106,12 +106,12 @@ pub fn labelled(id: impl Into<ElementId>, item: &'static Item, app: &Entity<App>
 // ------------------------------------------------------------------------------------------------ segmented choice
 
 /// A segmented choice (stock `ToggleGroup`): exactly one option is on; clicking another selects it.
-pub fn segmented(
-    id: impl Into<ElementId>,
+pub fn segmented<I: Into<ElementId>, F: Fn(usize, &mut gpui_kit::Window, &mut GpuiApp) + 'static>(
+    id: I,
     labels: &[&'static str],
     selected: usize,
-    on_select: impl Fn(usize, &mut gpui_kit::Window, &mut GpuiApp) + 'static,
-) -> impl IntoElement {
+    on_select: F,
+) -> impl IntoElement + use<I, F> {
     use gpui_kit::component::button::{Toggle, ToggleGroup};
     ToggleGroup::new(id)
         .segmented()
@@ -126,7 +126,12 @@ pub fn segmented(
 // ------------------------------------------------------------------------------------------------ forms
 
 /// A stock form [`Field`](gpui_kit::component::form::Field) whose label carries the info icon of `item`.
-pub fn field(id: impl Into<ElementId>, item: &'static Item, app: &Entity<App>, control: impl IntoElement) -> gpui_kit::component::form::Field {
+pub fn field(
+    id: impl Into<ElementId>,
+    item: &'static Item,
+    app: &Entity<App>,
+    control: impl IntoElement,
+) -> gpui_kit::component::form::Field {
     let (id, app): (ElementId, Entity<App>) = (id.into(), app.clone());
     gpui_kit::component::form::Field::new().label_fn(move |_, _| labelled(id.clone(), item, &app)).child(control)
 }
@@ -142,5 +147,11 @@ pub fn identity_line(cx: &GpuiApp, p: &Palette, model: &str, host: &str, serial:
     if !serial.is_empty() {
         s.push_str(&format!(" \u{00b7} SN {serial}"));
     }
-    h_flex().gap(px(8.0)).items_center().flex_wrap().child(mono(cx, s)).when_some(status, |d, st| d.child(compat_tag(p, st))).into_any_element()
+    h_flex()
+        .gap(px(8.0))
+        .items_center()
+        .flex_wrap()
+        .child(mono(cx, s))
+        .when_some(status, |d, st| d.child(compat_tag(p, st)))
+        .into_any_element()
 }

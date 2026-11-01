@@ -4,10 +4,10 @@
 use super::cli_cmd::CliCommand;
 use super::copy;
 use super::demo::{self, DemoUnit, Script};
+use super::screens::inventory::InventoryTable;
 use super::settings::{UiSettings, now_unix};
 use super::state::*;
 use super::theme::{self, ThemeChoice};
-use super::screens::inventory::InventoryTable;
 use super::worker::{self, Msg, Tx};
 use crate::cli::config_dir;
 use futures::StreamExt;
@@ -105,6 +105,7 @@ pub struct Inputs {
     pub filter: Entity<InputState>,
     pub add_ip: Entity<InputState>,
     pub bundle: Entity<InputState>,
+    pub bm_timeout: Entity<InputState>,
 }
 
 pub struct PlanForm {
@@ -189,6 +190,9 @@ pub struct App {
     pub bootmgr: Job<()>,
     pub update: UpdateState,
     pub page_scroll: gpui_kit::ScrollHandle,
+    pub help_view: Option<gpui_kit::WeakEntity<crate::ui::screens::help::HelpView>>,
+    pub manage_tab: usize,
+    pub settings_auto: Option<Entity<SelectState<Vec<SharedString>>>>,
 }
 
 pub fn version() -> &'static str {
@@ -236,6 +240,7 @@ impl App {
             filter: input(copy::INV_FILTER.short, "", false, &mut subs, cx),
             add_ip: input("192.168.1.20", "", false, &mut subs, cx),
             bundle: input("/path/to/bundle", "", false, &mut subs, cx),
+            bm_timeout: input("", "30 min", false, &mut subs, cx),
         };
         // Enter in the connection fields starts the inspection (the primary action of that screen).
         for st in [&inp.host, &inp.port, &inp.user, &inp.password, &inp.sudo, &inp.key_path] {
@@ -383,6 +388,9 @@ impl App {
             bootmgr: Job::Idle,
             update: UpdateState::Unknown,
             page_scroll: gpui_kit::ScrollHandle::new(),
+            help_view: None,
+            manage_tab: 0,
+            settings_auto: Some(App::make_auto_select(window, cx)),
         };
 
         // Message pump: workers send on `tx`; this task applies the messages on the UI thread.
@@ -401,6 +409,10 @@ impl App {
             None => {
                 app.start_scan(cx);
                 app.maybe_check_updates();
+                if !app.settings.first_launch_done {
+                    app.pending_overlay = Overlay::FirstLaunch;
+                    cx.defer_in(window, |this, window, cx| this.open_pending_overlay(window, cx));
+                }
             }
         }
         app
@@ -881,7 +893,14 @@ impl App {
     }
 
     pub fn gate<'a>(&'a self, typed: &'a str, phrase: &'a str) -> ConfirmGate<'a> {
-        ConfirmGate { phrase, typed, ack_backup: self.ack_backup, ack_loss: self.ack_loss, ack_unit: self.ack_unit, plan_ok: self.plan_ok() }
+        ConfirmGate {
+            phrase,
+            typed,
+            ack_backup: self.ack_backup,
+            ack_loss: self.ack_loss,
+            ack_unit: self.ack_unit,
+            plan_ok: self.plan_ok(),
+        }
     }
 
     pub fn build_job(&mut self, cx: &gpui_kit::App) -> Result<InstallJob, String> {

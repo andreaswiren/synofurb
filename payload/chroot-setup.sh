@@ -280,6 +280,11 @@ write_grub_cfg() {
     esac
   } > /etc/default/grub.d/10-synofurb.cfg
 }
+# Every md array (system, boot, ESP and each SHR data slice) must be in mdadm.conf BEFORE the initramfs is built,
+# otherwise the data slices are not assembled at boot. The installer wrote the file; just report what it lists.
+if [ -f /etc/mdadm/mdadm.conf ]; then
+  say "mdadm.conf lists $(grep -c '^ARRAY' /etc/mdadm/mdadm.conf || true) array(s)"
+fi
 case "$FIRMWARE" in
   Bios)
     write_grub_cfg

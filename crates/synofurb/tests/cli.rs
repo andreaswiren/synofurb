@@ -273,6 +273,30 @@ fn plan_json_and_exit_codes() {
 }
 
 #[test]
+fn plan_accepts_the_hybrid_raid_levels() {
+    let s = Sandbox::new("shr");
+    let v = s.run(&["plan", "--facts", "demo", "--json", "--raid", "shr1"]).json();
+    assert_eq!(v["plan_ok"], true, "{v}");
+    assert_eq!(v["plan"]["request"]["data_raid"], "Shr1");
+    let arrays: Vec<&str> = v["plan"]["arrays"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
+    assert!(arrays.contains(&"data1"), "{arrays:?}");
+    let vg = v["plan"]["vgs"].as_array().unwrap().iter().find(|g| g["name"] == "vg_data").unwrap();
+    assert_eq!(vg["pvs"].as_array().unwrap().len(), 1);
+    assert!(v["summary"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("hybrid RAID")));
+    let v = s.run(&["plan", "--facts", "demo", "--json", "--raid", "shr2"]).json();
+    assert_eq!(v["plan"]["arrays"].as_array().unwrap().iter().find(|a| a["name"] == "data1").unwrap()["level"], "6");
+    // keep mode preserves md2 by default: SHR cannot be built next to it, and the plan says why
+    let bad = s.run(&["plan", "--facts", "demo", "--json", "--mode", "keep", "--raid", "shr1"]);
+    assert_eq!(bad.code, 4, "{}{}", bad.stdout, bad.stderr);
+    let errs = bad.json()["errors"].to_string();
+    assert!(errs.contains("cannot be combined with preserved arrays") && errs.contains("md2"), "{errs}");
+    // the option is documented and completed
+    let help = s.run(&["plan", "--help"]);
+    assert!(help.stdout.contains("shr1") && help.stdout.contains("shr2"), "{}", help.stdout);
+    assert!(s.run(&["completions", "bash"]).stdout.contains("shr1"));
+}
+
+#[test]
 fn unsupported_hardware_exits_five() {
     let s = Sandbox::new("unsupported");
     let facts = s.run(&["inspect", "--facts", "demo", "--json"]).json()["facts"].clone();

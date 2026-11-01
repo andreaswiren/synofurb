@@ -141,11 +141,11 @@ Looks `DS923+`, `ds923plus`, `RS3618xs` up in the embedded list (or the cached r
 
 ```sh
 synofurb-cli plan (--host ADDRESS ... | --facts FILE|demo)
-    [--mode wipe|keep] [--keep md2[,md3]] [--system-gib N] [--copies N] [--raid auto|none|0|1|5|6|10] [--free-percent 0-90] [--kernel newest|stable] [--json]
+    [--mode wipe|keep] [--keep md2[,md3]] [--system-gib N] [--copies N] [--raid auto|none|0|1|5|6|10|shr1|shr2] [--free-percent 0-90] [--kernel newest|stable] [--json]
 ```
 
 Every planner knob of the app's Storage step: `--mode keep` reclaims only DSM's system and swap and preserves the data arrays (`--keep` selects which; default all);
-`--system-gib 0` means "recommended"; `--copies` is the number of disks carrying a copy of the system (default automatic); `--raid` the level of the new data volume;
+`--system-gib 0` means "recommended"; `--copies` is the number of disks carrying a copy of the system (default automatic); `--raid` the level of the new data volume (`shr1`/`shr2` = Synology-Hybrid-RAID-like slices of mdadm arrays in one LVM group that use disks of different sizes fully, tolerating 1 or 2 failed disks; they need at least 2 / 4 wiped disks and cannot be combined with preserved arrays, see [RAID.md](RAID.md));
 `--free-percent` the share of the data volume group left unallocated; `--kernel` is only echoed (the kernel channel does not change the layout). Prints what will be destroyed, what is preserved, warnings, errors and the confirmation phrase. Exit 4 when the plan has
 errors, 5 for unsupported hardware.
 

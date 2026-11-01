@@ -83,6 +83,8 @@ class Config:
     rollback_seconds: int = 90
     fail_delay: float = 0.4
     login_group: str = "sudo"
+    sys_root: str = "/sys"            # where md sysfs attributes are read/written (tests point it into a temp dir)
+    proc_root: str = "/proc"
     state_dir: str = "/var/lib/synofurb-mgmt"
     audit_path: str = "/var/log/synofurb-mgmt/audit.log"
     config_path: str = "/etc/synofurb/mgmt.json"
@@ -144,7 +146,7 @@ _SSHKEY_RE = re.compile(
 RESERVED_VOLUME_NAMES = frozenset({"sys", "data", "root", "swap", "boot", "efi"})
 CREATE_FS = ("xfs", "ext4", "btrfs")
 MOUNT_FS = ("xfs", "ext4", "btrfs", "vfat", "exfat", "ntfs")
-RAID_LEVELS = ("none", "raid0", "raid1", "raid5", "raid6", "raid10")
+RAID_LEVELS = ("none", "raid0", "raid1", "raid5", "raid6", "raid10", "shr1", "shr2")
 EXTRA_GROUPS_ALWAYS = ("sudo", "users", "adm")
 PROTECTED_MOUNTS = frozenset({"/", "/boot", "/boot/efi", "/boot/firmware", "/usr", "/var", "[SWAP]"})
 RESTARTABLE_UNITS = ("ssh", "systemd-resolved", "systemd-timesyncd", "cron")
@@ -483,7 +485,7 @@ class Step:
     """One unit of a plan: a command, or an 'internal' action (file edit)."""
     desc: str
     argv: list[str] | None = None
-    kind: str = "cmd"            # cmd | mdconf | fstab | mkdir
+    kind: str = "cmd"            # cmd | mdconf | fstab | mkdir | sysfs | unitfile
     timeout: int = 60
     ignore_error: bool = False
     meta: dict = field(default_factory=dict)
@@ -497,6 +499,10 @@ class Step:
             return "[edit /etc/fstab] %s %s %s" % (self.meta.get("mountpoint"), self.meta.get("fstype"), self.meta.get("options"))
         if self.kind == "mkdir":
             return "mkdir -p " + shlex.quote(str(self.meta.get("path")))
+        if self.kind == "sysfs":
+            return "echo %s > %s" % (self.meta.get("value"), self.meta.get("path"))
+        if self.kind == "unitfile":
+            return "[write %s]" % self.meta.get("path")
         return self.kind
 
     def to_dict(self) -> dict:
@@ -641,7 +647,7 @@ def parse_mdstat(text: str) -> list[dict]:
             toks = m.group(2).split()
             cur = {"name": m.group(1), "device": "/dev/" + m.group(1), "state": toks[0] if toks else "",
                    "flags": [], "level": None, "members": [], "blocks": 0, "size": 0, "total": None,
-                   "active": None, "health": None, "degraded": False, "sync": None}
+                   "active": None, "health": None, "degraded": False, "sync": None, "bitmap": None}
             for t in toks[1:]:
                 mm = _MD_MEMBER.match(t)
                 if mm:
@@ -665,6 +671,9 @@ def parse_mdstat(text: str) -> list[dict]:
         h = re.search(r"\[(\d+)/(\d+)\]\s*\[([U_]+)\]", raw)
         if h:
             cur["total"], cur["active"], cur["health"] = int(h.group(1)), int(h.group(2)), h.group(3)
+        bm = re.search(r"bitmap:\s*(\d+)/(\d+) pages \[(\d+)KB\],\s*(\d+)KB chunk", raw)
+        if bm:
+            cur["bitmap"] = {"pages_used": int(bm.group(1)), "pages": int(bm.group(2)), "chunk_kb": int(bm.group(4))}
         s = re.search(r"(resync|recovery|reshape|check|repair)\s*=\s*([\d.]+)%", raw)
         if s:
             fin = re.search(r"finish=([\d.]+)min", raw)
@@ -999,6 +1008,8 @@ def plan_volume_create(name: str, devices: list[str], level: str, fs: str, mount
     valid_raid_level(level)
     valid_fs_create(fs)
     valid_mountpoint(mountpoint)
+    if level.startswith("shr"):
+        raise ValidationError("SHR layouts are planned by plan_shr_create")
     devices = [valid_device(d) for d in devices]
     if len(set(devices)) != len(devices):
         raise ValidationError("duplicate devices selected")
@@ -1023,6 +1034,14 @@ def plan_volume_create(name: str, devices: list[str], level: str, fs: str, mount
         pvs = devices
     steps.append(Step("Create LVM physical volume(s)", ["pvcreate", "--yes"] + pvs))
     steps.append(Step("Create volume group " + vg, ["vgcreate", vg] + pvs))
+    steps += volume_tail_steps(name, vg, fs, mountpoint, size_gib)
+    return steps
+
+
+def volume_tail_steps(name: str, vg: str, fs: str, mountpoint: str, size_gib: int | None) -> list[Step]:
+    """lvcreate -> mkfs -> fstab -> mount (shared by plain, RAID and SHR volume creation)."""
+    lvp = lv_path(vg, name)
+    steps: list[Step] = []
     size_args = ["-l", "100%FREE"] if size_gib is None else ["-L", "%dG" % size_gib]
     steps.append(Step("Create logical volume " + name, ["lvcreate", "--yes", "-n", name] + size_args + [vg]))
     steps.append(Step("Wait for device nodes", ["udevadm", "settle", "--timeout=30"], ignore_error=True, timeout=45))
@@ -1388,6 +1407,9 @@ class App:
         r = self.run(["lsblk", "-J", "-b", "-o", LSBLK_COLS], timeout=20)
         return parse_lsblk(r.out) if r.ok else []
 
+    def mdstat(self) -> list[dict]:
+        return parse_mdstat(read_text(self.cfg.proc_root + "/mdstat"))
+
     def findmnt(self) -> list[dict]:
         r = self.run(["findmnt", "-J", "-b", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS,SIZE,USED,AVAIL"], timeout=15)
         return parse_findmnt(r.out) if r.ok else []
@@ -1475,6 +1497,8 @@ def vcall(fn: Callable[..., Any], *a: Any, **kw: Any) -> Any:
     """Run a validator, converting ValidationError into a 400."""
     try:
         return fn(*a, **kw)
+    except SafetyError as e:
+        raise ApiError(409, str(e))
     except ValidationError as e:
         raise ApiError(400, str(e))
 
@@ -1493,6 +1517,19 @@ def exec_step(app: App, step: Step) -> CompletedResult:
             check_no_symlinks(cfg, mp)
             os.makedirs(cfg.p(mp), exist_ok=True)
             return CompletedResult(0, "created " + mp)
+        if step.kind == "sysfs":
+            path, value = str(step.meta["path"]), str(step.meta["value"])
+            if not re.fullmatch(r"/sys/block/md\d{1,4}/md/(sync_action|sync_speed_min|sync_speed_max|stripe_cache_size)", path) or not re.fullmatch(r"[a-z0-9]{1,12}", value):
+                return CompletedResult(1, "", "refusing to write %r" % path)
+            with open(cfg.sys_root + path[len("/sys"):], "w", encoding="utf-8") as fh:
+                fh.write(value + "\n")
+            return CompletedResult(0, "wrote %s to %s" % (value, path))
+        if step.kind == "unitfile":
+            path = str(step.meta["path"])
+            if path not in RAID_SCRUB_UNITS:
+                return CompletedResult(1, "", "refusing to write %r" % path)
+            write_atomic(cfg.p(path), str(step.meta["content"]))
+            return CompletedResult(0, "wrote " + path)
         if step.kind == "mdconf":
             r = app.run(step.argv or [], timeout=step.timeout)
             if not r.ok:
@@ -1730,7 +1767,7 @@ def api_status(req: Request) -> dict:
         "memory": {"total": mem.get("MemTotal"), "available": mem.get("MemAvailable"),
                    "swap_total": mem.get("SwapTotal"), "swap_free": mem.get("SwapFree")},
         "rootfs": rootfs, "temps": read_temps(), "interfaces": parse_ip_addr(r.out) if r.ok else [],
-        "disks": app.lsblk(), "md": {"arrays": parse_mdstat(read_text("/proc/mdstat")), "scan": scan},
+        "disks": app.lsblk(), "md": {"arrays": app.mdstat(), "scan": scan},
         "lvm": {"vgs": app.vgs(), "lvs": app.lvs(), "pvs": app.pvs()},
         "mounts": [m for m in app.findmnt() if m["real"]],
     }
@@ -2191,6 +2228,12 @@ def build_volume_plan(app: App, b: dict) -> dict:
         raise ApiError(409, "volume group %s already exists" % vg)
     if any(m["target"] == mp for m in app.findmnt()) or any(e["mountpoint"] == mp for e in fstab_entries(app.read("/etc/fstab"))):
         raise ApiError(409, "%s is already mounted or listed in fstab" % mp)
+    if level.startswith("shr"):
+        if any(by_path[d]["type"] != "disk" for d in devices):
+            raise ApiError(400, "SHR needs whole disks, not partitions")
+        pl = vcall(plan_shr_create, name, {d: by_path[d]["size"] for d in devices}, level, fs, mp, size)
+        return {"name": name, "vg": vg, "level": level, "fs": fs, "mountpoint": mp, "usable_bytes": pl.info["usable_bytes"], "warnings": pl.warnings,
+                "steps": pl.steps, "shr": pl.info["shr"]}
     steps = vcall(plan_volume_create, name, devices, level, fs, mp, size)
     usable = estimate_usable(level, sizes)
     if size is not None and size * GIB > usable:
@@ -2236,7 +2279,7 @@ def volume_view(app: App) -> dict:
                             label=d["label"] if d else None))
     free, excl = candidate_devices(devs)
     return {"ok": True, "vgs": vgs, "lvs": out_lvs, "pvs": pvs, "candidates": free, "excluded": excl,
-            "md": parse_mdstat(read_text("/proc/mdstat")), "raid_levels": list(RAID_LEVELS),
+            "md": app.mdstat(), "raid_levels": list(RAID_LEVELS),
             "filesystems": list(CREATE_FS)}
 
 
@@ -2388,7 +2431,7 @@ def api_mounts_activate(req: Request) -> dict:
              Step("Wait for device nodes", ["udevadm", "settle", "--timeout=30"], ignore_error=True, timeout=45)]
     _, results = run_steps(app, steps)
     return {"ok": True, "results": results, "devices": mountable_devices(app), "other": other_signatures(app),
-            "md": parse_mdstat(read_text("/proc/mdstat")), "lvs": app.lvs()}
+            "md": app.mdstat(), "lvs": app.lvs()}
 
 
 # ============================================================================
@@ -2540,6 +2583,1096 @@ def api_boot_reboot_to(req: Request) -> dict:
     if not sr.ok:
         raise ApiError(500, "default entry set to %s, but the reboot could not be scheduled: %s" % (entry, sr.err.strip()[:200]))
     return {"ok": True, "entry": entry, "message": "Default set to %s; rebooting in 5 s." % entry}
+
+
+# ============================================================================
+# 16c. RAID management: inventory, plans, SHR (see docs/RAID.md)
+#      Pure parsers and plan functions first (unit-tested), routes at the end.
+# ============================================================================
+
+RAID_CREATE_LEVELS = ("raid0", "raid1", "raid5", "raid6", "raid10")
+BUSY_ACTIONS = frozenset({"resync", "recover", "recovery", "reshape", "check", "repair"})
+SCRUB_ACTIONS = ("check", "repair", "idle")
+FOREIGN_FREE_OPS = frozenset({"scrub", "assemble"})        # allowed on foreign arrays without the extra acknowledgement
+MIB = 1024 ** 2
+SHR_RESERVED_BYTES = 2 * MIB                                # 1 MiB at the start (alignment) + 1 MiB at the end (GPT backup)
+RAID_SCRUB_UNITS = ("/etc/systemd/system/synofurb-raid-scrub.service", "/etc/systemd/system/synofurb-raid-scrub.timer")
+LEVEL_TRANSITIONS: dict[tuple[str, str], dict] = {
+    # (from, to): what mdadm supports and what it needs. delta = change in the number of member devices.
+    ("raid1", "raid5"): {"members": 2, "delta": 0, "note": "A 2-disk RAID5 is created; add disks afterwards to gain space."},
+    ("raid5", "raid6"): {"delta": 1, "needs_new": 1, "note": "One extra disk is added and becomes the second parity."},
+    ("raid6", "raid5"): {"delta": -1, "note": "One disk is released and becomes a spare; protection drops to one failed disk."},
+    ("raid0", "raid5"): {"delta": 1, "needs_new": 1, "note": "One extra disk provides the parity; the data is restriped."},
+}
+
+
+class SafetyError(ValidationError):
+    """An operation refused by the safety rules (shown to the user as a 409)."""
+
+
+def valid_md_name(v: Any) -> str:
+    s = _need_str(v, "array")
+    if not re.fullmatch(r"md\d{1,4}", s):
+        raise ValidationError("invalid array name (expected md0, md127, ...)")
+    return s
+
+
+def valid_md_label(v: Any) -> str:
+    s = _need_str(v, "array name")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,23}", s):
+        raise ValidationError("array name must match [a-z][a-z0-9_]{0,23}")
+    return s
+
+
+# ---- parsers -----------------------------------------------------------------
+
+_DETAIL_KV = re.compile(r"^\s*([A-Za-z][A-Za-z ]*?)\s*:\s*(.*?)\s*$")
+_DETAIL_ROW = re.compile(r"^\s*(\d+|-)\s+(\d+)\s+(\d+)\s+(\d+|-)\s+(.+?)\s*$")
+
+
+def norm_member_state(raw: str) -> str:
+    r = raw.lower()
+    if "faulty" in r:
+        return "faulty"
+    if "removed" in r:
+        return "removed"
+    if "rebuilding" in r:
+        return "rebuilding"
+    if "replacement" in r:
+        return "replacement"
+    if r.startswith("spare"):
+        return "spare"
+    if "active" in r:
+        return "active"
+    return r or "unknown"
+
+
+def _first_int(v: str) -> int | None:
+    m = re.match(r"\s*(\d+)", v)
+    return int(m.group(1)) if m else None
+
+
+def parse_mdadm_detail(text: str) -> dict:
+    """Parse ``mdadm --detail /dev/mdX``. Sizes are bytes (mdadm prints KiB), members come from the device table."""
+    d: dict[str, Any] = {"device": None, "members": []}
+    kv: dict[str, str] = {}
+    in_table = False
+    for line in text.splitlines():
+        h = re.match(r"^(/dev/\S+):\s*$", line)
+        if h:
+            d["device"] = h.group(1)
+            continue
+        if re.match(r"\s*Number\s+Major\s+Minor\s+RaidDevice", line):
+            in_table = True
+            continue
+        if in_table:
+            m = _DETAIL_ROW.match(line)
+            if m:
+                rest = m.group(5)
+                dm = re.search(r"(/dev/\S+)\s*$", rest)
+                dev = dm.group(1) if dm else None
+                raw_state = (rest[:dm.start()] if dm else rest).strip()
+                d["members"].append({"number": None if m.group(1) == "-" else int(m.group(1)), "slot": None if m.group(4) == "-" else int(m.group(4)),
+                                     "device": dev, "state": norm_member_state(raw_state), "raw_state": raw_state,
+                                     "write_mostly": "writemostly" in raw_state.replace("-", "").lower()})
+            continue
+        m = _DETAIL_KV.match(line)
+        if m:
+            kv[m.group(1).strip().lower().replace(" ", "_")] = m.group(2)
+    d["version"] = kv.get("version")
+    d["level"] = (kv.get("raid_level") or "").strip() or None
+    for k_in, k_out in (("array_size", "array_size"), ("used_dev_size", "used_dev_size")):
+        n = _first_int(kv.get(k_in, ""))
+        d[k_out] = n * 1024 if n is not None else None
+    for k in ("raid_devices", "total_devices", "active_devices", "working_devices", "failed_devices", "spare_devices"):
+        d[k] = _first_int(kv.get(k, ""))
+    st = kv.get("state", "")
+    d["state"] = st
+    d["state_flags"] = [x.strip() for x in st.split(",") if x.strip()]
+    d["layout"] = kv.get("layout")
+    ck = re.match(r"(\d+)\s*([KMG]?)", kv.get("chunk_size", ""))
+    d["chunk_bytes"] = int(ck.group(1)) * {"": 1, "K": 1024, "M": MIB, "G": 1024 ** 3}[ck.group(2)] if ck else None
+    d["bitmap"] = "internal" if kv.get("intent_bitmap", "").lower().startswith("internal") else (kv.get("intent_bitmap") or None)
+    d["consistency_policy"] = kv.get("consistency_policy")
+    nm = kv.get("name", "")
+    nmm = re.match(r"(?:(?P<host>[^:\s]+):)?(?P<label>\S+)\s*(?P<rest>\(.*\))?", nm)
+    d["name_raw"] = nm
+    d["name_host"] = nmm.group("host") if nmm else None
+    d["name_label"] = nmm.group("label") if nmm else None
+    d["name_local"] = bool(nmm and nmm.group("rest") and "local to host" in nmm.group("rest"))
+    d["uuid"] = kv.get("uuid")
+    d["events"] = _first_int(kv.get("events", ""))
+    d["progress"] = None
+    for key, kind in (("rebuild_status", "recovery"), ("resync_status", "resync"), ("reshape_status", "reshape"), ("check_status", "check")):
+        pm = re.match(r"\s*(\d+(?:\.\d+)?)%", kv.get(key, ""))
+        if pm:
+            d["progress"] = {"kind": kind, "percent": float(pm.group(1))}
+    d["delta_devices"] = kv.get("delta_devices")
+    d["new_level"] = kv.get("new_level")
+    return d
+
+
+def parse_sync_completed(text: str) -> float | None:
+    """``/sys/block/mdX/md/sync_completed`` is "done / total" in sectors, or "none"/"delayed"."""
+    m = re.match(r"\s*(\d+)\s*/\s*(\d+)", text or "")
+    if not m or int(m.group(2)) == 0:
+        return None
+    return round(100.0 * int(m.group(1)) / int(m.group(2)), 1)
+
+
+def read_md_sysfs(cfg: Config, name: str) -> dict:
+    """The md attributes that matter for the UI. Missing files (no md support, dry run) give an empty dict."""
+    base = "%s/block/%s/md/" % (cfg.sys_root, name)
+
+    def rd(f: str) -> str | None:
+        t = read_text(base + f)
+        return t.strip() if t else None
+    out: dict[str, Any] = {}
+    sa = rd("sync_action")
+    if sa is not None:
+        out["sync_action"] = sa
+    mm = rd("mismatch_cnt")
+    out["mismatch_cnt"] = int(mm) if mm and mm.isdigit() else None
+    for f in ("array_state", "last_sync_action", "bitmap/location", "consistent"):
+        v = rd(f)
+        if v is not None:
+            out[f.replace("/", "_")] = v
+    out["sync_completed"] = parse_sync_completed(rd("sync_completed") or "")
+    for f in ("sync_speed", "degraded", "stripe_cache_size"):
+        v = rd(f)
+        out[f] = int(v) if v and v.isdigit() else None
+    for f in ("sync_speed_min", "sync_speed_max"):
+        v = rd(f)
+        mv = re.match(r"(\w+)", v or "")
+        out[f] = (int(mv.group(1)) if mv and mv.group(1).isdigit() else "system") if v else None
+    return out
+
+
+# ---- inventory ---------------------------------------------------------------
+
+def array_is_foreign(detail: dict, hostname: str, vg_names: list[str]) -> list[str]:
+    """Reasons an array looks like it was made elsewhere (empty list = ours)."""
+    why = []
+    host = detail.get("name_host")
+    if host and host != hostname and not detail.get("name_local"):
+        why.append("created on host %s" % host)
+    if any(not v.startswith("vg_") for v in vg_names):
+        why.append("volume group %s" % ", ".join(v for v in vg_names if not v.startswith("vg_")))
+    return why
+
+
+def build_array_inventory(mdstat: list[dict], details: dict[str, dict], sysfs: dict[str, dict], devs: list[dict],
+                          pvs: list[dict], lvs: list[dict], hostname: str) -> list[dict]:
+    """Merge mdstat, ``mdadm --detail`` and sysfs into one record per array (pure)."""
+    by_k = {d["kname"]: d for d in devs}
+    by_path = {d["path"]: d for d in devs}
+    out = []
+    for a in mdstat:
+        name = a["name"]
+        det, sysf = details.get(name) or {}, sysfs.get(name) or {}
+        dev = by_k.get(name)
+        members = []
+        if det.get("members"):
+            src = det["members"]
+        else:
+            src = [{"slot": mb["role"], "device": "/dev/" + mb["name"], "state": "faulty" if mb["failed"] else "spare" if mb["spare"] else "active"} for mb in a["members"]]
+        for mb in src:
+            m = {"device": mb["device"], "name": mb["device"].replace("/dev/", "") if mb["device"] else None, "slot": mb.get("slot"), "state": mb["state"],
+                 "write_mostly": bool(mb.get("write_mostly")), "disk": None, "model": None, "serial": None, "size": None}
+            ld = by_path.get(mb["device"] or "")
+            if ld:
+                m["size"] = ld["size"]
+                parent = by_k.get(ld["pkname"] or "") if ld["type"] == "part" else ld
+                if parent:
+                    m["disk"], m["model"], m["serial"] = parent["kname"], parent["model"], parent["serial"]
+            members.append(m)
+        vg_names = sorted({p["vg_name"] for p in pvs if p["pv_name"] in ("/dev/" + name, "/dev/md/" + str(det.get("name_label") or name)) and p["vg_name"]})
+        lv_names, mounts = [], []
+        if dev:
+            for d in [dev] + list(descendants(by_k, name)):
+                mounts += d["mountpoints"]
+                if d["type"] == "lvm":
+                    for lv in lvs:
+                        if d["name"] == mapper_name(lv["vg_name"], lv["lv_name"]):
+                            lv_names.append("%s/%s" % (lv["vg_name"], lv["lv_name"]))
+                            if lv["vg_name"] not in vg_names:
+                                vg_names.append(lv["vg_name"])
+        action = sysf.get("sync_action")
+        sync = a["sync"]
+        if sync is None and action and action in BUSY_ACTIONS:
+            sync = {"action": action, "percent": sysf.get("sync_completed"), "finish_min": None, "speed_kbs": sysf.get("sync_speed")}
+        if sync is None and det.get("progress"):
+            sync = {"action": det["progress"]["kind"], "percent": det["progress"]["percent"], "finish_min": None, "speed_kbs": None}
+        if sync and sysf.get("sync_speed") and not sync.get("speed_kbs"):
+            sync = dict(sync, speed_kbs=sysf["sync_speed"])
+        flags = det.get("state_flags") or []
+        degraded = bool(a["degraded"] or "degraded" in flags or (sysf.get("degraded") or 0) > 0)
+        reasons = array_is_foreign(det, hostname, vg_names) if det else (["volume group %s" % ", ".join(v for v in vg_names if not v.startswith("vg_"))] if any(not v.startswith("vg_") for v in vg_names) else [])
+        out.append({
+            "name": name, "device": "/dev/" + name, "label": det.get("name_label") or name, "level": det.get("level") or a["level"],
+            "state": ("inactive" if a["state"] == "inactive" else "degraded" if degraded else ", ".join(flags) if flags else a["state"]),
+            "flags": flags, "degraded": degraded, "size": det.get("array_size") or a["size"], "used_dev_size": det.get("used_dev_size"),
+            "raid_devices": det.get("raid_devices") or a["total"], "chunk_bytes": det.get("chunk_bytes"), "layout": det.get("layout"),
+            "bitmap": det.get("bitmap") or ("internal" if a.get("bitmap") else None), "members": members,
+            "spares": [m["device"] for m in members if m["state"] == "spare"], "failed": [m["device"] for m in members if m["state"] == "faulty"],
+            "sync": sync, "busy": bool(sync and sync.get("action") in BUSY_ACTIONS) or (action in BUSY_ACTIONS if action else False),
+            "mismatch_cnt": sysf.get("mismatch_cnt"), "last_sync_action": sysf.get("last_sync_action"), "sync_speed_min": sysf.get("sync_speed_min"),
+            "sync_speed_max": sysf.get("sync_speed_max"), "stripe_cache_size": sysf.get("stripe_cache_size"), "uuid": det.get("uuid"), "events": det.get("events"),
+            "foreign": bool(reasons), "foreign_reasons": reasons, "vgs": sorted(vg_names), "lvs": sorted(set(lv_names)),
+            "mounts": sorted(set(mounts)), "in_use": bool(mounts or lv_names), "holds_system": bool(dev and holds_system(by_k, dev)),
+            "inactive": a["state"] == "inactive",
+        })
+    return sorted(out, key=lambda x: x["name"])
+
+
+# ---- SHR slice algorithm (pure; mirrored by the Rust planner, vectors in tests/shr_vectors.json) -------------------------
+
+def shr_data_bytes(disk_bytes: int) -> int:
+    """Data space of a whole disk after the alignment and GPT reserve."""
+    return max(0, disk_bytes - SHR_RESERVED_BYTES)
+
+
+def shr_slices(disks: dict[str, int], mode: str) -> dict:
+    """Cut the data partitions of ``disks`` (name -> bytes) into slices.
+
+    Round sizes down to whole GiB; sizes within 1 GiB of the lowest size of a tier merge into that tier. Slice j spans
+    [t(j-1), t(j)) and its members are all disks with size >= t(j). One member: unusable. SHR-1: 2 -> RAID1, >=3 -> RAID5.
+    SHR-2: >=4 -> RAID6, 2 or 3 -> RAID1 (with a warning). Usable: RAID1 = len, RAID5 = (m-1) len, RAID6 = (m-2) len."""
+    if mode not in ("shr1", "shr2"):
+        raise ValidationError("mode must be shr1 or shr2")
+    minimum = 2 if mode == "shr1" else 4
+    if len(disks) < minimum:
+        raise ValidationError("%s needs at least %d disks (got %d)" % ("SHR-1" if mode == "shr1" else "SHR-2", minimum, len(disks)))
+    order = {n: i for i, n in enumerate(disks)}
+    tiers: list[list] = []                      # [tier_bytes, [names]]
+    low = None
+    for name, size in sorted(disks.items(), key=lambda kv: (kv[1], order[kv[0]])):
+        if low is None or size - low >= GIB:
+            low = size
+            tiers.append([(size // GIB) * GIB, [name]])
+        else:
+            tiers[-1][1].append(name)
+    slices, warnings, prev, total = [], [], 0, 0
+    for j, (t, _) in enumerate(tiers):
+        length = t - prev
+        prev = t
+        if length <= 0:
+            continue
+        names = {n for _, ns in tiers[j:] for n in ns}
+        members = [n for n in disks if n in names]
+        m = len(members)
+        idx = len(slices) + 1
+        note = None
+        if m == 1:
+            level, usable = None, 0
+            warnings.append("Slice %d: %d GiB on %s has no partner disk and stays unused." % (idx, length // GIB, members[0]))
+        elif mode == "shr1":
+            level = "raid1" if m == 2 else "raid5"
+            usable = length if m == 2 else (m - 1) * length
+        elif m >= 4:
+            level, usable = "raid6", (m - 2) * length
+        else:
+            level, usable = "raid1", length
+            note = "Only %d members: tolerates %d failure(s), not 2." % (m, m - 1)
+            warnings.append("Slice %d has %d disks and is mirrored; it tolerates %d failed disk(s), not 2." % (idx, m, m - 1))
+        slices.append({"index": idx, "start": t - length, "length": length, "members": members, "level": level, "usable": usable, "unusable": m == 1, "note": note})
+        total += usable
+    return {"mode": mode, "tiers": [t for t, _ in tiers], "slices": slices, "usable_bytes": total, "raw_bytes": sum(disks.values()), "warnings": warnings}
+
+
+def part_path(disk: str, n: int) -> str:
+    return "%s%s%d" % (disk, "p" if disk[-1].isdigit() else "", n)
+
+
+def shr_partition_steps(disk: str, parts: list[tuple[str, int, int]], fresh: bool) -> list[Step]:
+    """parted steps for one disk. ``parts`` = [(label, start_bytes, length_bytes)] with start relative to the data area."""
+    steps = []
+    if fresh:
+        steps.append(Step("Wipe %s" % disk, ["wipefs", "-a", disk]))
+        steps.append(Step("Create a GPT on %s" % disk, ["parted", "-s", disk, "mklabel", "gpt"]))
+    for label, start, length in parts:
+        s = (MIB + start) // MIB
+        steps.append(Step("Create partition %s on %s" % (label, disk),
+                          ["parted", "-s", "-a", "optimal", disk, "mkpart", label, "%dMiB" % s, "%dMiB" % (s + length // MIB)]))
+    return steps
+
+
+def raid_create_steps(label: str, level: str, devices: list[str], spares: list[str] | None = None, chunk_kib: int | None = None,
+                      bitmap: bool = True) -> list[Step]:
+    md = "/dev/md/" + label
+    spares = spares or []
+    argv = ["mdadm", "--create", md, "--run", "--level=" + level, "--raid-devices=%d" % len(devices), "--metadata=1.2", "--name=" + label]
+    if spares:
+        argv.append("--spare-devices=%d" % len(spares))
+    if chunk_kib and level in ("raid0", "raid5", "raid6", "raid10"):
+        argv.append("--chunk=%d" % chunk_kib)
+    if bitmap and level != "raid0":
+        argv.append("--bitmap=internal")
+    return [Step("Create %s array %s from %d devices" % (level, md, len(devices)), argv + devices + spares, timeout=180),
+            Step("Wait for device nodes", ["udevadm", "settle", "--timeout=30"], ignore_error=True, timeout=45)]
+
+
+def md_record_steps() -> list[Step]:
+    return [Step("Record arrays in /etc/mdadm/mdadm.conf", ["mdadm", "--detail", "--scan"], kind="mdconf"),
+            Step("Update initramfs so the arrays assemble at boot", ["update-initramfs", "-u"], timeout=600)]
+
+
+@dataclass
+class RaidPlan:
+    """What the server would do. ``confirm`` is the phrase the user must type (None = no typed confirmation)."""
+    op: str
+    title: str
+    steps: list[Step] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    confirm: str | None = None
+    array: str | None = None
+    follow_ups: list[Step] = field(default_factory=list)
+    info: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return dict(self.info, op=self.op, title=self.title, steps=[s.to_dict() for s in self.steps], warnings=self.warnings, confirm=self.confirm,
+                    array=self.array, follow_ups=[s.to_dict() for s in self.follow_ups], destructive=self.confirm is not None)
+
+
+def plan_shr_create(name: str, disks: dict[str, int], mode: str, fs: str, mountpoint: str, size_gib: int | None = None,
+                    data_sizes: dict[str, int] | None = None) -> RaidPlan:
+    """SHR volume: partition -> one md array per slice -> one volume group -> linear LV -> filesystem.
+
+    ``disks`` maps whole-disk paths to their raw size; slices are computed on the data size (raw minus the reserve)."""
+    valid_volume_name(name)
+    valid_fs_create(fs)
+    valid_mountpoint(mountpoint)
+    paths = [valid_device(d) for d in disks]
+    if size_gib is not None and (not isinstance(size_gib, int) or size_gib < 1):
+        raise ValidationError("size must be a whole number of GiB, or empty for all")
+    sizes = data_sizes or {d: shr_data_bytes(s) for d, s in disks.items()}
+    lay = shr_slices(sizes, mode)
+    usable_slices = [s for s in lay["slices"] if s["level"]]
+    if not usable_slices:
+        raise ValidationError("these disks give no usable SHR capacity")
+    vg = "vg_" + name
+    steps: list[Step] = []
+    per_disk: dict[str, list] = {}
+    for sl in usable_slices:
+        for d in sl["members"]:
+            per_disk.setdefault(d, []).append((("%s_%d" % (name, sl["index"])), sl["start"], sl["length"]))
+    part_of: dict[tuple[str, int], str] = {}
+    for d in disks:
+        if d in per_disk:
+            for k, (label, start, length) in enumerate(per_disk[d], 1):
+                part_of[(d, int(label.rsplit("_", 1)[1]))] = part_path(d, k)
+            steps += shr_partition_steps(d, per_disk[d], True)
+    steps.append(Step("Re-read partition tables", ["partprobe"] + [d for d in disks if d in per_disk], ignore_error=True))
+    steps.append(Step("Wait for device nodes", ["udevadm", "settle", "--timeout=30"], ignore_error=True, timeout=45))
+    pvs = []
+    for sl in usable_slices:
+        parts = [part_of[(d, sl["index"])] for d in sl["members"]]
+        steps += raid_create_steps("%s_%d" % (name, sl["index"]), sl["level"], parts)
+        pvs.append("/dev/md/%s_%d" % (name, sl["index"]))
+    steps += md_record_steps()
+    steps.append(Step("Create LVM physical volumes", ["pvcreate", "--yes"] + pvs))
+    steps.append(Step("Create volume group " + vg, ["vgcreate", vg] + pvs))
+    if size_gib is not None and size_gib * GIB > lay["usable_bytes"]:
+        raise ValidationError("requested %d GiB exceeds the usable capacity (%d GiB)" % (size_gib, lay["usable_bytes"] // GIB))
+    steps += volume_tail_steps(name, vg, fs, mountpoint, size_gib)
+    warnings = ["ALL DATA ON THE SELECTED DISKS WILL BE DESTROYED."] + lay["warnings"]
+    warnings.append("SHR-style layout managed by Debian; DSM will not adopt it.")
+    return RaidPlan("shr-create", "Create %s volume %s" % ("SHR-1" if mode == "shr1" else "SHR-2", name), steps, warnings, confirm=name,
+                    info={"shr": lay, "usable_bytes": lay["usable_bytes"], "name": name, "vg": vg, "mountpoint": mountpoint, "fs": fs, "level": mode})
+
+
+# ---- SHR growth ---------------------------------------------------------------
+
+def shr_layout_from_arrays(arrays: list[dict], volume: str) -> dict:
+    """Rebuild the slice layout of an existing synofurb SHR volume from the array inventory.
+
+    Returns {"mode", "slices": [{index, array, label, level, length, members: {disk: partition}}], "disks": {disk: {"size", "parts"}}}."""
+    pat = re.compile(r"^%s_(\d+)$" % re.escape(volume))
+    slices, disks = [], {}
+    for a in arrays:
+        m = pat.match(a["label"] or "")
+        if not m or ("vg_" + volume) not in a["vgs"]:
+            continue
+        members = {mb["disk"]: mb["device"] for mb in a["members"] if mb["disk"] and mb["state"] in ("active", "rebuilding", "spare", "faulty")}
+        length = min([mb["size"] for mb in a["members"] if mb["size"]] or [a["used_dev_size"] or 0])
+        slices.append({"index": int(m.group(1)), "array": a["name"], "label": a["label"], "level": a["level"], "length": length, "members": members,
+                       "raid_devices": a["raid_devices"], "degraded": a["degraded"], "busy": a["busy"]})
+        for dsk, part in members.items():
+            disks.setdefault(dsk, {"parts": []})["parts"].append((int(m.group(1)), part, length))
+    slices.sort(key=lambda s: s["index"])
+    mode = "shr2" if any(s["level"] == "raid6" for s in slices) else "shr1"
+    return {"mode": mode, "slices": slices, "disks": disks, "volume": volume}
+
+
+def slice_level_for(mode: str, members: int) -> str | None:
+    if members < 2:
+        return None
+    if mode == "shr1":
+        return "raid1" if members == 2 else "raid5"
+    return "raid6" if members >= 4 else "raid1"
+
+
+def plan_shr_add_disk(layout: dict, disk: str, disk_bytes: int, backup_dir: str = "/var/lib/synofurb-mgmt") -> RaidPlan:
+    """Add one whole disk to an SHR volume.
+
+    1. The new disk joins every existing slice it can still cover (in slice order); each array is grown by one member.
+    2. Free space that belongs to no array (the new disk's rest and the free tails of the old disks) is re-sliced with the
+       normal algorithm into new arrays, which extend the volume group."""
+    vol, mode = layout["volume"], layout["mode"]
+    if disk in layout["disks"]:
+        raise SafetyError("%s is already part of this volume" % disk)
+    for sl in layout["slices"]:
+        if sl["busy"] or sl["degraded"]:
+            raise SafetyError("array %s is %s; wait until it is healthy" % (sl["array"], "degraded" if sl["degraded"] else "busy"))
+    warnings: list[str] = []
+    free_new, off_new = shr_data_bytes(disk_bytes), 0
+    joined: list[tuple[dict, str, int]] = []                  # (slice, new partition, offset on the new disk)
+    for sl in layout["slices"]:
+        length = sl["length"] // MIB * MIB
+        if free_new < length:
+            break
+        members = len(sl["members"])
+        if sl["level"] == "raid1" and members >= 3 and mode == "shr2":
+            warnings.append("Slice %d is a 3-way mirror and cannot become RAID6 in place; its space is not extended." % sl["index"])
+            break
+        joined.append((sl, part_path(disk, len(joined) + 1), off_new))
+        off_new += length
+        free_new -= length
+    tails = {d: info["size"] - sum(p[2] for p in info["parts"]) for d, info in layout["disks"].items()}
+    ends = {d: sum(p[2] for p in info["parts"]) for d, info in layout["disks"].items()}
+    tails[disk], ends[disk] = free_new, off_new
+    tails = {d: t for d, t in tails.items() if t >= GIB}
+    eff = mode if len(tails) >= (2 if mode == "shr1" else 4) else "shr1"
+    new_slices = [s for s in shr_slices(tails, eff)["slices"] if s["level"]] if len(tails) >= 2 else []
+    if new_slices and eff != mode:
+        warnings.append("Fewer than 4 disks have free space: the new slices use SHR-1 protection.")
+    base = max([s["index"] for s in layout["slices"]] + [0])
+    counts = {d: len(info["parts"]) for d, info in layout["disks"].items()}
+    counts[disk] = len(joined)
+    new_by_disk: dict[str, list] = {}
+    arrays: list[tuple[str, dict, dict]] = []                # (label, slice, {disk: partition})
+    for k, sl in enumerate(new_slices, 1):
+        label = "%s_%d" % (vol, base + k)
+        pm = {}
+        for d in sl["members"]:
+            counts[d] += 1
+            new_by_disk.setdefault(d, []).append((label, ends[d] + sl["start"], sl["length"] // MIB * MIB))
+            pm[d] = part_path(d, counts[d])
+        arrays.append((label, sl, pm))
+    steps: list[Step] = []
+    new_disk_parts = [("%s_%d" % (vol, s["index"]), off, s["length"] // MIB * MIB) for s, _, off in joined] + new_by_disk.pop(disk, [])
+    if new_disk_parts:
+        steps += shr_partition_steps(disk, new_disk_parts, True)
+    for d, plist in new_by_disk.items():
+        steps += shr_partition_steps(d, plist, False)
+    touched = ([disk] if new_disk_parts else []) + list(new_by_disk)
+    if touched:
+        steps.append(Step("Re-read partition tables", ["partprobe"] + touched, ignore_error=True))
+        steps.append(Step("Wait for device nodes", ["udevadm", "settle", "--timeout=30"], ignore_error=True, timeout=45))
+    for sl, part, _ in joined:
+        md, backup = "/dev/" + sl["array"], "%s/md-%s.backup" % (backup_dir, sl["array"])
+        members = len(sl["members"])
+        if sl["level"] == "raid1" and members == 2 and mode == "shr1":
+            steps += [Step("Convert %s to RAID5" % sl["array"], ["mdadm", "--grow", md, "--level=5", "--backup-file=" + backup], timeout=120),
+                      Step("Add %s to %s" % (part, sl["array"]), ["mdadm", "--manage", md, "--add", part]),
+                      Step("Reshape %s to 3 devices" % sl["array"], ["mdadm", "--grow", md, "--raid-devices=3", "--backup-file=" + backup], timeout=120)]
+        elif sl["level"] == "raid1":
+            steps += [Step("Add %s to %s" % (part, sl["array"]), ["mdadm", "--manage", md, "--add", part]),
+                      Step("Grow the mirror %s to %d devices" % (sl["array"], members + 1), ["mdadm", "--grow", md, "--raid-devices=%d" % (members + 1)])]
+        else:
+            steps += [Step("Add %s to %s" % (part, sl["array"]), ["mdadm", "--manage", md, "--add", part]),
+                      Step("Reshape %s to %d devices" % (sl["array"], members + 1), ["mdadm", "--grow", md, "--raid-devices=%d" % (members + 1), "--backup-file=" + backup], timeout=120)]
+    pvs = []
+    for label, sl, pm in arrays:
+        steps += raid_create_steps(label, sl["level"], [pm[d] for d in sl["members"]])
+        pvs.append("/dev/md/" + label)
+    if arrays:
+        steps += md_record_steps()
+        steps.append(Step("Create LVM physical volumes", ["pvcreate", "--yes"] + pvs))
+        steps.append(Step("Add the new arrays to vg_" + vol, ["vgextend", "vg_" + vol] + pvs))
+    if not steps:
+        raise SafetyError("%s adds no usable capacity to this volume" % disk)
+    follow = []
+    if joined:
+        follow.append(Step("Grow the physical volumes", ["pvresize"] + ["/dev/" + s["array"] for s, _, _ in joined], ignore_error=True))
+    follow.append(Step("Extend the logical volume into the new space", ["lvextend", "-l", "+100%FREE", "/dev/vg_%s/%s" % (vol, vol)]))
+    warnings.insert(0, "Reshaping runs for hours; the volume stays usable but slower. Do not remove disks meanwhile.")
+    return RaidPlan("shr-add-disk", "Add %s to volume %s" % (disk, vol), steps, warnings, confirm=vol, follow_ups=follow,
+                    info={"volume": vol, "joined_slices": [s["index"] for s, _, _ in joined], "new_slices": [label for label, _, _ in arrays], "after_reshape": True})
+
+
+def plan_shr_replace_disk(layout: dict, old: str, new: str, new_bytes: int, old_failed: bool) -> RaidPlan:
+    """Replace one disk of an SHR volume by a disk at least as large: same partitions, then --replace (or fail/remove/add) per array."""
+    vol = layout["volume"]
+    info = layout["disks"].get(old)
+    if not info:
+        raise SafetyError("%s is not part of volume %s" % (old, vol))
+    if new in layout["disks"]:
+        raise SafetyError("%s is already part of this volume" % new)
+    need = sum(p[2] for p in info["parts"])
+    if shr_data_bytes(new_bytes) < need:
+        raise SafetyError("the new disk is too small (%d GiB needed)" % (need // GIB + 1))
+    if not old_failed and any(s["degraded"] for s in layout["slices"]):
+        raise SafetyError("a slice is degraded; rebuild it first or replace the failed disk")
+    if any(s["busy"] for s in layout["slices"]):
+        raise SafetyError("an array is busy (sync or reshape); wait until it is idle")
+    parts = sorted(info["parts"])
+    plist, off = [], 0
+    for idx, _, length in parts:
+        plist.append(("%s_%d" % (vol, idx), off, length))
+        off += length
+    steps = shr_partition_steps(new, plist, True)
+    steps.append(Step("Re-read partition tables", ["partprobe", new], ignore_error=True))
+    steps.append(Step("Wait for device nodes", ["udevadm", "settle", "--timeout=30"], ignore_error=True, timeout=45))
+    later: list[Step] = []
+    for k, (idx, oldpart, _) in enumerate(parts, 1):
+        sl = next(s for s in layout["slices"] if s["index"] == idx)
+        md, newpart = "/dev/" + sl["array"], part_path(new, k)
+        if old_failed:
+            steps += [Step("Remove %s from %s" % (oldpart, sl["array"]), ["mdadm", "--manage", md, "--fail", oldpart], ignore_error=True),
+                      Step("Remove %s from %s" % (oldpart, sl["array"]), ["mdadm", "--manage", md, "--remove", oldpart], ignore_error=True),
+                      Step("Add %s to %s" % (newpart, sl["array"]), ["mdadm", "--manage", md, "--add", newpart])]
+        else:
+            steps += [Step("Add %s to %s as a spare" % (newpart, sl["array"]), ["mdadm", "--manage", md, "--add", newpart]),
+                      Step("Replace %s by %s in %s" % (oldpart, newpart, sl["array"]), ["mdadm", "--manage", md, "--replace", oldpart, "--with", newpart])]
+            later.append(Step("When %s has finished: remove %s" % (sl["array"], oldpart), ["mdadm", "--manage", md, "--remove", oldpart]))
+    warnings = ["Rebuilding takes hours; keep the other disks healthy until it finishes."]
+    if shr_data_bytes(new_bytes) >= need + GIB:
+        warnings.append("The new disk is larger: the extra space can be added with 'Add disk' afterwards.")
+    return RaidPlan("shr-replace-disk", "Replace %s by %s in %s" % (old, new, vol), steps, warnings, confirm=vol, follow_ups=later,
+                    info={"volume": vol, "old": old, "new": new})
+
+
+# ---- operations on a single array --------------------------------------------
+
+def min_active(level: str | None, n: int) -> int:
+    """Smallest number of working members that still holds all data."""
+    return {"raid0": n, "raid1": 1, "raid4": n - 1, "raid5": n - 1, "raid6": n - 2, "raid10": max(1, n // 2)}.get(level or "", n)
+
+
+def fault_tolerance(level: str | None, n: int) -> int:
+    return max(0, n - min_active(level, n)) if level != "raid10" else 1
+
+
+def _need_idle(arr: dict, what: str) -> None:
+    if arr["busy"]:
+        raise SafetyError("%s is %s; wait until it is idle before %s" % (arr["name"], (arr["sync"] or {}).get("action") or "busy", what))
+
+
+def _need_member(arr: dict, dev: str) -> dict:
+    m = next((x for x in arr["members"] if x["device"] == dev), None)
+    if m is None:
+        raise ValidationError("%s is not a member of %s" % (dev, arr["name"]))
+    return m
+
+
+def _free_device(devs_by_path: dict[str, dict], by_k: dict[str, dict], dev: str, min_bytes: int = 0) -> dict:
+    d = devs_by_path.get(dev)
+    if d is None:
+        raise ValidationError("%s: no such block device" % dev)
+    why = device_unusable_reason(d, by_k)
+    if why:
+        raise SafetyError("%s cannot be used: %s" % (dev, why))
+    if min_bytes and d["size"] < min_bytes:
+        raise SafetyError("%s is smaller than the array members (%d GiB needed)" % (dev, min_bytes // GIB + 1))
+    return d
+
+
+def _member_size(arr: dict) -> int:
+    return arr["used_dev_size"] or min([m["size"] for m in arr["members"] if m["size"]] or [0])
+
+
+def backup_file(cfg_state: str, arr: dict) -> str:
+    return "%s/md-%s.backup" % (cfg_state, arr["name"])
+
+
+def plan_add_spare(arr: dict, dev: str, free: dict) -> RaidPlan:
+    d = free
+    return RaidPlan("add-spare", "Add spare to %s" % arr["name"], [Step("Add %s to %s as a spare" % (dev, arr["name"]), ["mdadm", "--manage", arr["device"], "--add", dev])],
+                    ["%s will be overwritten." % dev] + (["The array is degraded: the spare starts rebuilding at once."] if arr["degraded"] else []),
+                    confirm=arr["name"], array=arr["name"], info={"size": d["size"]})
+
+
+def plan_fail(arr: dict, dev: str) -> RaidPlan:
+    m = _need_member(arr, dev)
+    _need_idle(arr, "failing a disk")
+    if m["state"] in ("faulty", "removed"):
+        raise SafetyError("%s has already failed; remove it instead" % dev)
+    active = [x for x in arr["members"] if x["state"] == "active"]
+    if m["state"] == "active" and len(active) - 1 < min_active(arr["level"], arr["raid_devices"] or len(active)):
+        raise SafetyError("failing %s would make %s unreadable" % (dev, arr["name"]))
+    return RaidPlan("fail", "Fail %s in %s" % (dev, arr["name"]), [Step("Mark %s as failed in %s" % (dev, arr["name"]), ["mdadm", "--manage", arr["device"], "--fail", dev])],
+                    ["%s stays in the array as failed until you remove it." % dev], confirm=arr["name"], array=arr["name"])
+
+
+def plan_remove(arr: dict, dev: str) -> RaidPlan:
+    m = _need_member(arr, dev)
+    if m["state"] == "active" or m["state"] == "rebuilding":
+        raise SafetyError("%s is working; fail it first" % dev)
+    return RaidPlan("remove", "Remove %s from %s" % (dev, arr["name"]), [Step("Remove %s from %s" % (dev, arr["name"]), ["mdadm", "--manage", arr["device"], "--remove", dev])],
+                    [], confirm=arr["name"], array=arr["name"])
+
+
+def plan_replace(arr: dict, old: str, new: str, free: dict) -> RaidPlan:
+    m = _need_member(arr, old)
+    _need_idle(arr, "replacing a disk")
+    if (arr["level"] or "") == "raid0":
+        raise SafetyError("RAID0 has no redundancy to replace from")
+    md = arr["device"]
+    if m["state"] == "faulty":
+        steps = [Step("Remove %s from %s" % (old, arr["name"]), ["mdadm", "--manage", md, "--remove", old], ignore_error=True),
+                 Step("Add %s to %s" % (new, arr["name"]), ["mdadm", "--manage", md, "--add", new])]
+        follow, warn = [], ["The new disk is rebuilt from the others; the array is exposed until it finishes."]
+    else:
+        if arr["degraded"]:
+            raise SafetyError("%s is degraded; replace the failed disk first" % arr["name"])
+        if m["state"] != "active":
+            raise SafetyError("%s is %s and cannot be replaced" % (old, m["state"]))
+        steps = [Step("Add %s to %s as a spare" % (new, arr["name"]), ["mdadm", "--manage", md, "--add", new]),
+                 Step("Copy %s onto %s" % (old, new), ["mdadm", "--manage", md, "--replace", old, "--with", new])]
+        follow = [Step("When the copy has finished: remove %s" % old, ["mdadm", "--manage", md, "--remove", old])]
+        warn = ["Redundancy is kept during the copy. %s becomes a failed member when it is done." % old]
+    return RaidPlan("replace", "Replace %s in %s" % (old, arr["name"]), steps, warn, confirm=arr["name"], array=arr["name"], follow_ups=follow, info={"mode": "failed" if m["state"] == "faulty" else "healthy"})
+
+
+def after_grow_follow_ups(arr: dict, lvs: list[dict], devs: list[dict]) -> list[Step]:
+    """pvresize + lvextend + filesystem grow for every logical volume that lives on the array."""
+    steps = [Step("Grow the physical volume on %s" % arr["name"], ["pvresize", arr["device"]])]
+    by_name = {d["name"]: d for d in devs}
+    for lv in lvs:
+        if "%s/%s" % (lv["vg_name"], lv["lv_name"]) in arr["lvs"]:
+            d = by_name.get(mapper_name(lv["vg_name"], lv["lv_name"]))
+            mp = d["mountpoints"][0] if d and d["mountpoints"] else None
+            try:
+                steps += plan_volume_extend(lv["vg_name"], lv["lv_name"], d["fstype"] if d else None, mp, None)
+            except ValidationError:
+                steps.append(Step("Extend %s/%s" % (lv["vg_name"], lv["lv_name"]), ["lvextend", "-l", "+100%FREE", lv["lv_path"]]))
+    return steps
+
+
+def plan_grow(arr: dict, add: list[str], size_max: bool, state_dir: str, follow_ups: list[Step]) -> RaidPlan:
+    _need_idle(arr, "growing")
+    lvl = arr["level"]
+    if arr["degraded"]:
+        raise SafetyError("%s is degraded; rebuild it before growing" % arr["name"])
+    if lvl not in ("raid1", "raid5", "raid6"):
+        raise SafetyError("%s cannot be grown" % (lvl or "this array"))
+    if add and size_max:
+        raise ValidationError("add disks and use all space in two separate steps")
+    if not add and not size_max and not arr["spares"]:
+        raise ValidationError("choose disks to add, or use all space")
+    md = arr["device"]
+    steps: list[Step] = []
+    warnings: list[str] = []
+    if size_max:
+        steps.append(Step("Use all space on the members of %s" % arr["name"], ["mdadm", "--grow", md, "--size=max"], timeout=120))
+        warnings.append("Only useful after every member was replaced by a larger disk.")
+    else:
+        n = arr["raid_devices"] or len(arr["members"])
+        steps += [Step("Add %s to %s" % (d, arr["name"]), ["mdadm", "--manage", md, "--add", d]) for d in add]
+        n_new = n + len(add) + (len(arr["spares"]) if not add else 0)
+        argv = ["mdadm", "--grow", md, "--raid-devices=%d" % n_new]
+        if lvl in ("raid5", "raid6"):
+            argv.append("--backup-file=" + backup_file(state_dir, arr))
+        steps.append(Step("Reshape %s to %d devices" % (arr["name"], n_new), argv, timeout=120))
+        warnings.append("The reshape runs for hours; the array stays usable but slower.")
+    return RaidPlan("grow", "Grow %s" % arr["name"], steps, warnings, confirm=arr["name"], array=arr["name"], follow_ups=follow_ups, info={"after_reshape": True})
+
+
+def plan_change_level(arr: dict, target: str, add: list[str], state_dir: str) -> RaidPlan:
+    _need_idle(arr, "changing the level")
+    if arr["degraded"]:
+        raise SafetyError("%s is degraded; rebuild it first" % arr["name"])
+    key = (arr["level"], target)
+    tr = LEVEL_TRANSITIONS.get(key)
+    if not tr:
+        ok = "; ".join("%s to %s" % k for k in sorted(LEVEL_TRANSITIONS))
+        raise SafetyError("mdadm cannot convert %s to %s. Supported: %s" % (arr["level"], target, ok))
+    n = arr["raid_devices"] or len(arr["members"])
+    if tr.get("members") and n != tr["members"]:
+        raise SafetyError("%s to %s needs exactly %d members (this array has %d)" % (key[0], key[1], tr["members"], n))
+    need = tr.get("needs_new", 0)
+    if need > len(add) + len(arr["spares"]):
+        raise SafetyError("add %d more disk(s) first" % (need - len(add) - len(arr["spares"])))
+    md = arr["device"]
+    steps = [Step("Add %s to %s" % (d, arr["name"]), ["mdadm", "--manage", md, "--add", d]) for d in add]
+    n_new = n + tr["delta"] + (len(add) if key == ("raid1", "raid5") else 0)
+    argv = ["mdadm", "--grow", md, "--level=" + target[4:]]
+    if n_new != n:
+        argv.append("--raid-devices=%d" % n_new)
+    argv.append("--backup-file=" + backup_file(state_dir, arr))
+    steps.append(Step("Convert %s from %s to %s" % (arr["name"], key[0], target), argv, timeout=120))
+    return RaidPlan("change-level", "Change %s to %s" % (arr["name"], target), steps, [tr["note"], "The conversion rewrites all data and runs for hours; do not power off."],
+                    confirm=arr["name"], array=arr["name"], info={"from": key[0], "to": target, "after_reshape": True})
+
+
+def plan_scrub(arr: dict, action: str) -> RaidPlan:
+    if action not in SCRUB_ACTIONS:
+        raise ValidationError("action must be one of: " + ", ".join(SCRUB_ACTIONS))
+    if arr["inactive"]:
+        raise SafetyError("%s is inactive" % arr["name"])
+    if action != "idle":
+        if (arr["level"] or "") in ("raid0", "linear", None):
+            raise SafetyError("%s has no redundancy to check" % arr["name"])
+        _need_idle(arr, "starting a check")
+        if arr["degraded"] and action == "repair":
+            raise SafetyError("repair on a degraded array is refused; rebuild first")
+    title = {"check": "Check", "repair": "Repair", "idle": "Stop the running task on"}[action]
+    warn = ["Repair rewrites blocks that disagree; use it only after a check found mismatches."] if action == "repair" else []
+    return RaidPlan("scrub", "%s %s" % (title, arr["name"]), [Step("%s %s" % (title, arr["name"]), None, kind="sysfs", meta={"path": "/sys/block/%s/md/sync_action" % arr["name"], "value": action})],
+                    warn, confirm=None, array=arr["name"], info={"action": action, "writes": action == "repair"})
+
+
+def plan_stop(arr: dict) -> RaidPlan:
+    if arr["mounts"]:
+        raise SafetyError("%s is mounted at %s" % (arr["name"], ", ".join(arr["mounts"])))
+    if arr["holds_system"]:
+        raise SafetyError("%s holds the system" % arr["name"])
+    if arr["lvs"]:
+        raise SafetyError("%s is in use by %s" % (arr["name"], ", ".join(arr["lvs"])))
+    if arr["busy"]:
+        raise SafetyError("%s is %s; stopping now would interrupt it" % (arr["name"], (arr["sync"] or {}).get("action")))
+    return RaidPlan("stop", "Stop %s" % arr["name"], [Step("Stop %s" % arr["name"], ["mdadm", "--stop", arr["device"]])], [], confirm=arr["name"], array=arr["name"])
+
+
+def plan_assemble() -> RaidPlan:
+    return RaidPlan("assemble", "Assemble arrays", [Step("Assemble arrays", ["mdadm", "--assemble", "--scan"], ignore_error=True, timeout=120),
+                                                     Step("Scan LVM", ["vgscan"], ignore_error=True), Step("Activate logical volumes", ["vgchange", "-ay"], ignore_error=True)])
+
+
+def scrub_unit_files() -> list[Step]:
+    svc = ("[Unit]\nDescription=Check all RAID arrays (synofurb)\nConditionPathExists=/opt/synofurb-mgmt/synofurb_mgmt.py\n\n"
+           "[Service]\nType=oneshot\nExecStart=/usr/bin/python3 /opt/synofurb-mgmt/synofurb_mgmt.py --raid-scrub\n")
+    tmr = ("[Unit]\nDescription=Monthly RAID check (synofurb)\n\n[Timer]\nOnCalendar=monthly\nRandomizedDelaySec=6h\nPersistent=true\n\n"
+           "[Install]\nWantedBy=timers.target\n")
+    return [Step("Write the check service", None, kind="unitfile", meta={"path": RAID_SCRUB_UNITS[0], "content": svc}),
+            Step("Write the monthly timer", None, kind="unitfile", meta={"path": RAID_SCRUB_UNITS[1], "content": tmr}),
+            Step("Reload systemd units", ["systemctl", "daemon-reload"]),
+            Step("Enable the monthly check", ["systemctl", "enable", "--now", "synofurb-raid-scrub.timer"])]
+
+
+def plan_tuning(arr: dict | None, body: dict) -> RaidPlan:
+    steps: list[Step] = []
+    if body.get("scrub_schedule") in ("enable", "disable"):
+        steps += scrub_unit_files() if body["scrub_schedule"] == "enable" else [Step("Disable the monthly check", ["systemctl", "disable", "--now", "synofurb-raid-scrub.timer"], ignore_error=True)]
+    if arr is not None:
+        for key, fname in (("speed_min", "sync_speed_min"), ("speed_max", "sync_speed_max")):
+            v = body.get(key)
+            if v in (None, ""):
+                continue
+            if v != "system" and not (isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 4_000_000):
+                raise ValidationError("%s must be 'system' or a whole number of KiB/s up to 4000000" % key)
+            steps.append(Step("Set %s of %s" % (fname, arr["name"]), None, kind="sysfs", meta={"path": "/sys/block/%s/md/%s" % (arr["name"], fname), "value": str(v)}))
+        sc = body.get("stripe_cache")
+        if sc not in (None, ""):
+            if not (isinstance(sc, int) and not isinstance(sc, bool) and 17 <= sc <= 32768) or (arr["level"] not in ("raid5", "raid6")):
+                raise ValidationError("stripe cache is 17-32768 pages and only for RAID5/6")
+            steps.append(Step("Set the stripe cache of %s" % arr["name"], None, kind="sysfs", meta={"path": "/sys/block/%s/md/stripe_cache_size" % arr["name"], "value": str(sc)}))
+        bm = body.get("bitmap")
+        if bm in ("internal", "none"):
+            if (arr["level"] or "") == "raid0":
+                raise SafetyError("RAID0 has no bitmap")
+            steps.append(Step("Set the write-intent bitmap of %s to %s" % (arr["name"], bm), ["mdadm", "--grow", arr["device"], "--bitmap=" + bm], timeout=60))
+    if not steps:
+        raise ValidationError("nothing to change")
+    return RaidPlan("tuning", "Tune %s" % (arr["name"] if arr else "RAID checks"), steps, [], confirm=None, array=arr["name"] if arr else None)
+
+
+def plan_raid_create(label: str, level: str, devices: list[str], spares: list[str], chunk_kib: int | None, bitmap: bool, sizes: dict[str, int],
+                     volume: dict | None = None) -> RaidPlan:
+    valid_md_label(label)
+    if level not in RAID_CREATE_LEVELS:
+        raise ValidationError("level must be one of: " + ", ".join(RAID_CREATE_LEVELS))
+    allp = [valid_device(d) for d in devices + spares]
+    if len(set(allp)) != len(allp):
+        raise ValidationError("duplicate devices selected")
+    check_raid_counts(level, len(devices))
+    if spares and level == "raid0":
+        raise ValidationError("RAID0 cannot have spares")
+    if chunk_kib is not None and (not isinstance(chunk_kib, int) or chunk_kib not in (16, 32, 64, 128, 256, 512, 1024, 2048, 4096)):
+        raise ValidationError("chunk size must be 16, 32, 64, 128, 256, 512, 1024, 2048 or 4096 KiB")
+    steps = [Step("Wipe old signatures on %s" % d, ["wipefs", "-a", d]) for d in allp]
+    steps += raid_create_steps(label, level, devices, spares, chunk_kib, bitmap)
+    steps += md_record_steps()
+    sz = [sizes[d] for d in devices if d in sizes]
+    warnings = ["ALL DATA ON THE SELECTED DEVICES WILL BE DESTROYED."]
+    if sz and max(sz) > min(sz) * 1.1:
+        warnings.append("Devices differ in size; only the smallest size is used per member.")
+    if level == "raid0":
+        warnings.append("RAID0 has no redundancy.")
+    info = {"usable_bytes": estimate_usable(level, sz) if sz else 0, "tolerance": fault_tolerance(level, len(devices)), "label": label, "level": level}
+    if volume:
+        valid_fs_create(volume.get("fs", "xfs"))
+        vg, mp = "vg_" + label, valid_mountpoint(volume.get("mountpoint") or "/srv/" + label)
+        steps.append(Step("Create LVM physical volume", ["pvcreate", "--yes", "/dev/md/" + label]))
+        steps.append(Step("Create volume group " + vg, ["vgcreate", vg, "/dev/md/" + label]))
+        steps += volume_tail_steps(label, vg, volume.get("fs", "xfs"), mp, volume.get("size_gib"))
+        info["mountpoint"] = mp
+    return RaidPlan("create", "Create %s array %s" % (level, label), steps, warnings, confirm=label, info=info)
+
+
+# ---- context + routes ----------------------------------------------------------
+
+@dataclass
+class RaidCtx:
+    app: App
+    devs: list[dict]
+    by_k: dict[str, dict]
+    by_path: dict[str, dict]
+    arrays: list[dict]
+    lvs: list[dict]
+    mdadm: bool
+
+    def array(self, name: Any) -> dict:
+        n = vcall(valid_md_name, name)
+        a = next((x for x in self.arrays if x["name"] == n), None)
+        if a is None:
+            raise ApiError(404, "no such array %s" % n)
+        return a
+
+
+def gather_raid_ctx(app: App) -> RaidCtx:
+    devs = app.lsblk()
+    stat = app.mdstat()
+    have = bool(app.runner.which("mdadm"))
+    details = {}
+    if have:
+        for a in stat:
+            r = app.run(["mdadm", "--detail", "/dev/" + a["name"]], timeout=20)
+            if r.ok and r.out.strip():
+                details[a["name"]] = parse_mdadm_detail(r.out)
+    sysfs = {a["name"]: read_md_sysfs(app.cfg, a["name"]) for a in stat}
+    lvs = app.lvs()
+    arrays = build_array_inventory(stat, details, sysfs, devs, app.pvs(), lvs, socket.gethostname())
+    return RaidCtx(app, devs, {d["kname"]: d for d in devs}, {d["path"]: d for d in devs}, arrays, lvs, have)
+
+
+def _dev_list(v: Any, what: str = "devices") -> list[str]:
+    if v in (None, ""):
+        return []
+    if not isinstance(v, list):
+        raise ApiError(400, "%s must be a list" % what)
+    return [vcall(valid_device, d) for d in v]
+
+
+def shr_volume_names(ctx: RaidCtx) -> list[str]:
+    names = set()
+    for a in ctx.arrays:
+        m = re.match(r"^(.+)_\d+$", a["label"] or "")
+        if m and ("vg_" + m.group(1)) in a["vgs"]:
+            names.add(m.group(1))
+    return sorted(names)
+
+
+def make_raid_plan(ctx: RaidCtx, op: str, b: dict) -> tuple[RaidPlan, dict | None]:
+    """Build the plan for ``op`` from live state. Returns (plan, array record or None)."""
+    app = ctx.app
+    state = app.cfg.state_dir
+    if op in ("create", "add-spare", "fail", "remove", "replace", "grow", "change-level", "scrub", "stop", "assemble", "tuning", "shr-create", "shr-add-disk", "shr-replace-disk") and not ctx.mdadm:
+        raise ApiError(409, "mdadm is not installed (apt install mdadm)")
+    if op == "assemble":
+        return plan_assemble(), None
+    if op == "tuning" and not b.get("array"):
+        return vcall(plan_tuning, None, b), None
+    if op == "create":
+        label = vcall(valid_md_label, b.get("name"))
+        level = b.get("level")
+        devs, spares = _dev_list(b.get("devices")), _dev_list(b.get("spares"), "spares")
+        sizes = {}
+        for d in devs + spares:
+            sizes[d] = _free_device(ctx.by_path, ctx.by_k, d)["size"] if d in ctx.by_path else _raise(ValidationError("%s: no such block device" % d))
+        if any(a["label"] == label or a["name"] == label for a in ctx.arrays):
+            raise ApiError(409, "an array named %s already exists" % label)
+        vol = b.get("volume") if isinstance(b.get("volume"), dict) else None
+        if vol and any(v["vg_name"] == "vg_" + label for v in app.vgs()):
+            raise ApiError(409, "volume group vg_%s already exists" % label)
+        chunk = b.get("chunk_kib")
+        return vcall(plan_raid_create, label, level, devs, spares, chunk if chunk not in (None, "") else None, b.get("bitmap", True) is not False, sizes, vol), None
+    if op == "shr-create":
+        mode, name = b.get("mode") or b.get("level"), b.get("name")
+        disks = _dev_list(b.get("devices"), "disks")
+        sizes = {}
+        for d in disks:
+            dev = ctx.by_path.get(d)
+            if dev is None:
+                raise ApiError(400, "%s: no such block device" % d)
+            if dev["type"] != "disk":
+                raise ApiError(400, "%s is a partition; SHR needs whole disks" % d)
+            _free_device(ctx.by_path, ctx.by_k, d)
+            sizes[d] = dev["size"]
+        vg = "vg_" + str(name)
+        if any(v["vg_name"] == vg for v in app.vgs()):
+            raise ApiError(409, "volume group %s already exists" % vg)
+        mp = b.get("mountpoint") or "/srv/" + str(name)
+        size = None if b.get("size_gib") in (None, "", "all") else _int(b.get("size_gib"), "size_gib")
+        return vcall(plan_shr_create, name, sizes, mode, b.get("fs", "xfs"), mp, size), None
+    if op in ("shr-add-disk", "shr-replace-disk"):
+        vol = vcall(valid_volume_name, b.get("volume"))
+        if vol not in shr_volume_names(ctx):
+            raise ApiError(404, "no SHR volume %s created here" % vol)
+        arrs = [a for a in ctx.arrays if a["label"] and re.match(r"^%s_\d+$" % re.escape(vol), a["label"])]
+        if any(a["foreign"] for a in arrs):
+            raise SafetyError("%s was created by another system" % vol)
+        lay = shr_layout_from_arrays(ctx.arrays, vol)
+        for dsk, info in lay["disks"].items():
+            dd = ctx.by_k.get(dsk)
+            info["size"] = shr_data_bytes(dd["size"]) if dd else sum(p[2] for p in info["parts"])
+        new = vcall(valid_device, b.get("device"))
+        nd = ctx.by_path.get(new)
+        if nd is None or nd["type"] != "disk":
+            raise ApiError(400, "%s must be a whole disk" % new)
+        _free_device(ctx.by_path, ctx.by_k, new)
+        if op == "shr-add-disk":
+            return plan_shr_add_disk({**lay, "disks": {"/dev/" + k: v for k, v in lay["disks"].items()}}, new, nd["size"], state), None
+        old = vcall(valid_device, b.get("old"))
+        oldk = old.replace("/dev/", "")
+        failed = any(mb["disk"] == oldk and mb["state"] in ("faulty", "removed") for a in arrs for mb in a["members"])
+        plan = plan_shr_replace_disk({**lay, "disks": {"/dev/" + k: v for k, v in lay["disks"].items()}}, old, new, nd["size"], failed)
+        return plan, None
+    arr = ctx.array(b.get("array"))
+    dev = None
+    if op in ("add-spare", "fail", "remove"):
+        dev = vcall(valid_device, b.get("device"))
+    if op == "add-spare":
+        d = _free_device(ctx.by_path, ctx.by_k, dev, _member_size(arr))
+        return plan_add_spare(arr, dev, d), arr
+    if op == "fail":
+        return vcall(plan_fail, arr, dev), arr
+    if op == "remove":
+        return vcall(plan_remove, arr, dev), arr
+    if op == "replace":
+        old, new = vcall(valid_device, b.get("old")), vcall(valid_device, b.get("new"))
+        d = _free_device(ctx.by_path, ctx.by_k, new, _member_size(arr))
+        return vcall(plan_replace, arr, old, new, d), arr
+    if op == "grow":
+        add = _dev_list(b.get("add"), "add")
+        for d in add:
+            _free_device(ctx.by_path, ctx.by_k, d, _member_size(arr))
+        return vcall(plan_grow, arr, add, bool(b.get("size_max")), state, after_grow_follow_ups(arr, ctx.lvs, ctx.devs)), arr
+    if op == "change-level":
+        add = _dev_list(b.get("add"), "add")
+        for d in add:
+            _free_device(ctx.by_path, ctx.by_k, d, _member_size(arr))
+        return vcall(plan_change_level, arr, b.get("target"), add, state), arr
+    if op == "scrub":
+        return vcall(plan_scrub, arr, b.get("action", "check")), arr
+    if op == "stop":
+        return vcall(plan_stop, arr), arr
+    if op == "tuning":
+        return vcall(plan_tuning, arr, b), arr
+    raise ApiError(404, "unknown RAID operation")
+
+
+def _raise(e: Exception) -> Any:
+    raise e
+
+
+def _int(v: Any, what: str) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        raise ApiError(400, "%s must be a whole number" % what)
+
+
+def raid_foreign_gate(op: str, arr: dict | None, plan: RaidPlan, b: dict, execute: bool) -> None:
+    """Foreign arrays: only show, assemble, scrub (check/idle). Anything else needs the extra acknowledgement and the typed array name."""
+    if arr is None or not arr["foreign"] or op in FOREIGN_FREE_OPS and not plan.info.get("writes"):
+        return
+    plan.warnings.insert(0, "This array was not created by synofurb (%s). Changes can make DSM unable to use it." % "; ".join(arr["foreign_reasons"]))
+    plan.confirm = plan.confirm or arr["name"]
+    plan.info["needs_foreign_ack"] = True
+    if execute and b.get("foreign_ack") is not True:
+        raise ApiError(400, "this array was not created here: tick 'I understand this is not mine' to change it")
+
+
+def raid_status(app: App, ctx: RaidCtx) -> dict:
+    cands, excl = candidate_devices(ctx.devs)
+    speed = {"min": None, "max": None}
+    for k in ("min", "max"):
+        t = read_text("%s/sys/dev/raid/speed_limit_%s" % (app.cfg.proc_root, k)).strip()
+        speed[k] = int(t) if t.isdigit() else None
+    timer = {"enabled": None, "active": None, "installed": os.path.exists(app.cfg.p(RAID_SCRUB_UNITS[1]))}
+    if ctx.mdadm:
+        timer["enabled"] = app.run(["systemctl", "is-enabled", "synofurb-raid-scrub.timer"], timeout=10).out.strip() or "disabled"
+        timer["active"] = app.run(["systemctl", "is-active", "synofurb-raid-scrub.timer"], timeout=10).out.strip() or "inactive"
+    return {"ok": True, "available": ctx.mdadm, "arrays": ctx.arrays, "candidates": cands, "excluded": excl, "speed_limits": speed, "scrub_timer": timer,
+            "shr_volumes": shr_volume_names(ctx), "levels": {k: {"min": RAID_MIN[k]} for k in RAID_MIN},
+            "monitor": {"service": app.run(["systemctl", "is-active", "mdmonitor"], timeout=10).out.strip() or "unknown"} if ctx.mdadm else None}
+
+
+@route("GET", "/api/raid")
+def api_raid(req: Request) -> dict:
+    return raid_status(req.app, gather_raid_ctx(req.app))
+
+
+def raid_run(req: Request, op: str, execute: bool) -> dict:
+    app, b = req.app, req.body
+    ctx = gather_raid_ctx(app)
+    try:
+        plan, arr = make_raid_plan(ctx, op, b)
+    except SafetyError as e:
+        raise ApiError(409, str(e))
+    except ValidationError as e:
+        raise ApiError(400, str(e))
+    raid_foreign_gate(op, arr, plan, b, execute)
+    if not execute:
+        return dict(plan.to_dict(), ok=True)
+    if plan.confirm:
+        need_confirm(b, plan.confirm)
+    ok, results = run_steps(app, plan.steps)
+    out = {"ok": ok, "op": op, "results": results, "follow_ups": [s.to_dict() for s in plan.follow_ups], "title": plan.title}
+    if not ok:
+        out["error"] = "a step failed; nothing was rolled back automatically"
+        return 500, out
+    return out
+
+
+@route("POST", "/api/raid/plan", mutating=False)
+def api_raid_plan(req: Request) -> dict:
+    op = req.body.get("op")
+    if not isinstance(op, str):
+        raise ApiError(400, "op is required")
+    return raid_run(req, op, False)
+
+
+def _register_raid_ops() -> None:
+    for op in ("create", "add-spare", "fail", "remove", "replace", "grow", "change-level", "scrub", "stop", "assemble", "tuning", "shr-create", "shr-add-disk", "shr-replace-disk"):
+        ROUTES[("POST", "/api/raid/" + op)] = Route(lambda req, _op=op: raid_run(req, _op, True), True, True)
+
+
+_register_raid_ops()
+
+
+@route("POST", "/api/raid/after-grow")
+def api_raid_after_grow(req: Request) -> dict:
+    """pvresize + lvextend + filesystem grow once a reshape or 'size=max' has finished."""
+    app, b = req.app, req.body
+    ctx = gather_raid_ctx(app)
+    arr = ctx.array(b.get("array"))
+    _need_idle_api(arr)
+    if arr["foreign"] and b.get("foreign_ack") is not True:
+        raise ApiError(400, "this array was not created here: tick 'I understand this is not mine' to change it")
+    need_confirm(b, arr["name"])
+    steps = after_grow_follow_ups(arr, ctx.lvs, ctx.devs)
+    ok, results = run_steps(app, steps)
+    return (200 if ok else 500), {"ok": ok, "results": results, **({} if ok else {"error": "a step failed"})}
+
+
+def _need_idle_api(arr: dict) -> None:
+    try:
+        _need_idle(arr, "extending the volume")
+    except SafetyError as e:
+        raise ApiError(409, str(e))
+
+
+def raid_scrub_all(app: App) -> int:
+    """Used by the monthly timer: start a check on every idle, healthy redundant array."""
+    started = 0
+    for a in app.mdstat():
+        if a["level"] in ("raid1", "raid4", "raid5", "raid6", "raid10") and not a["degraded"] and not a["sync"] and a["state"] != "inactive":
+            r = exec_step(app, Step("check", None, kind="sysfs", meta={"path": "/sys/block/%s/md/sync_action" % a["name"], "value": "check"}))
+            started += 1 if r.ok else 0
+    return started
 
 
 # ============================================================================
@@ -2810,6 +3943,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--dry-run", action="store_true", help="never modify the system; record commands only")
     ap.add_argument("--no-tls", action="store_true", help="plain HTTP (development only, requires --dry-run)")
     ap.add_argument("--net-rollback", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--raid-scrub", action="store_true", help=argparse.SUPPRESS)
     return ap.parse_args(argv)
 
 
@@ -2838,6 +3972,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.net_rollback:
         done = rollback_network(app)
         app.audit.log("system", "-", "net-rollback", {}, "ok: timer fired" if done else "nothing to do")
+        return 0
+    if args.raid_scrub:
+        n = raid_scrub_all(app)
+        app.audit.log("system", "-", "raid-scrub", {}, "ok: started %d check(s)" % n)
         return 0
     startup_recovery(app)
     ctx = None

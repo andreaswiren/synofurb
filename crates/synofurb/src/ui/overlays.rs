@@ -12,7 +12,8 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{WindowExt, v_flex};
-use gpui_kit::{AppContext, Context, ClipboardItem, IntoElement, Window, px};
+use gpui_kit::prelude::*;
+use gpui_kit::{AppContext, ClipboardItem, Context, IntoElement, Window, px};
 use synofurb_core::plan::StorageMode;
 
 impl App {
@@ -51,14 +52,21 @@ impl App {
             let app = app.clone();
             d.title(copy::PLAN_KEEP_DIALOG.short).w(px(layout::DIALOG_W)).child(paragraphs(copy::PLAN_KEEP_DIALOG.body, cx)).footer(
                 DialogFooter::new()
-                    .child(Button::new("keep-cancel").outline().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(
+                        Button::new("keep-cancel")
+                            .outline()
+                            .label(copy::BTN_CANCEL.short)
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
                     .child(
                         Button::new("keep-use")
                             .primary()
                             .label(if keep { copy::PLAN_USE_WIPE.short } else { copy::PLAN_USE_KEEP.short })
                             .on_click(move |_, window, cx| {
                                 window.close_dialog(cx);
-                                app.update(cx, |a, cx| a.set_storage_mode(if keep { StorageMode::WipeAll } else { StorageMode::KeepVolumes }, cx));
+                                app.update(cx, |a, cx| {
+                                    a.set_storage_mode(if keep { StorageMode::WipeAll } else { StorageMode::KeepVolumes }, cx)
+                                });
                             }),
                     ),
             )
@@ -74,7 +82,8 @@ impl App {
         } else {
             &copy::DLG_NEXT_WIPE
         };
-        dialog(window, cx, item, &cx.entity());
+        let app = cx.entity();
+        dialog(window, cx, item, &app);
     }
 
     /// "Before you start": once, on the first launch.
@@ -113,7 +122,12 @@ impl App {
                 .child(v_flex().gap(px(8.0)).child(copy::INV_ADD_TITLE.body).child(Input::new(&input).cleanable(true)))
                 .footer(
                     DialogFooter::new()
-                        .child(Button::new("add-cancel").outline().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)))
+                        .child(
+                            Button::new("add-cancel")
+                                .outline()
+                                .label(copy::BTN_CANCEL.short)
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
                         .child(Button::new("add-ok").primary().label(copy::INV_ADD_BTN.short).on_click(move |_, window, cx| {
                             let ip = input2.read(cx).value().trim().to_string();
                             if !ip.is_empty() {

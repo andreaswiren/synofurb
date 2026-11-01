@@ -321,7 +321,8 @@ pub fn spawn_script(tx: Tx, script: Script, unit: DemoUnit, model: String, out: 
                 )));
             }
             Script::FailsEarly => {
-                let _ = tx.unbounded_send(Msg::Finished(Err("the installer reported a failure: preflight: disks differ from the plan".into())));
+                let _ =
+                    tx.unbounded_send(Msg::Finished(Err("the installer reported a failure: preflight: disks differ from the plan".into())));
             }
             Script::Succeeds => {
                 if let Some(o) = out {

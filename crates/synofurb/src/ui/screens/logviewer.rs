@@ -1,13 +1,16 @@
-//! The log viewer shared by the install and failure screens: dark terminal palette in both themes, a virtualised
-//! list, a minimum-level segmented filter with live counts, text search, follow-output, select all and copy.
+//! The log viewer shared by the install and failure screens (no log widget exists, so: `ToggleGroup` for the level,
+//! `Input` for the search, a virtualised `uniform_list` of mono rows with the themed scrollbar). The dark terminal
+//! palette is kept in both themes, as the design says.
 
 use crate::ui::app::App;
+use crate::ui::icons::{self, role};
 use crate::ui::logview::{LEVELS, format_line, level_name, level_tag};
-use crate::ui::theme::{self, Palette, Themed, radius, space};
-use crate::ui::widgets::*;
+use crate::ui::theme::{self, Palette, Themed};
+use gpui_kit::component::button::{Button, ButtonVariants, Toggle, ToggleGroup};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::{Sizable, h_flex, v_flex};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{ActiveTheme, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, FontWeight, IntoElement, Role, Window, actions, div, px, uniform_list};
 use synofurb_core::logs::Level;
@@ -35,81 +38,76 @@ fn level_color(p: &Palette, l: Level) -> gpui_kit::Hsla {
 }
 
 impl App {
-    /// The whole viewer: toolbar plus list. `height` is the list height in px (`None` = fill).
+    /// Toolbar plus list. `height` is the list height in px (`None` = fill).
     pub(crate) fn render_log_viewer(&mut self, height: Option<f32>, cx: &mut Context<App>) -> AnyElement {
         let p = cx.pal();
+        let app = cx.entity();
         let log = &self.install.log;
         let min = log.filter().min_level;
+        let sel = LEVELS.iter().position(|l| *l == min).unwrap_or(0);
 
-        let seg = h_flex().flex_none().rounded(px(radius::MD)).border_1().border_color(p.border_strong).overflow_hidden().children(
-            LEVELS.iter().enumerate().map(|(i, lv)| {
-                let on = *lv == min;
-                let lv = *lv;
-                h_flex()
-                    .id(("log-level", i))
-                    .h(px(28.0))
-                    .px(px(space::S12))
-                    .gap(px(space::S4))
-                    .items_center()
-                    .cursor_pointer()
-                    .role(Role::Button)
-                    .aria_label(format!("Show {} and above, {} lines", level_name(lv), log.count_at_least(lv)))
-                    .bg(if on { p.accent_bg } else { p.surface })
-                    .hover(|s| s.bg(p.surface_2))
-                    .when(i > 0, |d| d.border_l_1().border_color(p.border_strong))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.install.log.set_min_level(lv);
-                        this.log_selected_all = false;
-                        cx.notify();
-                    }))
-                    .child(
-                        text(&p, theme::CAPTION, level_name(lv))
-                            .text_color(if on { p.accent_fg } else { p.fg_2 })
-                            .font_weight(FontWeight(if on { 700.0 } else { 400.0 })),
-                    )
-                    .child(text(&p, theme::CAPTION, log.count_at_least(lv).to_string()).text_color(p.placeholder))
-            }),
-        );
-
+        let level_group = ToggleGroup::new("log-levels")
+            .segmented()
+            .small()
+            .children(
+                LEVELS
+                    .iter()
+                    .enumerate()
+                    .map(|(i, lv)| Toggle::new(i).label(format!("{} {}", level_name(*lv), log.count_at_least(*lv))).checked(i == sel)),
+            )
+            .on_click({
+                let app = app.clone();
+                move |checks: &Vec<bool>, _, cx| {
+                    if let Some(ix) = checks.iter().enumerate().find(|(i, on)| **on && *i != sel).map(|(i, _)| i) {
+                        app.update(cx, |a, cx| {
+                            a.install.log.set_min_level(LEVELS[ix]);
+                            a.log_selected_all = false;
+                            cx.notify();
+                        });
+                    }
+                }
+            });
         let toolbar = h_flex()
             .w_full()
-            .gap(px(space::S8))
+            .gap(px(8.0))
             .items_center()
             .flex_wrap()
-            .child(seg)
-            .child(div().w(px(200.0)).child(Input::new(&self.inp.log_search).cleanable(true).aria_label("Search the log")))
-            .child(Checkbox::new("log-follow").label("Follow output").checked(self.log_follow).on_click(cx.listener(
-                |this, v: &bool, _, cx| {
-                    this.log_follow = *v;
-                    if *v {
-                        this.scroll_log_to_end();
-                    }
-                    cx.notify();
-                },
-            )))
+            .child(level_group)
+            .child(
+                div()
+                    .w(px(200.0))
+                    .child(Input::new(&self.inp.log_search).prefix(icons::icon(role::SEARCH)).cleanable(true).aria_label("Search the log")),
+            )
+            .child(Checkbox::new("log-follow").label("Follow").checked(self.log_follow).on_click(cx.listener(|this, v: &bool, _, cx| {
+                this.log_follow = *v;
+                if *v {
+                    this.scroll_log_to_end();
+                }
+                cx.notify();
+            })))
             .child(div().flex_1())
             .child(
-                muted(&p, format!("{} lines, {} warnings or errors", log.len(), log.count_at_least(Level::Warn)))
-                    .text_size(theme::CAPTION.size()),
-            )
-            .child(btn_secondary("log-first-problem", "First warning").small().icon(icon("triangle-alert")).on_click(cx.listener(
-                |this, _, _, cx| {
-                    if let Some(i) = this.install.log.first_problem() {
-                        this.log_follow = false;
-                        this.log_scroll.scroll_to_item(i, gpui_kit::ScrollStrategy::Top);
-                    }
-                    cx.notify();
-                },
-            )))
-            .child(
-                btn_secondary("log-select", "Select all")
+                Button::new("log-first-problem")
+                    .ghost()
                     .small()
-                    .on_click(cx.listener(|this, _, window, cx| this.log_select_all(window, cx))),
+                    .icon(icons::icon(role::WARN))
+                    .tooltip("First warning")
+                    .accessibility_label("First warning")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(i) = this.install.log.first_problem() {
+                            this.log_follow = false;
+                            this.log_scroll.scroll_to_item(i, gpui_kit::ScrollStrategy::Top);
+                        }
+                        cx.notify();
+                    })),
             )
             .child(
-                btn_secondary("log-copy", "Copy")
+                Button::new("log-copy")
+                    .ghost()
                     .small()
-                    .icon(icon("copy"))
+                    .icon(icons::icon(role::COPY))
+                    .tooltip("Copy")
+                    .accessibility_label("Copy")
                     .on_click(cx.listener(|this, _, window, cx| this.log_copy(window, cx))),
             );
 
@@ -132,28 +130,32 @@ impl App {
                             .w_full()
                             .flex_none()
                             .items_center()
-                            .gap(px(space::S8))
-                            .pr(px(space::S8))
+                            .gap(px(8.0))
+                            .pr(px(8.0))
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_size(theme::LOG.size())
                             .when(selected, |d| d.bg(p.accent.opacity(0.28)))
                             .when(problem && !selected, |d| d.bg(if l.level == Level::Error { p.log_err_bg } else { p.log_wrn_bg }))
                             .child(div().w(px(3.0)).h_full().flex_none().when(problem, |d| d.bg(c)))
-                            .child(mono(&p, l.ts.clone(), cx).text_size(theme::LOG.size()).w(px(70.0)).flex_none().text_color(p.log_dim))
+                            .child(div().w(px(70.0)).flex_none().text_color(p.log_dim).child(l.ts.clone()))
                             .child(
                                 h_flex()
                                     .w(px(50.0))
                                     .flex_none()
-                                    .gap(px(space::S4))
-                                    .child(mono(&p, glyph, cx).text_size(theme::LOG.size()).text_color(c))
-                                    .child(mono(&p, word, cx).text_size(theme::LOG.size()).text_color(c).font_weight(FontWeight(600.0))),
+                                    .gap(px(4.0))
+                                    .text_color(c)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(glyph)
+                                    .child(word),
                             )
                             .child(
-                                mono(&p, l.msg.clone(), cx)
-                                    .text_size(theme::LOG.size())
+                                div()
                                     .flex_1()
                                     .min_w_0()
                                     .whitespace_nowrap()
                                     .overflow_hidden()
-                                    .text_color(if l.level == Level::Debug { p.log_dim } else { p.log_fg }),
+                                    .text_color(if l.level == Level::Debug { p.log_dim } else { p.log_fg })
+                                    .child(l.msg.clone()),
                             )
                     })
                     .collect::<Vec<_>>()
@@ -172,29 +174,25 @@ impl App {
                 let f = gpui_kit::Focusable::focus_handle(&this.inp.log_search, cx);
                 window.focus(&f, cx);
             }))
-            .on_mouse_down(
-                gpui_kit::MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    window.focus(&this.log_focus, cx);
-                }),
-            )
+            .on_mouse_down(gpui_kit::MouseButton::Left, cx.listener(|this, _, window, cx| window.focus(&this.log_focus, cx)))
             .role(Role::Log)
             .aria_label("Install log")
+            .relative()
             .w_full()
-            .rounded(px(radius::MD))
+            .rounded(cx.theme().radius)
             .bg(p.log_bg)
             .overflow_hidden()
             .border_1()
-            .border_color(p.border)
-            .when_some(height, |d, h| d.h(px(h)))
-            .when(height.is_none(), |d| d.flex_1().min_h(px(160.0)))
+            .border_color(cx.theme().border)
+            .h(px(height.unwrap_or(240.0)))
             .child(if self.install.log.is_empty() {
-                div().p(px(space::S16)).child(mono(&p, "No lines to show.", cx).text_color(p.log_dim)).into_any_element()
+                div().p(px(16.0)).font_family(cx.theme().mono_font_family.clone()).text_color(p.log_dim).child("-").into_any_element()
             } else {
                 list.into_any_element()
-            });
+            })
+            .vertical_scrollbar(&self.log_scroll);
 
-        v_flex().w_full().flex_1().min_h_0().gap(px(space::S8)).child(toolbar).child(area).into_any_element()
+        v_flex().w_full().gap(px(8.0)).child(toolbar).child(area).into_any_element()
     }
 
     pub(crate) fn log_select_all(&mut self, _window: &mut Window, cx: &mut Context<App>) {

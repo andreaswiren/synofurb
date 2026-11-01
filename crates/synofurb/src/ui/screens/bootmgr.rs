@@ -1,75 +1,120 @@
-//! Boot manager mode: add a small SSH-controllable boot environment to the unit's internal boot flash. Disks are
-//! not touched; the flash is backed up to this computer first and DSM stays the fail-safe default.
+//! D13 Boot manager: install the one-shot SSH agent on the boot flash.
 
 use crate::ui::app::{App, Job};
+use crate::ui::copy;
 use crate::ui::format::percent;
+use crate::ui::icons::{self, role};
+use crate::ui::kit;
 use crate::ui::render::Page;
-use crate::ui::state::{DOM_FLOW, Screen};
-use crate::ui::theme::{self, Themed, Tone, space};
-use crate::ui::widgets::*;
+use crate::ui::state::{KeyMode, Screen};
+use crate::ui::theme::{Themed, Tone};
+use gpui_kit::component::Sizable;
+use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::form::Form;
+use gpui_kit::component::input::Input;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, IntoElement, Role, Window, div, px};
+use gpui_kit::{Context, IntoElement, Window, div, px};
 
 impl App {
     pub(crate) fn page_bootmgr(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
         let p = cx.pal();
-        let name = self.unit_name();
+        let app = cx.entity();
         let avail = self.can_boot_manager();
-        let touched = card(
-            &p,
-            Some("What changes, and what does not".into()),
-            Some(badge(&p, Tone::Ok, "shield-check", "Disks untouched, reversible", false).into_any_element()),
-            Some(p.ok_solid),
-            v_flex()
-                .gap(px(space::S6))
-                .child(muted(&p, "Changes: the unit's internal boot flash gets a small boot agent as an extra entry. The whole flash is backed up to this computer first and checked against the NAS."))
-                .child(muted(&p, "Does not change: your disks, your volumes and DSM. DSM remains the default boot entry; the agent resets the default to DSM itself as its first action."))
-                .child(muted(&p, "Afterwards you control the bootloader over SSH and can netboot or kexec any OS, always with DSM as the way back.")),
-        );
-        let flow = card(
-            &p,
-            Some("What happens, in order".into()),
-            None,
-            None,
-            v_flex().gap(px(space::S6)).children(DOM_FLOW.iter().enumerate().map(|(i, s)| {
+        let tags = h_flex()
+            .gap(px(8.0))
+            .child(
                 h_flex()
-                    .gap(px(space::S8))
-                    .child(text(&p, theme::CAPTION, format!("{}", i + 1)).text_color(p.accent_fg).w(px(14.0)).flex_none())
-                    .child(muted(&p, *s).flex_1().min_w_0())
-            })),
-        );
+                    .gap(px(2.0))
+                    .child(kit::tag(&p, Tone::Warn, Some(role::WARN), copy::BM_FLASH_CHANGES.short))
+                    .child(crate::ui::disclosure::info_popover("bm-flash", &copy::BM_FLASH_CHANGES, &app)),
+            )
+            .child(
+                h_flex()
+                    .gap(px(2.0))
+                    .child(kit::tag(&p, Tone::Ok, Some(role::SAFE), copy::BM_DISKS_UNTOUCHED.short))
+                    .child(crate::ui::disclosure::info_tip("bm-disks", &copy::BM_DISKS_UNTOUCHED, &app)),
+            );
+        let key_ix = usize::from(self.sys.key_mode == KeyMode::Paste);
+        let form = Form::vertical()
+            .child(kit::field(
+                "bm-key",
+                &copy::BM_SSH_KEY,
+                &app,
+                v_flex()
+                    .gap(px(8.0))
+                    .child(kit::segmented("bm-key-mode", &[copy::SYS_KEY_GENERATE.short, copy::SYS_KEY_PASTE.short], key_ix, {
+                        let app = app.clone();
+                        move |ix, _, cx| {
+                            app.update(cx, |a, cx| {
+                                a.sys.key_mode = if ix == 1 { KeyMode::Paste } else { KeyMode::Generate };
+                                cx.notify();
+                            })
+                        }
+                    }))
+                    .when(self.sys.key_mode == KeyMode::Paste, |d| d.child(Input::new(&self.inp.pubkey))),
+            ))
+            .child(kit::field(
+                "bm-timeout",
+                &copy::BM_LOGIN_TIMEOUT,
+                &app,
+                div().w(px(160.0)).child(Input::new(&self.inp.bm_timeout).readonly(true)),
+            ));
         let state: gpui_kit::AnyElement = match &self.bootmgr {
-            Job::Idle => muted(&p, "Nothing has been changed yet.").into_any_element(),
+            Job::Idle => div().into_any_element(),
             Job::Running => {
-                let (what, f) = self.install.progress.clone().unwrap_or(("Working...".into(), 0.0));
-                v_flex().gap(px(space::S4)).child(muted(&p, what)).child(h_flex().gap(px(space::S8)).items_center().child(div().flex_1().min_w_0().child(Progress::new("bm-progress").value(f * 100.0))).child(text(&p, theme::CAPTION, percent(f)))).into_any_element()
+                let (what, f) = self.install.progress.clone().unwrap_or(("".into(), 0.0));
+                v_flex()
+                    .gap(px(4.0))
+                    .child(kit::caption(cx, what))
+                    .child(
+                        h_flex()
+                            .gap(px(8.0))
+                            .items_center()
+                            .child(div().flex_1().child(Progress::new("bm-progress").value(f * 100.0)))
+                            .child(kit::mono_sm(cx, percent(f))),
+                    )
+                    .into_any_element()
             }
-            Job::Done(Ok(())) => banner(&p, Tone::Ok, "Boot agent installed", "DSM is still the default. Backup of the boot flash is in the dom-backups folder. To boot into the agent, use `synofurb boot-manager enter`.", vec![]).into_any_element(),
-            Job::Done(Err(e)) => banner(&p, Tone::Err, "Could not install the boot manager", e.clone(), vec![]).id("bm-err").role(Role::Alert).into_any_element(),
+            Job::Done(Ok(())) => Alert::success("bm-ok", "DSM is still the default. `synofurb-cli boot-manager enter` boots the agent.")
+                .icon(icons::icon(role::OK))
+                .into_any_element(),
+            Job::Done(Err(e)) => Alert::error("bm-err", e.clone()).icon(icons::icon(role::ERR)).into_any_element(),
         };
-        let mut body = v_flex().w_full().gap(px(space::S16)).child(touched).child(flow);
+        let mut body = v_flex().w_full().max_w(px(560.0)).gap(px(14.0)).child(tags).child(form);
         if let Err(why) = avail {
-            body = body.child(banner(&p, Tone::Warn, "Not available for this unit", why, vec![]));
+            body = body.child(Alert::error("bm-na", why).title(copy::BM_NOT_EDITABLE.short).icon(icons::icon(role::ERR)));
         }
+        body = body.child(
+            h_flex()
+                .gap(px(2.0))
+                .items_start()
+                .child(Alert::warning("bm-other", copy::BM_OTHER_OS.short).small().icon(icons::icon(role::WARN)).flex_1())
+                .child(crate::ui::disclosure::info_tip("bm-other-i", &copy::BM_OTHER_OS, &app)),
+        );
         body = body.child(state);
         let running = self.bootmgr.running();
-        Page::new("Boot manager mode", body)
-            .subtitle(format!("{name}. Try other operating systems with DSM always one reboot away."))
-            .note(muted(&p, "Your disks are not touched."))
-            .buttons(vec![
-                btn_secondary("back", "Back")
-                    .icon(icon("arrow-left"))
+        Page::new(copy::BM_TITLE.short, body)
+            .title_info(&copy::BM_TITLE)
+            .subtitle(copy::BM_SUB.short)
+            .left(vec![
+                Button::new("back")
+                    .ghost()
+                    .icon(icons::icon(role::BACK))
+                    .label(copy::BTN_BACK.short)
                     .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Goal, window, cx)))
                     .into_any_element(),
+            ])
+            .right(vec![
                 Button::new("install-bm")
                     .primary()
-                    .icon(icon("download"))
-                    .label("Install boot manager")
+                    .icon(icons::icon(role::DOWNLOAD))
+                    .label(copy::BM_INSTALL.short)
                     .loading(running)
                     .disabled(avail.is_err() || running)
+                    .tooltip(avail.err().unwrap_or(""))
                     .on_click(cx.listener(|this, _, _, cx| this.start_boot_manager(cx)))
                     .into_any_element(),
             ])

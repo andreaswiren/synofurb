@@ -24,19 +24,23 @@ impl App {
 
         let signin = kit::segmented("sign-in", &[copy::CONN_PASSWORD.short, copy::CONN_KEY.short], usize::from(self.use_key), {
             let app = app.clone();
-            move |ix, _, cx| app.update(cx, |a, cx| {
-                a.use_key = ix == 1;
-                cx.notify();
-            })
+            move |ix, _, cx| {
+                app.update(cx, |a, cx| {
+                    a.use_key = ix == 1;
+                    cx.notify();
+                })
+            }
         });
         let secret: gpui_kit::AnyElement = if self.use_key {
             h_flex()
                 .gap(px(8.0))
                 .child(div().flex_1().min_w_0().child(Input::new(&self.inp.key_path).cleanable(true)))
-                .child(Button::new("browse-key").outline().label(copy::CONN_BROWSE.short).icon(icons::icon(role::FOLDER)).on_click(cx.listener(|this, _, window, cx| {
-                    let t = this.inp.key_path.clone();
-                    this.browse_file(t, window, cx)
-                })))
+                .child(Button::new("browse-key").outline().label(copy::CONN_BROWSE.short).icon(icons::icon(role::FOLDER)).on_click(
+                    cx.listener(|this, _, window, cx| {
+                        let t = this.inp.key_path.clone();
+                        this.browse_file(t, window, cx)
+                    }),
+                ))
                 .into_any_element()
         } else {
             self.password_input().into_any_element()
@@ -56,10 +60,16 @@ impl App {
             v_flex()
                 .gap(px(8.0))
                 .child(
-                    h_flex().items_center().gap(px(2.0)).child(Checkbox::new("same-sudo").label(copy::CONN_SUDO.short).checked(self.same_sudo).on_click(cx.listener(|this, v: &bool, _, cx| {
-                        this.same_sudo = *v;
-                        cx.notify();
-                    }))).child(crate::ui::disclosure::info_tip("sudo-info", &copy::CONN_SUDO, &app)),
+                    h_flex()
+                        .items_center()
+                        .gap(px(2.0))
+                        .child(Checkbox::new("same-sudo").label(copy::CONN_SUDO.short).checked(self.same_sudo).on_click(cx.listener(
+                            |this, v: &bool, _, cx| {
+                                this.same_sudo = *v;
+                                cx.notify();
+                            },
+                        )))
+                        .child(crate::ui::disclosure::info_tip("sudo-info", &copy::CONN_SUDO, &app)),
                 )
                 .when(!self.same_sudo, |d| d.child(Input::new(&self.inp.sudo).mask_toggle())),
         ));
@@ -71,7 +81,11 @@ impl App {
             body = body.child(
                 v_flex().gap(px(4.0)).child(Alert::error("connect-error", e.clone()).title(item.short).icon(icons::icon(role::ERR))).child(
                     h_flex().gap(px(2.0)).items_center().child(kit::caption(cx, item.tip)).child(
-                        Button::new("conn-help").link().small().label(copy::BTN_LEARN_MORE.short).on_click(cx.listener(|this, _, window, cx| this.open_help_topic(Some("troubleshooting"), window, cx))),
+                        Button::new("conn-help")
+                            .link()
+                            .small()
+                            .label(copy::BTN_LEARN_MORE.short)
+                            .on_click(cx.listener(|this, _, window, cx| this.open_help_topic(Some("troubleshooting"), window, cx))),
                     ),
                 ),
             );
@@ -82,20 +96,33 @@ impl App {
             .title_info(&copy::CONN_TITLE)
             .subtitle(copy::CONN_SUB.short)
             .subtitle_tip(&copy::CONN_SUB)
-            .left(vec![Button::new("back").ghost().icon(icons::icon(role::BACK)).label(copy::BTN_BACK.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Inventory, window, cx))).into_any_element()])
-            .right(vec![Button::new("inspect")
-                .primary()
-                .label(copy::INV_CONNECT.short)
-                .loading(inspecting)
-                .disabled(inspecting || host_empty)
-                .on_click(cx.listener(|this, _, window, cx| this.start_inspect(window, cx)))
-                .into_any_element()])
+            .left(vec![
+                Button::new("back")
+                    .ghost()
+                    .icon(icons::icon(role::BACK))
+                    .label(copy::BTN_BACK.short)
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Inventory, window, cx)))
+                    .into_any_element(),
+            ])
+            .right(vec![
+                Button::new("inspect")
+                    .primary()
+                    .label(copy::INV_CONNECT.short)
+                    .loading(inspecting)
+                    .disabled(inspecting || host_empty)
+                    .on_click(cx.listener(|this, _, window, cx| this.start_inspect(window, cx)))
+                    .into_any_element(),
+            ])
     }
 
     /// `(model, serial, status)` of the selected unit, from the discovery inventory or the inspection.
     pub(crate) fn selected_unit_model(&self) -> (String, String, synofurb_core::compat::Status) {
         if let Some(f) = &self.facts {
-            return (if f.model.is_empty() { f.hostname.clone() } else { f.model.clone() }, f.serial.clone(), self.compat_for_facts(f).status);
+            return (
+                if f.model.is_empty() { f.hostname.clone() } else { f.model.clone() },
+                f.serial.clone(),
+                self.compat_for_facts(f).status,
+            );
         }
         let ip = self.selected_ip.clone().unwrap_or_default();
         match self.inv.devices.iter().find(|d| d.primary_ip().map(|i| i.to_string()) == Some(ip.clone())) {

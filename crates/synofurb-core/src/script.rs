@@ -391,7 +391,7 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     for a in &plan.arrays {
         let level = if a.level == "linear" { "linear".to_string() } else { a.level.clone() };
         let members: Vec<String> = a.members.iter().map(|(d, n)| blockref(&BlockRef::Part(d.clone(), *n))).collect();
-        let bitmap = if a.name == "data" && a.level != "0" && a.level != "linear" { " --bitmap=internal" } else { "" };
+        let bitmap = if a.name.starts_with("data") && a.level != "0" && a.level != "linear" { " --bitmap=internal" } else { "" };
         writeln!(
             w,
             "run mdadm --create /dev/md/{name} --run --force --level={level} --raid-devices={n} --metadata={meta} --name={name} --homehost={host}{bitmap} {members}",
@@ -407,9 +407,15 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     // -- 6. LVM ------------------------------------------------------------------
     writeln!(w, "\nstep 6 \"Creating LVM volume groups and logical volumes\"")?;
     for vg in &plan.vgs {
-        writeln!(w, "PV_{}={}", vg.name, blockref(&vg.pv))?;
-        writeln!(w, "run pvcreate -ff -y \"$PV_{}\"", vg.name)?;
-        writeln!(w, "run vgcreate {} \"$PV_{}\"", vg.name, vg.name)?;
+        // One PV per entry; the data group of an SHR-like layout has one per slice array.
+        let mut pv_vars = vec![];
+        for (i, pv) in vg.pvs.iter().enumerate() {
+            let var = if vg.pvs.len() == 1 { format!("PV_{}", vg.name) } else { format!("PV_{}_{}", vg.name, i + 1) };
+            writeln!(w, "{var}={}", blockref(pv))?;
+            writeln!(w, "run pvcreate -ff -y \"${var}\"")?;
+            pv_vars.push(format!("\"${var}\""));
+        }
+        writeln!(w, "run vgcreate {} {}", vg.name, pv_vars.join(" "))?;
         for lv in &vg.lvs {
             let size = match (lv.mib, lv.vg_percent) {
                 (Some(m), _) => format!("-L {m}m"),
@@ -502,6 +508,14 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
         writeln!(w, "    mdadm --detail --scan")?;
     }
     writeln!(w, "  }} > /target/etc/mdadm/mdadm.conf")?;
+    // Every array we created (system, boot, ESP and each SHR slice) must be listed, or it is not assembled at boot.
+    // `--detail --scan` only lists running arrays, so fill any gap from the array itself.
+    for a in &plan.arrays {
+        writeln!(w, "  grep -Eq '^ARRAY [^ ]*{n}( |$)' /target/etc/mdadm/mdadm.conf || {{", n = a.name)?;
+        writeln!(w, "    warn \"mdadm.conf is missing array {n}; adding it\"", n = a.name)?;
+        writeln!(w, "    mdadm --detail --brief /dev/md/{n} >> /target/etc/mdadm/mdadm.conf", n = a.name)?;
+        writeln!(w, "  }}")?;
+    }
     writeln!(w, "  cat /target/etc/fstab /target/etc/mdadm/mdadm.conf >> \"$LOG\"")?;
     writeln!(w, "fi")?;
     writeln!(
@@ -798,6 +812,193 @@ mod tests {
         let (_, x86_plan) = render(StorageMode::WipeAll);
         assert!(x86_plan.raw_boot.is_none());
         assert!(!render(StorageMode::WipeAll).0.contains("uboot-env"));
+    }
+
+    // ------------------------------------------------------------------------------------ SHR
+
+    /// Facts with plain disks of the given DATA sizes (GiB), system mirrored on all of them.
+    fn shr_setup(data_gib: &[u64], raid: DataRaid) -> (DeviceFacts, Plan) {
+        let mut facts = parse_inspect(&fixtures::ds_4bay()).unwrap();
+        let names = ["sda", "sdb", "sdc", "sdd"];
+        facts.disks.retain(|d| d.name == "synoboot" || names[..data_gib.len()].contains(&d.name.as_str()));
+        facts.arrays.clear();
+        for d in facts.disks.iter_mut().filter(|d| d.name != "synoboot") {
+            let i = names.iter().position(|n| *n == d.name).unwrap();
+            d.sectors = (1 + 1 + 1024 + 8192 + data_gib[i] * 1024) * SECTORS_PER_MIB + 34;
+        }
+        let req = PlanRequest { data_raid: raid, system_copies: Some(data_gib.len()), system_size_mib: 8192, ..Default::default() };
+        let plan = build_plan(&facts, &req);
+        assert!(plan.is_ok(), "{:?}", plan.errors);
+        (facts, plan)
+    }
+
+    fn shr_script(data_gib: &[u64], raid: DataRaid) -> (String, Plan) {
+        let (facts, plan) = shr_setup(data_gib, raid);
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        (render_stage2(&params(&plan, &facts, &cfg)).unwrap(), plan)
+    }
+
+    #[test]
+    fn shr_script_creates_one_array_per_slice_and_joins_them_in_one_vg() {
+        let (s, _) = shr_script(&[32, 64, 64, 128], DataRaid::Shr1);
+        sh_syntax_ok(&s);
+        // slice 1: 4 members RAID5, slice 2: 3 members RAID5; the single-disk slice 3 is not created
+        let a1 = s.lines().find(|l| l.contains("mdadm --create /dev/md/data1")).expect("data1");
+        assert!(a1.contains("--level=5 --raid-devices=4") && a1.contains("--metadata=1.2") && a1.contains("--bitmap=internal"), "{a1}");
+        let a2 = s.lines().find(|l| l.contains("mdadm --create /dev/md/data2")).expect("data2");
+        assert!(a2.contains("--level=5 --raid-devices=3"), "{a2}");
+        assert!(!s.contains("/dev/md/data3") && !s.contains("md/data --"));
+        assert!(s.contains("Creating RAID arrays (4 array(s))"), "boot + system + data1 + data2");
+        // every PV is initialised, then one vgcreate takes all of them
+        assert!(s.contains("PV_vg_data_1=/dev/md/data1") && s.contains("PV_vg_data_2=/dev/md/data2"));
+        assert!(s.contains("run pvcreate -ff -y \"$PV_vg_data_1\"") && s.contains("run pvcreate -ff -y \"$PV_vg_data_2\""));
+        assert!(s.contains("run vgcreate vg_data \"$PV_vg_data_1\" \"$PV_vg_data_2\""));
+        assert!(s.contains("run vgcreate vg_sys \"$PV_vg_sys\""), "single-PV groups keep their form");
+        // a plain linear LV over all PVs
+        assert!(s.contains("lvcreate --noudevsync -y -n data -l 80%VG vg_data"));
+        // creation order: partitions -> arrays -> pvcreate -> vgcreate -> lvcreate -> mkfs
+        let pos = |n: &str| s.find(n).unwrap_or_else(|| panic!("{n}"));
+        assert!(pos("mkpart sf-data") < pos("mdadm --create /dev/md/data1"));
+        assert!(pos("mdadm --create /dev/md/data2") < pos("pvcreate -ff -y \"$PV_vg_data_1\""));
+        assert!(pos("pvcreate -ff -y \"$PV_vg_data_2\"") < pos("vgcreate vg_data"));
+        assert!(pos("vgcreate vg_data") < pos("lvcreate --noudevsync -y -n data"));
+        assert!(pos("lvcreate --noudevsync -y -n data") < pos("mkfs.xfs -f -L SF_DATA"));
+        // 4 + 3 data partitions are created (sda, sdb, sdc, sdd carry 1, 2, 2, 2)
+        assert_eq!(s.matches("mkpart sf-data").count(), 7);
+    }
+
+    #[test]
+    fn shr2_script_uses_raid6_and_mdadm_conf_lists_every_array() {
+        let (s, plan) = shr_script(&[64, 64, 64, 64], DataRaid::Shr2);
+        sh_syntax_ok(&s);
+        assert!(s.contains("mdadm --create /dev/md/data1 --run --force --level=6 --raid-devices=4"));
+        assert!(s.contains("PV_vg_data=/dev/md/data1") && s.contains("run vgcreate vg_data \"$PV_vg_data\""));
+        // mdadm.conf: scan output plus a per-array safety net, all before the initramfs is built in the chroot
+        for a in &plan.arrays {
+            assert!(s.contains(&format!("grep -Eq '^ARRAY [^ ]*{}( |$)' /target/etc/mdadm/mdadm.conf", a.name)), "{}", a.name);
+            assert!(s.contains(&format!("mdadm --detail --brief /dev/md/{} >> /target/etc/mdadm/mdadm.conf", a.name)));
+        }
+        assert!(s.find("mdadm.conf").unwrap() < s.find("run chroot /target").unwrap());
+    }
+
+    #[test]
+    fn shr_script_dry_run_executes_end_to_end() {
+        let (facts, plan) = shr_setup(&[32, 64, 64, 128], DataRaid::Shr1);
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let s = render_stage2(&params(&plan, &facts, &cfg)).unwrap();
+        let dir = std::env::temp_dir().join(format!("sf-shr-dry-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("stage2.sh");
+        std::fs::write(&script, &s).unwrap();
+        let log = dir.join("install.log");
+        let out = std::process::Command::new("sh")
+            .arg(&script)
+            .env("SYNOFURB_LOG", &log)
+            .env("SYNOFURB_LOCK", dir.join("lock"))
+            .output()
+            .expect("sh available");
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(out.status.success(), "dry-run exit status; log:\n{text}");
+        assert!(text.contains("@@DONE") && !text.contains("@@FAIL"), "{text}");
+        for needle in ["CMD   mdadm --create /dev/md/data1", "CMD   mdadm --create /dev/md/data2", "CMD   vgcreate vg_data"] {
+            assert!(text.contains(needle), "{needle} missing in\n{text}");
+        }
+        assert_eq!(text.matches("CMD   pvcreate -ff -y").count(), 2 + 1, "data1, data2 and the system PV");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn non_shr_scripts_are_unchanged_in_shape() {
+        let (s, _) = render(StorageMode::WipeAll);
+        assert!(s.contains("PV_vg_data=/dev/md/data") && s.contains("run vgcreate vg_data \"$PV_vg_data\""));
+        assert!(!s.contains("PV_vg_data_1"));
+    }
+
+    /// Runs the generated partitioning commands (real `parted`, only the disk variables are bound) on
+    /// loop-device images and compares the kernel's view with the plan. Needs root, `losetup` and `parted`;
+    /// skipped when they are missing. Does NOT run mdadm/LVM (no md/dm support needed or exercised).
+    #[test]
+    fn shr_partitioning_on_real_loop_devices_matches_the_plan() {
+        let have =
+            |t: &str| std::process::Command::new("sh").args(["-c", &format!("command -v {t}")]).output().is_ok_and(|o| o.status.success());
+        if !(have("losetup") && have("parted") && std::process::Command::new("id").arg("-u").output().is_ok_and(|o| o.stdout == b"0\n")) {
+            eprintln!("skipping: needs root, losetup and parted");
+            return;
+        }
+        // data sizes 4, 4, 8 GiB (sparse images, a few MiB actually written)
+        let (facts, plan) = shr_setup(&[4, 4, 8], DataRaid::Shr1);
+        let dir = std::env::temp_dir().join(format!("sf-shr-loop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        struct Loops(Vec<String>, std::path::PathBuf);
+        impl Drop for Loops {
+            fn drop(&mut self) {
+                for l in &self.0 {
+                    let _ = std::process::Command::new("losetup").args(["-d", l]).status();
+                }
+                let _ = std::fs::remove_dir_all(&self.1);
+            }
+        }
+        let mut loops = Loops(vec![], dir.clone());
+        let mut binds = String::new();
+        let mut devs: Vec<(String, String)> = vec![]; // (plan disk, loopN)
+        for dp in &plan.disks {
+            let img = dir.join(format!("{}.img", dp.disk));
+            let sectors = facts.disk(&dp.disk).unwrap().sectors;
+            std::fs::File::create(&img).unwrap().set_len(sectors * SECTOR).unwrap();
+            let out = std::process::Command::new("losetup").args(["-f", "--show"]).arg(&img).output().unwrap();
+            if !out.status.success() {
+                eprintln!("skipping: losetup failed: {}", String::from_utf8_lossy(&out.stderr));
+                return;
+            }
+            let dev = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            loops.0.push(dev.clone());
+            let name = dev.trim_start_matches("/dev/").to_string();
+            binds.push_str(&format!("D_{}={}\n", ident(&dp.disk), name));
+            devs.push((dp.disk.clone(), name));
+        }
+        let (facts2, plan2) = (facts, plan);
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let script = render_stage2(&params(&plan2, &facts2, &cfg)).unwrap();
+        let part: Vec<&str> = script
+            .split("\nstep 4 ")
+            .nth(1)
+            .unwrap()
+            .split("\nsettle\n")
+            .next()
+            .unwrap()
+            .lines()
+            .skip(1)
+            .filter(|l| l.starts_with("run parted") || l.starts_with("try blockdev"))
+            .collect();
+        let sh = format!("run() {{ \"$@\" || exit 1; }}\ntry() {{ \"$@\"; return 0; }}\n{binds}{}\n", part.join("\n"));
+        let f = dir.join("part.sh");
+        std::fs::write(&f, sh).unwrap();
+        let out = std::process::Command::new("sh").arg(&f).output().unwrap();
+        assert!(
+            out.status.success(),
+            "partitioning failed: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // compare with the kernel's idea of every partition
+        let mut checked = 0;
+        for dp in &plan2.disks {
+            let name = &devs.iter().find(|d| d.0 == dp.disk).unwrap().1;
+            for c in &dp.create {
+                let sys = std::path::Path::new("/sys/block").join(name).join(format!("{name}p{}", c.number));
+                let rd = |f: &str| {
+                    std::fs::read_to_string(sys.join(f)).unwrap_or_else(|e| panic!("{}: {e}", sys.display())).trim().parse::<u64>().unwrap()
+                };
+                assert_eq!((rd("start"), rd("size")), (c.start, c.sectors), "{} partition {}", dp.disk, c.number);
+                checked += 1;
+            }
+        }
+        // 3 disks x (bios_grub, boot, system) + data partitions of the 4+4+8 layout: 1 per disk
+        assert_eq!(checked, 3 * 3 + 3);
+        // GPT type flags: the data partitions are raid, as md members need
+        let print = std::process::Command::new("parted").args(["-s", &format!("/dev/{}", devs[0].1), "print"]).output().unwrap();
+        let print = String::from_utf8_lossy(&print.stdout).to_string();
+        assert!(print.contains("sf-data") && print.contains("raid"), "{print}");
     }
 
     #[test]

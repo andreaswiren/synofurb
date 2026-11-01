@@ -63,19 +63,14 @@ fn popover_for(id: ElementId, item: &'static Item, app: &Entity<App>, no_tooltip
             .when(!item.tip.is_empty(), |d| d.child(item.tip))
             .when(!item.body.is_empty(), |d| d.child(paragraphs(item.body, cx)))
             .when(!item.topic.is_empty(), |d| {
-                d.child(
-                    h_flex().justify_end().child(
-                        Button::new("learn-more")
-                            .link()
-                            .small()
-                            .label(copy::BTN_LEARN_MORE.short)
-                            .icon(icons::icon(role::BOOK))
-                            .on_click(move |_, window, cx| {
-                                popover.update(cx, |s, cx| s.dismiss(window, cx));
-                                app.update(cx, |a, cx| a.open_help_topic(Some(item.topic), window, cx));
-                            }),
+                d.child(h_flex().justify_end().child(
+                    Button::new("learn-more").link().small().label(copy::BTN_LEARN_MORE.short).icon(icons::icon(role::BOOK)).on_click(
+                        move |_, window, cx| {
+                            popover.update(cx, |s, cx| s.dismiss(window, cx));
+                            app.update(cx, |a, cx| a.open_help_topic(Some(item.topic), window, cx));
+                        },
                     ),
-                )
+                ))
             })
     })
 }
@@ -92,14 +87,16 @@ pub fn dialog(window: &mut Window, cx: &mut GpuiApp, item: &'static Item, app: &
             .footer(
                 DialogFooter::new()
                     .when(!item.topic.is_empty(), |f| {
-                        f.child(
-                            Button::new("dlg-help").ghost().icon(icons::icon(role::HELP)).label(copy::BTN_OPEN_HELP.short).on_click(move |_, window, cx| {
+                        f.child(Button::new("dlg-help").ghost().icon(icons::icon(role::HELP)).label(copy::BTN_OPEN_HELP.short).on_click(
+                            move |_, window, cx| {
                                 window.close_dialog(cx);
                                 app.update(cx, |a, cx| a.open_help_topic(Some(item.topic), window, cx));
-                            }),
-                        )
+                            },
+                        ))
                     })
-                    .child(Button::new("dlg-close").primary().label(copy::BTN_CLOSE.short).on_click(|_, window, cx| window.close_dialog(cx))),
+                    .child(
+                        Button::new("dlg-close").primary().label(copy::BTN_CLOSE.short).on_click(|_, window, cx| window.close_dialog(cx)),
+                    ),
             )
     });
 }

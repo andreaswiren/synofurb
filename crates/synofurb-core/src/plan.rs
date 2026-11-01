@@ -430,6 +430,19 @@ impl Plan {
     }
 }
 
+/// A disk that takes part in an SHR-like data layout, before its partitions are cut.
+struct ShrDisk {
+    /// Index into `Plan::disks`.
+    dp_index: usize,
+    disk: String,
+    /// First free sector after the system partitions.
+    start: u64,
+    /// Free sectors from `start` to the end of the usable area.
+    sectors: u64,
+    /// Partition numbers already taken on the disk.
+    used: BTreeSet<u32>,
+}
+
 fn align_up(v: u64, a: u64) -> u64 {
     v.div_ceil(a) * a
 }
@@ -746,13 +759,6 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     let mut data_members: Vec<(String, u32)> = vec![];
     let mut data_bytes: Vec<u64> = vec![];
     // SHR: disks with room for data. Their partitions are cut once every disk's size is known.
-    struct ShrDisk {
-        dp_index: usize,
-        disk: String,
-        start: u64,
-        sectors: u64,
-        used: BTreeSet<u32>,
-    }
     let mut shr_disks: Vec<ShrDisk> = vec![];
 
     for a in &analyses {
@@ -854,7 +860,7 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     let sys_pv = mdref(&sys_members, "system", "1", "1.2", &mut plan);
     plan.vgs.push(VgPlan {
         name: "vg_sys".into(),
-        pv: sys_pv,
+        pvs: vec![sys_pv],
         lvs: vec![
             LvPlan { name: "swap".into(), mib: Some(swap), vg_percent: None, fs: "swap".into(), mountpoint: "none".into() },
             LvPlan { name: "root".into(), mib: Some(root), vg_percent: None, fs: "xfs".into(), mountpoint: "/".into() },
@@ -862,7 +868,10 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     });
 
     // -- data
-    if !data_members.is_empty() {
+    if let Some(red) = shr_red {
+        let skipped: Vec<String> = analyses.iter().filter(|a| !a.fully_wiped || a.locked).map(|a| a.disk.name.clone()).collect();
+        plan_shr_data(&mut plan, facts, req, red, shr_disks, &skipped);
+    } else if !data_members.is_empty() {
         let n = data_members.len();
         let level: String = match req.data_raid {
             DataRaid::Auto => auto_data_level(n).to_string(),
@@ -922,7 +931,7 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         plan.sizes.data_lv_percent = pct;
         plan.vgs.push(VgPlan {
             name: "vg_data".into(),
-            pv,
+            pvs: vec![pv],
             lvs: if pct == 0 {
                 vec![]
             } else {
@@ -1026,6 +1035,78 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     plan
 }
 
+/// Cut the data partitions of an SHR-like layout, one md array per usable slice, all PVs of `vg_data`.
+fn plan_shr_data(plan: &mut Plan, facts: &DeviceFacts, req: &PlanRequest, red: u8, mut disks: Vec<ShrDisk>, skipped: &[String]) {
+    let n = disks.len();
+    let min = req.data_raid.min_members();
+    if n < min {
+        let mut msg = format!("{} needs at least {} wiped data disks but {} are available.", req.data_raid.label(), min, n);
+        if !skipped.is_empty() {
+            msg.push_str(&format!(
+                " Disks that keep partitions or arrays cannot take part ({} left out); use 'wipe everything' or release them.",
+                skipped.join(", ")
+            ));
+        }
+        plan.errors.push(msg);
+        return;
+    }
+    if !skipped.is_empty() {
+        plan.warnings.push(format!("Disks {} keep their partitions and take no part in the hybrid RAID group.", skipped.join(", ")));
+    }
+    let sizes: Vec<u64> = disks.iter().map(|d| d.sectors * SECTOR).collect();
+    let layout = shr_slices(&sizes, red);
+    if layout.usable_bytes == 0 {
+        plan.errors.push(format!(
+            "{}: the disks leave no slice that exists on at least two disks, so nothing can be protected.",
+            req.data_raid.label()
+        ));
+        return;
+    }
+    let names: Vec<String> = disks.iter().map(|d| d.disk.clone()).collect();
+    let mut cursors: Vec<u64> = disks.iter().map(|d| d.start).collect();
+    let mut raw = 0u64;
+    let mut pvs = vec![];
+    for slice in layout.usable() {
+        let name = slice.name.clone().unwrap_or_default();
+        let mut members = vec![];
+        for &i in &slice.members {
+            let d = &mut disks[i];
+            let num = (1..=128u32).find(|x| !d.used.contains(x)).unwrap_or(129);
+            d.used.insert(num);
+            let sectors = slice.len_bytes / SECTOR;
+            plan.disks[d.dp_index].create.push(NewPart { number: num, start: cursors[i], sectors, role: PartRole::Data });
+            cursors[i] += sectors;
+            raw += slice.len_bytes;
+            members.push((d.disk.clone(), num));
+        }
+        plan.arrays.push(ArrayPlan { name: name.clone(), level: slice.level.clone(), metadata: "1.2".into(), members });
+        pvs.push(BlockRef::Md(name));
+    }
+    plan.warnings.extend(layout.warnings.iter().cloned());
+    if layout.slices.iter().any(|s| s.unusable && s.members.iter().any(|&i| !plan.system_disks.contains(&names[i]))) {
+        plan.warnings.push(
+            "The disks that carry no copy of the system have more data space than the others. Raising the number of system copies to the number of disks evens this out.".into(),
+        );
+    }
+    if facts.arch == Arch::Armhf && layout.usable_bytes > 16 * 1024 * GIB {
+        plan.warnings.push("32-bit ARM kernels can address at most 16 TiB per filesystem; the part of the data volume above 16 TiB cannot be used in a single xfs filesystem. Consider a smaller data LV.".into());
+    }
+    plan.sizes.data_raw_bytes = raw;
+    plan.sizes.data_usable_bytes = layout.usable_bytes;
+    let pct = 100 - req.data_free_percent;
+    plan.sizes.data_lv_percent = pct;
+    plan.vgs.push(VgPlan {
+        name: "vg_data".into(),
+        pvs,
+        lvs: if pct == 0 {
+            vec![]
+        } else {
+            vec![LvPlan { name: "data".into(), mib: None, vg_percent: Some(pct), fs: "xfs".into(), mountpoint: "/srv/data".into() }]
+        },
+    });
+    plan.shr = Some(ShrPlan { disks: names, layout });
+}
+
 impl Plan {
     /// Re-check the safety invariants against the facts the plan was built from.
     pub fn validate(&self, facts: &DeviceFacts) -> Result<(), Vec<String>> {
@@ -1097,10 +1178,28 @@ impl Plan {
             }
         }
         for v in &self.vgs {
-            if let BlockRef::Md(n) = &v.pv
-                && !self.arrays.iter().any(|a| &a.name == n)
-            {
-                errs.push(format!("VG {} references missing array {}", v.name, n));
+            if v.pvs.is_empty() {
+                errs.push(format!("VG {} has no physical volume", v.name));
+            }
+            for pv in &v.pvs {
+                if let BlockRef::Md(n) = pv
+                    && !self.arrays.iter().any(|a| &a.name == n)
+                {
+                    errs.push(format!("VG {} references missing array {}", v.name, n));
+                }
+            }
+        }
+        if let Some(shr) = &self.shr {
+            // every slice array must have exactly its slice's member count, one partition per member disk
+            for sl in shr.layout.usable() {
+                let name = sl.name.clone().unwrap_or_default();
+                match self.arrays.iter().find(|a| a.name == name) {
+                    None => errs.push(format!("SHR slice {} has no array", sl.index + 1)),
+                    Some(a) if a.members.len() != sl.members.len() => {
+                        errs.push(format!("SHR array {name} has {} members, slice needs {}", a.members.len(), sl.members.len()))
+                    }
+                    Some(_) => {}
+                }
             }
         }
         if errs.is_empty() { Ok(()) } else { Err(errs) }
@@ -1137,7 +1236,35 @@ impl Plan {
             )),
         }
         for vg in self.vgs.iter().filter(|v| v.name == "vg_data") {
-            if let Some(a) = self.arrays.iter().find(|a| a.name == "data") {
+            if let Some(shr) = &self.shr {
+                v.push(format!(
+                    "Data: hybrid RAID (SHR-like, {}-disk protection) over {} disks, {} usable, {} md array(s) joined in LVM vg_data (xfs), {}% left free",
+                    shr.layout.redundancy,
+                    shr.disks.len(),
+                    human_bytes(self.sizes.data_usable_bytes),
+                    vg.pvs.len(),
+                    100 - self.sizes.data_lv_percent
+                ));
+                for sl in shr.layout.slices.iter() {
+                    let members: Vec<&str> = sl.members.iter().map(|&i| shr.disks[i].as_str()).collect();
+                    v.push(match &sl.name {
+                        Some(n) => format!(
+                            "  {n}: RAID{} {} x {} on {} -> {} usable",
+                            sl.level,
+                            members.len(),
+                            human_bytes(sl.len_bytes),
+                            members.join(","),
+                            human_bytes(sl.usable_bytes)
+                        ),
+                        None => format!(
+                            "  slice {}: {} on {} left unused (single disk)",
+                            sl.index + 1,
+                            human_bytes(sl.len_bytes),
+                            members.join(",")
+                        ),
+                    });
+                }
+            } else if let Some(a) = self.arrays.iter().find(|a| a.name == "data") {
                 v.push(format!(
                     "Data: RAID{} over {} disks, {} usable, LVM vg_data (xfs), {}% left free",
                     a.level,
@@ -1311,7 +1438,7 @@ mod tests {
         let p = build_plan(&f, &PlanRequest::default());
         assert!(p.is_ok(), "{:?}", p.errors);
         assert!(p.arrays.is_empty());
-        assert!(matches!(p.vgs[0].pv, BlockRef::Part(_, 3)));
+        assert!(matches!(p.vgs[0].pvs[..], [BlockRef::Part(_, 3)]));
         assert!(matches!(p.boot, Some(BlockRef::Part(_, 2))));
     }
 
@@ -1427,6 +1554,355 @@ mod tests {
         assert!(p.sizes.max_system_mib > 9 * 1024, "{}", p.sizes.max_system_mib);
         assert!(p.summary().iter().any(|l| l.contains("boot flash")));
         p.validate(&f).unwrap();
+    }
+
+    // ------------------------------------------------------------------------------------ SHR
+
+    const TB: u64 = 1024 * GIB;
+
+    fn lv(layout: &ShrLayout) -> Vec<(u64, usize, &str, u64, bool)> {
+        layout.slices.iter().map(|s| (s.len_bytes / GIB, s.members.len(), s.level.as_str(), s.usable_bytes / GIB, s.unusable)).collect()
+    }
+
+    #[test]
+    fn shr_worked_example_4_4_8() {
+        let l = shr_slices(&[4 * TB, 4 * TB, 8 * TB], 1);
+        assert_eq!(lv(&l), vec![(4096, 3, "5", 8192, false), (4096, 1, "", 0, true)]);
+        assert_eq!(l.usable_bytes, 8 * TB, "what DSM reports");
+        assert_eq!(l.unusable_bytes, 4 * TB);
+        assert_eq!(l.slices[0].name.as_deref(), Some("data1"));
+        assert_eq!(l.slices[1].name, None);
+        assert_eq!(l.slices[0].members, vec![0, 1, 2]);
+        assert_eq!(l.slices[1].members, vec![2]);
+        assert!(l.warnings.iter().any(|w| w.contains("one disk only")));
+    }
+
+    #[test]
+    fn shr_worked_example_2_4_4_8() {
+        let l = shr_slices(&[2 * TB, 4 * TB, 4 * TB, 8 * TB], 1);
+        assert_eq!(lv(&l), vec![(2048, 4, "5", 6144, false), (2048, 3, "5", 4096, false), (4096, 1, "", 0, true)]);
+        assert_eq!(l.usable_bytes, 10 * TB);
+        assert_eq!(l.slices[1].start_bytes, 2 * TB);
+        assert_eq!(l.slices[1].name.as_deref(), Some("data2"));
+    }
+
+    #[test]
+    fn shr_worked_example_1_2_2_3() {
+        let l = shr_slices(&[3 * TB, TB, 2 * TB, 2 * TB], 1);
+        assert_eq!(lv(&l), vec![(1024, 4, "5", 3072, false), (1024, 3, "5", 2048, false), (1024, 1, "", 0, true)]);
+        assert_eq!(l.usable_bytes, 5 * TB);
+        // member indices follow the order of the input, not the order of the sizes
+        assert_eq!(l.slices[1].members, vec![0, 2, 3]);
+    }
+
+    #[test]
+    fn shr2_with_four_equal_disks_is_one_raid6_slice() {
+        let l = shr_slices(&[4 * TB; 4], 2);
+        assert_eq!(lv(&l), vec![(4096, 4, "6", 8192, false)]);
+        assert_eq!(l.slices[0].fault_tolerance, 2);
+        assert!(l.warnings.is_empty());
+    }
+
+    #[test]
+    fn shr2_falls_back_to_mirrors_for_narrow_slices_and_warns() {
+        let l = shr_slices(&[4 * TB, 4 * TB, 8 * TB, 8 * TB], 2);
+        assert_eq!(lv(&l), vec![(4096, 4, "6", 8192, false), (4096, 2, "1", 4096, false)]);
+        assert_eq!(l.slices[1].fault_tolerance, 1);
+        assert!(l.warnings.iter().any(|w| w.contains("Slice 2") && w.contains("not the 2 you asked for")), "{:?}", l.warnings);
+        let l = shr_slices(&[4 * TB, 8 * TB, 8 * TB, 8 * TB], 2);
+        assert_eq!(lv(&l), vec![(4096, 4, "6", 8192, false), (4096, 3, "1", 4096, false)]);
+        assert_eq!(l.slices[1].fault_tolerance, 2);
+        assert!(l.warnings.iter().any(|w| w.contains("3-way")), "{:?}", l.warnings);
+    }
+
+    #[test]
+    fn shr1_with_two_disks_is_raid1_and_equal_disks_are_one_slice() {
+        let l = shr_slices(&[4 * TB, 4 * TB], 1);
+        assert_eq!(lv(&l), vec![(4096, 2, "1", 4096, false)]);
+        let l = shr_slices(&[4 * TB; 5], 1);
+        assert_eq!(lv(&l), vec![(4096, 5, "5", 16384, false)]);
+        assert!(l.warnings.is_empty());
+        // two disks of different size: the mirror is limited by the smaller one
+        let l = shr_slices(&[4 * TB, 8 * TB], 1);
+        assert_eq!(l.usable_bytes, 4 * TB);
+        assert_eq!(l.slices.len(), 2);
+    }
+
+    #[test]
+    fn shr_rounds_down_to_gib_and_merges_close_tiers() {
+        // 10 GiB + 900 MiB and 10 GiB are the same tier; 20 GiB + 1 MiB is the 20 GiB tier
+        let l = shr_slices(&[10 * GIB + 900 * MIB, 10 * GIB, 20 * GIB + MIB], 1);
+        assert_eq!(lv(&l), vec![(10, 3, "5", 20, false), (10, 1, "", 0, true)]);
+        // exactly 1 GiB apart stays a (1 GiB) slice
+        let l = shr_slices(&[10 * GIB, 11 * GIB, 11 * GIB], 1);
+        assert_eq!(lv(&l), vec![(10, 3, "5", 20, false), (1, 2, "1", 1, false)]);
+        // below 1 GiB takes no part; a single disk has nothing usable
+        let l = shr_slices(&[GIB / 2, 5 * GIB], 1);
+        assert_eq!((l.slices.len(), l.usable_bytes), (1, 0));
+        assert_eq!(shr_slices(&[], 1).slices.len(), 0);
+    }
+
+    #[test]
+    fn shr_sizes_are_in_input_order_and_layout_survives_json() {
+        let l = shr_slices(&[8 * TB, 4 * TB, 4 * TB], 1);
+        assert_eq!(l.slices[1].members, vec![0]);
+        let back: ShrLayout = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+        assert_eq!(back, l);
+    }
+
+    /// The language-neutral vectors shared with the NAS-side Python implementation
+    /// (`apps/mgmt-plane/tests/shr_vectors.json`): both must produce the same slices.
+    #[test]
+    fn shr_slices_agree_with_the_shared_vectors() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/mgmt-plane/tests/shr_vectors.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            eprintln!("skipping: {} not present", path.display());
+            return;
+        };
+        let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let vectors = doc["vectors"].as_array().expect("vectors");
+        assert!(!vectors.is_empty());
+        for v in vectors {
+            let name = v["name"].as_str().unwrap();
+            assert_eq!(v["unit"], "MiB", "{name}");
+            let disks: Vec<(&str, u64)> = v["disks"].as_object().unwrap().iter().map(|(k, x)| (k.as_str(), x.as_u64().unwrap())).collect();
+            let sizes: Vec<u64> = disks.iter().map(|d| d.1 * MIB).collect();
+            let red = if v["mode"] == "shr2" { 2 } else { 1 };
+            let l = shr_slices(&sizes, red);
+            assert_eq!(l.usable_bytes / MIB, v["usable"].as_u64().unwrap(), "{name}: usable");
+            let want = v["slices"].as_array().unwrap();
+            assert_eq!(l.slices.len(), want.len(), "{name}: slice count");
+            for (got, w) in l.slices.iter().zip(want) {
+                let members: Vec<&str> = got.members.iter().map(|&i| disks[i].0).collect();
+                let wm: Vec<&str> = w["members"].as_array().unwrap().iter().map(|m| m.as_str().unwrap()).collect();
+                assert_eq!(members, wm, "{name}: members");
+                assert_eq!(got.len_bytes / MIB, w["length"].as_u64().unwrap(), "{name}: length");
+                assert_eq!(got.usable_bytes / MIB, w["usable"].as_u64().unwrap(), "{name}: slice usable");
+                match w["level"].as_str() {
+                    Some(l) => assert_eq!(format!("raid{}", got.level), l, "{name}: level"),
+                    None => assert!(got.unusable, "{name}: unusable"),
+                }
+            }
+        }
+    }
+
+    /// `n` plain disks with the given usable DATA sizes (GiB), system mirrored on all of them, so the data
+    /// partitions are exactly those sizes: 1 MiB start + bios_grub 1 MiB + boot 1 GiB + 8 GiB system.
+    fn shr_facts(data_gib: &[u64]) -> (DeviceFacts, PlanRequest) {
+        let mut f = facts();
+        let names = ["sda", "sdb", "sdc", "sdd"];
+        f.disks.retain(|d| d.name == "synoboot" || names[..data_gib.len()].contains(&d.name.as_str()));
+        f.arrays.clear();
+        for d in f.disks.iter_mut().filter(|d| d.name != "synoboot") {
+            let i = names.iter().position(|n| *n == d.name).unwrap();
+            d.sectors = (1 + 1 + 1024 + 8192 + data_gib[i] * 1024) * SECTORS_PER_MIB + 34;
+        }
+        let req =
+            PlanRequest { data_raid: DataRaid::Shr1, system_copies: Some(data_gib.len()), system_size_mib: 8192, ..Default::default() };
+        (f, req)
+    }
+
+    fn data_parts<'a>(p: &'a Plan, disk: &str) -> Vec<&'a NewPart> {
+        p.disks.iter().find(|d| d.disk == disk).unwrap().create.iter().filter(|c| c.role == PartRole::Data).collect()
+    }
+
+    #[test]
+    fn shr_plan_for_4_4_8_builds_slice_partitions_arrays_and_one_vg() {
+        let (f, req) = shr_facts(&[64, 64, 128]);
+        let p = build_plan(&f, &req);
+        assert!(p.is_ok(), "{:?}", p.errors);
+        p.validate(&f).unwrap();
+        // sda/sdb carry one data partition, sdc (the 8) too: its upper slice is unusable and stays unallocated
+        for d in ["sda", "sdb", "sdc"] {
+            let parts = data_parts(&p, d);
+            assert_eq!(parts.len(), 1, "{d}");
+            assert_eq!(parts[0].sectors * SECTOR, 64 * GIB);
+        }
+        let data: Vec<&ArrayPlan> = p.arrays.iter().filter(|a| a.name.starts_with("data")).collect();
+        assert_eq!(data.len(), 1);
+        assert_eq!((data[0].name.as_str(), data[0].level.as_str(), data[0].metadata.as_str()), ("data1", "5", "1.2"));
+        assert_eq!(data[0].members.len(), 3);
+        let vg = p.vgs.iter().find(|v| v.name == "vg_data").unwrap();
+        assert_eq!(vg.pvs, vec![BlockRef::Md("data1".into())]);
+        assert_eq!(p.sizes.data_usable_bytes, 128 * GIB);
+        assert_eq!(p.sizes.data_raw_bytes, 3 * 64 * GIB);
+        assert!(p.warnings.iter().any(|w| w.contains("one disk only") && w.contains("unused")), "{:?}", p.warnings);
+        assert!(p.summary().iter().any(|l| l.contains("hybrid RAID") && l.contains("128.0 GiB")), "{:?}", p.summary());
+        // the unallocated tail of the big disk is really free
+        let sdc = p.disks.iter().find(|d| d.disk == "sdc").unwrap();
+        let last = sdc.create.iter().map(|c| c.end()).max().unwrap();
+        assert!(last + 64 * 1024 * SECTORS_PER_MIB <= f.disk("sdc").unwrap().sectors);
+    }
+
+    #[test]
+    fn shr_plan_for_2_4_4_8_has_consecutive_partitions_per_disk() {
+        let (f, req) = shr_facts(&[32, 64, 64, 128]);
+        let p = build_plan(&f, &req);
+        assert!(p.is_ok(), "{:?}", p.errors);
+        let names: Vec<&str> = p.arrays.iter().filter(|a| a.name.starts_with("data")).map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["data1", "data2"]);
+        let level_members: Vec<(String, usize)> =
+            p.arrays.iter().filter(|a| a.name.starts_with("data")).map(|a| (a.level.clone(), a.members.len())).collect();
+        assert_eq!(level_members, vec![("5".to_string(), 4), ("5".to_string(), 3)]);
+        assert_eq!(p.sizes.data_usable_bytes, (3 * 32 + 2 * 32) * GIB);
+        let vg = p.vgs.iter().find(|v| v.name == "vg_data").unwrap();
+        assert_eq!(vg.pvs, vec![BlockRef::Md("data1".into()), BlockRef::Md("data2".into())]);
+        // sda has slice 1 only; sdb/sdc slice 1 and 2 back to back; sdd the same (slice 3 is unusable)
+        assert_eq!(data_parts(&p, "sda").len(), 1);
+        for d in ["sdb", "sdc", "sdd"] {
+            let ps = data_parts(&p, d);
+            assert_eq!(ps.len(), 2, "{d}");
+            assert_eq!(ps[0].end(), ps[1].start, "{d}: slice partitions are consecutive");
+            assert_eq!(ps[1].sectors * SECTOR, 32 * GIB);
+        }
+        // every array member exists as a created partition with the right size
+        for a in p.arrays.iter().filter(|a| a.name.starts_with("data")) {
+            for (disk, num) in &a.members {
+                let c = p.disks.iter().find(|d| &d.disk == disk).unwrap().create.iter().find(|c| c.number == *num).unwrap();
+                assert_eq!(c.role, PartRole::Data);
+            }
+        }
+        p.validate(&f).unwrap();
+    }
+
+    #[test]
+    fn shr_plan_for_1_2_2_3() {
+        let (f, req) = shr_facts(&[16, 32, 32, 48]);
+        let p = build_plan(&f, &req);
+        assert!(p.is_ok(), "{:?}", p.errors);
+        assert_eq!(p.sizes.data_usable_bytes, (3 * 16 + 2 * 16) * GIB);
+        assert_eq!(p.shr.as_ref().unwrap().layout.slices.len(), 3);
+    }
+
+    #[test]
+    fn shr2_with_four_equal_disks_is_one_raid6_array() {
+        let (f, mut req) = shr_facts(&[64, 64, 64, 64]);
+        req.data_raid = DataRaid::Shr2;
+        let p = build_plan(&f, &req);
+        assert!(p.is_ok(), "{:?}", p.errors);
+        let data: Vec<&ArrayPlan> = p.arrays.iter().filter(|a| a.name.starts_with("data")).collect();
+        assert_eq!((data.len(), data[0].level.as_str(), data[0].members.len()), (1, "6", 4));
+        assert_eq!(p.sizes.data_usable_bytes, 128 * GIB);
+        assert!(p.warnings.iter().all(|w| !w.contains("RAID 1")), "{:?}", p.warnings);
+    }
+
+    #[test]
+    fn shr1_with_two_equal_disks_is_a_raid1_array() {
+        let (f, req) = shr_facts(&[64, 64]);
+        let p = build_plan(&f, &req);
+        assert!(p.is_ok(), "{:?}", p.errors);
+        let a = p.arrays.iter().find(|a| a.name == "data1").unwrap();
+        assert_eq!((a.level.as_str(), a.members.len()), ("1", 2));
+        assert_eq!(p.sizes.data_usable_bytes, 64 * GIB);
+        assert!(p.arrays.iter().all(|a| a.name != "data"));
+    }
+
+    #[test]
+    fn shr_with_too_few_disks_is_an_error() {
+        let (f, mut req) = shr_facts(&[64]);
+        let p = build_plan(&f, &req);
+        assert!(!p.is_ok());
+        assert!(p.errors.iter().any(|e| e.contains("at least 2")), "{:?}", p.errors);
+        let (f, r) = shr_facts(&[64, 64, 64]);
+        req = PlanRequest { data_raid: DataRaid::Shr2, ..r };
+        let p = build_plan(&f, &req);
+        assert!(!p.is_ok());
+        assert!(
+            p.errors.iter().any(|e| e.contains("Hybrid RAID, 2-disk") && e.contains("at least 4") && e.contains("3 are available")),
+            "{:?}",
+            p.errors
+        );
+        // two disks of very different size: still valid SHR-1, the big disk's extra space is reported unused
+        let (f, req) = shr_facts(&[32, 96]);
+        let p = build_plan(&f, &req);
+        assert!(p.is_ok(), "{:?}", p.errors);
+        assert_eq!(p.sizes.data_usable_bytes, 32 * GIB);
+    }
+
+    #[test]
+    fn shr_tiers_closer_than_one_gib_merge_in_the_plan() {
+        let (mut f, req) = shr_facts(&[64, 64, 64]);
+        f.disks.iter_mut().find(|d| d.name == "sdc").unwrap().sectors += 700 * SECTORS_PER_MIB;
+        let p = build_plan(&f, &req);
+        assert!(p.is_ok(), "{:?}", p.errors);
+        assert_eq!(p.shr.as_ref().unwrap().layout.slices.len(), 1);
+        assert_eq!(p.sizes.data_usable_bytes, 128 * GIB);
+    }
+
+    #[test]
+    fn shr_cannot_be_combined_with_preserved_arrays() {
+        let f = facts();
+        for raid in [DataRaid::Shr1, DataRaid::Shr2] {
+            // keep mode, md2 preserved (the default): nothing wiped to build on
+            let p = build_plan(&f, &PlanRequest { mode: StorageMode::KeepVolumes, data_raid: raid, ..Default::default() });
+            assert!(!p.is_ok());
+            assert!(p.errors.iter().any(|e| e.contains("cannot be combined with preserved arrays") && e.contains("md2")), "{:?}", p.errors);
+            assert!(p.arrays.is_empty() && p.disks.is_empty(), "no half-built plan");
+        }
+        // releasing md2 turns every disk into a wiped disk: SHR works again
+        let req =
+            PlanRequest { mode: StorageMode::KeepVolumes, keep_arrays: Some(vec![]), data_raid: DataRaid::Shr1, ..Default::default() };
+        let p = build_plan(&f, &req);
+        assert!(p.is_ok(), "{:?}", p.errors);
+        assert!(p.arrays.iter().any(|a| a.name == "data1"));
+        p.validate(&f).unwrap();
+    }
+
+    #[test]
+    fn shr_leaves_out_disks_that_keep_partitions_and_says_so() {
+        let mut f = facts();
+        // sdd5 is no longer part of an array: an unknown partition, which keep mode preserves
+        f.arrays.iter_mut().find(|a| a.name == "md2").unwrap().members.retain(|m| m != "sdd5");
+        let req =
+            PlanRequest { mode: StorageMode::KeepVolumes, keep_arrays: Some(vec![]), data_raid: DataRaid::Shr1, ..Default::default() };
+        let p = build_plan(&f, &req);
+        assert!(p.is_ok(), "{:?}", p.errors);
+        assert_eq!(p.shr.as_ref().unwrap().disks.len(), 3);
+        assert!(p.warnings.iter().any(|w| w.contains("sdd") && w.contains("keep their partitions")), "{:?}", p.warnings);
+        let p = build_plan(&f, &PlanRequest { data_raid: DataRaid::Shr2, ..req });
+        assert!(!p.is_ok());
+        assert!(p.errors.iter().any(|e| e.contains("sdd") && e.contains("cannot take part")), "{:?}", p.errors);
+    }
+
+    #[test]
+    fn shr_default_system_copies_report_the_uneven_disk() {
+        // 4 equal disks, system on 3: the 4th has ~9+ GiB more data space which cannot be protected
+        let mut f = facts();
+        for d in f.disks.iter_mut().filter(|d| d.name != "synoboot") {
+            d.sectors = 200 * GIB / SECTOR;
+        }
+        let p = build_plan(&f, &PlanRequest { data_raid: DataRaid::Shr1, system_size_mib: 8192, ..Default::default() });
+        assert!(p.is_ok(), "{:?}", p.errors);
+        assert!(p.warnings.iter().any(|w| w.contains("no copy of the system")), "{:?}", p.warnings);
+    }
+
+    #[test]
+    fn plain_levels_are_unchanged_by_shr_support() {
+        let f = facts();
+        let p = build_plan(&f, &PlanRequest::default());
+        assert!(p.shr.is_none());
+        assert_eq!(p.vgs.iter().find(|v| v.name == "vg_data").unwrap().pvs, vec![BlockRef::Md("data".into())]);
+        assert_eq!(DataRaid::ALL.len(), 9);
+        assert_eq!(DataRaid::Shr1.level(), "shr1");
+        assert_eq!(DataRaid::Shr2.level(), "shr2");
+        assert_eq!((DataRaid::Shr1.min_members(), DataRaid::Shr2.min_members()), (2, 4));
+        assert_eq!(DataRaid::Shr1.label(), "Hybrid RAID, 1-disk protection (SHR-like)");
+        assert_eq!(DataRaid::Shr2.label(), "Hybrid RAID, 2-disk protection (SHR-like)");
+        assert_eq!(DataRaid::Raid5.shr_redundancy(), None);
+    }
+
+    #[test]
+    fn vg_plan_reads_the_old_single_pv_form() {
+        let old = r#"{"name":"vg_sys","pv":{"Md":"system"},"lvs":[]}"#;
+        let v: VgPlan = serde_json::from_str(old).unwrap();
+        assert_eq!(v.pvs, vec![BlockRef::Md("system".into())]);
+        let new: VgPlan = serde_json::from_str(&serde_json::to_string(&v).unwrap()).unwrap();
+        assert_eq!(new.pvs, v.pvs);
+        let (f, req) = shr_facts(&[32, 64, 64, 128]);
+        let p = build_plan(&f, &req);
+        let back: Plan = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.shr, p.shr);
+        assert_eq!(back.vgs.last().unwrap().pvs.len(), 2);
     }
 
     #[test]

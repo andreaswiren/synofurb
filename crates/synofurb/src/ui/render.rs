@@ -206,12 +206,16 @@ impl App {
                     .accessibility_label("Menu")
                     .dropdown_menu(move |menu, _, _| {
                         let (a1, a2) = (app.clone(), app.clone());
-                        menu.item(PopupMenuItem::new(copy::MENU_ABOUT.short).icon(icons::icon(role::ABOUT)).on_click(
-                            move |_, window, cx| a1.update(cx, |t, cx| t.go(Screen::About, window, cx)),
-                        ))
-                        .item(PopupMenuItem::new(copy::MENU_UPDATES.short).icon(icons::icon(role::REFRESH)).on_click(
-                            move |_, _, cx| a2.update(cx, |t, cx| t.check_updates_now(cx)),
-                        ))
+                        menu.item(
+                            PopupMenuItem::new(copy::MENU_ABOUT.short)
+                                .icon(icons::icon(role::ABOUT))
+                                .on_click(move |_, window, cx| a1.update(cx, |t, cx| t.go(Screen::About, window, cx))),
+                        )
+                        .item(
+                            PopupMenuItem::new(copy::MENU_UPDATES.short)
+                                .icon(icons::icon(role::REFRESH))
+                                .on_click(move |_, _, cx| a2.update(cx, |t, cx| t.check_updates_now(cx))),
+                        )
                     }),
             );
         TitleBar::new()
@@ -252,18 +256,14 @@ impl App {
             .py(px(8.0))
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(
-                Stepper::new("steps")
-                    .small()
-                    .selected_index(cur.number() - 1)
-                    .items(items)
-                    .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                        let target = Step::ALL[*ix];
-                        if can_jump(this.current_step(), target, this.install_started) && !this.install_running() {
-                            this.go(target.screen(), window, cx);
-                        }
-                    })),
-            )
+            .child(Stepper::new("steps").small().selected_index(cur.number() - 1).items(items).on_click(cx.listener(
+                |this, ix: &usize, window, cx| {
+                    let target = Step::ALL[*ix];
+                    if can_jump(this.current_step(), target, this.install_started) && !this.install_running() {
+                        this.go(target.screen(), window, cx);
+                    }
+                },
+            )))
             .into_any_element()
     }
 
@@ -279,7 +279,12 @@ impl App {
             Risk::DebianRunning => (Tone::Ok, role::OK),
         };
         let risk_tag = HoverCard::new("risk-tag")
-            .trigger(div().id("risk-tag").role(Role::Status).aria_label(format!("{}. {}", item.short, item.tip)).child(kit::tag(&p, tone, Some(icon), item.short)))
+            .trigger(div().id("risk-tag").role(Role::Status).aria_label(format!("{}. {}", item.short, item.tip)).child(kit::tag(
+                &p,
+                tone,
+                Some(icon),
+                item.short,
+            )))
             .content({
                 let tip = item.tip;
                 move |_, _, _| div().p(px(8.0)).max_w(px(280.0)).text_sm().child(tip)
@@ -288,15 +293,23 @@ impl App {
             let model = if f.model.is_empty() { f.hostname.clone() } else { f.model.clone() };
             format!("{} \u{00b7} {}", model, super::format::display_host(&self.input_value(&self.inp.host, cx)))
         });
-        let way_back = Popover::new("way-back").anchor(Anchor::BottomRight).trigger(Button::new("way-back-btn").link().small().label(copy::WAY_BACK.short)).content({
-            let tip = item.tip;
-            move |_, _, _| div().w(px(280.0)).text_sm().child(tip)
-        });
+        let way_back = Popover::new("way-back")
+            .anchor(Anchor::BottomRight)
+            .trigger(Button::new("way-back-btn").link().small().label(copy::WAY_BACK.short))
+            .content({
+                let tip = item.tip;
+                move |_, _, _| div().w(px(280.0)).text_sm().child(tip)
+            });
         let offline = self.offline_app();
         StatusBar::new()
-            .left(h_flex().gap(px(8.0)).items_center().child(risk_tag).when(self.demo.is_some(), |d| {
-                d.child(kit::tag(&p, Tone::Info, None, copy::TAG_DEMO.short))
-            }).when(offline, |d| d.child(kit::tag(&p, Tone::Warn, Some(role::OFFLINE), copy::TAG_OFFLINE.short))))
+            .left(
+                h_flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .child(risk_tag)
+                    .when(self.demo.is_some(), |d| d.child(kit::tag(&p, Tone::Info, None, copy::TAG_DEMO.short)))
+                    .when(offline, |d| d.child(kit::tag(&p, Tone::Warn, Some(role::OFFLINE), copy::TAG_OFFLINE.short))),
+            )
             .child(match identity {
                 Some(i) => kit::mono_sm(cx, i).into_any_element(),
                 None => div().into_any_element(),
@@ -324,8 +337,20 @@ impl App {
                 .pt(px(8.0))
                 .child(Alert::info("update-banner", copy::UPD_BANNER.short).small().flex_1().min_w_0())
                 .child(kit::tag(&p, Tone::Accent, None, info.latest.clone()))
-                .child(Button::new("upd-details").ghost().small().label(copy::UPD_DETAILS.short).on_click(cx.listener(|this, _, window, cx| this.open_update_dialog(window, cx))))
-                .child(Button::new("upd-later").ghost().small().label(copy::UPD_LATER.short).on_click(cx.listener(|this, _, _, cx| this.remind_tomorrow(cx))))
+                .child(
+                    Button::new("upd-details")
+                        .ghost()
+                        .small()
+                        .label(copy::UPD_DETAILS.short)
+                        .on_click(cx.listener(|this, _, window, cx| this.open_update_dialog(window, cx))),
+                )
+                .child(
+                    Button::new("upd-later")
+                        .ghost()
+                        .small()
+                        .label(copy::UPD_LATER.short)
+                        .on_click(cx.listener(|this, _, _, cx| this.remind_tomorrow(cx))),
+                )
                 .into_any_element(),
         )
     }
@@ -358,7 +383,13 @@ impl App {
                             .when_some(page.title_info, |d, i| d.child(info_tip("title-info", i, &app))),
                     )
                     .when_some(page.subtitle.clone(), |d, s| {
-                        d.child(h_flex().gap(px(2.0)).items_center().child(kit::muted(cx, s)).when_some(page.subtitle_tip, |d, i| d.child(info_tip("sub-info", i, &app))))
+                        d.child(
+                            h_flex()
+                                .gap(px(2.0))
+                                .items_center()
+                                .child(kit::muted(cx, s))
+                                .when_some(page.subtitle_tip, |d, i| d.child(info_tip("sub-info", i, &app))),
+                        )
                     }),
             )
             .when_some(page.header_right.is_some().then_some(()), |d, _| d)
@@ -376,7 +407,12 @@ impl Render for App {
         let header = self.render_header(&page, cx);
         let header_right = page.header_right.take();
 
-        let top = h_flex().w_full().items_start().gap(px(16.0)).child(div().flex_1().min_w_0().child(header)).when_some(header_right, |d, r| d.child(r));
+        let top = h_flex()
+            .w_full()
+            .items_start()
+            .gap(px(16.0))
+            .child(div().flex_1().min_w_0().child(header))
+            .when_some(header_right, |d, r| d.child(r));
         let content = v_flex().w_full().gap(px(16.0)).p(px(layout::PAGE_PAD)).child(top).child(page.body);
         let content_area = if page.scroll {
             div()

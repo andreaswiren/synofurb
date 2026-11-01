@@ -231,7 +231,8 @@ pub enum Risk {
 }
 
 impl Risk {
-    pub const ALL: [Risk; 6] = [Risk::ReadOnly, Risk::PlanOnly, Risk::FlashChanged, Risk::DisksChanged, Risk::FailedSafely, Risk::DebianRunning];
+    pub const ALL: [Risk; 6] =
+        [Risk::ReadOnly, Risk::PlanOnly, Risk::FlashChanged, Risk::DisksChanged, Risk::FailedSafely, Risk::DebianRunning];
 
     /// Has anything on the NAS been written?
     pub fn touched(self) -> bool {
@@ -722,7 +723,11 @@ mod tests {
         assert_eq!(risk_for(w(Screen::Install, true, false, false, false, false, false)), Risk::PlanOnly, "no flash, nothing written yet");
         assert_eq!(risk_for(w(Screen::Install, true, true, false, false, true, false)), Risk::DisksChanged);
         assert_eq!(risk_for(w(Screen::Failed, true, false, true, false, true, false)), Risk::FailedSafely);
-        assert_eq!(risk_for(w(Screen::Failed, true, true, true, false, true, false)), Risk::DisksChanged, "after step 3 a failure is not safe");
+        assert_eq!(
+            risk_for(w(Screen::Failed, true, true, true, false, true, false)),
+            Risk::DisksChanged,
+            "after step 3 a failure is not safe"
+        );
         assert_eq!(risk_for(w(Screen::Done, true, true, false, true, true, false)), Risk::DebianRunning);
         assert_eq!(risk_for(w(Screen::BootMgr, false, false, false, false, true, true)), Risk::FlashChanged);
         assert!(Risk::DisksChanged.touched() && !Risk::ReadOnly.touched() && !Risk::FailedSafely.touched());
@@ -750,7 +755,10 @@ mod tests {
     #[test]
     fn the_gate_says_what_is_missing() {
         let r = gate("", false, false, true).reason().unwrap();
-        assert!(r.starts_with("Missing:") && r.contains("Backup is tested") && r.contains("I accept data loss") && r.contains("typed phrase"), "{r}");
+        assert!(
+            r.starts_with("Missing:") && r.contains("Backup is tested") && r.contains("I accept data loss") && r.contains("typed phrase"),
+            "{r}"
+        );
         assert_eq!(gate("ERASE DS918+", true, false, true).reason().unwrap(), "Missing: I accept data loss.");
         assert_eq!(gate("", true, true, true).reason().unwrap(), "Missing: the typed phrase.");
         assert!(gate("ERASE DS918+", true, true, false).reason().unwrap().contains("valid plan"));

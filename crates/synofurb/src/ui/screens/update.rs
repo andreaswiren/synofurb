@@ -1,14 +1,21 @@
-//! "Update available" dialog. A small view that observes the app, so download progress and verification update live
-//! inside the dialog. Uses `synofurb_core::updater` for everything: this file only shows state and forwards clicks.
+//! D11 Update dialog: release notes, size, date, download progress and the signature state. A small view that
+//! observes the app, so progress and verification update live inside the dialog. All checks live in
+//! `synofurb_core::updater`; this file only shows state and forwards clicks.
 
 use crate::ui::app::{App, UpdateState};
+use crate::ui::copy;
 use crate::ui::format::{human, percent};
-use crate::ui::theme::{self, Themed, Tone, layout, radius, space};
-use crate::ui::widgets::*;
+use crate::ui::icons::{self, role};
+use crate::ui::kit;
+use crate::ui::theme::{Themed, Tone, layout};
+use gpui_kit::component::Sizable;
+use gpui_kit::component::alert::Alert;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
-use gpui_kit::component::{Disableable, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AppContext, Context, Entity, FontWeight, IntoElement, Render, Role, Window, div, px};
+use gpui_kit::{AppContext, Context, Entity, IntoElement, Render, Window, div, px};
 use synofurb_core::updater;
 
 pub struct UpdateView {
@@ -29,98 +36,96 @@ impl Render for UpdateView {
         let app = self.app.clone();
         let a = app.read(cx);
         let Some(info) = a.update_info().cloned() else {
-            return v_flex().child(muted(&p, "You are up to date.")).into_any_element();
+            return v_flex().child(kit::muted(cx, "-")).into_any_element();
         };
         let key_missing = updater::signing_key_is_placeholder(updater::UPDATE_PUBLIC_KEY);
         let install_running = a.install_running();
-        let size = info.asset.as_ref().map(|x| human(x.size)).unwrap_or_else(|| "no file for this system".into());
-        let published = info.published_at.clone().unwrap_or_default();
-        let published = published.split('T').next().unwrap_or("").to_string();
+        let size = info.asset.as_ref().map(|x| human(x.size)).unwrap_or_else(|| "-".into());
+        let published = info.published_at.clone().unwrap_or_default().split('T').next().unwrap_or("").to_string();
 
         let meta = h_flex()
-            .gap(px(space::S8))
+            .gap(px(8.0))
+            .items_center()
             .flex_wrap()
-            .child(chip(&p, format!("{} -> {}", info.current, info.latest)))
-            .child(chip(&p, size))
-            .when(!published.is_empty(), |d| d.child(chip(&p, format!("published {published}"))))
-            .when(info.prerelease, |d| d.child(badge(&p, Tone::Warn, "triangle-alert", "Pre-release", false)));
+            .child(kit::chip(&p, format!("{} \u{2192} {}", info.current, info.latest)))
+            .child(kit::chip(&p, size))
+            .when(!published.is_empty(), |d| d.child(kit::chip(&p, published)))
+            .when(info.prerelease, |d| d.child(kit::tag(&p, Tone::Warn, Some(role::WARN), "Pre-release")));
         let notes = div()
             .id("update-notes")
             .max_h(px(200.0))
             .w_full()
-            .p(px(space::S12))
-            .rounded(px(radius::MD))
-            .bg(p.surface_2)
-            .border_1()
-            .border_color(p.border)
+            .p(px(10.0))
+            .rounded(cx.theme().radius)
+            .bg(cx.theme().muted)
             .overflow_y_scroll()
-            .child(v_flex().gap(px(space::S4)).children(info.notes.lines().map(|l| {
+            .child(v_flex().gap(px(2.0)).text_sm().children(info.notes.lines().map(|l| {
                 let l = l.trim_end();
                 if let Some(h) = l.strip_prefix("## ") {
-                    text(&p, theme::BODY, h.to_string()).font_weight(FontWeight(700.0)).mt(px(space::S4)).into_any_element()
+                    div().font_weight(gpui_kit::FontWeight::SEMIBOLD).mt(px(4.0)).child(h.to_string())
                 } else if l.is_empty() {
-                    div().h(px(4.0)).into_any_element()
+                    div().h(px(4.0))
                 } else {
-                    muted(&p, l.to_string()).into_any_element()
+                    div().text_color(cx.theme().muted_foreground).child(l.to_string())
                 }
             })));
-
-        let mut col = v_flex().w_full().gap(px(space::S12)).child(meta).child(notes);
+        let mut col = v_flex().w_full().gap(px(12.0)).child(meta).child(notes);
         if key_missing {
-            col = col.child(banner(&p, Tone::Warn, "Installing updates is switched off in this build", "The release signing key has not been configured yet (placeholder key), so a download cannot be verified. synofurb never installs an unverified file. Use the release page to download manually.", vec![]));
+            col = col.child(
+                Alert::warning("key-missing", "Installing updates is switched off in this build: the signing key is a placeholder.")
+                    .small()
+                    .icon(icons::icon(role::WARN)),
+            );
         }
-        for pr in &info.problems {
-            col = col.child(banner(&p, Tone::Warn, "Cannot be installed automatically", pr.clone(), vec![]));
+        for (i, pr) in info.problems.iter().enumerate() {
+            col = col.child(Alert::warning(("upd-problem", i), pr.clone()).small().icon(icons::icon(role::WARN)));
         }
 
         let (state_ui, buttons): (gpui_kit::AnyElement, Vec<gpui_kit::AnyElement>) = match &a.update {
             UpdateState::Downloading(_, prog) => {
                 let frac = prog.total.filter(|t| *t > 0).map(|t| prog.downloaded as f32 / t as f32).unwrap_or(0.0);
                 (
-                    v_flex()
-                        .gap(px(space::S4))
-                        .child(muted(
-                            &p,
+                    h_flex()
+                        .gap(px(8.0))
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(Progress::new("upd-progress").value(frac * 100.0).accessibility_label("Download progress")),
+                        )
+                        .child(kit::mono_sm(
+                            cx,
                             format!(
-                                "Downloading and verifying... {} of {}",
+                                "{} / {} \u{00b7} {}",
                                 human(prog.downloaded),
-                                prog.total.map(human).unwrap_or_else(|| "?".into())
+                                prog.total.map(human).unwrap_or_else(|| "?".into()),
+                                percent(frac)
                             ),
                         ))
-                        .child(
-                            h_flex()
-                                .gap(px(space::S8))
-                                .items_center()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .child(Progress::new("upd-progress").value(frac * 100.0).accessibility_label("Download progress")),
-                                )
-                                .child(text(&p, theme::CAPTION, percent(frac))),
-                        )
                         .into_any_element(),
                     vec![],
                 )
             }
             UpdateState::Verified(_, vd) => {
-                let blocked = install_running;
                 let app2 = app.clone();
                 (
-                    banner(
-                        &p,
-                        Tone::Ok,
-                        "Verified",
-                        format!(
-                            "The signature of SHA256SUMS is valid and the SHA-256 matches ({}...).",
-                            vd.sha256.chars().take(16).collect::<String>()
-                        ),
-                        vec![],
-                    )
-                    .into_any_element(),
+                    h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .child(kit::tag(
+                            &p,
+                            Tone::Ok,
+                            Some(role::OK),
+                            format!("{} \u{00b7} {}", copy::UPD_SIGNATURE.short, vd.sha256.chars().take(12).collect::<String>()),
+                        ))
+                        .child(crate::ui::disclosure::info_tip("sig-info", &copy::UPD_SIGNATURE, &app))
+                        .into_any_element(),
                     vec![
-                        btn_primary("upd-apply", "Restart and update")
-                            .disabled(blocked)
-                            .tooltip(if blocked { "Not while an installation is running" } else { "" })
+                        Button::new("upd-apply")
+                            .primary()
+                            .label(copy::UPD_RESTART.short)
+                            .disabled(install_running)
+                            .tooltip(if install_running { copy::UPD_RESTART.tip } else { "" })
                             .on_click(move |_, _, cx| app2.update(cx, |a, cx| a.apply_update(cx)))
                             .into_any_element(),
                     ],
@@ -129,39 +134,44 @@ impl Render for UpdateView {
             UpdateState::Failed(_, e) => {
                 let app2 = app.clone();
                 (
-                    banner(&p, Tone::Err, "The update was not installed", e.clone(), vec![])
-                        .id("upd-fail")
-                        .role(Role::Alert)
-                        .into_any_element(),
+                    Alert::error("upd-fail", e.clone()).title(copy::UPD_DISCARDED.short).icon(icons::icon(role::ERR)).into_any_element(),
                     vec![
-                        btn_secondary("upd-retry", "Try again")
+                        Button::new("upd-retry")
+                            .outline()
+                            .label("Try again")
                             .on_click(move |_, _, cx| app2.update(cx, |a, cx| a.start_update_download(cx)))
                             .into_any_element(),
                     ],
                 )
             }
             _ => {
-                let (app_a, app_b, app_c) = (app.clone(), app.clone(), app.clone());
+                let (a1, a2, a3) = (app.clone(), app.clone(), app.clone());
                 let dis = key_missing || !info.installable();
                 (
                     div().into_any_element(),
                     vec![
-                        btn_ghost("upd-skip", "Skip this version")
+                        Button::new("upd-skip")
+                            .ghost()
+                            .label(copy::UPD_SKIP.short)
                             .on_click(move |_, window, cx| {
-                                app_a.update(cx, |a, cx| a.skip_version(cx));
+                                a1.update(cx, |a, cx| a.skip_version(cx));
                                 window.close_dialog(cx);
                             })
                             .into_any_element(),
-                        btn_secondary("upd-later", "Remind me tomorrow")
+                        Button::new("upd-later")
+                            .outline()
+                            .label(copy::UPD_LATER.short)
                             .on_click(move |_, window, cx| {
-                                app_b.update(cx, |a, cx| a.remind_tomorrow(cx));
+                                a2.update(cx, |a, cx| a.remind_tomorrow(cx));
                                 window.close_dialog(cx);
                             })
                             .into_any_element(),
-                        btn_primary("upd-download", "Download and verify")
-                            .icon(icon("download"))
+                        Button::new("upd-download")
+                            .primary()
+                            .icon(icons::icon(role::DOWNLOAD))
+                            .label(copy::UPD_DOWNLOAD.short)
                             .disabled(dis)
-                            .on_click(move |_, _, cx| app_c.update(cx, |a, cx| a.start_update_download(cx)))
+                            .on_click(move |_, _, cx| a3.update(cx, |a, cx| a.start_update_download(cx)))
                             .into_any_element(),
                     ],
                 )
@@ -173,13 +183,14 @@ impl Render for UpdateView {
                 h_flex()
                     .w_full()
                     .items_center()
-                    .gap(px(space::S8))
-                    .pt(px(space::S4))
+                    .gap(px(8.0))
                     .child(div().flex_1().when_some(url, |d, u| {
                         d.child(
-                            btn_ghost("upd-page", "Release page")
+                            Button::new("upd-page")
+                                .link()
                                 .small()
-                                .icon(icon("external-link"))
+                                .icon(icons::icon(role::EXTERNAL))
+                                .label("Release page")
                                 .on_click(move |_, _, cx| cx.open_url(&u)),
                         )
                     }))
@@ -196,7 +207,7 @@ impl App {
         }
         let app = cx.entity();
         let view = cx.new(|cx| UpdateView::new(app, cx));
-        let title = self.update_info().map(|i| format!("synofurb {} is available", i.latest)).unwrap_or_default();
-        window.open_dialog(cx, move |dialog, _, _| dialog.title(title.clone()).w(px(layout::DIALOG_W + 120.0)).child(view.clone()));
+        let title = self.update_info().map(|i| format!("{} {}", copy::UPD_BANNER.short, i.latest)).unwrap_or_default();
+        window.open_dialog(cx, move |dialog, _, _| dialog.title(title.clone()).w(px(layout::DIALOG_W_WIDE)).child(view.clone()));
     }
 }

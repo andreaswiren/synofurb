@@ -17,6 +17,8 @@
 - **Release engineering**: tag-triggered workflow (MSI, NSIS, DMG, deb, rpm, AppImage, portable), one-line installers (`install.sh`, `install.ps1`),
   design-approval gate with a UX critic and a UI critic.
 
+- **Hybrid RAID (SHR-like) data layout** in the installer: `--raid shr1|shr2` (and the wizard/plan lists). The data space of every disk is cut into slices at the disk sizes, each slice becomes an mdadm array (`data1`, `data2`, ...; RAID 1/5 for SHR-1, RAID 6 or mirrors for SHR-2), all joined as PVs of `vg_data` with one linear xfs volume, so mixed disk sizes are used fully. Pure slice algorithm `plan::shr_slices` (docs/RAID.md), warnings for unusable single-disk slices and SHR-2 mirror fallbacks, clear plan errors for too few disks and for combination with preserved arrays. `VgPlan` now holds a list of physical volumes (`pvs`; old plans with a single `pv` still load).
+
 ### Changed
 - Installer failure handling: on units with a boot flash a failed or cancelled install reboots into DSM (60 s before the point of no return, 15 min after).
 - ARM boards: the installer prints the exact U-Boot commands before the reboot.

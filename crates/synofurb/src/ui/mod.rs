@@ -1,8 +1,12 @@
 //! The desktop interface, built on GPUI Kit (GPUI + gpui-component). One codebase for Windows, macOS and Linux.
 //!
 //! Layout of this module (see docs/GUI.md for the architecture and how to add a screen):
-//! * `theme`     - every colour, size, radius and type style; maps our palette onto GPUI Kit's theme
-//! * `widgets`   - badges, banners, cards, form rows, tables built from the theme
+//! * `theme`     - sizes and type styles; loads the designer's ThemeSet (`assets/theme/`) into GPUI Kit
+//! * `tokens`    - generated colour tokens (`design/v2/tokens-v2.json`)
+//! * `copy`      - every user-visible string, with word-budget tests
+//! * `kit`       - small helpers on stock widgets (tags, labels with info icons, segmented choices)
+//! * `disclosure`- info icons (tooltip / popover) and dialogs
+//! * `icons`, `brand`, `assets` - Lucide roles, the logo, bundled fonts
 //! * `state`     - pure state machine pieces (screens, risk level, confirm gate, install progress)
 //! * `logview`   - bounded log buffer with level/text filtering
 //! * `diagram`   - plan -> disk/partition/array/LVM diagram
@@ -14,20 +18,27 @@
 
 pub mod app;
 pub mod assets;
+pub mod brand;
+pub mod cli_cmd;
+pub mod copy;
 pub mod demo;
 pub mod diagram;
+pub mod disclosure;
 pub mod format;
+pub mod icons;
+pub mod kit;
 pub mod logview;
+mod overlays;
 mod render;
 pub mod screens;
 pub mod settings;
 pub mod state;
 pub mod theme;
-pub mod widgets;
+pub mod tokens;
 pub mod worker;
 
 use crate::cli::config_dir;
-use gpui_kit::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+use gpui_kit::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 use settings::UiSettings;
 use state::{DEMO_SCREEN_NAMES, DemoTarget};
 
@@ -47,10 +58,11 @@ pub fn run(demo: Option<&str>) -> anyhow::Result<()> {
 
     gpui_kit::application().with_assets(assets::UiAssets).run(move |cx| {
         gpui_kit::init(cx);
+        assets::register_fonts(cx);
         render::bind_keys(cx);
         screens::logviewer::bind_keys(cx);
         let dark = settings.theme.is_dark(theme::os_is_dark(cx));
-        theme::apply(theme::Palette::for_mode(dark), cx);
+        theme::apply(dark, scale, cx);
 
         // SYNOFURB_WINDOW=960x640 opens at a given size (used to test the minimum size).
         let (w, h) = std::env::var("SYNOFURB_WINDOW")
@@ -61,12 +73,10 @@ pub fn run(demo: Option<&str>) -> anyhow::Result<()> {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(theme::layout::WINDOW_MIN_W), px(theme::layout::WINDOW_MIN_H))),
-            titlebar: Some(TitlebarOptions { title: Some("synofurb".into()), ..Default::default() }),
             app_id: Some("synofurb".into()),
-            ..Default::default()
+            ..gpui_kit::component::TitleBar::window_options()
         };
         let res = gpui_kit::open_window(options, cx, move |window, cx| {
-            window.set_rem_size(px(scale.rem_px()));
             window.set_window_title("synofurb");
             let view = cx.new(|cx| app::App::new(target, window, cx));
             let focus = view.read(cx).focus.clone();

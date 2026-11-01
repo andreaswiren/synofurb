@@ -1,158 +1,288 @@
-//! Settings and About: theme, text size, motion, updates, the compatibility list, logs, keyboard shortcuts.
+//! D12 Settings: the stock `Settings` widget (pages General, Updates, Data, Logs, Privacy). Changes apply at once.
+//! Rows are `SettingItem::render` rows so every label can carry its info icon instead of a paragraph of help.
 
 use crate::ui::app::{App, UpdateState, version};
+use crate::ui::copy::{self, Item};
+use crate::ui::icons::{self, role};
+use crate::ui::kit;
 use crate::ui::render::Page;
-use crate::ui::theme::{self, TextScale, ThemeChoice, Themed, Tone, space};
-use crate::ui::widgets::*;
-use gpui_kit::component::radio::{Radio, RadioGroup};
+use crate::ui::theme::{TextScale, ThemeChoice};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::Input;
+use gpui_kit::component::select::{Select, SelectState};
+use gpui_kit::component::setting::{SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{Disableable, Sizable, h_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, IntoElement, Window, px};
+use gpui_kit::{AnyElement, Context, Entity, IntoElement, SharedString, Window, div, px};
 use synofurb_core::compat::DbOrigin;
 
+fn row(
+    app: &Entity<App>,
+    id: &'static str,
+    item: &'static Item,
+    control: impl Fn(&Entity<App>, &mut Window, &mut gpui_kit::App) -> AnyElement + 'static,
+) -> SettingItem {
+    let app = app.clone();
+    SettingItem::render(move |_, window, cx| {
+        h_flex()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap(px(16.0))
+            .child(kit::labelled(id, item, &app))
+            .child(control(&app, window, cx))
+            .into_any_element()
+    })
+}
+
 impl App {
-    pub(crate) fn page_settings(&mut self, window: &mut Window, cx: &mut Context<App>) -> Page {
-        let p = cx.pal();
+    pub(crate) fn page_settings(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
+        let app = cx.entity();
+        let theme_ix = ThemeChoice::ALL.iter().position(|t| *t == self.settings.theme).unwrap_or(0);
+        let scale_ix = TextScale::ALL.iter().position(|t| *t == self.settings.text_scale).unwrap_or(0);
+        let beta = self.settings.update_channel == "prerelease";
+        let reduce = self.settings.reduce_motion;
+        let check = self.settings.check_updates;
+        let send = self.settings.send_results;
+        let list_note = format!("{} \u{00b7} {} models", self.compat.updated(), self.compat.len());
+        let origin = match self.compat.origin() {
+            DbOrigin::Embedded => "built in",
+            DbOrigin::Cache => "cached",
+        };
+        let refreshing = self.compat_refreshing;
+        let offline = self.offline_app();
+        let (upd_text, upd_available) = match &self.update {
+            UpdateState::Available(i) => (format!("{} available", i.latest), true),
+            UpdateState::UpToDate => (format!("{} is current", version()), false),
+            UpdateState::Checking => ("checking".into(), false),
+            UpdateState::CheckFailed(_) => ("not checked".into(), false),
+            _ => (version().to_string(), false),
+        };
+        let logs = self.cfg_dir.join("logs");
+        let logs_s = logs.display().to_string();
+        let bundle_input = self.inp.bundle.clone();
+        let auto_state = self.settings_auto.clone();
 
-        let theme_sel = ThemeChoice::ALL.iter().position(|t| *t == self.settings.theme);
-        let theme_group = RadioGroup::horizontal("theme-choice")
-            .selected_index(theme_sel)
-            .children(ThemeChoice::ALL.iter().map(|t| Radio::new(t.label()).label(t.label())))
-            .on_click(cx.listener(|this, ix: &usize, _, cx| this.set_theme(ThemeChoice::ALL[*ix], cx)));
-        let scale_sel = TextScale::ALL.iter().position(|t| *t == self.settings.text_scale);
-        let scale_group = RadioGroup::horizontal("text-scale")
-            .selected_index(scale_sel)
-            .children(TextScale::ALL.iter().map(|t| Radio::new(t.label()).label(t.label())))
-            .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                let s = TextScale::ALL[*ix];
-                this.settings.text_scale = s;
-                this.save_settings();
-                window.set_rem_size(gpui_kit::px(s.rem_px()));
-                cx.notify();
-            }));
-        let _ = window;
-        let appearance = v_flex()
-            .gap(px(14.0))
-            .child(form_row(&p, "Theme", Some("Follow system uses the operating system's light or dark setting.".into()), theme_group))
-            .child(form_row(&p, "Text size", Some("Scales all text. Layouts reflow down to the minimum window size.".into()), scale_group))
-            .child(form_row(
-                &p,
-                "Motion",
-                None,
-                Switch::new("reduce-motion")
-                    .label("Reduce motion: show a static glyph instead of the spinner")
-                    .checked(self.settings.reduce_motion)
-                    .on_click(cx.listener(|this, v: &bool, _, cx| {
-                        this.settings.reduce_motion = *v;
-                        this.save_settings();
-                        cx.notify();
-                    })),
-            ));
-
-        // ---- updates
-        let status: gpui_kit::AnyElement = match &self.update {
-            UpdateState::Unknown => muted(&p, "Not checked yet.").into_any_element(),
-            UpdateState::Checking => muted(&p, "Checking...").into_any_element(),
-            UpdateState::UpToDate => {
-                badge(&p, Tone::Ok, "circle-check", format!("synofurb {} is up to date", version()), false).into_any_element()
-            }
-            UpdateState::CheckFailed(e) => {
-                badge(&p, Tone::Warn, "triangle-alert", format!("Could not check: {}", e.chars().take(90).collect::<String>()), false)
-                    .into_any_element()
-            }
-            UpdateState::Available(i) | UpdateState::Downloading(i, _) | UpdateState::Verified(i, _) | UpdateState::Failed(i, _) => {
-                h_flex()
-                    .gap(px(space::S8))
-                    .items_center()
-                    .child(badge(&p, Tone::Accent, "sparkles", format!("{} is available", i.latest), false))
-                    .child(
-                        btn_secondary("show-update", "View details")
-                            .small()
-                            .on_click(cx.listener(|this, _, window, cx| this.open_update_dialog(window, cx))),
+        let general = SettingPage::new(copy::SET_GENERAL.short).icon(icons::icon(role::SETTINGS)).group(
+            SettingGroup::new()
+                .item(row(&app, "s-theme", &copy::SET_THEME, move |app, _, _| {
+                    let app = app.clone();
+                    kit::segmented(
+                        "theme",
+                        &[copy::SET_SYSTEM.short, copy::SET_LIGHT.short, copy::SET_DARK.short],
+                        theme_ix,
+                        move |ix, _, cx| app.update(cx, |a, cx| a.set_theme(ThemeChoice::ALL[ix], cx)),
                     )
                     .into_any_element()
-            }
-        };
-        let chan_sel = if self.settings.update_channel == "prerelease" { 1 } else { 0 };
-        let channel = RadioGroup::horizontal("update-channel")
-            .selected_index(Some(chan_sel))
-            .child(Radio::new("ch-stable").label("Stable"))
-            .child(Radio::new("ch-pre").label("Pre-releases too"))
-            .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                this.settings.update_channel = if *ix == 1 { "prerelease".into() } else { "stable".into() };
-                this.save_settings();
-                cx.notify();
-            }));
-        let updates = v_flex()
-            .gap(px(14.0))
-            .child(form_row(&p, "Check for updates", Some("Looks at the project's releases on GitHub; nothing is installed without your click, and only verified files can be installed.".into()), Switch::new("check-updates").label("Check when the app starts").checked(self.settings.check_updates).on_click(cx.listener(|this, v: &bool, _, cx| {
-                this.settings.check_updates = *v;
-                this.save_settings();
-                cx.notify();
-            }))))
-            .child(form_row(&p, "Channel", None, channel))
-            .child(form_row(&p, "Status", None, h_flex().gap(px(space::S8)).items_center().child(status).child(btn_secondary("check-now", "Check now").small().icon(icon("refresh-cw")).on_click(cx.listener(|this, _, _, cx| this.check_updates_now(cx))))));
+                }))
+                .item(row(&app, "s-size", &copy::SET_TEXT_SIZE, move |app, _, _| {
+                    let app = app.clone();
+                    kit::segmented(
+                        "text-size",
+                        &[copy::SET_DEFAULT.short, copy::SET_LARGE.short, copy::SET_LARGEST.short],
+                        scale_ix,
+                        move |ix, window, cx| {
+                            app.update(cx, |a, cx| {
+                                a.settings.text_scale = TextScale::ALL[ix];
+                                a.save_settings();
+                                let dark = a.settings.theme.is_dark(crate::ui::theme::os_is_dark(cx));
+                                crate::ui::theme::apply(dark, a.settings.text_scale, cx);
+                                let _ = &window;
+                                cx.notify();
+                            })
+                        },
+                    )
+                    .into_any_element()
+                }))
+                .item(row(&app, "s-motion", &copy::SET_MOTION, move |app, _, _| {
+                    let app = app.clone();
+                    Switch::new("reduce-motion")
+                        .checked(reduce)
+                        .on_click(move |v: &bool, _, cx| {
+                            let v = *v;
+                            app.update(cx, |a, cx| {
+                                a.settings.reduce_motion = v;
+                                a.save_settings();
+                                cx.notify();
+                            })
+                        })
+                        .into_any_element()
+                })),
+        );
 
-        // ---- compatibility list
-        let origin = match self.compat.origin() {
-            DbOrigin::Embedded => "built into this version",
-            DbOrigin::Cache => "downloaded and cached",
-        };
-        let counts = h_flex().gap(px(space::S8)).flex_wrap().children(
-            self.compat.count_by_status().into_iter().filter(|(_, n)| *n > 0).map(|(s, n)| {
+        let updates = SettingPage::new(copy::SET_UPDATES.short).icon(icons::icon(role::REFRESH)).group(
+            SettingGroup::new()
+                .item(row(&app, "s-channel", &copy::SET_CHANNEL, move |app, _, _| {
+                    let app = app.clone();
+                    kit::segmented("channel", &[copy::SET_STABLE.short, copy::SET_BETA.short], usize::from(beta), move |ix, _, cx| {
+                        app.update(cx, |a, cx| {
+                            a.settings.update_channel = if ix == 1 { "prerelease".into() } else { "stable".into() };
+                            a.save_settings();
+                            cx.notify();
+                        })
+                    })
+                    .into_any_element()
+                }))
+                .item(row(&app, "s-auto", &copy::SET_AUTO_UPDATE, move |_, _, _| match &auto_state {
+                    Some(st) => {
+                        div().w(px(180.0)).child(Select::new(st).accessibility_label(copy::SET_AUTO_UPDATE.short)).into_any_element()
+                    }
+                    None => div().into_any_element(),
+                }))
+                .item(row(&app, "s-list", &copy::SET_COMPAT_LIST, move |app, _, cx| {
+                    let app = app.clone();
+                    h_flex()
+                        .gap(px(8.0))
+                        .items_center()
+                        .child(kit::caption(cx, format!("{list_note} \u{00b7} {origin}")))
+                        .child(
+                            Button::new("refresh-compat")
+                                .outline()
+                                .small()
+                                .icon(icons::icon(role::REFRESH))
+                                .label(copy::SET_REFRESH.short)
+                                .loading(refreshing)
+                                .disabled(refreshing || offline)
+                                .tooltip(if offline { copy::TAG_OFFLINE.short } else { "" })
+                                .on_click(move |_, _, cx| app.update(cx, |a, cx| a.refresh_compat(cx))),
+                        )
+                        .into_any_element()
+                }))
+                .item(SettingItem::render({
+                    let app = app.clone();
+                    let text = upd_text.clone();
+                    move |_, _, cx| {
+                        let app2 = app.clone();
+                        h_flex()
+                            .w_full()
+                            .justify_between()
+                            .items_center()
+                            .child(kit::muted(cx, text.clone()))
+                            .child(
+                                Button::new("check-now")
+                                    .outline()
+                                    .small()
+                                    .icon(icons::icon(role::REFRESH))
+                                    .label(copy::MENU_UPDATES.short)
+                                    .on_click(move |_, _, cx| app2.update(cx, |a, cx| a.check_updates_now(cx)))
+                                    .when(upd_available, |b| b.primary()),
+                            )
+                            .into_any_element()
+                    }
+                })),
+        );
+        let _ = check;
+
+        let data = SettingPage::new(copy::SET_DATA.short).icon(icons::icon(role::DATABASE)).group(SettingGroup::new().item(row(
+            &app,
+            "s-bundle",
+            &copy::SET_BUNDLE,
+            move |app, _, _| {
+                let app = app.clone();
+                let input = bundle_input.clone();
                 h_flex()
-                    .gap(px(space::S4))
+                    .gap(px(6.0))
                     .items_center()
-                    .child(compat_badge(&p, s))
-                    .child(text(&p, theme::CAPTION, n.to_string()).text_color(p.fg_2))
-            }),
-        );
-        let compat = v_flex()
-            .gap(px(space::S12))
-            .child(muted(&p, format!("{} models, list dated {} ({}).", self.compat.len(), self.compat.updated(), origin)))
-            .child(counts)
-            .child(h_flex().gap(px(space::S8)).items_center().child(btn_secondary("refresh-compat", "Refresh list").icon(icon("refresh-cw")).loading(self.compat_refreshing).disabled(self.compat_refreshing).on_click(cx.listener(|this, _, _, cx| this.refresh_compat(cx)))).when_some(self.compat_note.clone(), |d, (m, ok)| d.child(text(&p, theme::BODY_SM, m).text_color(if ok { p.fg_2 } else { p.warn_fg }).flex_1().min_w_0())))
-            .child(muted(&p, "Verified means maintainers reproduced a full install on that model; it is still not a guarantee. Statuses are always shown as words with an icon.").text_size(theme::CAPTION.size()));
+                    .child(div().w(px(260.0)).child(Input::new(&input)))
+                    .child(
+                        Button::new("bundle-browse")
+                            .outline()
+                            .small()
+                            .icon(icons::icon(role::FOLDER))
+                            .accessibility_label(copy::CONN_BROWSE.short)
+                            .on_click(move |_, window, cx| {
+                                let input = input.clone();
+                                app.update(cx, |a, cx| a.browse_dir(input, window, cx))
+                            }),
+                    )
+                    .child(
+                        Button::new("bundle-dl")
+                            .ghost()
+                            .small()
+                            .label(copy::SET_BUNDLE_DOWNLOAD.short)
+                            .disabled(true)
+                            .tooltip("Run `synofurb-cli bundle` to build or download one."),
+                    )
+                    .into_any_element()
+            },
+        )));
 
-        // ---- about
-        let logs = self.cfg_dir.join("logs");
-        let logs_shown = logs.display().to_string();
-        let about = v_flex()
-            .gap(px(space::S8))
-            .child(h_flex().gap(px(space::S8)).items_center().child(text(&p, theme::H2, "synofurb")).child(chip(&p, format!("v{}", version()))))
-            .child(muted(&p, "Reinstalls Synology NAS units with plain Debian 13. One program for Windows, macOS and Linux; every decision lives in the shared engine, so the command line does exactly what this window does."))
-            .child(h_flex().gap(px(space::S8)).items_center().child(muted(&p, "Logs and keys:")).child(mono(&p, logs_shown, cx).flex_1().min_w_0().truncate()).child(btn_secondary("show-logs", "Show folder").small().icon(icon("folder-open")).on_click(move |_, _, cx| {
-                let _ = std::fs::create_dir_all(&logs);
-                cx.reveal_path(&logs)
-            })))
-            .child(h_flex().gap(px(space::S8)).child(btn_ghost("repo", "Project page").small().icon(icon("external-link")).on_click(|_, _, cx| cx.open_url("https://github.com/andreaswiren/synofurb"))));
+        let logs_page = SettingPage::new(copy::SET_LOGS.short).icon(icons::icon(role::LOG)).group(SettingGroup::new().item(row(
+            &app,
+            "s-logs",
+            &copy::SET_LOG_FOLDER,
+            move |_, _, cx| {
+                let logs = logs.clone();
+                h_flex()
+                    .gap(px(6.0))
+                    .items_center()
+                    .child(kit::mono_sm(cx, logs_s.clone()).max_w(px(320.0)).truncate())
+                    .child(Button::new("open-logs").outline().small().icon(icons::icon(role::FOLDER)).label(copy::SET_OPEN.short).on_click(
+                        move |_, _, cx| {
+                            let _ = std::fs::create_dir_all(&logs);
+                            cx.reveal_path(&logs)
+                        },
+                    ))
+                    .into_any_element()
+            },
+        )));
 
-        let keys = v_flex().gap(px(space::S4)).children(
-            [
-                ("Tab / Shift+Tab", "Move between controls"),
-                ("Enter", "The screen's main action (never the red erase button)"),
-                ("Alt+Left / Alt+Right", "Previous / next step through completed steps"),
-                ("Ctrl+, (Cmd+, on macOS)", "Settings and About"),
-                ("Ctrl+F / Ctrl+A / Ctrl+C in the log", "Search, select all, copy"),
-                ("Esc", "Close a dialog; never cancels an installation"),
-            ]
-            .map(|(k, d)| h_flex().gap(px(space::S12)).child(mono(&p, k, cx).w(px(250.0)).flex_none()).child(muted(&p, d))),
-        );
+        let privacy = SettingPage::new(copy::SET_PRIVACY.short).icon(icons::icon(role::LOCK)).group(SettingGroup::new().item(row(
+            &app,
+            "s-send",
+            &copy::SET_SEND_RESULTS,
+            move |app, _, _| {
+                let app = app.clone();
+                Switch::new("send-results")
+                    .checked(send)
+                    .on_click(move |v: &bool, _, cx| {
+                        let v = *v;
+                        app.update(cx, |a, cx| {
+                            a.settings.send_results = v;
+                            a.save_settings();
+                            cx.notify();
+                        })
+                    })
+                    .into_any_element()
+            },
+        )));
 
-        let body = v_flex()
+        let body = div()
+            .flex_1()
+            .min_h_0()
             .w_full()
-            .gap(px(space::S16))
-            .child(card(&p, Some("Appearance".into()), None, None, appearance))
-            .child(card(&p, Some("Updates".into()), None, None, updates))
-            .child(card(&p, Some("Compatibility list".into()), None, None, compat))
-            .child(card(&p, Some("Keyboard".into()), None, None, keys))
-            .child(card(&p, Some("About".into()), None, None, about));
-        let back = self.return_to;
-        Page::new("Settings and About", body).subtitle("Preferences are stored on this computer only.").buttons(vec![
-            btn_primary("close-settings", "Done")
-                .on_click(cx.listener(move |this, _, window, cx| this.go(back, window, cx)))
+            .child(Settings::new("settings").sidebar_width(px(180.0)).pages([general, updates, data, logs_page, privacy]));
+        Page::new(copy::SET_TITLE.short, body).no_scroll().left(vec![
+            Button::new("back")
+                .ghost()
+                .icon(icons::icon(role::BACK))
+                .label(copy::BTN_BACK.short)
+                .on_click(cx.listener(|this, _, window, cx| this.go(this.return_to, window, cx)))
                 .into_any_element(),
         ])
+    }
+
+    /// The Auto-update select ("Check on start" / "Never"), created once.
+    pub(crate) fn make_auto_select(window: &mut Window, cx: &mut Context<App>) -> Entity<SelectState<Vec<SharedString>>> {
+        use gpui_kit::component::IndexPath;
+        use gpui_kit::component::select::SelectEvent;
+        let st = cx.new(|cx| {
+            SelectState::new(
+                vec![SharedString::from("Check on start"), SharedString::from("Never")],
+                Some(IndexPath::default().row(0)),
+                window,
+                cx,
+            )
+        });
+        cx.subscribe(&st, |this: &mut App, _, ev: &SelectEvent<Vec<SharedString>>, cx| {
+            if let SelectEvent::Confirm(Some(v)) = ev {
+                this.settings.check_updates = v.as_ref() == "Check on start";
+                this.save_settings();
+                cx.notify();
+            }
+        })
+        .detach();
+        st
     }
 }

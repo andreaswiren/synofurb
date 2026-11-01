@@ -57,6 +57,8 @@ fn raid_arg(r: DataRaid) -> &'static str {
         DataRaid::Raid5 => "5",
         DataRaid::Raid6 => "6",
         DataRaid::Raid10 => "10",
+        DataRaid::Shr1 => "shr1",
+        DataRaid::Shr2 => "shr2",
     }
 }
 
@@ -243,7 +245,17 @@ mod tests {
         c.bundle = Some("/data/bundle".into());
         c.port = 2222;
         let s = c.install_command(None);
-        for want in ["--mode keep", "--keep md2,md3", "--copies 3", "--kernel newest", "--method kit", "--kit-dir '/tmp/kit dir'", "--source offline", "--bundle /data/bundle", "--port 2222"] {
+        for want in [
+            "--mode keep",
+            "--keep md2,md3",
+            "--copies 3",
+            "--kernel newest",
+            "--method kit",
+            "--kit-dir '/tmp/kit dir'",
+            "--source offline",
+            "--bundle /data/bundle",
+            "--port 2222",
+        ] {
             assert!(s.contains(want), "{want} in {s}");
         }
         assert!(!s.contains("--source online"));

@@ -1,0 +1,368 @@
+{
+ "_comment": "Language-neutral test vectors for the SHR slice algorithm (docs/RAID.md). Sizes are MiB of the data partition of each disk; 'TB' in the spec examples = 1000 GiB. Rust and Python must agree on members, length, level and usable of every slice.",
+ "vectors": [
+  {
+   "name": "spec example 1: 4,4,8 TB SHR-1",
+   "mode": "shr1",
+   "unit": "MiB",
+   "disks": {
+    "a": 4096000,
+    "b": 4096000,
+    "c": 8192000
+   },
+   "usable": 8192000,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b",
+      "c"
+     ],
+     "length": 4096000,
+     "level": "raid5",
+     "usable": 8192000
+    },
+    {
+     "members": [
+      "c"
+     ],
+     "length": 4096000,
+     "level": null,
+     "usable": 0
+    }
+   ]
+  },
+  {
+   "name": "spec example 2: 2,4,4,8 TB SHR-1",
+   "mode": "shr1",
+   "unit": "MiB",
+   "disks": {
+    "a": 2048000,
+    "b": 4096000,
+    "c": 4096000,
+    "d": 8192000
+   },
+   "usable": 10240000,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b",
+      "c",
+      "d"
+     ],
+     "length": 2048000,
+     "level": "raid5",
+     "usable": 6144000
+    },
+    {
+     "members": [
+      "b",
+      "c",
+      "d"
+     ],
+     "length": 2048000,
+     "level": "raid5",
+     "usable": 4096000
+    },
+    {
+     "members": [
+      "d"
+     ],
+     "length": 4096000,
+     "level": null,
+     "usable": 0
+    }
+   ]
+  },
+  {
+   "name": "spec example 3: 1,2,2,3 TB SHR-1",
+   "mode": "shr1",
+   "unit": "MiB",
+   "disks": {
+    "a": 1024000,
+    "b": 2048000,
+    "c": 2048000,
+    "d": 3072000
+   },
+   "usable": 5120000,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b",
+      "c",
+      "d"
+     ],
+     "length": 1024000,
+     "level": "raid5",
+     "usable": 3072000
+    },
+    {
+     "members": [
+      "b",
+      "c",
+      "d"
+     ],
+     "length": 1024000,
+     "level": "raid5",
+     "usable": 2048000
+    },
+    {
+     "members": [
+      "d"
+     ],
+     "length": 1024000,
+     "level": null,
+     "usable": 0
+    }
+   ]
+  },
+  {
+   "name": "two equal disks SHR-1 are a mirror",
+   "mode": "shr1",
+   "unit": "MiB",
+   "disks": {
+    "a": 4096000,
+    "b": 4096000
+   },
+   "usable": 4096000,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b"
+     ],
+     "length": 4096000,
+     "level": "raid1",
+     "usable": 4096000
+    }
+   ]
+  },
+  {
+   "name": "four equal disks SHR-1",
+   "mode": "shr1",
+   "unit": "MiB",
+   "disks": {
+    "a": 4096000,
+    "b": 4096000,
+    "c": 4096000,
+    "d": 4096000
+   },
+   "usable": 12288000,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b",
+      "c",
+      "d"
+     ],
+     "length": 4096000,
+     "level": "raid5",
+     "usable": 12288000
+    }
+   ]
+  },
+  {
+   "name": "four equal disks SHR-2",
+   "mode": "shr2",
+   "unit": "MiB",
+   "disks": {
+    "a": 4096000,
+    "b": 4096000,
+    "c": 4096000,
+    "d": 4096000
+   },
+   "usable": 8192000,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b",
+      "c",
+      "d"
+     ],
+     "length": 4096000,
+     "level": "raid6",
+     "usable": 8192000
+    }
+   ]
+  },
+  {
+   "name": "4,4,8,8 TB SHR-2: second slice is a mirror",
+   "mode": "shr2",
+   "unit": "MiB",
+   "disks": {
+    "a": 4096000,
+    "b": 4096000,
+    "c": 8192000,
+    "d": 8192000
+   },
+   "usable": 12288000,
+   "warnings": 1,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b",
+      "c",
+      "d"
+     ],
+     "length": 4096000,
+     "level": "raid6",
+     "usable": 8192000
+    },
+    {
+     "members": [
+      "c",
+      "d"
+     ],
+     "length": 4096000,
+     "level": "raid1",
+     "usable": 4096000
+    }
+   ]
+  },
+  {
+   "name": "sizes within 1 GiB merge into the lower tier",
+   "mode": "shr1",
+   "unit": "MiB",
+   "disks": {
+    "a": 4096000,
+    "b": 4096512
+   },
+   "usable": 4096000,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b"
+     ],
+     "length": 4096000,
+     "level": "raid1",
+     "usable": 4096000
+    }
+   ]
+  },
+  {
+   "name": "sizes 1 GiB apart stay separate",
+   "mode": "shr1",
+   "unit": "MiB",
+   "disks": {
+    "a": 4096000,
+    "b": 4097024,
+    "c": 4097024
+   },
+   "usable": 8193024,
+   "warnings": 0,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b",
+      "c"
+     ],
+     "length": 4096000,
+     "level": "raid5",
+     "usable": 8192000
+    },
+    {
+     "members": [
+      "b",
+      "c"
+     ],
+     "length": 1024,
+     "level": "raid1",
+     "usable": 1024
+    }
+   ]
+  },
+  {
+   "name": "sizes round down to whole GiB",
+   "mode": "shr1",
+   "unit": "MiB",
+   "disks": {
+    "a": 4097000,
+    "b": 4096900
+   },
+   "usable": 4096000,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b"
+     ],
+     "length": 4096000,
+     "level": "raid1",
+     "usable": 4096000
+    }
+   ]
+  },
+  {
+   "name": "1,2,3,4,5 TB SHR-1",
+   "mode": "shr1",
+   "unit": "MiB",
+   "disks": {
+    "a": 1024000,
+    "b": 2048000,
+    "c": 3072000,
+    "d": 4096000,
+    "e": 5120000
+   },
+   "usable": 10240000,
+   "slices": [
+    {
+     "members": [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e"
+     ],
+     "length": 1024000,
+     "level": "raid5",
+     "usable": 4096000
+    },
+    {
+     "members": [
+      "b",
+      "c",
+      "d",
+      "e"
+     ],
+     "length": 1024000,
+     "level": "raid5",
+     "usable": 3072000
+    },
+    {
+     "members": [
+      "c",
+      "d",
+      "e"
+     ],
+     "length": 1024000,
+     "level": "raid5",
+     "usable": 2048000
+    },
+    {
+     "members": [
+      "d",
+      "e"
+     ],
+     "length": 1024000,
+     "level": "raid1",
+     "usable": 1024000
+    },
+    {
+     "members": [
+      "e"
+     ],
+     "length": 1024000,
+     "level": null,
+     "usable": 0
+    }
+   ]
+  }
+ ]
+}

@@ -1,179 +1,256 @@
-//! Final step: where the new system is and how to log in. The password and the private key are shown here once.
+//! D10 Done: the logins, shown once. The password must be copied before Finish enables.
 
 use crate::ui::app::App;
-use crate::ui::format::{mask, shorten_path};
+use crate::ui::copy;
+use crate::ui::disclosure::paragraphs;
+use crate::ui::icons::{self, role};
+use crate::ui::kit;
 use crate::ui::render::Page;
-use crate::ui::theme::{self, Themed, Tone, space};
-use crate::ui::widgets::*;
-use gpui_kit::component::{Sizable, h_flex, v_flex};
+use crate::ui::theme::{Themed, Tone};
+use gpui_kit::component::accordion::Accordion;
+use gpui_kit::component::alert::Alert;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::clipboard::Clipboard;
+use gpui_kit::component::description_list::{DescriptionItem, DescriptionList};
+use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::component::input::Input;
+use gpui_kit::component::{Disableable, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, FontWeight, IntoElement, Window, px};
+use gpui_kit::{AnyElement, Context, IntoElement, Window, div, px};
 use synofurb_core::model::Firmware;
 
+/// Percent-encode for a URL query value.
+pub fn pct(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
 impl App {
-    /// Value + small copy button on one line.
-    fn copy_row(&self, p: &theme::Palette, id: &str, value: String, what: &'static str, cx: &mut Context<App>) -> AnyElement {
-        let v = value.clone();
-        let id = id.to_string();
+    /// The pre-filled "compat report" issue: model, DSM version, synofurb version, result, boot method. No serial.
+    pub fn report_url(&self) -> String {
+        let (model, dsm, method) = self
+            .facts
+            .as_ref()
+            .map(|f| (f.model.clone(), f.dsm_version.clone(), self.sys.boot.resolve(f).label().to_string()))
+            .unwrap_or_default();
+        let result = if matches!(self.result, Some(Ok(_))) { "installed" } else { "failed" };
+        let body =
+            format!("model: {model}\ndsm: {dsm}\nsynofurb: {}\nresult: {result}\nboot method: {method}\n", super::super::app::version());
+        format!(
+            "https://github.com/andreaswiren/synofurb/issues/new?template=compat-report.yml&title={}&body={}",
+            pct(&format!("Compat report: {model}")),
+            pct(&body)
+        )
+    }
+
+    fn done_row(&self, cx: &mut Context<App>, id: &'static str, value: String, what: &'static str) -> AnyElement {
         h_flex()
-            .gap(px(space::S8))
+            .gap(px(4.0))
             .items_center()
-            .child(mono(p, value, cx).flex_1().min_w_0())
-            .child(
-                btn_ghost(gpui_kit::SharedString::from(format!("copy-{id}")), "Copy")
-                    .small()
-                    .icon(icon("copy"))
-                    .on_click(cx.listener(move |this, _, window, cx| this.copy_text(v.clone(), what, window, cx))),
-            )
+            .child(kit::mono(cx, value.clone()).flex_1().min_w_0().truncate())
+            .child(Clipboard::new(id).value(value).tooltip("Copy").on_copied(move |_, _, _| {
+                let _ = what;
+            }))
             .into_any_element()
     }
 
     pub(crate) fn page_done(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
         let p = cx.pal();
+        let app = cx.entity();
         let Some(Ok(o)) = self.result.clone() else {
-            return Page::new("Debian is installed", muted(&p, "Waiting for the result...")).buttons(vec![]);
+            return Page::new(copy::DONE_TITLE.short, kit::muted(cx, "-"));
         };
-        let name = self.unit_name();
-        let ip = o.ip.map(|i| i.to_string()).unwrap_or_else(|| "see your DHCP server".into());
-        let password = self.input_value(&self.inp.new_password, cx);
-        let shown = if self.reveal_password { password.clone() } else { mask(&password) };
-        let ssh_cmd = format!("ssh {}@{}", o.username, ip);
-        let serial = {
-            let t = self.input_value(&self.inp.serial_text, cx);
-            let s = self.input_value(&self.inp.serial_speed, cx);
-            format!(
-                "{t} at {s} baud, 8N1 (built-in port and any USB serial adapter). VGA/HDMI and a USB keyboard work on the local console."
-            )
+        let ip = o.ip.map(|i| i.to_string()).unwrap_or_else(|| "?".into());
+        let ssh_cmd = match &self.sys.generated_key {
+            Some((_, path)) => format!("ssh -i {} {}@{}", crate::ui::format::shorten_path(&path.display().to_string(), 40), o.username, ip),
+            None => format!("ssh {}@{}", o.username, ip),
         };
-
-        let reach = if o.mgmt_reachable {
-            banner(
-                &p,
-                Tone::Ok,
-                format!("Debian is installed on {name}"),
-                "The new system answers on SSH. Write the logins below down: the password and the private key are not kept anywhere else.",
-                vec![],
-            )
-        } else {
-            banner(
-                &p,
-                Tone::Warn,
-                format!("Debian is installed on {name}, but the management page did not answer yet"),
-                "Give it a minute. If SSH works, the management plane may still be starting.",
-                vec![],
-            )
-        };
-
-        let reveal = h_flex()
-            .gap(px(space::S8))
-            .items_center()
-            .child(mono(&p, shown, cx).flex_1().min_w_0())
+        let label = |id: &'static str, it: &'static copy::Item| kit::labelled(id, it, &app);
+        let mut list = DescriptionList::horizontal()
+            .columns(1)
+            .bordered(false)
+            .child(DescriptionItem::new(copy::DONE_ADDRESS.short).value(self.done_row(cx, "c-addr", ip.clone(), "Address")))
+            .child(DescriptionItem::new(copy::DONE_USER.short).value(kit::strong(o.username.clone()).into_any_element()))
             .child(
-                btn_ghost("reveal-pw", if self.reveal_password { "Hide" } else { "Reveal" })
-                    .small()
-                    .icon(icon(if self.reveal_password { "eye-off" } else { "eye" }))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.reveal_password = !this.reveal_password;
-                        cx.notify();
-                    })),
-            )
-            .child(btn_ghost("copy-pw", "Copy").small().icon(icon("copy")).on_click(cx.listener(|this, _, window, cx| {
-                let pw = this.input_value(&this.inp.new_password, cx);
-                this.copy_text(pw, "Password", window, cx);
-            })));
-
-        let mut logins = v_flex()
-            .child(kv(&p, "Host name", text(&p, theme::BODY_SM, format!("{}  (also {}.local through mDNS)", o.hostname, o.hostname))))
-            .child(kv(&p, "Address", self.copy_row(&p, "addr", ip.clone(), "Address", cx)))
-            .child(kv(&p, "User", text(&p, theme::BODY_SM, o.username.clone()).font_weight(FontWeight(600.0))))
-            .child(kv(&p, "Password", reveal))
-            .child(kv(&p, "SSH command", self.copy_row(&p, "ssh", ssh_cmd.clone(), "SSH command", cx)));
-        if let Some(fp) = &o.ssh_fingerprint {
-            logins = logins.child(kv(&p, "SSH host key", self.copy_row(&p, "fp", fp.clone(), "Fingerprint", cx)));
-        }
-        if let Some((kp, path)) = &self.sys.generated_key {
-            let pstr = path.display().to_string();
-            logins = logins.child(kv(
-                &p,
-                "SSH private key",
-                v_flex().gap(px(space::S2)).child(self.copy_row(&p, "key", pstr.clone(), "Key path", cx)).child(
-                    muted(&p, format!("{}  -  use: ssh -i {} {}@{}", kp.fingerprint, shorten_path(&pstr, 48), o.username, ip))
-                        .text_size(theme::CAPTION.size()),
+                DescriptionItem::new(label("d-pw", &copy::DONE_PASSWORD)).value(
+                    h_flex()
+                        .gap(px(4.0))
+                        .items_center()
+                        .child(div().w(px(260.0)).child(Input::new(&self.inp.new_password).readonly(true).mask_toggle()))
+                        .child(Clipboard::new("c-pw").value(self.input_value(&self.inp.new_password, cx)).tooltip("Copy").on_copied({
+                            let app = app.clone();
+                            move |_, _, cx| {
+                                app.update(cx, |a, cx| {
+                                    a.password_copied = true;
+                                    cx.notify();
+                                })
+                            }
+                        }))
+                        .into_any_element(),
                 ),
-            ));
+            )
+            .child(DescriptionItem::new(copy::DONE_SSH.short).value(self.done_row(cx, "c-ssh", ssh_cmd, "SSH command")));
+        if let Some(fp) = &o.ssh_fingerprint {
+            list = list.child(DescriptionItem::new(label("d-hk", &copy::DONE_HOST_KEY)).value(self.done_row(
+                cx,
+                "c-fp",
+                fp.clone(),
+                "Fingerprint",
+            )));
         }
         if let Some(u) = &o.mgmt_url {
             let uu = u.clone();
-            logins = logins.child(kv(
-                &p,
-                "Management plane",
-                v_flex()
-                    .gap(px(space::S2))
-                    .child(h_flex().gap(px(space::S8)).items_center().child(mono(&p, u.clone(), cx)).child(
-                        btn_ghost("open-mgmt", "Open").small().icon(icon("external-link")).on_click(move |_, _, cx| cx.open_url(&uu)),
-                    ))
-                    .child(
-                        muted(&p, "Self-signed certificate: your browser will warn once. Log in with the user above.")
-                            .text_size(theme::CAPTION.size()),
-                    ),
-            ));
+            list = list.child(
+                DescriptionItem::new(label("d-web", &copy::DONE_WEB_UI)).value(
+                    h_flex()
+                        .gap(px(8.0))
+                        .items_center()
+                        .child(kit::mono(cx, u.clone()))
+                        .child(
+                            Button::new("open-web")
+                                .outline()
+                                .small()
+                                .icon(icons::icon(role::EXTERNAL))
+                                .label(copy::DONE_OPEN.short)
+                                .on_click(move |_, _, cx| cx.open_url(&uu)),
+                        )
+                        .into_any_element(),
+                ),
+            );
         }
-        logins = logins.child(kv(&p, "Serial console", muted(&p, serial)));
 
-        let mut next = vec![
-            "Root login is disabled. Use the user above with sudo.".to_string(),
-            "RAID arrays synchronise in the background after the first boot; large disks take hours. The NAS is usable meanwhile."
-                .to_string(),
-        ];
-        if self.facts.as_ref().is_some_and(|f| f.firmware == Firmware::Dom) {
-            next.push("If the NAS does not boot from its disks, check the BIOS/UEFI boot order: the internal Synology flash module may take precedence.".into());
+        let mut next = vec!["Open the web UI.".to_string(), "Replace warned disks.".into()];
+        next.push(if self.facts.as_ref().is_some_and(|f| f.firmware == Firmware::Dom) {
+            "Check the BIOS boot order: the internal Synology flash may take precedence.".into()
         } else {
-            next.push("If the NAS boots into the old system, check the BIOS/UEFI boot order.".into());
+            "Check the BIOS boot order.".into()
+        });
+        let next_ui = v_flex().gap(px(2.0)).text_sm().children(next.into_iter().map(|l| div().child(format!("\u{2022} {l}"))));
+        let acc = Accordion::new("done-acc")
+            .bordered(true)
+            .item(|i| i.title(h_flex().gap(px(2.0)).child(copy::DONE_NEXT_STEPS.short)).child(next_ui));
+
+        let mut body = v_flex().w_full().max_w(px(680.0)).gap(px(14.0));
+        if !o.mgmt_reachable {
+            body = body.child(Alert::warning("web-wait", "Web UI not answering yet.").small().icon(icons::icon(role::WARN)));
         }
-        if let Some(path) = &o.log_path {
-            next.push(format!("The full debug log is saved at {}.", path.display()));
-        }
-        let next_card = card(
-            &p,
-            Some("Next steps".into()),
-            None,
-            None,
-            v_flex().gap(px(space::S6)).children(next.into_iter().map(|l| {
+        body = body.child(list);
+        if !self.install.uboot_lines.is_empty() {
+            let lines = self.install.uboot_lines.clone();
+            body = body.child(
                 h_flex()
-                    .gap(px(space::S8))
-                    .child(icon_sized("chevron-right", 12.0, p.placeholder).mt(px(5.0)))
-                    .child(muted(&p, l).flex_1().min_w_0())
-            })),
-        );
-
-        let mut body = v_flex().w_full().gap(px(space::S16)).child(reach).child(card(
-            &p,
-            Some("Logins".into()),
-            Some(badge(&p, Tone::Warn, "key-round", "Shown once", false).into_any_element()),
-            None,
-            logins,
-        ));
-        if let Some(b) = self.uboot_box(&p, cx) {
-            body = body.child(b);
+                    .gap(px(8.0))
+                    .items_center()
+                    .child(Alert::warning("arm-action", copy::DONE_ARM_ACTION.short).small().icon(icons::icon(role::WARN)).flex_1())
+                    .child(Button::new("arm-cmds").outline().label(copy::DONE_SHOW_COMMANDS.short).on_click(move |_, window, cx| {
+                        let lines = lines.clone();
+                        window.open_dialog(cx, move |d, _, cx| {
+                            let text = lines.join("\n");
+                            d.title("U-Boot commands")
+                                .w(px(560.0))
+                                .child(
+                                    v_flex()
+                                        .gap(px(8.0))
+                                        .child(
+                                            div()
+                                                .p(px(10.0))
+                                                .rounded(cx.theme_radius())
+                                                .bg(cx.pal().log_bg)
+                                                .text_color(cx.pal().log_fg)
+                                                .font_family(gpui_kit::component::ActiveTheme::theme(cx).mono_font_family.clone())
+                                                .text_xs()
+                                                .children(lines.iter().map(|l| div().child(l.clone()))),
+                                        )
+                                        .child(Clipboard::new("c-uboot").value(text)),
+                                )
+                                .footer(
+                                    DialogFooter::new().child(
+                                        Button::new("ub-close")
+                                            .primary()
+                                            .label(copy::BTN_CLOSE.short)
+                                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                                    ),
+                                )
+                        });
+                    })),
+            );
         }
-        body = body.child(next_card);
-
-        Page::new(format!("Debian is installed on {name}"), body)
-            .subtitle("Everything you need to log in. Store the password and the key somewhere safe.")
-            .note(muted(&p, "Root login is disabled."))
-            .buttons(vec![
-                btn_secondary("save-logins", "Save logins to a file...")
-                    .icon(icon("save"))
+        body = body.child(acc).child(h_flex().gap(px(8.0)).items_center().child(
+            Checkbox::new("pw-copied").label(copy::DONE_COPIED.short).checked(self.password_copied).on_click(cx.listener(
+                |this, v: &bool, _, cx| {
+                    this.password_copied = *v;
+                    cx.notify();
+                },
+            )),
+        ));
+        let copied = self.password_copied;
+        let _ = (&p, Tone::Ok);
+        Page::new(copy::DONE_TITLE.short, body)
+            .subtitle(copy::DONE_SUB.short)
+            .left(vec![
+                Button::new("save-logins")
+                    .ghost()
+                    .icon(icons::icon(role::SAVE))
+                    .label(copy::DONE_SAVE.short)
+                    .tooltip(copy::DONE_SAVE.tip)
                     .on_click(cx.listener(|this, _, window, cx| this.save_logins(window, cx)))
                     .into_any_element(),
-                btn_secondary("copy-ssh", "Copy SSH command")
-                    .icon(icon("terminal"))
-                    .on_click(cx.listener(move |this, _, window, cx| this.copy_text(ssh_cmd.clone(), "SSH command", window, cx)))
+            ])
+            .right(vec![
+                Button::new("report")
+                    .outline()
+                    .label(copy::DONE_REPORT.short)
+                    .tooltip(copy::DONE_REPORT.tip)
+                    .on_click(cx.listener(|this, _, window, cx| this.open_report_dialog(window, cx)))
                     .into_any_element(),
-                btn_primary("start-over", "Start over")
-                    .icon(icon("undo-2"))
+                Button::new("finish")
+                    .primary()
+                    .label(copy::DONE_FINISH.short)
+                    .disabled(!copied)
+                    .tooltip(if copied { "" } else { copy::DONE_FINISH.tip })
                     .on_click(cx.listener(|this, _, window, cx| this.start_over(window, cx)))
                     .into_any_element(),
             ])
+    }
+
+    pub fn open_report_dialog(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        let url = self.report_url();
+        window.open_dialog(cx, move |d, _, cx| {
+            let url = url.clone();
+            d.title(copy::DLG_REPORT.short).w(px(crate::ui::theme::layout::DIALOG_W)).child(paragraphs(copy::DLG_REPORT.body, cx)).footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("rep-cancel").outline().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(Button::new("rep-open").primary().icon(icons::icon(role::EXTERNAL)).label(copy::BTN_OPEN_ISSUE.short).on_click(
+                        move |_, window, cx| {
+                            cx.open_url(&url);
+                            window.close_dialog(cx);
+                        },
+                    )),
+            )
+        });
+    }
+}
+
+trait ThemeRadius {
+    fn theme_radius(&self) -> gpui_kit::Pixels;
+}
+impl ThemeRadius for gpui_kit::App {
+    fn theme_radius(&self) -> gpui_kit::Pixels {
+        gpui_kit::component::ActiveTheme::theme(self).radius
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pct;
+
+    #[test]
+    fn percent_encoding_keeps_unreserved_and_escapes_the_rest() {
+        assert_eq!(pct("a-b_c.d~e"), "a-b_c.d~e");
+        assert_eq!(pct("a b\n&="), "a%20b%0A%26%3D");
     }
 }

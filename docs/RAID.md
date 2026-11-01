@@ -76,3 +76,38 @@ Foreign arrays (created by DSM or another system) are shown and can be assembled
 Safety rules for every operation: never touch a device that is mounted, holds `/`, `/boot` or swap, or belongs to a different array;
 refuse when the array is already resyncing/reshaping (except monitoring and `idle`); show the exact commands before running; re-derive the plan
 on the server at execution time; sizes and names pass the existing validators.
+
+## Implementation and verification
+
+Installer side (this repository, `synofurb-core`): `DataRaid::Shr1` / `Shr2` (`--raid shr1|shr2`), the pure function `plan::shr_slices`,
+the plan (`Plan::shr`, one `ArrayPlan` per usable slice named `data1`, `data2`, ..., `VgPlan::pvs` as a list) and the generated stage-2 script
+(`pvcreate` on every slice array, one `vgcreate vg_data` with all of them, one linear `lvcreate`, every array checked against `/etc/mdadm/mdadm.conf`
+before the initramfs is built). Details of the implementation that the spec leaves open:
+
+* A slice that exists on one disk only gets **no partition** at all; its space stays unallocated and the plan lists it as unused with a warning.
+* Only fully wiped disks take part. SHR with `--mode keep` is refused when arrays are preserved ("cannot be combined with preserved arrays"); disks
+  that keep any partition are left out and named in a warning, or in the error when too few disks remain. Minimum 2 (SHR-1) / 4 (SHR-2) data disks.
+* The data partition of a disk that carries a copy of the system is smaller than that of a data-only disk, so with the default 3 system copies on
+  4 equal disks the 4th disk's extra space forms an unusable single-disk slice. The plan warns and suggests setting `--copies` to the number of disks.
+* SHR-2 slices with 2 members are RAID 1 (survive 1 failure, not 2); with 3 members a 3-way RAID 1 (survives 2, one disk's worth usable). Both warn.
+* Old serialised plans with a single `pv` per volume group still deserialise.
+* Not implemented here: growing/replacing disks of an SHR group (the NAS-side operations in the table above), SHR for the system area.
+
+**Run for real in the development sandbox**
+
+* The slice algorithm: the three worked examples (4,4,8 -> 8 TB; 2,4,4,8 -> 10; 1,2,2,3 -> 5), SHR-2 with four equal disks, SHR-2 mirror fallbacks,
+  SHR-1 with two disks, equal disks, rounding and 1 GiB tier merging, and the shared language-neutral vectors
+  (`apps/mgmt-plane/tests/shr_vectors.json`, also checked by the Python implementation of the NAS side).
+* The planner on the 4-bay fixture: partitions per slice are consecutive, MiB-aligned and inside the disk; array members match the created partitions;
+  too few disks, keep-mode combinations and the JSON round trip.
+* The generated stage-2 script: `sh -n`, `shellcheck`, and an end-to-end `SYNOFURB_DRY=1` run that logs the `mdadm --create` / `pvcreate` / `vgcreate` commands.
+* **Real `parted` on loop devices**: the partitioning commands generated for a 4+4+8 GiB SHR-1 plan are executed on three sparse loop images and the
+  kernel's partition start/size values are compared with the plan (`shr_partitioning_on_real_loop_devices_matches_the_plan`; skipped without root, `losetup` or `parted`).
+
+**Not run**
+
+* `mdadm --create`, `pvcreate`, `vgcreate`, `lvcreate`, `mkfs.xfs`, the assembly at boot and the initramfs content: the sandbox kernel has no md or
+  device-mapper support (no `/proc/mdstat`, no `mdadm`/`lvm` binaries), so these exist only as generated text that was reviewed and syntax-checked.
+  The commands are the standard ones (`mdadm --create`, `pvcreate`, `vgcreate`), but nothing proves they work together on a running kernel yet.
+* Resync of several arrays on the same disks, a degraded SHR group, disk replacement and growth.
+* Anything on a real Synology, and adoption of an SHR-like group by DSM (not expected to work, see the limits above).
