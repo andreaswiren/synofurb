@@ -55,7 +55,7 @@ uncompressed, which is fine: only x86 units have a boot flash. It:
 
 1. resets the default entry to DSM as its **first action** (so it is one-shot: any later reboot returns to DSM),
 2. brings up DHCPv4 + SLAAC/DHCPv6 on every Ethernet port and starts SSH with a per-unit key that the desktop app baked in,
-3. announces itself by a UDP beacon, and reboots into DSM by itself if nobody logs in within the timeout,
+3. announces itself by a UDP beacon, and reboots into DSM by itself if nobody logs in within the timeout (60 minutes in boot manager mode, 30 during an install, the agent's own default is 20; this only works once the agent is running: if it never boots, see "Manual recovery" in [boot/dom](../boot/dom/README.md)),
 4. offers `sf-boot` to download any kernel + initrd and `kexec` into it. Downloads over HTTP(S) are **refused without SHA-256 hashes** (its `wget` does not
    verify TLS); the app always passes them.
 
