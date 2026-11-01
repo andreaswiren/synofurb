@@ -124,17 +124,19 @@ impl App {
         let usable = size_2dp(plan.sizes.data_usable_bytes);
         let survives = raid::survives(&plan).map(|n| format!(" \u{00b7} survives {}", raid::survives_text(n))).unwrap_or_default();
         let hostname = self.input_value(&self.inp.hostname, cx);
+        let sys_gib = if self.form.system_gib > 0.0 { self.form.system_gib } else { plan.sizes.recommended_system_mib as f32 / 1024.0 };
+        let copies = plan.system_disks.len().max(1);
         let after_text = if keep {
             format!(
                 "Debian 13 \u{00b7} volume kept \u{00b7} system {:.0} GiB \u{00d7} {} \u{00b7} {hostname}",
-                self.form.system_gib, self.form.copies
+                sys_gib, copies
             )
         } else {
             format!(
                 "Debian 13 \u{00b7} {} \u{00b7} {usable} usable{survives} \u{00b7} system {:.0} GiB \u{00d7} {} \u{00b7} {hostname}",
                 raid::raid_label(plan.request.data_raid),
-                self.form.system_gib,
-                self.form.copies
+                sys_gib,
+                copies
             )
         };
         let after = h_flex()

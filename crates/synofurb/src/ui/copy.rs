@@ -470,6 +470,22 @@ mod strings {
         REC_RUN: Button, "Run", "", "", "";
         REC_SAVED: Label, "Saved here", "First and last 1 MiB of changed disks; not your files.", "backups", "";
         REC_OPEN_FOLDER: Button, "Open folder", "", "", "";
+        REC_FLASH_OURS: Label, "Flash: ours present", "", "", "";
+        REC_FLASH_CLEAN: Label, "Flash: clean", "", "", "";
+        REC_DEFAULT_DSM: Label, "Default: DSM", "", "", "";
+        REC_DEFAULT_DEBIAN: Label, "Default: Debian", "", "", "";
+        REC_DEFAULT_UNKNOWN: Label, "Default: not confirmed", "We cannot tell if the agent ran; if it did not, a power cycle boots it again.", "recovery", "";
+        REC_DISKS_MODIFIED: Label, "Disks: modified", "", "", "";
+        REC_DISKS_UNTOUCHED: Label, "Disks: untouched", "", "", "";
+        REC_UNKNOWN_ALERT: Label, "The agent may still be the default.", "DSM may not return by itself.", "recovery", "";
+        REC_MANUAL: Button, "Manual recovery", "Steps that work without the unit answering.", "recovery", "";
+        REC_NOTHING: Label, "Nothing to recover.", "The unit is as it was found.", "", "";
+        DLG_MANUAL: Dialog, "Manual recovery", "Steps that work without the unit answering.", "recovery",
+            "Power the NAS off, wait ten seconds, power it on. If DSM starts, you are done.\n\nIf it does not, use the unit's console (VGA or serial) to restore the saved boot-flash image, or reinstall DSM from find.synology.com with the .pat file for your model.\n\nThe agent never changes your disks. We promise nothing about your data.";
+        DLG_RESTORE: Dialog, "Restore boot flash?", "Writes the saved image back to the boot flash.", "backups", "This writes the saved image back to the boot flash. It needs a working Linux on the unit, such as the agent or Debian.";
+        DLG_REMOVE: Dialog, "Remove our entries?", "Leaves only Synology's own files on the flash.", "boot-manager", "This removes our entries from the boot flash and leaves Synology's own files. DSM stays the default.";
+        REC_TYPE: Label, "Type {phrase} to continue.", "", "", "";
+        REC_COPY_CMD: Button, "Copy command", "", "", "";
         REC_UNAVAILABLE: Label, "Unavailable", "", "", "";
         DLG_REINSTALL: Dialog, "Reinstall DSM", "Use Synology's page; no data promise.", "recovery",
             "The NAS boots Synology's loader, which shows an install page. Open find.synology.com or Synology Assistant, find the unit and install DSM with the .pat file for your model.\n\nSynology documents a reinstall that can keep data volumes; check its current documentation. This project cannot guarantee it.";

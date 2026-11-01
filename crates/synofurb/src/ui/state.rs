@@ -29,7 +29,10 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 28] = [
+pub const DEMO_SCREEN_NAMES: [&str; 31] = [
+    "recovery-fresh",
+    "recovery-debian",
+    "recovery-agent",
     "inventory",
     "inventory-offline",
     "connect",
@@ -90,11 +93,26 @@ pub struct DemoTarget {
     pub offline: bool,
     /// Plan screen starts in Keep mode.
     pub keep: bool,
+    /// Unit facts the Recovery and Manage demos start from.
+    pub fixture: Fixture,
+}
+
+/// What a demo run pretends to know about the unit (drives the risk Tag and the Recovery rows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Fixture {
+    #[default]
+    None,
+    /// Boot flash written and disks changed by a failed install; default is DSM.
+    Failed,
+    /// Debian running through our boot-flash entries.
+    Debian,
+    /// The agent was armed but never answered.
+    Agent,
 }
 
 impl DemoTarget {
     fn at(screen: Screen) -> DemoTarget {
-        DemoTarget { screen, overlay: Overlay::None, past_no_return: false, offline: false, keep: false }
+        DemoTarget { screen, overlay: Overlay::None, past_no_return: false, offline: false, keep: false, fixture: Fixture::None }
     }
 
     /// Parses a `--screen` value. The old names (`layout`, `account`, `find`, ...) keep working.
@@ -120,7 +138,10 @@ impl DemoTarget {
             "settings" => DemoTarget::at(Screen::Settings),
             "about" => DemoTarget::at(Screen::About),
             "bootmgr" | "boot-manager" => DemoTarget::at(Screen::BootMgr),
-            "recover" | "recovery" | "restore" => DemoTarget::at(Screen::Recover),
+            "recovery-fresh" => DemoTarget::at(Screen::Recover),
+            "recovery-debian" => DemoTarget { fixture: Fixture::Debian, ..DemoTarget::at(Screen::Recover) },
+            "recovery-agent" => DemoTarget { fixture: Fixture::Agent, ..DemoTarget::at(Screen::Recover) },
+            "recover" | "recovery" | "restore" => DemoTarget { fixture: Fixture::Failed, ..DemoTarget::at(Screen::Recover) },
             "manage" => DemoTarget::at(Screen::Manage),
             "help" => DemoTarget { overlay: Overlay::Help(None), ..DemoTarget::at(Screen::Inventory) },
             "help-topic" => DemoTarget { overlay: Overlay::Help(Some("recovery")), ..DemoTarget::at(Screen::Confirm) },

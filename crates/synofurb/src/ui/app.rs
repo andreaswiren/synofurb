@@ -186,6 +186,7 @@ pub struct App {
     pub log_selected_all: bool,
     pub log_scroll: gpui_kit::UniformListScrollHandle,
     pub recover: Job<String>,
+    pub rec_result: Option<crate::ui::screens::recover::RecResult>,
     pub bootmgr: Job<()>,
     pub update: UpdateState,
     pub page_scroll: gpui_kit::ScrollHandle,
@@ -388,6 +389,7 @@ impl App {
             log_selected_all: false,
             log_scroll: gpui_kit::UniformListScrollHandle::new(),
             recover: Job::Idle,
+            rec_result: None,
             bootmgr: Job::Idle,
             update: UpdateState::Unknown,
             page_scroll: gpui_kit::ScrollHandle::new(),
@@ -532,7 +534,20 @@ impl App {
                 demo::spawn_script(self.tx.clone(), script, unit, model, Some(out));
             }
             Screen::BootMgr => self.goal = Goal::BootManager,
-            Screen::Recover => self.goal = Goal::Recover,
+            Screen::Recover => {
+                self.goal = Goal::Recover;
+                match t.fixture {
+                    Fixture::None => {}
+                    Fixture::Failed | Fixture::Debian | Fixture::Agent => {
+                        self.bootmgr = Job::Done(Ok(()));
+                        self.install.past_no_return = t.fixture != Fixture::Agent;
+                        if t.fixture == Fixture::Debian {
+                            self.result = Some(Ok(demo::outcome(unit, "nas", "nasadmin")));
+                        }
+                        self.agent_unknown = t.fixture == Fixture::Agent;
+                    }
+                }
+            }
             Screen::Manage => {
                 self.manage_unit = demo::inventory().devices.into_iter().find(|d| d.synofurb_debian);
             }
