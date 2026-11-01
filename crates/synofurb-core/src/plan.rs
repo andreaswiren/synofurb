@@ -51,6 +51,10 @@ pub enum DataRaid {
     Raid5,
     Raid6,
     Raid10,
+    /// Synology-Hybrid-RAID-like: mdadm slices + one LVM volume group, tolerates 1 failed disk.
+    Shr1,
+    /// Like [`DataRaid::Shr1`] but RAID 6 slices (2 failed disks, needs at least 4 disks).
+    Shr2,
 }
 
 impl DataRaid {
@@ -62,6 +66,16 @@ impl DataRaid {
             DataRaid::Raid5 => "5",
             DataRaid::Raid6 => "6",
             DataRaid::Raid10 => "10",
+            DataRaid::Shr1 => "shr1",
+            DataRaid::Shr2 => "shr2",
+        }
+    }
+    /// Disks of protection requested by a hybrid (SHR-like) choice; `None` for the plain levels.
+    pub fn shr_redundancy(self) -> Option<u8> {
+        match self {
+            DataRaid::Shr1 => Some(1),
+            DataRaid::Shr2 => Some(2),
+            _ => None,
         }
     }
     pub fn label(self) -> &'static str {
@@ -73,18 +87,29 @@ impl DataRaid {
             DataRaid::Raid5 => "RAID 5",
             DataRaid::Raid6 => "RAID 6",
             DataRaid::Raid10 => "RAID 10",
+            DataRaid::Shr1 => "Hybrid RAID, 1-disk protection (SHR-like)",
+            DataRaid::Shr2 => "Hybrid RAID, 2-disk protection (SHR-like)",
         }
     }
     pub fn min_members(self) -> usize {
         match self {
             DataRaid::Auto | DataRaid::None => 1,
-            DataRaid::Raid0 | DataRaid::Raid1 => 2,
+            DataRaid::Raid0 | DataRaid::Raid1 | DataRaid::Shr1 => 2,
             DataRaid::Raid5 => 3,
-            DataRaid::Raid6 | DataRaid::Raid10 => 4,
+            DataRaid::Raid6 | DataRaid::Raid10 | DataRaid::Shr2 => 4,
         }
     }
-    pub const ALL: [DataRaid; 7] =
-        [DataRaid::Auto, DataRaid::None, DataRaid::Raid0, DataRaid::Raid1, DataRaid::Raid5, DataRaid::Raid6, DataRaid::Raid10];
+    pub const ALL: [DataRaid; 9] = [
+        DataRaid::Auto,
+        DataRaid::None,
+        DataRaid::Raid0,
+        DataRaid::Raid1,
+        DataRaid::Raid5,
+        DataRaid::Raid6,
+        DataRaid::Raid10,
+        DataRaid::Shr1,
+        DataRaid::Shr2,
+    ];
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,8 +226,134 @@ pub struct LvPlan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VgPlan {
     pub name: String,
-    pub pv: BlockRef,
+    /// Physical volumes of the group, in creation order. The data group of an SHR-like layout has one
+    /// PV per slice array; every other group has exactly one. Older serialised plans carry a single
+    /// `pv` and still load.
+    #[serde(alias = "pv", deserialize_with = "one_or_many")]
+    pub pvs: Vec<BlockRef>,
     pub lvs: Vec<LvPlan>,
+}
+
+impl VgPlan {
+    /// The first (for single-PV groups: the only) physical volume.
+    pub fn first_pv(&self) -> Option<&BlockRef> {
+        self.pvs.first()
+    }
+}
+
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<BlockRef>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        Many(Vec<BlockRef>),
+        One(BlockRef),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::Many(v) => v,
+        OneOrMany::One(b) => vec![b],
+    })
+}
+
+// ---------------------------------------------------------------------------------------------- SHR slices
+
+/// One slice of a hybrid layout: the same-sized stretch of the data space on every disk that reaches it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShrSlice {
+    /// 0-based tier number (slice 1 in the docs is index 0).
+    pub index: usize,
+    /// Offset of the slice inside every member's data space.
+    pub start_bytes: u64,
+    pub len_bytes: u64,
+    /// Indices into the `sizes` slice given to [`shr_slices`].
+    pub members: Vec<usize>,
+    /// md level: "1", "5" or "6"; empty for an unusable slice.
+    pub level: String,
+    pub usable_bytes: u64,
+    /// Exists on a single disk only: cannot be protected, never used.
+    pub unusable: bool,
+    /// How many member disks may fail without losing this slice.
+    pub fault_tolerance: u8,
+    /// md array name (`data1`, `data2`, ... in slice order); `None` for an unusable slice.
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShrLayout {
+    /// 1 (SHR-1) or 2 (SHR-2).
+    pub redundancy: u8,
+    pub slices: Vec<ShrSlice>,
+    pub usable_bytes: u64,
+    /// Capacity left unused because it exists on one disk only.
+    pub unusable_bytes: u64,
+    pub warnings: Vec<String>,
+}
+
+impl ShrLayout {
+    /// The slices that become md arrays.
+    pub fn usable(&self) -> impl Iterator<Item = &ShrSlice> {
+        self.slices.iter().filter(|s| !s.unusable)
+    }
+}
+
+/// Synology-Hybrid-RAID-like slicing (see `docs/RAID.md`). Pure: `sizes` is the data space of every
+/// data disk in bytes, `redundancy` 1 (SHR-1) or 2 (SHR-2; anything larger is treated as 2).
+///
+/// Sizes are rounded down to whole GiB, which also merges tiers closer than 1 GiB into the lower one.
+/// Disks that round to 0 take no part. Too-few-disks is the caller's decision: this function
+/// just reports what the sizes allow (e.g. a single disk yields one unusable slice).
+pub fn shr_slices(sizes: &[u64], redundancy: u8) -> ShrLayout {
+    let red: u8 = if redundancy >= 2 { 2 } else { 1 };
+    let gib: Vec<u64> = sizes.iter().map(|s| s / GIB).collect();
+    let tiers: BTreeSet<u64> = gib.iter().copied().filter(|g| *g > 0).collect();
+    let mut layout = ShrLayout { redundancy: red, slices: vec![], usable_bytes: 0, unusable_bytes: 0, warnings: vec![] };
+    let mut prev = 0u64;
+    let mut next_name = 1usize;
+    for (index, t) in tiers.into_iter().enumerate() {
+        let members: Vec<usize> = gib.iter().enumerate().filter(|(_, g)| **g >= t).map(|(i, _)| i).collect();
+        let m = members.len() as u64;
+        let len = (t - prev) * GIB;
+        let (level, usable, tol, unusable) = match (red, members.len()) {
+            (_, 0 | 1) => ("", 0, 0u8, true),
+            (1, 2) => ("1", len, 1, false),
+            (1, _) => ("5", (m - 1) * len, 1, false),
+            (_, 2) => ("1", len, 1, false),
+            (_, 3) => ("1", len, 2, false),
+            (_, _) => ("6", (m - 2) * len, 2, false),
+        };
+        let name = (!unusable).then(|| {
+            let n = format!("data{next_name}");
+            next_name += 1;
+            n
+        });
+        let label = format!("Slice {} ({} on {} disk(s))", index + 1, human_bytes(len), members.len());
+        if unusable {
+            layout.unusable_bytes += len;
+            layout.warnings.push(format!(
+                "{label} exists on one disk only: it cannot be protected, so {} of that disk stay unused (add a second disk of that size to use it).",
+                human_bytes(len)
+            ));
+        } else if red == 2 && members.len() < 4 {
+            layout.warnings.push(if members.len() == 2 {
+                format!("{label} is mirrored (RAID 1) because RAID 6 needs 4 members: it survives 1 failed disk, not the 2 you asked for.")
+            } else {
+                format!("{label} is a 3-way RAID 1 mirror because RAID 6 needs 4 members: it survives 2 failed disks but only one disk's worth of it is usable.")
+            });
+        }
+        layout.usable_bytes += usable;
+        layout.slices.push(ShrSlice {
+            index,
+            start_bytes: prev * GIB,
+            len_bytes: len,
+            members,
+            level: level.into(),
+            usable_bytes: usable,
+            unusable,
+            fault_tolerance: tol,
+            name,
+        });
+        prev = t;
+    }
+    layout
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +374,13 @@ pub struct Sizes {
     pub data_raw_bytes: u64,
     pub data_usable_bytes: u64,
     pub data_lv_percent: u8,
+}
+
+/// The hybrid layout plus the names of the disks its `members` indices refer to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShrPlan {
+    pub disks: Vec<String>,
+    pub layout: ShrLayout,
 }
 
 /// Raw boot area for U-Boot boards, offsets in MiB from the start of each system disk.
@@ -247,6 +405,9 @@ pub struct Plan {
     pub release_arrays: Vec<String>,
     pub arrays: Vec<ArrayPlan>,
     pub vgs: Vec<VgPlan>,
+    /// Slice layout of the data volume when a hybrid (SHR-like) level was chosen.
+    #[serde(default)]
+    pub shr: Option<ShrPlan>,
     /// `/boot` device. `None` on U-Boot boards (kernel and initrd are written raw).
     pub boot: Option<BlockRef>,
     pub esp: Option<BlockRef>,
@@ -438,6 +599,7 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         release_arrays: vec![],
         arrays: vec![],
         vgs: vec![],
+        shr: None,
         boot: None,
         esp: None,
         raw_boot: None,
@@ -486,6 +648,17 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
             }
             _ => {}
         }
+    }
+
+    let shr_red = req.data_raid.shr_redundancy();
+    if shr_red.is_some() && !kept.is_empty() {
+        plan.errors.push(format!(
+            "{} builds new data arrays on whole, wiped disks and cannot be combined with preserved arrays ({}). \
+             Release the preserved arrays, choose 'wipe everything', or pick another data level.",
+            req.data_raid.label(),
+            kept.iter().cloned().collect::<Vec<_>>().join(", ")
+        ));
+        return plan;
     }
 
     let analyses: Vec<DiskAnalysis> = candidates.iter().map(|d| analyse(facts, d, req.mode, &kept)).collect();
@@ -572,6 +745,15 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     let mut esp_members: Vec<(String, u32)> = vec![];
     let mut data_members: Vec<(String, u32)> = vec![];
     let mut data_bytes: Vec<u64> = vec![];
+    // SHR: disks with room for data. Their partitions are cut once every disk's size is known.
+    struct ShrDisk {
+        dp_index: usize,
+        disk: String,
+        start: u64,
+        sectors: u64,
+        used: BTreeSet<u32>,
+    }
+    let mut shr_disks: Vec<ShrDisk> = vec![];
 
     for a in &analyses {
         let d = a.disk;
@@ -626,7 +808,15 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
             let n = add(&mut dp, chosen * SECTORS_PER_MIB, PartRole::SystemPv, &mut cursor);
             sys_members.push((d.name.clone(), n));
         }
-        if a.fully_wiped && is_sys_or_free(&ext) && ext.end > cursor + SECTORS_PER_MIB {
+        if a.fully_wiped && is_sys_or_free(&ext) && ext.end > cursor + SECTORS_PER_MIB && shr_red.is_some() {
+            shr_disks.push(ShrDisk {
+                dp_index: plan.disks.len(),
+                disk: d.name.clone(),
+                start: cursor,
+                sectors: ext.end - cursor,
+                used: used.clone(),
+            });
+        } else if a.fully_wiped && is_sys_or_free(&ext) && ext.end > cursor + SECTORS_PER_MIB {
             let sectors = ext.end - cursor;
             let n = add(&mut dp, sectors, PartRole::Data, &mut cursor);
             data_members.push((d.name.clone(), n));

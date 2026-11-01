@@ -290,6 +290,9 @@ mod strings {
         SYS_NEXT: Button, "Next: Confirm", "", "", "";
         SYS_DTB: Label, "Device tree", "File name known to Debian for this board; needed on ARM units.", "serial-console", "";
         SYS_KIT_DIR: Label, "Kit folder", "Kernel, initrd and instructions are written here.", "", "";
+        SYS_MORE: Label, "More options", "", "", "";
+        SYS_FIRMWARE: Label, "Non-free firmware", "Needed by some network chips.", "", "";
+        SYS_VERBOSE: Label, "Verbose installer", "Detailed installer logging; recommended.", "", "";
         SYS_MIRROR: Label, "Mirror", "Where the NAS downloads packages during an online install.", "", "";
 
         // ===================================================================== D7 confirm

@@ -1,13 +1,19 @@
-//! Step 4: choose a goal. Each card says plainly what it does to the disks.
+//! D4 Goal: three GroupBox cards (Boot manager, Install Debian, Restore / Recover), one primary action.
 
 use crate::ui::app::{App, Goal};
+use crate::ui::copy::{self, Item};
+use crate::ui::disclosure::info_tip;
+use crate::ui::icons::{self, role};
+use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::state::{BootChoice, Screen};
-use crate::ui::theme::{self, Themed, Tone, radius, space};
-use crate::ui::widgets::*;
-use gpui_kit::component::{Disableable, h_flex, v_flex};
+use crate::ui::theme::{Themed, Tone};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
+use gpui_kit::component::{ActiveTheme, Disableable, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, IntoElement, Window, px};
+use gpui_kit::{Context, Entity, IntoElement, Window, px};
 use synofurb_core::compat::Status;
 
 impl App {
@@ -29,119 +35,73 @@ impl App {
         if self.compat_for_facts(f).blocking {
             return Err("This hardware is not supported.");
         }
-        BootChoice::Dom.available(f).map_err(|_| "Needs an editable internal boot flash (DOM), which this unit does not have.")
+        BootChoice::Dom.available(f).map_err(|_| copy::BM_NOT_EDITABLE.tip)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn goal_card(
+        &self,
+        cx: &mut Context<App>,
+        app: &Entity<App>,
+        id: &'static str,
+        icon: IconName,
+        item: &'static Item,
+        line: &'static Item,
+        tag: Option<gpui_kit::component::tag::Tag>,
+        button: Button,
+    ) -> impl IntoElement {
+        GroupBox::new().outline().id(id).title(
+            h_flex().gap(px(8.0)).items_center().text_color(cx.theme().foreground).child(icons::icon_sized(icon, 18.0, cx.theme().foreground)).child(kit::heading(item.short)).child(info_tip(("goal-info", id), item, app)).children(tag),
+        ).child(v_flex().gap(px(12.0)).child(kit::muted(cx, line.short)).child(h_flex().child(button)))
     }
 
     pub(crate) fn page_goal(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
         let p = cx.pal();
-        let name = self.unit_name();
+        let app = cx.entity();
         let status = self.facts.as_ref().map(|f| self.compat_for_facts(f).status).unwrap_or(Status::Untested);
         let install_ok = self.can_install();
         let bm = self.can_boot_manager();
-        let promote_bm = bm.is_ok() && matches!(status, Status::Untested | Status::KnownIssues | Status::Community);
+        let try_first = bm.is_ok() && status == Status::Untested;
 
-        let tag = |tone: Tone, ic: &str, label: &str| badge(&p, tone, ic, label.to_string(), false);
-
-        let install_card = v_flex().w_full().gap(px(space::S6)).child(
-            choice_card(
-                &p,
-                "goal-install",
-                self.goal == Goal::Install,
-                !install_ok,
-                format!("Install Debian on {name}"),
-                "Replaces DSM with Debian 13 on LVM, with a mirrored system area and your choice of data RAID. You plan the layout next and confirm before anything is written.",
-                cx.listener(|this, _, _, cx| {
-                    this.goal = Goal::Install;
-                    cx.notify();
-                }),
-            ),
-        );
-        let install_tags = h_flex()
-            .gap(px(space::S8))
-            .pl(px(space::S12))
-            .child(tag(Tone::Err, "triangle-alert", "Erases the disks"))
-            .when(!install_ok, |d| d.child(tag(Tone::Err, "ban", "Disabled: unsupported hardware")));
-
-        let bm_reason = bm.err();
-        let bm_card = choice_card(
-            &p,
-            "goal-bootmgr",
-            self.goal == Goal::BootManager,
-            bm_reason.is_some(),
-            format!("Boot manager mode{}", if promote_bm { " (try this first)" } else { "" }),
-            "Adds a small SSH-controllable boot environment to the unit's internal boot flash so you can netboot or kexec any OS later. DSM stays the fail-safe default, and your disks are not touched.",
-            cx.listener(|this, _, _, cx| {
+        let bm_btn = {
+            let b = Button::new("goal-bm").label(copy::GOAL_SET_UP.short).disabled(bm.is_err()).tooltip(bm.err().unwrap_or(""));
+            let b = if try_first { b.primary() } else { b.outline() };
+            b.on_click(cx.listener(|this, _, window, cx| {
                 this.goal = Goal::BootManager;
-                cx.notify();
-            }),
-        );
-        let bm_tags = h_flex()
-            .gap(px(space::S8))
-            .pl(px(space::S12))
-            .child(tag(Tone::Ok, "shield-check", "Disks untouched, reversible"))
-            .when_some(bm_reason, |d, r| d.child(muted(&p, r).text_size(theme::CAPTION.size())));
-
-        let rec_card = choice_card(
-            &p,
-            "goal-recover",
-            self.goal == Goal::Recover,
-            false,
-            "Restore and recover",
-            "Make the unit boot its original DSM again (from DSM, from the installed Debian or from the boot agent), or find out what is still possible after a failed install.",
-            cx.listener(|this, _, _, cx| {
-                this.goal = Goal::Recover;
-                cx.notify();
-            }),
-        );
-        let rec_tags = h_flex().gap(px(space::S8)).pl(px(space::S12)).child(tag(Tone::Info, "life-buoy", "Always available"));
-
-        let body = v_flex()
-            .w_full()
-            .gap(px(space::S12))
-            .child(install_card)
-            .child(install_tags)
-            .child(bm_card)
-            .child(bm_tags)
-            .child(rec_card)
-            .child(rec_tags)
-            .child(
-                h_flex()
-                    .p(px(space::S12))
-                    .gap(px(space::S8))
-                    .rounded(px(radius::MD))
-                    .bg(p.surface_2)
-                    .child(icon_sized("info", 16.0, p.fg_2).mt(px(2.0)))
-                    .child(
-                        muted(
-                            &p,
-                            "Compatibility for this unit: Verified means maintainers reproduced a full install; it is still not a guarantee. For Untested and Known-issues units the boot manager is the safe way to try first.",
-                        )
-                        .flex_1()
-                        .min_w_0(),
-                    ),
-            );
-
-        let enabled = match self.goal {
-            Goal::Install => install_ok,
-            Goal::BootManager => self.can_boot_manager().is_ok(),
-            Goal::Recover => true,
+                this.continue_from_goal(window, cx);
+            }))
         };
-        Page::new("What do you want to do?", body)
-            .subtitle(format!("{name} is inspected and nothing has been changed. Pick a goal; each one says what it does to the disks."))
-            .note(muted(
-                &p,
-                if enabled { "Nothing is written until the confirmation step." } else { "This goal is not available for this unit." },
-            ))
-            .buttons(vec![
-                btn_secondary("back", "Back")
-                    .icon(icon("arrow-left"))
-                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Inspect, window, cx)))
-                    .into_any_element(),
-                btn_primary("continue", "Continue")
-                    .icon(icon("arrow-right"))
-                    .disabled(!enabled)
-                    .on_click(cx.listener(|this, _, window, cx| this.continue_from_goal(window, cx)))
-                    .into_any_element(),
-            ])
+        let rec_tag = try_first.then(|| {
+            // the Recommended tag explains itself in a tooltip through its info icon on the card title
+            kit::tag(&p, Tone::Info, Some(role::SPARKLES), copy::GOAL_RECOMMENDED.short)
+        });
+        let inst_btn = {
+            let b = Button::new("goal-install").label(copy::GOAL_PLAN_INSTALL.short).disabled(!install_ok).tooltip(if install_ok { "" } else { copy::GOAL_PLAN_INSTALL.tip });
+            let b = if try_first { b.outline() } else { b.primary() };
+            b.on_click(cx.listener(|this, _, window, cx| {
+                this.goal = Goal::Install;
+                this.continue_from_goal(window, cx);
+            }))
+        };
+        let rec_btn = Button::new("goal-recover").outline().label(copy::GOAL_OPEN_RECOVERY.short).on_click(cx.listener(|this, _, window, cx| {
+            this.goal = Goal::Recover;
+            this.continue_from_goal(window, cx);
+        }));
+
+        let body = h_flex()
+            .w_full()
+            .items_start()
+            .gap(px(16.0))
+            .child(div_flex(self.goal_card(cx, &app, "bm", role::TERMINAL, &copy::GOAL_BOOTMGR, &copy::GOAL_BOOTMGR_LINE, rec_tag, bm_btn)))
+            .child(div_flex(self.goal_card(cx, &app, "inst", role::DISK, &copy::GOAL_INSTALL, &copy::GOAL_INSTALL_LINE, None, inst_btn)))
+            .child(div_flex(self.goal_card(cx, &app, "rec", role::HELP, &copy::GOAL_RECOVER, &copy::GOAL_RECOVER_LINE, None, rec_btn)));
+        Page::new(copy::GOAL_TITLE.short, body)
+            .subtitle(copy::GOAL_SUB.short)
+            .left(vec![Button::new("back").ghost().icon(icons::icon(role::BACK)).label(copy::BTN_BACK.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Inspect, window, cx))).into_any_element()])
     }
+}
+
+fn div_flex(e: impl IntoElement) -> gpui_kit::Div {
+    use gpui_kit::div;
+    div().flex_1().min_w_0().child(e)
 }

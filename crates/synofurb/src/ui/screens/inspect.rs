@@ -1,213 +1,117 @@
-//! Step 3: the inspection result and the compatibility panel.
+//! D3 Inspect: what was read from the unit. A DescriptionList for the facts, a Table for the disks, two collapsed
+//! Accordion items for DSM's volumes and layout.
 
 use crate::ui::app::App;
-use crate::ui::format::{plural, size_2dp};
+use crate::ui::copy::{self, Item};
+use crate::ui::disclosure::info_tip;
+use crate::ui::format::size_2dp;
+use crate::ui::icons::{self, role};
+use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::state::Screen;
-use crate::ui::theme::{self, Themed, Tone, space};
-use crate::ui::widgets::*;
-use gpui_kit::component::{h_flex, v_flex};
+use crate::ui::theme::{Themed, Tone};
+use gpui_kit::component::accordion::Accordion;
+use gpui_kit::component::alert::Alert;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::description_list::DescriptionList;
+use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
+use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, FontWeight, IntoElement, Window, div, px};
+use gpui_kit::{AnyElement, Context, Entity, IntoElement, Window, px};
 use synofurb_core::model::{ArrayRole, Firmware, SECTOR, human_bytes};
-use synofurb_core::platform;
+
+fn label(id: &'static str, item: &'static Item, app: &Entity<App>) -> AnyElement {
+    kit::labelled(id, item, app)
+}
 
 impl App {
     pub(crate) fn page_inspect(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
         let p = cx.pal();
+        let app = cx.entity();
         let Some(f) = self.facts.clone() else {
-            return Page::new("Inspection result", muted(&p, "No unit has been inspected yet.")).buttons(vec![
-                btn_secondary("back", "Back")
-                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Connect, window, cx)))
-                    .into_any_element(),
-            ]);
+            return Page::new(copy::INSPECT_TITLE.short, kit::muted(cx, "-"))
+                .left(vec![Button::new("back").ghost().label(copy::BTN_BACK.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Connect, window, cx))).into_any_element()]);
         };
-        let info = platform::classify(&f.unique, &f.uname_m);
         let verdict = self.compat_for_facts(&f);
-        let arch_tag = match f.arch {
-            synofurb_core::model::Arch::X86_64 => "x86_64",
-            synofurb_core::model::Arch::Arm64 => "arm64",
-            synofurb_core::model::Arch::Armhf => "armv7",
-            synofurb_core::model::Arch::Unsupported => "unsupported",
-        };
         let name = if f.model.is_empty() { f.hostname.clone() } else { f.model.clone() };
-
-        // --- compatibility panel
-        let (tone, _, _) = status_style(verdict.status);
-        let mut compat_body = v_flex().gap(px(space::S8)).child(muted(&p, verdict.status.explain()));
-        for d in &verdict.details {
-            compat_body = compat_body.child(
-                h_flex()
-                    .gap(px(space::S8))
-                    .child(icon_sized("circle-dot", 10.0, p.placeholder).mt(px(6.0)))
-                    .child(muted(&p, d.clone()).flex_1().min_w_0()),
-            );
-        }
-        let compat_card = card(
-            &p,
-            Some("Compatibility".into()),
-            Some(compat_badge(&p, verdict.status).into_any_element()),
-            Some(p.tone(tone).solid),
-            v_flex()
-                .gap(px(space::S8))
-                .child(text(&p, theme::BODY, verdict.headline.clone()).font_weight(FontWeight(600.0)))
-                .child(compat_body),
-        );
-
-        // --- hardware
         let serial = f.serial_console();
-        let serial_text = match &serial.raw {
-            Some(raw) => format!("{raw} (raw MMIO console: AMD boards have no legacy UART)"),
-            None => format!("{} at {} baud", serial.tty, serial.speed),
+        let console = match &serial.raw {
+            Some(raw) => raw.clone(),
+            None => format!("{} {}", serial.tty, serial.speed),
         };
-        let boot_text = match f.firmware {
+        let flash = match f.firmware {
             Firmware::Dom => match &f.dom {
-                Some(d) => format!(
-                    "{} - {} flash module, {}",
-                    f.firmware.label(),
-                    human_bytes(d.sectors * SECTOR),
-                    if d.is_editable() { "editable" } else { "not editable" }
-                ),
-                None => f.firmware.label().to_string(),
+                Some(d) => format!("{} \u{00b7} {}", human_bytes(d.sectors * SECTOR), if d.is_editable() { "editable" } else { "not editable" }),
+                None => "-".into(),
             },
-            other => other.label().to_string(),
+            _ => "none".into(),
         };
-        let hw = v_flex()
-            .child(kv(&p, "Model", text(&p, theme::BODY, format!("{}  ({})", name, f.unique)).font_weight(FontWeight(600.0))))
-            .child(kv(&p, "Platform", cell_text(&p, format!("{} - {}", info.platform, info.soc))))
-            .child(kv(&p, "CPU", cell_text(&p, f.cpu.clone())))
-            .child(kv(&p, "Memory", cell_text(&p, format!("{:.1} GiB RAM", f.mem_gib()))))
-            .child(kv(&p, "DSM", cell_text(&p, format!("{}  (kernel {})", f.dsm_version, f.kernel))))
-            .child(kv(&p, "Firmware", text(&p, theme::BODY_SM, boot_text).font_weight(FontWeight(600.0)).into_any_element()))
-            .child(kv(&p, "kexec", cell_text(&p, if f.kexec { "supported by the DSM kernel" } else { "not supported by the DSM kernel" })))
-            .child(kv(&p, "Serial console", mono(&p, serial_text, cx).into_any_element()))
-            .child(kv(
-                &p,
-                "Network",
-                cell_text(&p, f.nics.iter().map(|n| format!("{} {}", n.name, n.mac)).collect::<Vec<_>>().join(",  ")),
-            ));
-        let chips = h_flex()
-            .gap(px(space::S8))
-            .items_center()
-            .child(vendor_chip(&p, f.cpu_vendor.label(), arch_tag, cx))
-            .child(compat_badge(&p, verdict.status))
-            .child(chip(&p, plural(f.candidate_disks().len(), "disk", "disks")))
-            .child(chip(&p, format!("{:.0} GiB RAM", f.mem_gib())));
+        let compat_row = h_flex().gap(px(2.0)).items_center().child(kit::compat_tag(&p, verdict.status)).child(info_tip("compat-info", &copy::INSPECT_COMPAT, &app)).into_any_element();
+        let facts = DescriptionList::horizontal()
+            .columns(2)
+            .bordered(false)
+            .child(gpui_kit::component::description_list::DescriptionItem::new(label("l-model", &copy::INSPECT_MODEL, &app)).value(kit::strong(format!("{name} ({})", f.unique)).into_any_element()))
+            .child(gpui_kit::component::description_list::DescriptionItem::new(label("l-comp", &copy::INSPECT_COMPAT, &app)).value(compat_row))
+            .item(copy::INSPECT_CPU.short, f.cpu.clone(), 1)
+            .item(copy::INSPECT_RAM.short, format!("{:.1} GiB", f.mem_gib()), 1)
+            .item(copy::INSPECT_FIRMWARE.short, f.firmware.label().to_string(), 1)
+            .child(gpui_kit::component::description_list::DescriptionItem::new(label("l-flash", &copy::INSPECT_FLASH, &app)).value(flash))
+            .child(gpui_kit::component::description_list::DescriptionItem::new(label("l-console", &copy::INSPECT_CONSOLE, &app)).value(kit::mono_sm(cx, console).into_any_element()))
+            .child(gpui_kit::component::description_list::DescriptionItem::new(label("l-backups", &copy::INSPECT_BACKUPS, &app)).value(kit::chip(&p, "not checked").into_any_element()));
 
-        // --- disks
-        let cols = [
-            Col::new("Disk", 90.0),
-            Col::new("Model", 0.0),
-            Col::new("Serial", 150.0),
-            Col::new("Type", 70.0),
-            Col::new("Table", 70.0),
-            Col::new("Size", 100.0).right(),
-            Col::new("Use", 190.0),
-        ];
-        let rows = f
-            .disks
-            .iter()
-            .map(|d| {
-                let parts = d
-                    .parts
-                    .iter()
-                    .filter_map(|pt| f.arrays.iter().find(|a| a.members.contains(&pt.name)).map(|a| a.name.clone()))
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let usage = if d.is_candidate() {
-                    format!("install target{}", if parts.is_empty() { String::new() } else { format!(" (in {parts})") })
-                } else {
-                    "not an install target".to_string()
-                };
-                (
-                    if d.is_candidate() { None } else { Some(p.border_strong) },
-                    vec![
-                        mono(&p, d.name.clone(), cx).into_any_element(),
-                        cell_text(&p, d.model.clone()),
-                        mono(&p, d.serial.clone(), cx).text_size(theme::CAPTION.size()).into_any_element(),
-                        cell_text(&p, if d.rotational { "HDD" } else { "SSD" }),
-                        cell_text(&p, format!("{:?}", d.table).to_uppercase()),
-                        mono(&p, size_2dp(d.size_bytes()), cx).into_any_element(),
-                        muted(&p, usage).text_size(theme::CAPTION.size()).into_any_element(),
-                    ],
-                )
-            })
-            .collect();
-        let disks = data_table(&p, &cols, rows);
-
-        // --- DSM layout
-        let acols = [
-            Col::new("Array", 90.0),
-            Col::new("Level", 80.0),
-            Col::new("Role", 0.0),
-            Col::new("Size", 110.0).right(),
-            Col::new("Members", 220.0),
-        ];
-        let arows = f
-            .arrays
-            .iter()
-            .map(|a| {
-                let role = match a.role {
-                    ArrayRole::DsmSystem => "DSM system (reclaimed by the install)".to_string(),
-                    ArrayRole::DsmSwap => "DSM swap (reclaimed)".to_string(),
-                    ArrayRole::Data => format!("data volume{}", a.vg.as_ref().map(|v| format!(", LVM {v}")).unwrap_or_default()),
-                };
-                (
-                    None,
-                    vec![
-                        mono(&p, a.name.clone(), cx).into_any_element(),
-                        cell_text(&p, a.level.to_uppercase()),
-                        cell_text(&p, role),
-                        mono(&p, size_2dp(a.sectors * SECTOR), cx).into_any_element(),
-                        mono(&p, a.members.join(" "), cx).text_size(theme::CAPTION.size()).into_any_element(),
-                    ],
-                )
-            })
-            .collect();
-        let layout = data_table(&p, &acols, arows);
-
-        let mut body = v_flex().w_full().gap(px(space::S16)).child(chips);
-        if verdict.blocking {
-            body = body.child(banner(
-                &p,
-                Tone::Err,
-                format!("{name} cannot be converted"),
-                format!("{} You can still use Restore and recover for this unit.", info.note),
-                vec![],
-            ));
-        }
-        body = body
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_start()
-                    .gap(px(space::S16))
-                    .child(div().flex_1().min_w_0().child(compat_card))
-                    .child(div().flex_1().min_w_0().child(card(&p, Some("Hardware".into()), None, None, hw))),
-            )
-            .child(section(&p, format!("Disks ({})", f.disks.len())))
-            .child(disks)
-            .child(section(&p, "Current DSM layout"))
-            .child(layout);
-
-        Page::new(format!("{name}: inspection result"), body)
-            .subtitle(format!(
-                "Read-only. {} at {}. Nothing on the NAS has been changed.",
-                name,
-                super::super::format::display_host(&self.input_value(&self.inp.host, cx))
+        let disks = Table::new()
+            .child(TableHeader::new().child(
+                TableRow::new()
+                    .child(TableHead::new().child(copy::INSPECT_DISK.short))
+                    .child(TableHead::new().child(copy::INSPECT_COL_MODEL.short))
+                    .child(TableHead::new().child(copy::INSPECT_COL_SERIAL.short))
+                    .child(TableHead::new().text_right().child(copy::INSPECT_COL_SIZE.short)),
             ))
-            .note(muted(&p, "This is everything synofurb knows about the unit before you choose a goal."))
-            .buttons(vec![
-                btn_secondary("back", "Back")
-                    .icon(icon("arrow-left"))
-                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Connect, window, cx)))
-                    .into_any_element(),
-                btn_primary("next", "Choose a goal")
-                    .icon(icon("arrow-right"))
-                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Goal, window, cx)))
-                    .into_any_element(),
-            ])
+            .child(TableBody::new().children(f.disks.iter().map(|d| {
+                TableRow::new()
+                    .child(TableCell::new().child(kit::mono(cx, d.name.clone())))
+                    .child(TableCell::new().child(d.model.clone()))
+                    .child(TableCell::new().child(kit::mono_sm(cx, d.serial.clone())))
+                    .child(TableCell::new().text_right().child(kit::mono(cx, size_2dp(d.size_bytes()))))
+            })));
+
+        let arrays = Table::new()
+            .child(TableHeader::new().child(TableRow::new().child(TableHead::new().child("md")).child(TableHead::new().child("RAID")).child(TableHead::new().child(copy::INSPECT_COL_USE.short)).child(TableHead::new().text_right().child(copy::INSPECT_COL_SIZE.short))))
+            .child(TableBody::new().children(f.arrays.iter().map(|a| {
+                let role_text = match a.role {
+                    ArrayRole::DsmSystem => "DSM system".to_string(),
+                    ArrayRole::DsmSwap => "DSM swap".to_string(),
+                    ArrayRole::Data => format!("data{}", a.vg.as_ref().map(|v| format!(" \u{00b7} LVM {v}")).unwrap_or_default()),
+                };
+                TableRow::new()
+                    .child(TableCell::new().child(kit::mono(cx, a.name.clone())))
+                    .child(TableCell::new().child(a.level.to_uppercase()))
+                    .child(TableCell::new().child(role_text))
+                    .child(TableCell::new().text_right().child(kit::mono(cx, size_2dp(a.sectors * SECTOR))))
+            })));
+        let layout = v_flex().gap(px(4.0)).children(f.disks.iter().map(|d| {
+            let parts = d.parts.iter().map(|pt| format!("{} {}", pt.name, size_2dp(pt.sectors * SECTOR))).collect::<Vec<_>>().join("  \u{00b7}  ");
+            h_flex().gap(px(12.0)).child(kit::mono_sm(cx, d.name.clone()).w(px(48.0))).child(kit::mono_sm(cx, parts))
+        }));
+        let accordion = Accordion::new("inspect-acc")
+            .multiple(true)
+            .bordered(true)
+            .item(|i| i.title(h_flex().gap(px(2.0)).items_center().child(copy::INSPECT_VOLUMES.short)).child(arrays))
+            .item(|i| i.title(copy::INSPECT_LAYOUT.short).child(layout));
+
+        let mut body = v_flex().w_full().gap(px(16.0));
+        if verdict.blocking {
+            body = body.child(Alert::error("blocked", verdict.headline.clone()).title(copy::INSPECT_BLOCKED.short).icon(icons::icon(role::ERR)));
+        }
+        if f.candidate_disks().is_empty() {
+            body = body.child(Alert::error("no-disks", "No disks visible").icon(icons::icon(role::ERR)));
+        }
+        body = body.child(facts).child(disks).child(accordion);
+        let blocked = verdict.blocking || f.candidate_disks().is_empty();
+        let _ = Tone::Ok;
+        Page::new(copy::INSPECT_TITLE.short, body)
+            .subtitle(copy::INSPECT_SUB.short)
+            .left(vec![Button::new("back").ghost().icon(icons::icon(role::BACK)).label(copy::BTN_BACK.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Connect, window, cx))).into_any_element()])
+            .right(vec![Button::new("next").primary().icon(icons::icon(role::NEXT)).label(copy::INSPECT_CHOOSE.short).disabled(blocked).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Goal, window, cx))).into_any_element()])
     }
 }

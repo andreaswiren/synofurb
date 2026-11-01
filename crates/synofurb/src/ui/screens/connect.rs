@@ -1,138 +1,106 @@
-//! Step 2: connect to DSM over SSH. Says first what it needs and exactly what it reads.
+//! D2 Connect: sign in over SSH (read-only). Fields, one ToggleGroup, one Alert for errors.
 
 use crate::ui::app::App;
+use crate::ui::copy;
+use crate::ui::icons::{self, role};
+use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::state::Screen;
-use crate::ui::theme::{Themed, Tone, space};
-use crate::ui::widgets::*;
+use crate::ui::theme::Themed;
+use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::form::Form;
 use gpui_kit::component::input::Input;
-use gpui_kit::component::radio::{Radio, RadioGroup};
-use gpui_kit::component::{Disableable, h_flex, v_flex};
+use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Window, div, px};
+use gpui_kit::{Context, IntoElement, Window, div, px};
 
 impl App {
     pub(crate) fn page_connect(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
         let p = cx.pal();
+        let app = cx.entity();
         let inspecting = self.inspecting;
 
-        let login = RadioGroup::horizontal("login-with")
-            .selected_index(Some(if self.use_key { 1 } else { 0 }))
-            .child(Radio::new("lw-pass").label("Password"))
-            .child(Radio::new("lw-key").label("Private key file"))
-            .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                this.use_key = *ix == 1;
+        let signin = kit::segmented("sign-in", &[copy::CONN_PASSWORD.short, copy::CONN_KEY.short], usize::from(self.use_key), {
+            let app = app.clone();
+            move |ix, _, cx| app.update(cx, |a, cx| {
+                a.use_key = ix == 1;
                 cx.notify();
-            }));
-
-        let auth_row = if self.use_key {
-            form_row(
-                &p,
-                "Key file",
-                Some("An OpenSSH private key. It is read on this computer and used for this connection only.".into()),
-                h_flex().gap(px(space::S8)).child(div().flex_1().min_w_0().child(Input::new(&self.inp.key_path))).child(
-                    btn_secondary("browse-key", "Browse...").on_click(cx.listener(|this, _, window, cx| {
-                        let t = this.inp.key_path.clone();
-                        this.browse_file(t, window, cx)
-                    })),
-                ),
-            )
+            })
+        });
+        let secret: gpui_kit::AnyElement = if self.use_key {
+            h_flex()
+                .gap(px(8.0))
+                .child(div().flex_1().min_w_0().child(Input::new(&self.inp.key_path).cleanable(true)))
+                .child(Button::new("browse-key").outline().label(copy::CONN_BROWSE.short).icon(icons::icon(role::FOLDER)).on_click(cx.listener(|this, _, window, cx| {
+                    let t = this.inp.key_path.clone();
+                    this.browse_file(t, window, cx)
+                })))
+                .into_any_element()
         } else {
-            form_row(&p, "Password", None, self.password_input())
+            self.password_input().into_any_element()
         };
 
-        let form = v_flex()
-            .w_full()
-            .gap(px(14.0))
-            .child(form_row(&p, "Address", None, Input::new(&self.inp.host)))
-            .child(form_row(&p, "SSH port", None, div().w(px(120.0)).child(Input::new(&self.inp.port))))
-            .child(form_row(
-                &p,
-                "User",
-                Some("An administrator account. DSM 7 admins get root through sudo.".into()),
-                Input::new(&self.inp.user),
-            ))
-            .child(form_row(&p, "Log in with", None, login))
-            .child(auth_row)
-            .child(form_row(
-                &p,
-                "sudo",
-                None,
-                v_flex()
-                    .gap(px(space::S8))
-                    .child(Checkbox::new("same-sudo").label("Use the same password for sudo").checked(self.same_sudo).on_click(
-                        cx.listener(|this, v: &bool, _, cx| {
-                            this.same_sudo = *v;
-                            cx.notify();
-                        }),
-                    ))
-                    .when(!self.same_sudo, |d| d.child(Input::new(&self.inp.sudo).mask_toggle())),
-            ));
+        let model = self.selected_unit_model();
+        let host = crate::ui::format::display_host(&self.input_value(&self.inp.host, cx));
+        let identity = kit::identity_line(cx, &p, &model.0, &host, &model.1, Some(model.2));
 
-        let reads = v_flex()
-            .gap(px(space::S6))
-            .child(muted(&p, "synofurb reads, read-only:"))
-            .children(
-                [
-                    "Model, DSM version, CPU, RAM and kernel command line",
-                    "Disks, partition tables and RAID/LVM layout",
-                    "Mounted volumes and network cards",
-                    "Whether the kernel supports kexec, and the internal boot flash if present",
-                ]
-                .map(|l| {
-                    h_flex().gap(px(space::S8)).child(icon_sized("check", 14.0, p.ok_fg).mt(px(3.0))).child(muted(&p, l).flex_1().min_w_0())
-                }),
-            )
-            .child(divider(&p))
-            .child(muted(&p, "Nothing is written to the NAS until you confirm the data-loss gate at step 7."));
+        let mut form = Form::vertical()
+            .child(kit::field_plain(copy::CONN_PORT.short, div().w(px(120.0)).child(Input::new(&self.inp.port))))
+            .child(kit::field("f-user", &copy::CONN_USER, &app, Input::new(&self.inp.user)))
+            .child(kit::field_plain(copy::CONN_SIGNIN.short, signin))
+            .child(kit::field_plain(if self.use_key { copy::CONN_KEY_FILE.short } else { copy::CONN_PASSWORD.short }, secret));
+        form = form.child(kit::field_plain(
+            "",
+            v_flex()
+                .gap(px(8.0))
+                .child(
+                    h_flex().items_center().gap(px(2.0)).child(Checkbox::new("same-sudo").label(copy::CONN_SUDO.short).checked(self.same_sudo).on_click(cx.listener(|this, v: &bool, _, cx| {
+                        this.same_sudo = *v;
+                        cx.notify();
+                    }))).child(crate::ui::disclosure::info_tip("sudo-info", &copy::CONN_SUDO, &app)),
+                )
+                .when(!self.same_sudo, |d| d.child(Input::new(&self.inp.sudo).mask_toggle())),
+        ));
 
-        let enable_ssh = banner(
-            &p,
-            Tone::Info,
-            "SSH must be on in DSM",
-            "Control Panel > Terminal & SNMP > Enable SSH service. Use an administrator account.",
-            vec![],
-        );
-
-        let mut body = v_flex().w_full().gap(px(space::S16)).child(enable_ssh);
+        let mut body = v_flex().w_full().max_w(px(560.0)).gap(px(16.0)).child(identity);
         if let Some(e) = &self.error {
-            body =
-                body.child(banner(&p, Tone::Err, "Could not connect", e.clone(), vec![]).id("connect-error").role(gpui_kit::Role::Alert));
+            let off = e.to_lowercase().contains("refused") || e.to_lowercase().contains("timed out");
+            let item = if off { &copy::CONN_SSH_OFF } else { &copy::CONN_LOGIN_FAILED };
+            body = body.child(
+                v_flex().gap(px(4.0)).child(Alert::error("connect-error", e.clone()).title(item.short).icon(icons::icon(role::ERR))).child(
+                    h_flex().gap(px(2.0)).items_center().child(kit::caption(cx, item.tip)).child(
+                        Button::new("conn-help").link().small().label(copy::BTN_LEARN_MORE.short).on_click(cx.listener(|this, _, window, cx| this.open_help_topic(Some("troubleshooting"), window, cx))),
+                    ),
+                ),
+            );
         }
-        body = body.child(
-            h_flex()
-                .w_full()
-                .items_start()
-                .gap(px(space::S24))
-                .child(div().flex_1().min_w_0().child(card(&p, Some("Connection".into()), None, None, form)))
-                .child(div().w(px(300.0)).flex_none().child(card(&p, Some("What we read".into()), None, None, reads))),
-        );
+        body = body.child(form);
+        let host_empty = host.is_empty();
+        Page::new(copy::CONN_TITLE.short, body)
+            .title_info(&copy::CONN_TITLE)
+            .subtitle(copy::CONN_SUB.short)
+            .subtitle_tip(&copy::CONN_SUB)
+            .left(vec![Button::new("back").ghost().icon(icons::icon(role::BACK)).label(copy::BTN_BACK.short).on_click(cx.listener(|this, _, window, cx| this.go(Screen::Inventory, window, cx))).into_any_element()])
+            .right(vec![Button::new("inspect")
+                .primary()
+                .label(copy::INV_CONNECT.short)
+                .loading(inspecting)
+                .disabled(inspecting || host_empty)
+                .on_click(cx.listener(|this, _, window, cx| this.start_inspect(window, cx)))
+                .into_any_element()])
+    }
 
-        let host_empty = self.input_value(&self.inp.host, cx).trim().is_empty();
-        Page::new("Connect to DSM", body)
-            .subtitle("synofurb needs SSH access to read the disk layout (read-only) and, later, to start the installer.")
-            .note(muted(
-                &p,
-                if inspecting {
-                    "Connecting and reading the unit. Nothing is being changed."
-                } else {
-                    "Nothing on the NAS has been changed."
-                },
-            ))
-            .buttons(vec![
-                btn_secondary("back-inv", "Back")
-                    .icon(icon("arrow-left"))
-                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Inventory, window, cx)))
-                    .into_any_element(),
-                Button::new("inspect")
-                    .primary()
-                    .label(if inspecting { "Inspecting..." } else { "Connect and inspect" })
-                    .loading(inspecting)
-                    .disabled(inspecting || host_empty)
-                    .on_click(cx.listener(|this, _, window, cx| this.start_inspect(window, cx)))
-                    .into_any_element(),
-            ])
+    /// `(model, serial, status)` of the selected unit, from the discovery inventory or the inspection.
+    pub(crate) fn selected_unit_model(&self) -> (String, String, synofurb_core::compat::Status) {
+        if let Some(f) = &self.facts {
+            return (if f.model.is_empty() { f.hostname.clone() } else { f.model.clone() }, f.serial.clone(), self.compat_for_facts(f).status);
+        }
+        let ip = self.selected_ip.clone().unwrap_or_default();
+        match self.inv.devices.iter().find(|d| d.primary_ip().map(|i| i.to_string()) == Some(ip.clone())) {
+            Some(d) => (if d.model.is_empty() { "Synology".into() } else { d.model.clone() }, d.serial.clone(), self.compat_for_found(d).0),
+            None => ("NAS".into(), String::new(), synofurb_core::compat::Status::Untested),
+        }
     }
 }

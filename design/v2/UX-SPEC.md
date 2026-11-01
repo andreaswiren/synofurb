@@ -1,12 +1,13 @@
 # synofurb UX spec v2
 
-Binding input: `design/BRIEF-v2.md` (the first mockups were rejected: too much text, hand-made widgets). This is a **spec, not mockups**. It defines, for the desktop app (GPUI, `gpui-component` 0.8.1 via `gpui-kit`) and the NAS web UI, every screen's exact visible elements, their word budget, where each removed explanation now lives, and which widget realises it. Facts follow `docs/RECOVERY.md`, `docs/BOOT.md`, `docs/COMPAT.md` and `README.md`. The real application is later reviewed against this file.
+Binding input: `design/BRIEF-v2.md` (the first mockups were rejected: too much text, hand-made widgets). This is a **spec, not mockups**. It defines, for the desktop app (GPUI, `gpui-component` 0.8.1 via `gpui-kit`) and the NAS web UI, every screen's exact visible elements, their word budget, where each removed explanation now lives, and which widget realises it. Facts follow `docs/RECOVERY.md`, `docs/BOOT.md`, `docs/COMPAT.md`, `docs/RAID.md` and `README.md`. The real application is later reviewed against this file.
 
 Sample values (DS918+, 192.168.1.40, SN 1930PDN123456, `sdc` with 8 reallocated sectors) are only sample data. **No model is Verified today**; the primary path is **Untested**.
 
 ## 0. Rules that apply to every screen
 
 1. **Budget.** At most 60 words of static prose per screen, shell included (titles, subtitles, labels, options, column headers, buttons, prose; data in braces is not counted). Title at most 4 words; subtitle at most 12; label at most 4; button a verb plus at most 2 words.
+1b. **What is counted.** Only what is visible in the default state of the screen. Closed menus, closed selects, dropdown items and popovers are not counted (their items are at most 4 words each). Open Sheets and Dialogs are counted as separate screens or bounded separately (section 4).
 2. **Where explanations go.** Tooltip (one sentence, hover and keyboard focus) for a label or a disabled control; Popover (short paragraph + action) from an info icon; Dialog for decisions and anything long; Help topic for reference. Progress and logs are collapsed Accordions except the current step. Every info icon links to a Help topic id.
 3. **The safety gate stays visible but terse**: identity, destroyed/changed/preserved as names and sizes, three confirmations, typed phrase.
 4. **Copy module.** All strings live in one module per surface: `Copy { id, short, tip, help: Option<TopicId> }`. `short` is what is drawn, `tip` is the Tooltip (one sentence, at most 24 words), `help` is a topic id (bodies at most 150 words, section 7) or a Dialog id (section 4). Tests: per-screen word budget (sum of `short` of the screen plus shell), title/subtitle/label/button limits, `tip` single sentence, every `help` id exists, every topic at most 150 words, no string outside the module.
@@ -20,12 +21,12 @@ Sample values (DS918+, 192.168.1.40, SN 1930PDN123456, `sdc` with 8 reallocated 
 
 | # | Element | Visible text | Widget | Words |
 |---|---|---|---|---|
-| 1 | TitleBar: logo mark + wordmark | synofurb | `TitleBar` + SVG logo (custom asset) | 1 |
-| 2 | TitleBar actions | (icons only: circle-question-mark = Help, settings = Settings, menu = About / Check for updates) | `Button` icon + `Tooltip`, `DropdownMenu` | 0 |
-| 3 | Stepper | Find, Connect, Inspect, Goal, Plan, System, Confirm, Install, Done | `Stepper` + `StepperItem` (horizontal, click only completed steps) | 9 |
-| 4 | StatusBar left | Risk Tag, at most 2 words: Read-only, Plan only, Flash changed, Disks changed, Failed safely, Debian running | `StatusBar` + `Tag` (icon + text) | 2 |
-| 5 | StatusBar center | {DS918+ · 192.168.1.40} | `StatusBar`, `Label` (mono data) | 0 |
-| 6 | StatusBar right | Way back | `Button` (link) opening a `Popover` with the one-line fallback for the current state | 2 |
+| 2 | TitleBar: logo mark + wordmark | synofurb | `TitleBar` + SVG logo (custom asset) | 1 |
+| 3 | TitleBar actions | (icons only: circle-question-mark = Help, settings = Settings, menu = About / Check for updates) | `Button` icon + `Tooltip`, `DropdownMenu` | 0 |
+| 4 | Stepper | Find, Connect, Inspect, Goal, Plan, System, Confirm, Install, Done | `Stepper` + `StepperItem` (horizontal, click only completed steps) | 9 |
+| 5 | StatusBar left | Risk Tag, at most 2 words: Read-only, Plan only, Flash changed, Disks changed, Failed safely, Debian running | `StatusBar` + `Tag` (icon + text) | 2 |
+| 6 | StatusBar center | {DS918+ · 192.168.1.40} | `StatusBar`, `Label` (mono data) | 0 |
+| 0 | StatusBar right | Way back | `Button` (link) opening a `Popover` with the one-line fallback for the current state | 2 |
 
 **Shell words: 14.** Risk Tag states (derived from facts, never from step number): *Read-only* (before Confirm, before any write); *Plan only* (plan prepared, not applied); *Flash changed* (confirmed; boot flash written, no disk yet); *Disks changed* (step 3 reached); *Failed safely* (failed with disks untouched; the boot flash may still hold our entries); *Debian running*. The Way back Popover (one sentence each): Read-only/Plan only "Nothing to undo."; Flash changed "Cancel or power-cycle: DSM boots."; Disks changed "Rescue shell 15 min, then the DSM loader; no data promise."; Failed safely "DSM boots again by itself."; Debian running "Recovery stays under Manage."
 
@@ -36,11 +37,11 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | Element | Visible text | Widget (web) | Words |
 |---|---|---|---|
 | Brand | synofurb (+ {host}) | `header` + inline SVG logo | 1 |
-| Navigation | Dashboard, Storage, Mounts, Network, Users, Boot, System, Audit, Help, About | `nav` (sidebar; `aria-current=page`), Lucide icons | 10 |
+| Navigation | Dashboard, Storage, RAID, Mounts, Network, Users, Boot, System, Audit, Help, About | `nav` (sidebar; `aria-current=page`), Lucide icons | 11 |
 | Status strip | Tag "Needs attention" (worst health) + {RAID sync 24 % · up 2 h 14 min} | `role=status` strip, Tag | 2 |
 | Rollback banner | only while a network change is pending (see W6) | Alert, `role=alert` | conditional |
 
-**Shell words: 13.** Phones: nav collapses to a bottom tab bar (Home, Storage, Network, Users, More) with 44 px targets; the strip and rollback banner stay. Web "widgets" are named after the gpui-component equivalents so both surfaces share vocabulary: Tooltip = `role=tooltip` on hover and focus; Popover = `popover` attribute; Dialog = `<dialog>`; Sheet = `<dialog>` docked right; Accordion = `<details>`; Stepper = `<ol aria-current=step>`; Tag = `span.tag` with icon; Alert = `role=alert|status`; Toast = `role=status` live region.
+**Shell words: 14.** Phones: nav collapses to a bottom tab bar (Home, Storage, Network, Users, More) with 44 px targets; the strip and rollback banner stay. Web "widgets" are named after the gpui-component equivalents so both surfaces share vocabulary: Tooltip = `role=tooltip` on hover and focus; Popover = `popover` attribute; Dialog = `<dialog>`; Sheet = `<dialog>` docked right; Accordion = `<details>`; Stepper = `<ol aria-current=step>`; Tag = `span.tag` with icon; Alert = `role=alert|status`; Toast = `role=status` live region.
 
 ## 2. Widget catalogue (gpui-component 0.8.1, read from `src/`)
 
@@ -53,6 +54,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | Need | Why no widget | Exception |
 |---|---|---|
 | Disk / RAID / LVM layout diagram | No chart widget draws partition stacks | One custom element built from `div` segments inside a `GroupBox`; its legend is a `Tooltip` |
+| Capacity / slices preview bar (RAID, Hybrid) | No chart widget for stacked slices | Same custom element as the layout diagram, reused; the numbers are `Tag`s and a `DataTable`, so the bar is decorative and the data is also in text |
 | Countdown (60 s, 15 min, 90 s) | No timer widget | `Label` (JetBrains Mono) driven by an app-side tick; announced as a timer |
 | Logo / wordmark | Brand asset | SVG via `img`/`Icon` custom path; Montserrat wordmark baked into the SVG outlines |
 | Log viewer | No log widget | `VirtualList` of `Label` rows (mono) + `Input` search + `ToggleGroup` levels |
@@ -78,7 +80,11 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 
 **F7 Update.** D11 banner and Dialog; never during an install.
 
-**F8 Web day-2.** W1 Login -> W2 Dashboard (Needs attention first) -> W3/W4 storage -> W6 Network (safe apply) -> W8 Boot.
+**F8 Web day-2.** W1 Login -> W2 Dashboard (Needs attention first) -> W3/W4 storage -> W13 RAID -> W6 Network (safe apply) -> W8 Boot.
+
+**F9 RAID choice at install.** D5 *Data RAID* Select (Auto, None, 0, 1, 5, 6, 10, Hybrid 1-disk, Hybrid 2-disk) shows *Usable* and *Survives* live; Hybrid adds a *Slices* link (Dialog with the slices table) and, when relevant, a *Weaker slice* warning; D6 repeats the choice as a read-only *Data layout* tag; D7 lists it under Destroyed/Changed as sizes only.
+
+**F10 RAID day-2.** Desktop: D15 Manage > Storage (D18) lists arrays and opens the same Operation plan Dialog; the web RAID page (W13 to W17) is the full tool. Replace a failed disk: W2 Needs attention -> W13 (degraded Alert) -> W16 -> rebuild progress. Create: W13 *Create array* menu -> W14 or W15. Foreign arrays: Assemble and Scrub only until the *Not mine* checkbox is ticked.
 
 ## 4. Dialog texts (opened on purpose; each at most 90 words, 2 to 4 short paragraphs)
 
@@ -96,6 +102,8 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | Before you start (first launch) | D1 Inventory | Got it / Open Help | 31 | synofurb only reads until you confirm. Make a tested backup first. Screen readers are not supported in this window; the same steps work from the command line (see Help, Command line). |
 | Apply with rollback? (web) | W6 Network | Apply / Cancel | 36 | After applying, open {https://192.168.1.45:8443}. The browser warns again; the certificate is the same: {SHA-256 5E:91:C4:0B:7A:D2:38:F6 ... 2D:83:3C:A1}. Passkeys do not work on an IP address. You have 90 seconds; you can also confirm over SSH {ssh andreas@192.168.1.45 sudo synofurb-net confirm}. Do nothing and it rolls back. |
 | Enable write? (web) | W5 Mounts | Enable write / Cancel | 24 | DSM btrfs volumes can use features Debian handles poorly. Read-only is the safe default. Write only if you have a copy of the files. |
+| Hybrid slices (desktop Plan) | D5 Plan (Slices link) | Close | 89 | Hybrid (SHR-style) cuts your disks' data space into slices at the sizes of the different disks. Each slice present on two or more disks becomes one array: RAID 1 for two members, RAID 5 for three or more (Hybrid 2-disk: RAID 6 for four or more). A slice on one disk has no partner and stays unused. The arrays are joined by LVM into one volume. This is built by synofurb with mdadm and LVM; DSM may not adopt it, and nothing here has run on a real Synology. |
+| Operation plan | D18 / W13 to W17 | Run / Cancel | 58 | Shows the ordered steps for this operation, re-derived on the server when you run it, and the exact commands (collapsed). Destructive steps ask you to type a phrase such as REPLACE sdc. It refuses to touch a device that is mounted, holds the system or swap, belongs to another array, or while the array is resyncing or reshaping. |
 
 ## 5. Desktop screens
 
@@ -251,7 +259,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | Element | Pattern | short (visible) | tip (one sentence) | help |
 |---|---|---|---|---|
 | Boot manager (i) | Popover | Boot manager | Adds a small SSH agent to the boot flash. | Flash changes, disks untouched, one-shot, 30 min watchdog; help: boot-manager |
-| Install Debian (i) | Popover | Install Debian | Erases disks; needs your backup. | Wipe or advanced Keep, about 25 minutes; help: first-install |
+| Install Debian (i) | Popover | Install Debian | Erases disks; needs your backup. | Wipe or advanced Keep, about 25 minutes; data layout from None to RAID 10 or Hybrid (SHR-style); help: first-install, raid-levels |
 | Restore (i) | Popover | Restore / Recover | Reads the unit's state before offering anything. | help: recovery |
 | Recommended tag | Tooltip | Recommended | No one has reported this model; try the agent first. | help: compat-status |
 
@@ -274,18 +282,22 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 5 | Advanced | Link (opens Dialog) | 1 |
 | 6 | System size | Field + Slider + value label | 2 |
 | 7 | Mirror copies | Field + ToggleGroup 2 / 3 / 4 | 2 |
-| 8 | Data RAID | Field + Select | 2 |
-| 9 | Free space | Field + Slider | 2 |
-| 10 | {disk / RAID / LVM layout} | Custom diagram (exception, section 2), legend as Tooltip | data |
-| 11 | Destroyed | Tag (danger) + data size | 1 |
-| 12 | Changed | Tag (warning) + data | 1 |
-| 13 | Preserved | Tag (secondary) + data | 1 |
-| 14 | Disk warning | Alert (warning) + data line | 2 |
-| 15 | Next: System | Button (primary) | 2 |
-| 16 | Back | Button (ghost) | 1 |
-| 17 | Copy command | Button (icon: terminal, tooltip only) | cond. |
+| 8 | Data RAID | Field + Select (closed list: Auto, None, 0, 1, 5, 6, 10, Hybrid 1-disk, Hybrid 2-disk; items not counted) | 2 |
+| 9 | Usable | Tag (secondary) + data {10.82 TiB}; recomputed live from the chosen level | 1 |
+| 10 | Survives | Tag (secondary) + data {1 disk} | 1 |
+| 11 | Slices | Link, shown only for Hybrid; opens Dialog with a DataTable (Slice, Disks, Level, Usable) | cond. |
+| 12 | Weaker slice | Alert (warning), only when a Hybrid 2-disk slice has fewer than 4 members | cond. |
+| 13 | Free space | Field + Slider | 2 |
+| 14 | {disk / RAID / LVM layout} | Custom diagram (exception, section 2), legend as Tooltip | data |
+| 15 | Destroyed | Tag (danger) + data size | 1 |
+| 16 | Changed | Tag (warning) + data | 1 |
+| 17 | Preserved | Tag (secondary) + data | 1 |
+| 18 | Disk warning | Alert (warning) + data line | 2 |
+| 19 | Next: System | Button (primary) | 2 |
+| 20 | Back | Button (ghost) | 1 |
+| 21 | Copy command | Button (icon: terminal, tooltip only) | cond. |
 
-**Word budget:** screen 26 + shell 14 = **40** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 28 + shell 14 = **42** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -295,7 +307,11 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | Advanced | Dialog | Keep existing volumes | Best effort; no guarantee. | Dialog (3 short paragraphs): caps the system near 9.5 GiB; what is gone (DSM, settings, users, packages); volumes are not mounted automatically and import read-only. Buttons Use Keep / Cancel |
 | System size (i) | Tooltip | System size | Mirrored on every copy; 32 GiB is recommended. | help: first-install |
 | Mirror copies (i) | Tooltip | Mirror copies | More copies survive more disk failures. | help: recovery |
-| Data RAID (i) | Tooltip | Data RAID | Auto picks the level from the disk count. | help: first-install |
+| Data RAID (i) | Popover | Data RAID | Auto picks the level from the disk count. | Small table: level, minimum disks, survives; Hybrid row; button "Open Help"; help: raid-levels |
+| Hybrid options | Tooltip on each option | Hybrid 1-disk / 2-disk | Mixes disk sizes; survives any one (or two) disks. | Needs 2 (1-disk) or 4 (2-disk) disks; help: hybrid-raid |
+| Usable / Survives | HoverCard | Capacity | Usable space and fault tolerance for this level and disk set. | Raw size, usable size, wasted space, tolerated failures; help: raid-levels |
+| Slices | Dialog | Hybrid slices | Each slice becomes one array. | DataTable of slices; unusable single-member slice is shown as "Unused"; text: Hybrid dialog, section 4; help: hybrid-raid |
+| Weaker slice | Tooltip | Weaker slice | This slice tolerates fewer failures than you chose. | help: hybrid-raid |
 | Free space (i) | Tooltip | Free space | Left unallocated for growth and snapshots. | - |
 | Summary tags | HoverCard | Destroyed / Changed / Preserved | Hover for names and sizes. | Names and sizes of disks, volumes and the boot flash |
 | Disk warning | Tooltip | Disk warning | A failing disk during the first sync is risky. | help: troubleshooting |
@@ -306,7 +322,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 
 **Keyboard:** `Left`/`Right` adjust a focused Slider; `Tab` through controls; `Ctrl+Shift+C` Copy command; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: n/a; *error*: Blocking: Alert error + inline fix; non-blocking: Alert warning; Next disabled only on blocking; *loading*: Layout recomputes instantly; no loading state.
+**States:** *empty*: n/a; *error*: Blocking (for example too few disks for the level): Alert error + inline fix, Next disabled; non-blocking: Alert warning; *loading*: Layout recomputes instantly; no loading state.
 
 ### D6 System
 
@@ -332,13 +348,14 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 16 | Source | Field + ToggleGroup | 1 |
 | 17 | Online | ToggleGroup option | 1 |
 | 18 | Offline | ToggleGroup option | 1 |
-| 19 | Boot via | Field + Tag (read-only) "Boot flash" or "Installer kit" | 2 |
-| 20 | Next: Confirm | Button (primary) | 2 |
-| 21 | Back | Button (ghost) | 1 |
-| 22 | Bundle | Field + Select + Button "Download" when Offline | cond. |
-| 23 | Copy command | Button (icon: terminal) | cond. |
+| 19 | Data layout | Field + Tag (read-only) {RAID 5 · 10.82 TiB} with link back to Plan | 2 |
+| 20 | Boot via | Field + Tag (read-only) "Boot flash" or "Installer kit" | 2 |
+| 21 | Next: Confirm | Button (primary) | 2 |
+| 22 | Back | Button (ghost) | 1 |
+| 23 | Bundle | Field + Select + Button "Download" when Offline | cond. |
+| 24 | Copy command | Button (icon: terminal) | cond. |
 
-**Word budget:** screen 29 + shell 14 = **43** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 31 + shell 14 = **45** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -352,6 +369,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | Source (i) | Popover | Source | Offline uses a downloaded bundle. | Online needs Internet on the NAS; Offline needs a bundle for this architecture (Settings, Data); help: offline-mode |
 | Bundle missing | Alert (error) inline | No bundle | Download one in Settings or switch to Online. | Button "Download" opens Settings > Data |
 | Boot via (i) | Popover | Boot via | Debian starts through the boot flash on this unit. | Backed up first, DSM stays default; Installer kit shown for units without a flash; help: boot-manager |
+| Data layout | Tooltip | Data layout | Chosen in Plan; click to change it. | help: raid-levels |
 | Copy command | Tooltip | Copy command | Copies the equivalent synofurb command. | help: cli |
 
 **Primary:** Next: Confirm. **Secondary:** Back, Copy command.
@@ -679,7 +697,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 |---|---|---|---|
 | 1 | {DS918+} | Label (title, data) | data |
 | 2 | Running Debian 13. | Label (subtitle) | 3 |
-| 3 | Overview, Logins, Recovery, History | TabBar + Tab (4) | 4 |
+| 3 | Overview, Storage, Logins, Recovery, History | TabBar + Tab (5); Storage = D18 | 5 |
 | 4 | Address | DescriptionList label | 1 |
 | 5 | Default boot | DescriptionList label | 2 |
 | 6 | Web UI | DescriptionList label | 2 |
@@ -689,7 +707,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 10 | Password not kept | Tag (secondary) | 3 |
 | 11 | {timeline} | History tab: List of events | data |
 
-**Word budget:** screen 21 + shell 14 = **35** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 22 + shell 14 = **36** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -698,6 +716,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | Password not kept | Tooltip | Password | synofurb does not store it; the NAS keeps a hash. | help: first-install |
 | Default boot | Tooltip | Default boot | Debian; the DSM loader entry remains. | help: recovery |
 | Recovery tab | Link to D14 | Recovery | - | - |
+| Storage tab | Tab content D18 | Storage | Arrays, members and RAID operations. | help: raid-levels |
 
 **Primary:** Open web UI. **Secondary:** Diagnostics.
 
@@ -714,12 +733,12 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 1 | Help | Sheet title (opens from the right, 480 px; full-window below 960 px) | 1 |
 | 2 | Search help | Input (search) | 2 |
 | 3 | Topics, Shortcuts | TabBar | 2 |
-| 4 | First install, Status meanings, Backups, Recovery, Boot manager, Serial console, Offline mode, Command line, Troubleshooting, Report a result | List (10 items, one line each) | 18 |
+| 4 | First install, Status meanings, Backups, Recovery, Boot manager, Serial console, Offline mode, Command line, Troubleshooting, Report a result, RAID levels, Hybrid RAID, Replace disk, Scrubbing | List (14 items, one line each) | 25 |
 | 5 | Open docs | Link (external-link icon) | 2 |
 | 6 | Back | Button (ghost) in topic view | 1 |
 | 7 | {topic body ≤150 words} | TextView.markdown + "More" Link | data |
 
-**Word budget:** screen 26 + shell 14 = **40** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 33 + shell 14 = **47** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -766,6 +785,40 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 **Keyboard:** `Tab`; `Enter`; `Esc` back; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
 **States:** *empty*: n/a; *error*: Clipboard failure: Notification error; *loading*: n/a.
+
+### D18 Manage: Storage / RAID
+
+**Purpose:** List the unit's arrays and run RAID operations over SSH or the management plane.
+
+| # | Visible element (reading order) | Widget | Words |
+|---|---|---|---|
+| 1 | Storage | Tab content under D15 (TabBar tab) | 1 |
+| 2 | Array, Level, State, Size, Progress | DataTable column headers | 5 |
+| 3 | {md1 · RAID 5 · Rebuilding · 10.82 TiB · 24 %} | DataTable rows; State = Tag (success Clean / warning Degraded / info Rebuilding / warning Foreign) + Progress in the row | data |
+| 4 | Create array | DropdownButton (primary): RAID array, Hybrid array | 2 |
+| 5 | Actions | DropdownMenu per row: Add spare, Replace disk, Grow, Change level, Scrub, Stop, Tune (closed list, items not counted) | 1 |
+| 6 | Open web UI | Button (secondary): detail and history live in the web UI | 3 |
+| 7 | Array degraded | Alert (warning) + Button "Replace disk" | cond. |
+| 8 | No arrays | Empty + Button "Create array" | cond. |
+
+**Word budget:** screen 12 + shell 14 = **26** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+
+**Disclosures** (everything that used to be prose):
+
+| Element | Pattern | short (visible) | tip (one sentence) | help |
+|---|---|---|---|---|
+| State Tag | Tooltip | State | Clean, degraded, rebuilding or foreign. | help: replace-disk |
+| Level column (i) | Popover | Level | RAID level and minimum disks. | Same table as D5; help: raid-levels |
+| Actions item disabled | Tooltip | Unavailable | Wait for the rebuild to finish. | Other reasons: in use by LVM or mounted; foreign array needs "not mine" confirmation |
+| Every operation | Dialog (Operation plan) | Operation plan | Review the steps and exact commands first. | Ordered steps, Accordion "Commands" (mono, collapsed), typed phrase per section 5b; buttons Run / Cancel |
+| Foreign Tag | Tooltip | Foreign | Created by DSM or another system; you can assemble and scrub it. | help: hybrid-raid |
+| Open web UI | Tooltip | Open web UI | Full array detail and history. | help: raid-levels |
+
+**Primary:** Create array. **Secondary:** Actions, Open web UI.
+
+**Keyboard:** `Up`/`Down` row; `Enter` opens the row's Actions menu; `Ctrl+N` Create array; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
+
+**States:** *empty*: Empty "No arrays" + Create array; *error*: Unit unreachable: Alert "Cannot reach unit"; an operation failing shows the real error and what was rolled back; *loading*: Skeleton rows; Progress per syncing array.
 
 ## 6. Web UI screens
 
@@ -824,7 +877,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | 11 | Arrays | Card with {md0, md1} progress rows | 1 |
 | 12 | Network | Card with {eth0 address} | 1 |
 
-**Word budget:** screen 19 + shell 13 = **32** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 19 + shell 14 = **33** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -848,15 +901,16 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | # | Visible element (reading order) | Widget | Words |
 |---|---|---|---|
 | 1 | Storage | h1 | 1 |
-| 2 | Volumes, Arrays, LVM, Disks | Tabs (role=tablist) | 4 |
-| 3 | Volume, Mount, Size, Used | table headers | 4 |
-| 4 | {data · /srv/data · 8.66 TiB · 16 %} | table rows | data |
-| 5 | Create volume | button.primary | 2 |
-| 6 | Extend | button.ghost (row) opens Popover | 1 |
-| 7 | Delete | button.ghost danger (row) opens Dialog | 1 |
-| 8 | Add | Popover: number input (GiB) + button "Extend" | cond. |
+| 2 | Volumes, LVM, Disks | Tabs (role=tablist); arrays moved to the RAID page | 3 |
+| 3 | RAID | link to W13 | 1 |
+| 4 | Volume, Mount, Size, Used | table headers | 4 |
+| 5 | {data · /srv/data · 8.66 TiB · 16 %} | table rows | data |
+| 6 | Create volume | button.primary | 2 |
+| 7 | Extend | button.ghost (row) opens Popover | 1 |
+| 8 | Delete | button.ghost danger (row) opens Dialog | 1 |
+| 9 | Add | Popover: number input (GiB) + button "Extend" | cond. |
 
-**Word budget:** screen 13 + shell 13 = **26** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 13 + shell 14 = **27** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -864,7 +918,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 |---|---|---|---|---|
 | Extend | Popover | Extend | Grows online; it cannot be shrunk again. | Result preview: new size and free space; help: storage |
 | Delete | Dialog | Delete {name}? | Destroys {n} TiB; cannot be undone. | In use by {2 shares, 1 export}; Checkbox "I have a copy" + Input phrase `delete {name}`; button Delete (danger) |
-| Array row | Tooltip | Sync | Progress, speed and time left. | help: storage |
+| RAID link | Tooltip | RAID | Arrays, spares and sync have their own page. | help: raid-levels |
 | Create volume | Tooltip | Create volume | Uses free space in the volume group. | help: storage |
 
 **Primary:** Create volume. **Secondary:** Extend, Delete.
@@ -891,7 +945,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | 10 | Back | button.ghost | 1 |
 | 11 | Create volume | button.primary (step 4, one click) | 2 |
 
-**Word budget:** screen 14 + shell 13 = **27** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 14 + shell 14 = **28** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -922,7 +976,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | 7 | Unmount | button.ghost (row) | 1 |
 | 8 | Enable write | button.ghost (imported row; opens Dialog) | 2 |
 
-**Word budget:** screen 13 + shell 13 = **26** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 13 + shell 14 = **27** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -959,7 +1013,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | 13 | Roll back | Rollback Alert: button | cond. |
 | 14 | Cannot reach? | Rollback Alert: link opening Popover | cond. |
 
-**Word budget:** screen 10 + shell 13 = **23** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 10 + shell 14 = **24** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -995,7 +1049,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | 10 | Cancel | Panel: button.ghost | 1 |
 | 11 | Edit, Lock, Password, Delete | Row icon buttons with tooltips only | cond. |
 
-**Word budget:** screen 18 + shell 13 = **31** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 18 + shell 14 = **32** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -1027,7 +1081,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | 7 | Next boot only | button | 3 |
 | 8 | Make default | button (typed Dialog for non-Debian entries) | 2 |
 
-**Word budget:** screen 24 + shell 13 = **37** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 24 + shell 14 = **38** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -1061,7 +1115,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | 9 | Reboot | button (opens Dialog) | 1 |
 | 10 | Shut down | button.danger (opens Dialog) | 2 |
 
-**Word budget:** screen 17 + shell 13 = **30** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 17 + shell 14 = **31** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -1090,7 +1144,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | 4 | Time, Who, From, Action, Result | table headers | 5 |
 | 5 | Export CSV | button.ghost | 2 |
 
-**Word budget:** screen 15 + shell 13 = **28** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 15 + shell 14 = **29** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -1113,12 +1167,12 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 |---|---|---|---|
 | 1 | Help | h1 in a Sheet (right, 420 px; full width on phones) | 1 |
 | 2 | Search help | input (search) | 2 |
-| 3 | Safe apply, Sign-in, Certificate, Storage, Imports, Boot, Recovery, Report | List of topics (8) | 9 |
+| 3 | Safe apply, Sign-in, Certificate, Storage, Imports, Boot, Recovery, Report, RAID levels, Hybrid RAID, Replace disk, Scrubbing | List of topics (12) | 16 |
 | 4 | Shortcuts | Tab | 1 |
 | 5 | Open docs | link | 2 |
 | 6 | Back | button.ghost in topic view | 1 |
 
-**Word budget:** screen 16 + shell 13 = **29** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 23 + shell 14 = **37** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -1148,7 +1202,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | 8 | Credits | details/summary | 1 |
 | 9 | {Debian · Lucide · Inter · JetBrains Mono · Montserrat · synodeb note} | List inside Credits | data |
 
-**Word budget:** screen 9 + shell 13 = **22** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 9 + shell 14 = **23** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -1163,9 +1217,221 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 
 **States:** *empty*: n/a; *error*: Clipboard failure: Toast error; *loading*: n/a.
 
+### W13 RAID
+
+**Purpose:** List arrays and open one for detail and operations.
+
+| # | Visible element (reading order) | Widget | Words |
+|---|---|---|---|
+| 1 | RAID | h1 | 1 |
+| 2 | Arrays, spares and sync. | subtitle | 4 |
+| 3 | Array, Level, State, Size, Members | table headers | 5 |
+| 4 | {md1 · RAID 5 · Rebuilding · 10.82 TiB · sda3 sdb3 sdc3 sdd3} | table rows; State = Tag + progressbar with speed and time left | data |
+| 5 | Create array | DropdownButton (primary): RAID array, Hybrid array | 2 |
+| 6 | Actions | Row menu button: Add spare, Replace disk, Grow, Change level, Scrub, Stop, Tune (closed menu, items not counted) | 1 |
+| 7 | Level, State, Size | Detail Sheet (right): dl labels | 3 |
+| 8 | Spares, Bitmap | Detail Sheet: dl labels | 2 |
+| 9 | Last check | Detail Sheet: dl label | 2 |
+| 10 | Mismatches | Detail Sheet: dl label | 1 |
+| 11 | Disk, State, Size | Detail Sheet: members table headers | 3 |
+| 12 | Array degraded | Alert (warning) + button "Replace disk" | cond. |
+| 13 | Foreign | Tag (warning) on arrays created elsewhere | cond. |
+| 14 | No arrays | Empty + button "Create array" | cond. |
+
+**Word budget:** screen 24 + shell 14 = **38** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+
+**Disclosures** (everything that used to be prose):
+
+| Element | Pattern | short (visible) | tip (one sentence) | help |
+|---|---|---|---|---|
+| Level column (i) | Popover | Level | RAID level and minimum disks. | Table: level, minimum disks, survives; help: raid-levels |
+| State Tag | Tooltip | State | Clean, degraded, rebuilding or foreign. | help: replace-disk |
+| Rebuilding progress | Tooltip | Rebuilding | Speed and time left; the array stays usable. | help: replace-disk |
+| Foreign Tag | Tooltip | Foreign | Created by DSM or another system; you can assemble and scrub it. | Create, grow and destroy need an "I understand this is not mine" checkbox first; help: hybrid-raid |
+| Actions item disabled | Tooltip | Unavailable | Wait for the rebuild to finish. | Other reasons: mounted or used by LVM (Stop), array not degraded (Replace failed) |
+| Mismatches | Tooltip | Mismatches | Blocks that disagree between copies or parity. | help: scrubbing |
+| Tune | Popover | Tune | Sync speed limits, stripe cache, bitmap. | Number inputs with units; no typed confirm; help: scrubbing |
+
+**Primary:** Create array. **Secondary:** Actions.
+
+**Keyboard:** `Tab`/`Shift+Tab` move; `/` focuses search where present; `?` opens Help; `Esc` closes popovers, dialogs and sheets; `Enter` opens the focused row; arrow keys move in the level picker
+
+**States:** *empty*: Empty "No arrays" + Create array; *degraded*: Alert warning + row Tag danger "Degraded" + button Replace disk; *rebuilding*: Row progressbar; Actions disabled except Scrub-stop and Tune; Tooltip "Wait for the rebuild"; *foreign*: Tag "Foreign"; only Assemble and Scrub enabled until the "not mine" checkbox is ticked; *error*: Command failure: Alert error with the real message and what was rolled back; *loading*: Skeleton rows.
+
+### W14 Create array
+
+**Purpose:** Pick a level, see capacity live, choose disks, confirm.
+
+| # | Visible element (reading order) | Widget | Words |
+|---|---|---|---|
+| 1 | Create array | h1 | 2 |
+| 2 | Level, Disks, Preview, Confirm | Stepper (ol, aria-current=step) | 4 |
+| 3 | Level | Step 1: label + radio cards: None, 0, 1, 5, 6, 10 (closed set; each shows min disks) | 1 |
+| 4 | Name | Step 1: label + input (default {data2}) | 1 |
+| 5 | Spares | Step 1: label + number input | 1 |
+| 6 | Usable | Live preview Tag + data {7.22 TiB} | 1 |
+| 7 | Survives | Live preview Tag + data {1 disk} | 1 |
+| 8 | Disk, Size, Free | Step 2: table headers with checkbox per row | 3 |
+| 9 | Commands | Step 3: details/summary (collapsed, mono) | 1 |
+| 10 | Type phrase | Step 4: label + input; phrase code chip {CREATE data2} | 2 |
+| 11 | Next | button.primary | 1 |
+| 12 | Back | button.ghost | 1 |
+| 13 | Create array | button.danger (step 4) | 2 |
+| 14 | Not mine | Step 4 checkbox, only for foreign arrays | cond. |
+
+**Word budget:** screen 21 + shell 14 = **35** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+
+**Disclosures** (everything that used to be prose):
+
+| Element | Pattern | short (visible) | tip (one sentence) | help |
+|---|---|---|---|---|
+| Level cards | Tooltip | Level | Minimum disks and failures survived. | help: raid-levels |
+| Usable / Survives | Popover | Capacity | Usable space and fault tolerance, live. | Raw, usable, wasted (smallest member size is used on every member); help: raid-levels |
+| Disks step | Tooltip | Disks | Only unused disks and partitions are listed. | Mounted, system and other-array devices are never offered |
+| Commands | Accordion | Commands | Exact commands, run in order. | e.g. mdadm --create /dev/md/data2 --level=5 --raid-devices=3 --metadata=1.2 /dev/sdb3 /dev/sdc3 /dev/sdd3 |
+| Create array | Tooltip | Create array | Erases the selected partitions. | Typed phrase CREATE {name}; see section 5b |
+
+**Primary:** Next / Create array. **Secondary:** Back.
+
+**Keyboard:** `Tab`/`Shift+Tab` move; `/` focuses search where present; `?` opens Help; `Esc` closes popovers, dialogs and sheets; `Enter` opens the focused row; arrow keys move in the level picker
+
+**States:** *empty*: No unused disks: Empty with link Help; *error*: Too few disks for the level: inline Alert, Next disabled with Tooltip; *loading*: Create shows progress of each ordered step.
+
+### W15 Create hybrid
+
+**Purpose:** Build an SHR-style layout from disks of different sizes.
+
+| # | Visible element (reading order) | Widget | Words |
+|---|---|---|---|
+| 1 | Create hybrid | h1 | 2 |
+| 2 | Disks, Level, Slices, Confirm | Stepper | 4 |
+| 3 | Disk, Size, Free | Step 1: table headers + checkbox per row | 3 |
+| 4 | 1 disk, 2 disks | Step 2: radio group (Hybrid 1-disk / 2-disk) | 4 |
+| 5 | Usable | Live preview Tag + data {8 TB} | 1 |
+| 6 | Survives | Live preview Tag + data {1 disk} | 1 |
+| 7 | Unused | Live preview Tag (warning) + data {4 TB} | 1 |
+| 8 | Slice, Disks, Level, Usable | Step 3: slices table headers | 4 |
+| 9 | {1 · sda sdb sdc · RAID 5 · 8 TB / 2 · sdc · none · unused} | slices table rows | data |
+| 10 | Commands | details/summary (collapsed) | 1 |
+| 11 | Type phrase | Step 4: label + input; chip {CREATE hybrid} | 2 |
+| 12 | Next | button.primary | 1 |
+| 13 | Back | button.ghost | 1 |
+| 14 | Create hybrid | button.danger | 2 |
+| 15 | Weaker slice | Alert (warning) when a Hybrid 2-disk slice has fewer than 4 members | cond. |
+
+**Word budget:** screen 27 + shell 14 = **41** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+
+**Disclosures** (everything that used to be prose):
+
+| Element | Pattern | short (visible) | tip (one sentence) | help |
+|---|---|---|---|---|
+| Hybrid choice | Popover | Hybrid | Mixes disk sizes; every shared slice becomes an array. | Example 4, 4, 8 TB = 8 TB usable; SHR-style, not adopted by DSM; help: hybrid-raid |
+| Slices table | Tooltip | Slice | A slice is space present on the same disks. | help: hybrid-raid |
+| Unused | Tooltip | Unused | Space on a single disk has no partner and stays unused. | help: hybrid-raid |
+| Weaker slice | Tooltip | Weaker slice | This slice tolerates fewer failures than you chose. | help: hybrid-raid |
+| Commands | Accordion | Commands | Partitions, arrays data1 to dataN, then vg_data. | Per slice: partition each disk, mdadm --create, then vgcreate vg_data and lvcreate; listed in order |
+| Create hybrid | Tooltip | Create hybrid | Erases the selected disks. | Typed phrase CREATE hybrid; section 5b |
+
+**Primary:** Next / Create hybrid. **Secondary:** Back.
+
+**Keyboard:** `Tab`/`Shift+Tab` move; `/` focuses search where present; `?` opens Help; `Esc` closes popovers, dialogs and sheets; `Enter` opens the focused row; arrow keys move in the level picker
+
+**States:** *empty*: Fewer than 2 unused disks: Empty; *error*: Fewer than 4 disks for Hybrid 2-disk: option disabled with Tooltip; *loading*: Ordered steps with progress.
+
+### W16 Replace disk
+
+**Purpose:** Swap a failed or healthy member; watch the rebuild.
+
+| # | Visible element (reading order) | Widget | Words |
+|---|---|---|---|
+| 1 | Replace disk | h1 | 2 |
+| 2 | Member, New disk, Preview, Confirm | Stepper | 5 |
+| 3 | Disk, State | Step 1: member table headers (failed member preselected) | 2 |
+| 4 | Disk, Size, Free | Step 2: new-disk table headers (must be at least as large) | 3 |
+| 5 | Steps | Step 3: ordered list; for Hybrid arrays a table headed Step, Disk, Action | 1 |
+| 6 | Commands | Step 3: details/summary (collapsed) | 1 |
+| 7 | Type phrase | Step 4: label + input; chip {REPLACE sdc} | 2 |
+| 8 | Next | button.primary | 1 |
+| 9 | Back | button.ghost | 1 |
+| 10 | Replace disk | button.danger | 2 |
+| 11 | Rebuilding | Progress view: Tag + progressbar + labels Speed, Left | cond. |
+
+**Word budget:** screen 20 + shell 14 = **34** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+
+**Disclosures** (everything that used to be prose):
+
+| Element | Pattern | short (visible) | tip (one sentence) | help |
+|---|---|---|---|---|
+| Failed vs healthy | Tooltip | Replace | A healthy member is replaced without losing redundancy. | Failed: --fail, --remove, --add. Healthy: --add then --replace --with; help: replace-disk |
+| New disk | Tooltip | New disk | It is erased; it must be at least as large as the member. | help: replace-disk |
+| Steps | Accordion body | Steps | Reviewed list; re-derived on the server when you run it. | help: replace-disk |
+| Commands | Accordion | Commands | Exact commands, run in order. | mdadm /dev/md1 --fail /dev/sdc3; mdadm /dev/md1 --remove /dev/sdc3; mdadm /dev/md1 --add /dev/sde3 |
+| Replace disk | Tooltip | Replace disk | Starts a rebuild that takes hours. | Typed phrase REPLACE {disk}; section 5b |
+
+**Primary:** Next / Replace disk. **Secondary:** Back.
+
+**Keyboard:** `Tab`/`Shift+Tab` move; `/` focuses search where present; `?` opens Help; `Esc` closes popovers, dialogs and sheets; `Enter` opens the focused row; arrow keys move in the level picker
+
+**States:** *empty*: No free disk: Empty "Insert a disk" with link Help; *error*: Step failure: Alert with the real message; the array state is re-read; *rebuilding*: Progress view replaces the wizard; leaving the page is safe.
+
+### W17 RAID operation
+
+**Purpose:** Shared dialog for Add spare, Grow, Change level, Scrub, Stop, Assemble.
+
+| # | Visible element (reading order) | Widget | Words |
+|---|---|---|---|
+| 1 | {Grow data1} | Dialog title (verb + array) | data |
+| 2 | {ordered steps: 1 add disk, 2 reshape, 3 pvresize, 4 lvextend, 5 xfs_growfs} | ol (server-derived plan) | data |
+| 3 | Commands | details/summary (collapsed, mono) | 1 |
+| 4 | Not mine | checkbox, foreign arrays only | cond. |
+| 5 | Type phrase | label + input; chip per section 5b | 2 |
+| 6 | Run | button.danger (button.primary for non-destructive Scrub check, Assemble) | 1 |
+| 7 | Cancel | button.ghost | 1 |
+
+**Word budget:** screen 5 + shell 14 = **19** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+
+**Disclosures** (everything that used to be prose):
+
+| Element | Pattern | short (visible) | tip (one sentence) | help |
+|---|---|---|---|---|
+| Plan | Tooltip | Plan | Re-derived on the server when you run it. | help: replace-disk |
+| Refusal | Alert (error) in the dialog | Not possible | - | Reasons: mounted or in use by LVM, already resyncing or reshaping, system device |
+| Scrub check / repair | Toggle in dialog | Check / Repair | Check counts mismatches; repair rewrites them. | Repair needs the typed phrase; help: scrubbing |
+
+**Primary:** Run. **Secondary:** Cancel.
+
+**Keyboard:** `Tab`/`Shift+Tab` move; `/` focuses search where present; `?` opens Help; `Esc` closes popovers, dialogs and sheets
+
+**States:** *empty*: n/a; *error*: Step failure: Alert with message and what was rolled back; *loading*: Ordered steps with status icons.
+
+### 6.1 RAID operations (shared by D18, W13 to W17; source: docs/RAID.md)
+
+Every operation: server-side plan, typed confirmation where listed, ordered steps, audit entry; the plan is re-derived on the server at execution; sizes and names pass the existing validators; **the exact commands are always behind a collapsed "Commands" Accordion** (mono). A foreign array (created by DSM or another system) can be listed, assembled and scrubbed; create, grow and destroy on it first require the checkbox "Not mine" ("I understand this is not mine").
+
+| Operation | Typed phrase | Commands shown behind the disclosure | Refused when |
+|---|---|---|---|
+| List arrays | none | `mdadm --detail /dev/mdX`, `cat /proc/mdstat`, `/sys/block/mdX/md/*` | n/a |
+| Create array | `CREATE <name>` | `mdadm --create /dev/md/<name> --level=<L> --raid-devices=<N> --metadata=1.2 <partitions>` | device mounted, holds `/`, `/boot` or swap, or belongs to another array; too few disks |
+| Create hybrid (SHR-style) | `CREATE hybrid` | per slice: partition each disk, `mdadm --create` (arrays `data1`, `data2`, ...), then `vgcreate vg_data` and `lvcreate` (linear over the arrays) | fewer than 2 disks (4 for Hybrid 2-disk); a single-member slice is reported as unused, never used |
+| Add spare | `ADD <disk>` (the disk is erased) | `mdadm --manage /dev/mdX --add /dev/<disk>` | array not healthy enough, device in use |
+| Replace a failed member | `REPLACE <disk>` | `mdadm /dev/mdX --fail <old>`; `--remove <old>`; `--add <new>` | array already rebuilding |
+| Replace a healthy member | `REPLACE <disk>` | `mdadm /dev/mdX --add <new>`; `mdadm /dev/mdX --replace <old> --with <new>` | array resyncing or reshaping |
+| Grow capacity | `GROW <name>` | `mdadm --grow /dev/mdX --raid-devices=N` (RAID 5/6) or `--size=max` after larger disks; then `pvresize`, `lvextend`, `xfs_growfs` | resyncing; may need a backup file for some levels |
+| Change level | `LEVEL <name>` | `mdadm --grow /dev/mdX --level=<new>` (+ `--raid-devices`); only transitions mdadm supports are listed (for example RAID 1 to RAID 5 with 3 members, RAID 5 to RAID 6 with one more disk) | unsupported transition; resyncing |
+| Scrub: check | none (simple confirm) | `echo check > /sys/block/mdX/md/sync_action`; stop with `idle` | resyncing or reshaping |
+| Scrub: repair | `REPAIR <name>` | `echo repair > /sys/block/mdX/md/sync_action` | resyncing or reshaping |
+| Stop | simple confirm with consequences | `mdadm --stop /dev/mdX` | mounted or used by LVM |
+| Assemble | simple confirm | `mdadm --assemble --scan` | n/a |
+| Tune | none (Tooltip explains units) | `speed_limit_min` / `speed_limit_max`, `stripe_cache_size`, write-mostly, bitmap on/off | n/a |
+| SHR add disk / replace disk | `REPLACE <disk>` or `ADD <disk>` | a reviewed list of steps: partition the new disk like the others, then add it to each slice's array or create new slices | array resyncing |
+
+Capacity preview rule (Create array and Create hybrid): usable bytes follow `docs/RAID.md` (RAID 1 = length, RAID 5 = (m-1) x length, RAID 6 = (m-2) x length per slice; equal-size levels use the smallest member on every disk); the preview is a `Tag` pair (*Usable*, *Survives*) plus, for Hybrid, *Unused* and the slices table. It recomputes on every change and never promises more than the planner returns. Worked examples to show as the sample data: 4, 4, 8 TB Hybrid 1-disk = 8 TB; 2, 4, 4, 8 TB = 10 TB; 1, 2, 2, 3 TB = 5 TB.
+
+Health summary: mail on degrade comes from `mdadm --monitor` (`mdmonitor.service`); the Dashboard shows the worst component (a degraded array is *Needs attention*).
+
 ## 7. Help centre content
 
-**Desktop Help centre (D16)**: a `Sheet` from the right (480 px). Top: `Input` search. Tabs: *Topics*, *Shortcuts*. Topic view: `TextView::markdown` body (at most 150 words) + a *More* `Link` to the docs page + *Back*. Opened by `F1` (topic of the focused control), every info icon, and the TitleBar Help button. Search matches titles and bodies. Offline: the topics are bundled; only *More* needs Internet.
+**Desktop Help centre (D16)**: a `Sheet` from the right (480 px). Top: `Input` search. Tabs: *Topics*, *Shortcuts*. Topic view (14 topics: first install, status meanings, backups, recovery, boot manager, serial console, offline mode, command line, troubleshooting, report a result, RAID levels, Hybrid RAID, replacing a failed disk, scrubbing): `TextView::markdown` body (at most 150 words) + a *More* `Link` to the docs page + *Back*. Opened by `F1` (topic of the focused control), every info icon, and the TitleBar Help button. Search matches titles and bodies. Offline: the topics are bundled; only *More* needs Internet.
 
 | Id | Title | Words | Docs target |
 |---|---|---|---|
@@ -1179,6 +1445,10 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 | cli | Command line | 80 | README.md |
 | troubleshooting | Troubleshooting | 97 | docs/RECOVERY.md |
 | report-result | Report a result | 76 | docs/COMPAT.md |
+| raid-levels | RAID levels | 108 | docs/RAID.md |
+| hybrid-raid | Hybrid RAID | 131 | docs/RAID.md |
+| replace-disk | Replacing a failed disk | 128 | docs/RAID.md, docs/RECOVERY.md |
+| scrubbing | Scrubbing | 87 | docs/RAID.md |
 
 #### first-install: First install
 
@@ -1253,6 +1523,22 @@ Logs: `~/.local/share/synofurb/logs` (secrets removed). Settings, Logs opens the
 
 Reports move a model from Untested towards Verified. After an install, press Report result on the Done screen. It opens a pre-filled GitHub issue (compat report template) with the model, DSM version, synofurb version, result, boot method and a log excerpt without secrets. The serial number is left out. Nothing is sent without your click, and Settings, Privacy has an off switch. A maintainer checks the log and changes the status through a reviewed pull request.
 
+#### raid-levels: RAID levels
+
+RAID combines disks into one array. **None**: one disk, no protection. **RAID 0**: striped and fast; any failure loses everything (2+ disks). **RAID 1**: mirror, survives all but one disk (2+). **RAID 5**: survives one failed disk; usable space is (n-1) disks (3+). **RAID 6**: survives two; usable (n-2) disks (4+). **RAID 10**: mirrored stripes, survives one disk per mirror, half the capacity (4+). Equal-size levels use the smallest disk's size on every member, so larger disks waste space; Hybrid avoids that. RAID is not a backup: it does not protect against deletion, corruption or fire. A new array syncs for hours and works meanwhile with reduced protection.
+
+#### hybrid-raid: Hybrid RAID
+
+Hybrid (SHR-style) mixes disk sizes. synofurb cuts the disks' data space into slices at the sizes of the different disks; every slice on two or more disks becomes an array (RAID 1 for two members, RAID 5 for three or more; Hybrid 2-disk uses RAID 6 for four or more). LVM joins the arrays into one volume. Example: 4, 4 and 8 TB with Hybrid 1-disk gives 8 TB usable; the extra 4 TB on the large disk has no partner and stays unused. Hybrid 1-disk survives any one disk; Hybrid 2-disk any two where a slice has four or more members. It is built with mdadm and LVM, so Debian manages it. DSM may not adopt it, and DSM-made volumes import read-only. Nothing here has run on a real Synology.
+
+#### replace-disk: Replacing a failed disk
+
+A failed member leaves the array degraded: it works, but one more failure may lose data (RAID 5). 1. Check the disk on the Dashboard or RAID page. 2. Choose the new disk; it is erased and must be at least as large. 3. The tool marks the old member failed, removes it and adds the new one. 4. The rebuild runs for hours; progress and speed are shown, and other operations wait. Do not power off. To upgrade a healthy member, the tool adds a spare and uses a replace operation, so redundancy is kept during the swap. After replacing every member with a larger disk you can grow the array. Each step shows its exact commands and asks you to type REPLACE and the disk name.
+
+#### scrubbing: Scrubbing
+
+A scrub reads every block and compares copies or parity to find silent errors. Check only counts mismatches; Repair also rewrites them and needs a typed confirmation. Debian's mdcheck timer runs a scrub monthly; you can start one or stop it (idle) from the RAID page. The array stays usable but slower while it runs, and speed limits can be tuned. A non-zero mismatch count on a healthy array deserves attention: check SMART on every member. A scrub cannot start while the array is resyncing or reshaping.
+
 **Shortcuts tab (desktop)**
 
 | Keys | Action |
@@ -1278,6 +1564,10 @@ Reports move a model from Untested towards Verified. After an install, press Rep
 | boot | Boot page | 63 |
 | recovery | Recovery | 55 |
 | report | Report a result | 32 |
+| raid-levels | RAID levels | 108 |
+| hybrid-raid | Hybrid RAID | 131 |
+| replace-disk | Replacing a failed disk | 128 |
+| scrubbing | Scrubbing | 87 |
 
 #### web:safe-apply: Safe apply
 
@@ -1311,6 +1601,22 @@ If something fails: DSM stays the default boot entry. Before the installer's ste
 
 Use Report issue on the About page to open the compatibility report template. Include the model, DSM version, synofurb version, what worked and the log. Do not include serial numbers or passwords.
 
+#### web:raid-levels: RAID levels
+
+RAID combines disks into one array. **None**: one disk, no protection. **RAID 0**: striped and fast; any failure loses everything (2+ disks). **RAID 1**: mirror, survives all but one disk (2+). **RAID 5**: survives one failed disk; usable space is (n-1) disks (3+). **RAID 6**: survives two; usable (n-2) disks (4+). **RAID 10**: mirrored stripes, survives one disk per mirror, half the capacity (4+). Equal-size levels use the smallest disk's size on every member, so larger disks waste space; Hybrid avoids that. RAID is not a backup: it does not protect against deletion, corruption or fire. A new array syncs for hours and works meanwhile with reduced protection.
+
+#### web:hybrid-raid: Hybrid RAID
+
+Hybrid (SHR-style) mixes disk sizes. synofurb cuts the disks' data space into slices at the sizes of the different disks; every slice on two or more disks becomes an array (RAID 1 for two members, RAID 5 for three or more; Hybrid 2-disk uses RAID 6 for four or more). LVM joins the arrays into one volume. Example: 4, 4 and 8 TB with Hybrid 1-disk gives 8 TB usable; the extra 4 TB on the large disk has no partner and stays unused. Hybrid 1-disk survives any one disk; Hybrid 2-disk any two where a slice has four or more members. It is built with mdadm and LVM, so Debian manages it. DSM may not adopt it, and DSM-made volumes import read-only. Nothing here has run on a real Synology.
+
+#### web:replace-disk: Replacing a failed disk
+
+A failed member leaves the array degraded: it works, but one more failure may lose data (RAID 5). 1. Check the disk on the Dashboard or RAID page. 2. Choose the new disk; it is erased and must be at least as large. 3. The tool marks the old member failed, removes it and adds the new one. 4. The rebuild runs for hours; progress and speed are shown, and other operations wait. Do not power off. To upgrade a healthy member, the tool adds a spare and uses a replace operation, so redundancy is kept during the swap. After replacing every member with a larger disk you can grow the array. Each step shows its exact commands and asks you to type REPLACE and the disk name.
+
+#### web:scrubbing: Scrubbing
+
+A scrub reads every block and compares copies or parity to find silent errors. Check only counts mismatches; Repair also rewrites them and needs a typed confirmation. Debian's mdcheck timer runs a scrub monthly; you can start one or stop it (idle) from the RAID page. The array stays usable but slower while it runs, and speed limits can be tuned. A non-zero mismatch count on a healthy array deserves attention: check SMART on every member. A scrub cannot start while the array is resyncing or reshaping.
+
 **Shortcuts tab (web)**: `?` Help; `/` Search; `Esc` Close; `Tab / Shift+Tab` Move focus.
 
 ## 8. About page (desktop D17, web W12)
@@ -1334,8 +1640,8 @@ Use Report issue on the About page to open the compatibility report template. In
 | D2 Connect | 23 | 14 | 37 | ok |
 | D3 Inspect | 24 | 14 | 38 | ok |
 | D4 Goal | 32 | 14 | 46 | ok |
-| D5 Plan | 26 | 14 | 40 | ok |
-| D6 System | 29 | 14 | 43 | ok |
+| D5 Plan | 28 | 14 | 42 | ok |
+| D6 System | 31 | 14 | 45 | ok |
 | D7 Confirm | 39 | 14 | 53 | ok |
 | D8 Install | 13 | 14 | 27 | ok |
 | D9 Install failed | 22 | 14 | 36 | ok |
@@ -1344,26 +1650,32 @@ Use Report issue on the About page to open the compatibility report template. In
 | D12 Settings | 28 | 14 | 42 | ok |
 | D13 Boot manager | 26 | 14 | 40 | ok |
 | D14 Recovery | 23 | 14 | 37 | ok |
-| D15 Manage | 21 | 14 | 35 | ok |
-| D16 Help centre | 26 | 14 | 40 | ok |
+| D15 Manage | 22 | 14 | 36 | ok |
+| D16 Help centre | 33 | 14 | 47 | ok |
 | D17 About | 15 | 14 | 29 | ok |
+| D18 Manage: Storage / RAID | 12 | 14 | 26 | ok |
 | W1 Login | 9 | 1 | 10 | ok |
-| W2 Dashboard | 19 | 13 | 32 | ok |
-| W3 Storage | 13 | 13 | 26 | ok |
-| W4 Create volume | 14 | 13 | 27 | ok |
-| W5 Mounts and imports | 13 | 13 | 26 | ok |
-| W6 Network | 10 | 13 | 23 | ok |
-| W7 Users | 18 | 13 | 31 | ok |
-| W8 Boot | 24 | 13 | 37 | ok |
-| W9 System | 17 | 13 | 30 | ok |
-| W10 Audit log | 15 | 13 | 28 | ok |
-| W11 Help centre | 16 | 13 | 29 | ok |
-| W12 About | 9 | 13 | 22 | ok |
+| W2 Dashboard | 19 | 14 | 33 | ok |
+| W3 Storage | 13 | 14 | 27 | ok |
+| W4 Create volume | 14 | 14 | 28 | ok |
+| W5 Mounts and imports | 13 | 14 | 27 | ok |
+| W6 Network | 10 | 14 | 24 | ok |
+| W7 Users | 18 | 14 | 32 | ok |
+| W8 Boot | 24 | 14 | 38 | ok |
+| W9 System | 17 | 14 | 31 | ok |
+| W10 Audit log | 15 | 14 | 29 | ok |
+| W11 Help centre | 23 | 14 | 37 | ok |
+| W12 About | 9 | 14 | 23 | ok |
+| W13 RAID | 24 | 14 | 38 | ok |
+| W14 Create array | 21 | 14 | 35 | ok |
+| W15 Create hybrid | 27 | 14 | 41 | ok |
+| W16 Replace disk | 20 | 14 | 34 | ok |
+| W17 RAID operation | 5 | 14 | 19 | ok |
 
-Highest desktop screen: 53 words. Highest web screen: 37 words. Dialog and Help bodies are opened on purpose and are bounded separately (dialogs at most 90 words, topics at most 150).
+Highest desktop screen: 53 words. Highest web screen: 41 words. Dialog and Help bodies are opened on purpose and are bounded separately (dialogs at most 90 words, topics at most 150).
 
 ## 10. Review checklist for the real-app screenshots
 
-Proposed `synofurb gui --demo --screen <name>` names: `inventory`, `inventory-offline`, `connect`, `connect-hostkey`, `inspect`, `goal`, `plan`, `plan-keep`, `system`, `system-offline`, `confirm`, `confirm-keep`, `install`, `install-after-ponr`, `failed-pre`, `failed-post`, `failed-keep`, `done`, `done-arm`, `update`, `settings`, `boot-manager`, `recovery`, `manage`, `help`, `help-topic`, `about`, and the dialogs `dlg-recovery`, `dlg-keep`, `dlg-next-pre`, `dlg-next-wipe`, `dlg-next-keep`. For each: light and dark at 960x640; focus ring visible; no horizontal scroll; word count at or under the table above; every element is the widget named here (hand-made imitations are defects); tooltips and popovers captured open for at least one screen per pattern; fonts Inter / JetBrains Mono visible; scrollbars themed.
+Proposed `synofurb gui --demo --screen <name>` names: `inventory`, `inventory-offline`, `connect`, `connect-hostkey`, `inspect`, `goal`, `plan`, `plan-keep`, `system`, `system-offline`, `confirm`, `confirm-keep`, `install`, `install-after-ponr`, `failed-pre`, `failed-post`, `failed-keep`, `done`, `done-arm`, `update`, `settings`, `boot-manager`, `recovery`, `manage`, `manage-storage`, `help`, `help-topic`, `about`, web `raid`, `raid-create`, `raid-shr`, `raid-replace`, `raid-operation`, `raid-degraded`, `raid-foreign`, `raid-empty`, and the dialogs `dlg-recovery`, `dlg-keep`, `dlg-next-pre`, `dlg-next-wipe`, `dlg-next-keep`. For each: light and dark at 960x640; focus ring visible; no horizontal scroll; word count at or under the table above; every element is the widget named here (hand-made imitations are defects); tooltips and popovers captured open for at least one screen per pattern; fonts Inter / JetBrains Mono visible; scrollbars themed.
 
 Placeholders to confirm with engineering (shown as sample values in this spec): the web lockout numbers (5 failures in 10 minutes, 5 minute pause), the SSH confirm command name `synofurb-net confirm`, `synofurb-dom`/`sf-boot` command names as in `docs/BOOT.md` and `docs/RECOVERY.md`, and the `--screen` names above.

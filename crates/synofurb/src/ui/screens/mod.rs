@@ -1,18 +1,20 @@
-//! One module per screen. Each adds a `page_<name>` method to [`App`](super::app::App) that returns a
-//! [`Page`](super::render::Page): title, body, and the action-bar buttons. To add a screen, see docs/GUI.md.
+//! One module per screen; each adds `App::page_<name>` (see `render.rs` for how a [`Page`](super::render::Page) is laid out).
 
-mod bootmgr;
-mod confirm;
-mod connect;
-mod done;
-mod failed;
-mod goal;
-mod inspect;
-mod install;
-mod inventory;
+pub mod about;
+pub mod bootmgr;
+pub mod confirm;
+pub mod connect;
+pub mod done;
+pub mod failed;
+pub mod goal;
+pub mod help;
+pub mod inspect;
+pub mod install;
+pub mod inventory;
 pub mod logviewer;
-mod plan;
-mod recover;
-mod settings;
-mod system;
+pub mod manage;
+pub mod plan;
+pub mod recover;
+pub mod settings;
+pub mod system;
 pub mod update;
