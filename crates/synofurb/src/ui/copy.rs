@@ -128,16 +128,21 @@ mod strings {
         STEP_INSPECT: Label, "Inspect", "", "", "";
         STEP_GOAL: Label, "Goal", "", "", "";
         STEP_PLAN: Label, "Plan", "", "", "";
+        STEP_SETUP: Label, "Setup", "", "", "";
         STEP_SYSTEM: Label, "System", "", "", "";
         STEP_CONFIRM: Label, "Confirm", "", "", "";
         STEP_INSTALL: Label, "Install", "", "", "";
         STEP_DONE: Label, "Done", "", "", "";
         RISK_READ_ONLY: Label, "Read-only", "Nothing to undo.", "recovery", "";
         RISK_PLAN_ONLY: Label, "Plan only", "Nothing to undo.", "recovery", "";
-        RISK_FLASH_CHANGED: Label, "Flash changed", "Cancel or power-cycle: DSM boots.", "recovery", "";
+        RISK_FLASH_CHANGED: Label, "Flash changed", "Power-cycle or Cancel: DSM boots. Our entries stay until removed.", "recovery", "";
         RISK_DISKS_CHANGED: Label, "Disks changed", "Rescue shell 15 min, then the DSM loader; no data promise.", "recovery", "";
         RISK_FAILED_SAFELY: Label, "Failed safely", "DSM boots again by itself.", "recovery", "";
         RISK_DEBIAN_RUNNING: Label, "Debian running", "Recovery stays under Manage.", "recovery", "";
+        RISK_BOOT_UNCONFIRMED: Label, "Boot unconfirmed", "DSM may not return by itself: see Help, Recovery.", "recovery", "";
+        RISK_NEEDS_ATTENTION: Label, "Needs attention", "Recovery stays under Manage. Repair the flagged item first.", "recovery", "";
+        RISK_CRITICAL: Label, "Critical", "Recovery stays under Manage. Replace the failed disk soon.", "recovery", "";
+        RISK_UNREACHABLE: Label, "Unreachable", "Check power and network; Recovery stays under Manage.", "recovery", "";
         WAY_BACK: Button, "Way back", "What returns the unit to DSM from here.", "recovery", "";
         TAG_DEMO: Label, "Demo", "Built-in sample unit; nothing touches the network or any disk.", "", "";
         TAG_OFFLINE: Label, "Offline", "Compatibility list is {n} days old; LAN scan still works.", "offline-mode", "";
@@ -606,21 +611,9 @@ pub static SHORTCUTS: &[(&str, &str)] = &[
     ("escape", "Close popovers and dialogs"),
 ];
 
-/// The shell around every wizard screen: stepper, risk tag, way back, wordmark (14 words).
-pub static SHELL: &[&Item] = &[
-    &APP_NAME,
-    &STEP_FIND,
-    &STEP_CONNECT,
-    &STEP_INSPECT,
-    &STEP_GOAL,
-    &STEP_PLAN,
-    &STEP_SYSTEM,
-    &STEP_CONFIRM,
-    &STEP_INSTALL,
-    &STEP_DONE,
-    &RISK_FLASH_CHANGED,
-    &WAY_BACK,
-];
+/// The shell around every wizard screen: stepper (six steps), risk tag, way back, wordmark (11 words).
+pub static SHELL: &[&Item] =
+    &[&APP_NAME, &STEP_FIND, &STEP_CONNECT, &STEP_GOAL, &STEP_SETUP, &STEP_CONFIRM, &STEP_INSTALL, &RISK_FLASH_CHANGED, &WAY_BACK];
 
 /// Items each screen shows without a click (UX spec section 5; conditional elements are left out).
 pub static SCREENS: &[ScreenCopy] = &[
@@ -999,9 +992,9 @@ mod tests {
     }
 
     #[test]
-    fn shell_is_fourteen_words() {
+    fn shell_is_eleven_words() {
         let n: usize = SHELL.iter().map(|i| words(i.short)).sum();
-        assert_eq!(n, 14, "the UX spec counts 14 words of shell on every wizard screen");
+        assert_eq!(n, 11, "six steps, the wordmark, a two-word risk Tag and Way back");
         // the risk tag is at most two words in every state
         for r in [&RISK_READ_ONLY, &RISK_PLAN_ONLY, &RISK_FLASH_CHANGED, &RISK_DISKS_CHANGED, &RISK_FAILED_SAFELY, &RISK_DEBIAN_RUNNING] {
             assert!(words(r.short) <= 2, "{}", r.key);

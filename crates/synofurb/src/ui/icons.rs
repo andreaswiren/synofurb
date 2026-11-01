@@ -78,6 +78,8 @@ roles! {
     DELETE => Trash,
     PLAY => Play,
     CHECK => Check,
+    EDIT => SquarePen,
+    ROTATE_BACK => RotateCcw,
     EXPAND => ChevronDown,
     COLLAPSE => ChevronRight,
     // contextual help

@@ -27,6 +27,7 @@ pub mod cli_cmd;
 pub mod copy;
 pub mod demo;
 pub mod diagram;
+pub mod facts;
 pub mod disclosure;
 pub mod format;
 pub mod icons;

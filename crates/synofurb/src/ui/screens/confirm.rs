@@ -44,7 +44,7 @@ impl App {
             ]);
         };
         let name = self.unit_name();
-        let phrase = self.phrase();
+        let phrase = self.phrase(cx);
         let typed = self.input_value(&self.inp.typed, cx);
         let gate = self.gate(&typed, &phrase);
         let open = gate.is_open();

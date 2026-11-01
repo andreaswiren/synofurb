@@ -191,6 +191,10 @@ pub struct App {
     pub page_scroll: gpui_kit::ScrollHandle,
     pub help_view: Option<gpui_kit::WeakEntity<crate::ui::screens::help::HelpView>>,
     pub manage_tab: usize,
+    /// The boot agent was armed but never answered (the default boot entry is not confirmed to be DSM).
+    pub agent_unknown: bool,
+    pub manage_health: super::facts::Health,
+    pub svc_fixed: bool,
     pub settings_auto: Option<Entity<SelectState<Vec<SharedString>>>>,
 }
 
@@ -389,6 +393,9 @@ impl App {
             page_scroll: gpui_kit::ScrollHandle::new(),
             help_view: None,
             manage_tab: 0,
+            agent_unknown: false,
+            manage_health: super::facts::Health::Ok,
+            svc_fixed: false,
             settings_auto: Some(App::make_auto_select(window, cx)),
         };
 
@@ -418,6 +425,24 @@ impl App {
     }
 
     // ------------------------------------------------------------------------------------------ navigation
+
+    /// Another unit of the same model on the network (a twin): the confirmation phrase then carries the serial tail.
+    pub fn twin_of_selected(&self, cx: &gpui_kit::App) -> Option<Found> {
+        let me = self.facts.as_ref()?;
+        let host = super::format::display_host(&self.input_value(&self.inp.host, cx));
+        self.inv
+            .devices
+            .iter()
+            .find(|d| {
+                !d.synofurb_debian
+                    && !me.model.is_empty()
+                    && d.model == me.model
+                    && !d.serial.is_empty()
+                    && d.serial != me.serial
+                    && d.primary_ip().map(|i| i.to_string()).is_some_and(|i| !host.contains(&i))
+            })
+            .cloned()
+    }
 
     pub fn go(&mut self, screen: Screen, window: &mut Window, cx: &mut Context<App>) {
         if screen == Screen::Settings && self.screen != Screen::Settings {
@@ -480,7 +505,7 @@ impl App {
         match t.screen {
             Screen::Confirm => {
                 self.ack_backup = true;
-                let partial: String = self.phrase().chars().take(9).collect();
+                let partial: String = self.phrase(cx).chars().take(9).collect();
                 self.set_input(&self.inp.typed.clone(), &partial, window, cx);
             }
             Screen::Install | Screen::Failed | Screen::Done => {
@@ -887,8 +912,12 @@ impl App {
 
     // ------------------------------------------------------------------------------------------ system / install
 
-    pub fn phrase(&self) -> String {
-        self.facts.as_ref().map(confirm_phrase).unwrap_or_default()
+    /// `ERASE <MODEL>`, with the serial tail added when a twin is on the network.
+    pub fn phrase(&self, cx: &gpui_kit::App) -> String {
+        self.facts
+            .as_ref()
+            .map(|f| super::facts::confirm_phrase_for(&confirm_phrase(f), &f.serial, self.twin_of_selected(cx).is_some()))
+            .unwrap_or_default()
     }
 
     pub fn gate<'a>(&'a self, typed: &'a str, phrase: &'a str) -> ConfirmGate<'a> {
@@ -962,7 +991,7 @@ impl App {
     /// Start the installation. Only reachable through the confirm gate; re-checks the gate itself.
     pub fn start_install(&mut self, window: &mut Window, cx: &mut Context<App>) {
         let typed = self.input_value(&self.inp.typed, cx);
-        let phrase = self.phrase();
+        let phrase = self.phrase(cx);
         if !self.gate(&typed, &phrase).is_open() {
             self.error = Some("The confirmation is not complete.".into());
             cx.notify();

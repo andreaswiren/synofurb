@@ -192,7 +192,7 @@ impl App {
             Screen::System => spec.install_command(None),
             Screen::Confirm => {
                 let typed = self.input_value(&self.inp.typed, cx);
-                let phrase = self.phrase();
+                let phrase = self.phrase(cx);
                 if self.gate(&typed, &phrase).is_open() { spec.install_command(Some(&phrase)) } else { spec.plan_command() }
             }
             _ => spec.install_command(None),

@@ -6,6 +6,7 @@ use super::app::{App, UpdateState};
 use super::brand;
 use super::copy::{self, Item};
 use super::disclosure::info_tip;
+use super::facts::{self, Risk, UnitFacts, Where};
 use super::icons::{self, role};
 use super::kit;
 use super::state::*;
@@ -145,29 +146,34 @@ impl App {
         })
     }
 
-    /// The risk tag state, from what has been written.
-    pub fn risk(&self) -> Risk {
+    /// What the app knows has been written to the unit (the risk Tag and Recovery read this, never the screen name).
+    pub fn unit_facts(&self) -> UnitFacts {
         let dom = self.facts.as_ref().is_some_and(|f| self.sys.boot.resolve(f) == BootChoice::Dom);
-        risk_for(Written {
-            screen: Some(if self.screen.is_side_page() { self.return_to } else { self.screen }),
-            install_started: self.install_started,
-            past_no_return: self.install.past_no_return,
-            failed: self.screen == Screen::Failed || matches!(self.result, Some(Err(_))),
-            succeeded: matches!(self.result, Some(Ok(_))),
-            dom,
-            agent: matches!(self.bootmgr, super::app::Job::Running | super::app::Job::Done(Ok(()))),
-        })
+        let debian = matches!(self.result, Some(Ok(_))) || self.screen == Screen::Manage;
+        let agent = matches!(self.bootmgr, super::app::Job::Running | super::app::Job::Done(Ok(())));
+        let fail = self.screen == Screen::Failed || matches!(self.result, Some(Err(_)));
+        UnitFacts {
+            flash: agent || (self.install_started && dom) || self.agent_unknown,
+            disks: self.install.past_no_return,
+            debian,
+            fail,
+            agent_unknown: self.agent_unknown,
+            default_not_dsm: debian || self.agent_unknown,
+        }
     }
 
-    fn risk_item(r: Risk) -> &'static Item {
-        match r {
-            Risk::ReadOnly => &copy::RISK_READ_ONLY,
-            Risk::PlanOnly => &copy::RISK_PLAN_ONLY,
-            Risk::FlashChanged => &copy::RISK_FLASH_CHANGED,
-            Risk::DisksChanged => &copy::RISK_DISKS_CHANGED,
-            Risk::FailedSafely => &copy::RISK_FAILED_SAFELY,
-            Risk::DebianRunning => &copy::RISK_DEBIAN_RUNNING,
+    pub fn risk_where(&self) -> Where {
+        match self.screen {
+            Screen::Settings | Screen::About => Where::Neutral,
+            Screen::Manage => Where::Manage(self.manage_health, self.svc_fixed),
+            Screen::Plan | Screen::System | Screen::Confirm => Where::Planning,
+            _ => Where::Wizard,
         }
+    }
+
+    /// The risk Tag state; `None` on Settings and About.
+    pub fn risk(&self) -> Option<Risk> {
+        facts::risk(&self.unit_facts(), self.risk_where())
     }
 
     fn render_title_bar(&self, cx: &mut Context<App>) -> AnyElement {
@@ -238,16 +244,18 @@ impl App {
             let label = match s {
                 Step::Find => &copy::STEP_FIND,
                 Step::Connect => &copy::STEP_CONNECT,
-                Step::Inspect => &copy::STEP_INSPECT,
                 Step::Goal => &copy::STEP_GOAL,
-                Step::Plan => &copy::STEP_PLAN,
-                Step::System => &copy::STEP_SYSTEM,
+                Step::Setup => &copy::STEP_SETUP,
                 Step::Confirm => &copy::STEP_CONFIRM,
                 Step::Install => &copy::STEP_INSTALL,
-                Step::Done => &copy::STEP_DONE,
             };
-            StepperItem::new().disabled(!clickable && state != StepState::Current).child(div().text_xs().child(label.short))
+            let done = state == StepState::Done || (self.screen == Screen::Done && *s == Step::Install);
+            let item = StepperItem::new()
+                .disabled(!clickable && state != StepState::Current)
+                .child(div().text_sm().when(state == StepState::Current, |d| d.font_weight(FontWeight::BOLD)).child(label.short));
+            if done { item.icon(icons::icon(role::CHECK)) } else { item }
         });
+        let at = if self.screen == Screen::Done { Step::ALL.len() } else { cur.number() - 1 };
         div()
             .w_full()
             .flex_none()
@@ -255,65 +263,128 @@ impl App {
             .py(px(8.0))
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(Stepper::new("steps").small().selected_index(cur.number() - 1).items(items).on_click(cx.listener(
-                |this, ix: &usize, window, cx| {
-                    let target = Step::ALL[*ix];
-                    if can_jump(this.current_step(), target, this.install_started) && !this.install_running() {
-                        this.go(target.screen(), window, cx);
-                    }
-                },
-            )))
+            .child(Stepper::new("steps").selected_index(at).items(items).on_click(cx.listener(|this, ix: &usize, window, cx| {
+                let target = Step::ALL[*ix];
+                if can_jump(this.current_step(), target, this.install_started) && !this.install_running() {
+                    this.go(target.screen(), window, cx);
+                }
+            })))
             .into_any_element()
+    }
+
+    /// The unit strip under the stepper: tile, model, compatibility (or Debian) and Twin tags, address, serial, version,
+    /// and the facts on the right. Not shown on Find, Settings or About (nothing is selected there).
+    fn render_unit_header(&self, cx: &mut Context<App>) -> Option<AnyElement> {
+        if matches!(self.screen, Screen::Inventory | Screen::Settings | Screen::About) {
+            return None;
+        }
+        let p = cx.pal();
+        let (model, serial, status) = self.selected_unit_model();
+        let host = super::format::display_host(&self.input_value(&self.inp.host, cx));
+        let debian = self.unit_facts().debian;
+        let twin = self.twin_of_selected(cx);
+        let (disks, cpu, ram, dsm) = match &self.facts {
+            Some(f) => (
+                format!(
+                    "{} disks \u{00b7} {}",
+                    f.candidate_disks().len(),
+                    super::format::size_2dp(f.candidate_disks().iter().map(|d| d.size_bytes()).sum())
+                ),
+                f.cpu.clone(),
+                format!("{:.0} GiB", f.mem_gib()),
+                f.dsm_version.clone(),
+            ),
+            None => (String::new(), String::new(), String::new(), String::new()),
+        };
+        Some(
+            h_flex()
+                .w_full()
+                .flex_none()
+                .items_center()
+                .gap(px(12.0))
+                .px(px(layout::PAGE_PAD))
+                .py(px(8.0))
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    div()
+                        .size(px(40.0))
+                        .rounded(cx.theme().radius)
+                        .bg(p.accent_bg)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(icons::icon_sized(role::SERVER, 20.0, p.accent_fg)),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            h_flex()
+                                .gap(px(8.0))
+                                .items_center()
+                                .child(div().text_base().font_weight(FontWeight::BOLD).child(model))
+                                .child(if debian {
+                                    kit::tag(&p, Tone::Ok, Some(role::OK), "Debian 13")
+                                } else {
+                                    kit::compat_tag(&p, status)
+                                })
+                                .when_some(twin, |d, _| d.child(kit::tag(&p, Tone::Warn, Some(role::WARN), copy::INV_TWIN.short))),
+                        )
+                        .child(
+                            h_flex()
+                                .gap(px(12.0))
+                                .child(kit::mono_sm(cx, host))
+                                .child(kit::mono_sm(cx, if serial.is_empty() { String::new() } else { format!("SN {serial}") }))
+                                .child(kit::caption(cx, if dsm.is_empty() { String::new() } else { format!("DSM {dsm}") })),
+                        ),
+                )
+                .child(h_flex().gap(px(12.0)).child(kit::caption(cx, disks)).child(kit::caption(cx, cpu)).child(kit::caption(cx, ram)))
+                .into_any_element(),
+        )
     }
 
     fn render_status_bar(&self, cx: &mut Context<App>) -> AnyElement {
         let p = cx.pal();
+        let at = self.risk_where();
         let risk = self.risk();
-        let item = Self::risk_item(risk);
-        let (tone, icon) = match risk {
-            Risk::ReadOnly | Risk::PlanOnly => (Tone::Ok, role::SAFE),
-            Risk::FlashChanged => (Tone::Warn, role::WARN),
-            Risk::DisksChanged => (Tone::Err, role::DANGER),
-            Risk::FailedSafely => (Tone::Warn, role::WARN),
-            Risk::DebianRunning => (Tone::Ok, role::OK),
-        };
-        let risk_tag = HoverCard::new("risk-tag")
-            .trigger(div().id("risk-tag").role(Role::Status).aria_label(format!("{}. {}", item.short, item.tip)).child(kit::tag(
+        let risk_tag = risk.map(|r| {
+            let (tone, icon) = match r {
+                Risk::ReadOnly => (Tone::Neutral, role::LOCK),
+                Risk::PlanOnly => (Tone::Neutral, role::EDIT),
+                Risk::FlashChanged | Risk::DisksChanged | Risk::NeedsAttention => (Tone::Warn, role::WARN),
+                Risk::FailedSafely => (Tone::Warn, role::SAFE),
+                Risk::BootUnconfirmed => (Tone::Warn, role::TIP),
+                Risk::DebianRunning => (Tone::Ok, role::OK),
+                Risk::Critical => (Tone::Err, role::STOP),
+                Risk::Unreachable => (Tone::Neutral, role::OFFLINE),
+            };
+            div().id("risk-tag").role(Role::Status).aria_label(format!("{}. {}", r.label(), r.way_back(at))).child(kit::tag(
                 &p,
                 tone,
                 Some(icon),
-                item.short,
-            )))
-            .content({
-                let tip = item.tip;
-                move |_, _, _| div().p(px(8.0)).max_w(px(280.0)).text_sm().child(tip)
-            });
-        let identity = self.facts.as_ref().map(|f| {
-            let model = if f.model.is_empty() { f.hostname.clone() } else { f.model.clone() };
-            format!("{} \u{00b7} {}", model, super::format::display_host(&self.input_value(&self.inp.host, cx)))
+                r.label(),
+            ))
         });
-        let way_back = Popover::new("way-back")
-            .anchor(Anchor::BottomRight)
-            .trigger(Button::new("way-back-btn").link().small().label(copy::WAY_BACK.short))
-            .content({
-                let tip = item.tip;
-                move |_, _, _| div().w(px(280.0)).text_sm().child(tip)
-            });
+        let way_back = risk.map(|r| {
+            let text = r.way_back(at);
+            Popover::new("way-back")
+                .anchor(Anchor::BottomRight)
+                .trigger(Button::new("way-back-btn").link().small().label(copy::WAY_BACK.short))
+                .content(move |_, _, _| div().w(px(280.0)).text_sm().child(text))
+        });
         let offline = self.offline_app();
         StatusBar::new()
             .left(
                 h_flex()
                     .gap(px(8.0))
                     .items_center()
-                    .child(risk_tag)
+                    .children(risk_tag)
                     .when(self.demo.is_some(), |d| d.child(kit::tag(&p, Tone::Info, None, copy::TAG_DEMO.short)))
                     .when(offline, |d| d.child(kit::tag(&p, Tone::Warn, Some(role::OFFLINE), copy::TAG_OFFLINE.short))),
             )
-            .child(match identity {
-                Some(i) => kit::mono_sm(cx, i).into_any_element(),
-                None => div().into_any_element(),
-            })
-            .right(way_back)
+            .right(h_flex().children(way_back))
             .into_any_element()
     }
 
@@ -401,6 +472,7 @@ impl Render for App {
         let mut page = self.page_for(window, cx);
         let title_bar = self.render_title_bar(cx);
         let stepper = (!self.screen.is_side_page()).then(|| self.render_stepper(cx));
+        let unit_header = self.render_unit_header(cx);
         let status = self.render_status_bar(cx);
         let update = self.render_update_banner(cx);
         let header = self.render_header(&page, cx);
@@ -471,6 +543,7 @@ impl Render for App {
             .text_size(theme::BODY.size())
             .child(title_bar)
             .children(stepper)
+            .children(unit_header)
             .children(update)
             .child(content_area)
             .child(footer)

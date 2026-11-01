@@ -134,23 +134,20 @@ impl DemoTarget {
     }
 }
 
-/// The nine steps of the guided flow, in the order of the stepper (UX spec 1.1).
+/// The six steps of the guided flow (approved mockup): Inspect belongs to Connect, Plan and System are the two tabs of
+/// Setup, Done belongs to Install.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Step {
     Find,
     Connect,
-    Inspect,
     Goal,
-    Plan,
-    System,
+    Setup,
     Confirm,
     Install,
-    Done,
 }
 
 impl Step {
-    pub const ALL: [Step; 9] =
-        [Step::Find, Step::Connect, Step::Inspect, Step::Goal, Step::Plan, Step::System, Step::Confirm, Step::Install, Step::Done];
+    pub const ALL: [Step; 6] = [Step::Find, Step::Connect, Step::Goal, Step::Setup, Step::Confirm, Step::Install];
 
     pub fn number(self) -> usize {
         Step::ALL.iter().position(|s| *s == self).unwrap_or(0) + 1
@@ -160,14 +157,11 @@ impl Step {
     pub fn screen(self) -> Screen {
         match self {
             Step::Find => Screen::Inventory,
-            Step::Connect => Screen::Connect,
-            Step::Inspect => Screen::Inspect,
+            Step::Connect => Screen::Inspect,
             Step::Goal => Screen::Goal,
-            Step::Plan => Screen::Plan,
-            Step::System => Screen::System,
+            Step::Setup => Screen::Plan,
             Step::Confirm => Screen::Confirm,
             Step::Install => Screen::Install,
-            Step::Done => Screen::Done,
         }
     }
 }
@@ -177,14 +171,11 @@ impl Screen {
     pub fn step(self) -> Option<Step> {
         Some(match self {
             Screen::Inventory => Step::Find,
-            Screen::Connect => Step::Connect,
-            Screen::Inspect => Step::Inspect,
+            Screen::Connect | Screen::Inspect => Step::Connect,
             Screen::Goal | Screen::BootMgr | Screen::Recover => Step::Goal,
-            Screen::Plan => Step::Plan,
-            Screen::System => Step::System,
+            Screen::Plan | Screen::System => Step::Setup,
             Screen::Confirm => Step::Confirm,
-            Screen::Install | Screen::Failed => Step::Install,
-            Screen::Done => Step::Done,
+            Screen::Install | Screen::Failed | Screen::Done => Step::Install,
             Screen::Settings | Screen::About | Screen::Manage => return None,
         })
     }
@@ -217,61 +208,6 @@ pub fn can_jump(current: Step, target: Step, install_started: bool) -> bool {
 }
 
 // ------------------------------------------------------------------------------------------------ risk
-
-/// The risk tag of the status bar (UX spec 1.1). It is derived from facts about what has been written, never from
-/// the step number.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Risk {
-    ReadOnly,
-    PlanOnly,
-    FlashChanged,
-    DisksChanged,
-    FailedSafely,
-    DebianRunning,
-}
-
-impl Risk {
-    pub const ALL: [Risk; 6] =
-        [Risk::ReadOnly, Risk::PlanOnly, Risk::FlashChanged, Risk::DisksChanged, Risk::FailedSafely, Risk::DebianRunning];
-
-    /// Has anything on the NAS been written?
-    pub fn touched(self) -> bool {
-        matches!(self, Risk::FlashChanged | Risk::DisksChanged | Risk::DebianRunning)
-    }
-}
-
-/// What has been written, as far as the UI knows.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Written {
-    pub screen: Option<Screen>,
-    pub install_started: bool,
-    pub past_no_return: bool,
-    pub failed: bool,
-    pub succeeded: bool,
-    /// The unit starts Debian through its boot flash (the flash is written before any disk).
-    pub dom: bool,
-    /// The boot manager agent has been installed (or is being installed).
-    pub agent: bool,
-}
-
-pub fn risk_for(w: Written) -> Risk {
-    if w.succeeded {
-        return Risk::DebianRunning;
-    }
-    if w.past_no_return {
-        return Risk::DisksChanged;
-    }
-    if w.failed {
-        return Risk::FailedSafely;
-    }
-    if w.agent || (w.install_started && w.dom) {
-        return Risk::FlashChanged;
-    }
-    match w.screen {
-        Some(Screen::Plan | Screen::System | Screen::Confirm | Screen::Install) => Risk::PlanOnly,
-        _ => Risk::ReadOnly,
-    }
-}
 
 // ------------------------------------------------------------------------------------------------ data-loss gate
 
@@ -686,12 +622,12 @@ mod tests {
 
     #[test]
     fn stepper_states_and_jumping() {
-        assert_eq!(Step::ALL.len(), 9);
-        assert_eq!(step_state(Step::Plan, Step::Connect), StepState::Done);
-        assert_eq!(step_state(Step::Plan, Step::Plan), StepState::Current);
-        assert_eq!(step_state(Step::Plan, Step::Confirm), StepState::Upcoming);
-        assert!(can_jump(Step::Plan, Step::Connect, false));
-        assert!(!can_jump(Step::Plan, Step::Confirm, false), "never forward through the stepper");
+        assert_eq!(Step::ALL.len(), 6);
+        assert_eq!(step_state(Step::Setup, Step::Connect), StepState::Done);
+        assert_eq!(step_state(Step::Setup, Step::Setup), StepState::Current);
+        assert_eq!(step_state(Step::Setup, Step::Confirm), StepState::Upcoming);
+        assert!(can_jump(Step::Setup, Step::Connect, false));
+        assert!(!can_jump(Step::Setup, Step::Confirm, false), "never forward through the stepper");
         assert!(!can_jump(Step::Install, Step::Goal, true), "no jumping while installing");
         assert_eq!(Screen::Failed.step(), Some(Step::Install));
         assert_eq!(Screen::BootMgr.step(), Some(Step::Goal));
@@ -703,34 +639,10 @@ mod tests {
             assert_eq!(s.screen().step(), Some(s), "stepper click lands on its own step");
         }
         assert_eq!(Step::Find.number(), 1);
-        assert_eq!(Step::Done.number(), 9);
-    }
-
-    #[test]
-    fn risk_comes_from_what_was_written() {
-        let w = |screen, started, ponr, failed, ok, dom, agent| Written {
-            screen: Some(screen),
-            install_started: started,
-            past_no_return: ponr,
-            failed,
-            succeeded: ok,
-            dom,
-            agent,
-        };
-        assert_eq!(risk_for(w(Screen::Inspect, false, false, false, false, true, false)), Risk::ReadOnly);
-        assert_eq!(risk_for(w(Screen::Confirm, false, false, false, false, true, false)), Risk::PlanOnly);
-        assert_eq!(risk_for(w(Screen::Install, true, false, false, false, true, false)), Risk::FlashChanged, "boot flash is written first");
-        assert_eq!(risk_for(w(Screen::Install, true, false, false, false, false, false)), Risk::PlanOnly, "no flash, nothing written yet");
-        assert_eq!(risk_for(w(Screen::Install, true, true, false, false, true, false)), Risk::DisksChanged);
-        assert_eq!(risk_for(w(Screen::Failed, true, false, true, false, true, false)), Risk::FailedSafely);
-        assert_eq!(
-            risk_for(w(Screen::Failed, true, true, true, false, true, false)),
-            Risk::DisksChanged,
-            "after step 3 a failure is not safe"
-        );
-        assert_eq!(risk_for(w(Screen::Done, true, true, false, true, true, false)), Risk::DebianRunning);
-        assert_eq!(risk_for(w(Screen::BootMgr, false, false, false, false, true, true)), Risk::FlashChanged);
-        assert!(Risk::DisksChanged.touched() && !Risk::ReadOnly.touched() && !Risk::FailedSafely.touched());
+        assert_eq!(Step::Install.number(), 6);
+        assert_eq!(Screen::Done.step(), Some(Step::Install));
+        assert_eq!(Screen::Inspect.step(), Some(Step::Connect));
+        assert_eq!(Screen::System.step(), Some(Step::Setup));
     }
 
     fn gate<'a>(typed: &'a str, b: bool, l: bool, ok: bool) -> ConfirmGate<'a> {
