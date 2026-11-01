@@ -94,7 +94,15 @@ pub fn recover(out: &Out, a: RecoverArgs) -> CliResult<()> {
                 } else {
                     "There was no .sha256 file next to the image to compare with.".to_string()
                 },
-                "synofurb-dom read the flash back and compared it with the image.".into(),
+                match &o.readback {
+                    recovery::Readback::Verified => {
+                        "Read back from the unit: the flash hashes to the image's SHA-256 (verified).".to_string()
+                    }
+                    recovery::Readback::NotPossible(why) => format!(
+                        "NOT VERIFIED: the flash could not be read back for comparison ({why}). synofurb-dom reported success, but check the unit before relying on it."
+                    ),
+                    recovery::Readback::Mismatch(_) => "NOT VERIFIED: the flash does not match the image.".to_string(),
+                },
             ];
             lines.extend(state_lines(&o.state_after));
             out.result_text(&lines);

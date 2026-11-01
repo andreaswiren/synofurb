@@ -45,6 +45,9 @@
 - **Flash backups belong to one unit**: `domboot::backup_dom_for` writes `<image>.json` (serial, model, address); `recovery::backups_for_unit(dir, &UnitIdentity)` lists only the backups of that unit (two units of one model never see each other's); `restore_flash` / `restore_flash_for_unit_on` refuse another unit's image (`RecoveryError::OtherUnit`) unless `allow_other_unit`.
 - RECOVERY.md and BOOT.md carry the plain `sha256sum -c` + `dd` route for restoring the flash from another computer.
 
+### Fixed (engine, round 3)
+- `readback_verified` of the recovery outcomes is no longer a constant: `RestoreOutcome.readback_verified` is true only if the flash was read back from the unit and hashes to the image (`readback: Verified | Mismatch(hash) | NotPossible(why)`; a mismatch is `RecoveryError::Unverified`), `RemoveOutcome` and `BootDsmOutcome` carry the same field from their own read-back. `UnitBootState.device` records the flash device the tool reported.
+
 ### Changed
 - `bundle create` now builds for the **Newest** kernel by default (`--kernel newest|stable`; `--kernel-newest` still accepted), the same default as `install`, so a plain bundle fits a plain install. A kernel mismatch between bundle and install names both ways out (`--kernel <bundle's>` or `bundle create --kernel <install's>`). A bundle holds one kernel and has no offline fallback to the other.
 - Installer failure handling: on units with a boot flash a failed or cancelled install reboots into DSM (60 s before the point of no return, 15 min after).

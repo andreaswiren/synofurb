@@ -89,6 +89,7 @@ synofurb-cli boot-manager enter --host <ip> --yes  # boot the SSH-controlled age
 ```
 `recover status` is the only honest way to know where a unit stands. It runs `synofurb-dom status --json` on the unit (and `sf-boot status` on the agent). If the tool is
 not installed or refuses, the answer is **NOT READ / NOT KNOWN**, which is a different thing from "DSM is the default": nothing is claimed about a menu that was not read.
+Every action reports `readback_verified`, which is true only when the app itself read the result back from the unit afterwards: the default entry read again and equal to DSM (`boot-dsm`), the menu read again with none of our entries (`remove`), and for `restore` the flash read from the unit and hashed against the image (not just the tool's exit code). A failed read-back is never shown as success: a mismatch is an error, an impossible read-back is `readback_verified: false` with the reason.
 `boot-dsm` verifies the default by reading it back and sends **no reboot if that did not verify**; `wait` reports `DSM is back` only when an OpenSSH banner and a DSM web
 port (5000/5001) both answer. The states: *DSM is back*, *only DSM's web port answers* (DSM still starting, or only the DSM loader runs: keep waiting a few minutes, then see
 "Reinstalling DSM"), *the boot agent answers* (dropbear: the unit is in the agent), *SSH answers but not DSM's web ports* (another system), *nothing answers*.

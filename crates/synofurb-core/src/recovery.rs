@@ -134,6 +134,8 @@ pub enum ReadOutcome {
 /// What the unit's boot flash looks like, read from the unit (never from this session's memory).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UnitBootState {
+    /// The boot flash device the tool reported (`/dev/synoboot` on DSM).
+    pub device: Option<String>,
     pub read: ReadOutcome,
     pub source: StateSource,
     pub running: RunningSystem,
@@ -152,6 +154,7 @@ impl UnitBootState {
     /// A state that says only that nothing is known.
     pub fn unknown(read: ReadOutcome, why: &str) -> UnitBootState {
         UnitBootState {
+            device: None,
             read,
             source: StateSource::Nothing,
             running: RunningSystem::Unknown,
@@ -246,6 +249,7 @@ pub fn parse_dom_status(text: &str) -> Result<UnitBootState, String> {
         path: str_of(b, "path").filter(|p| !p.is_empty()).map(str::to_string),
     });
     Ok(UnitBootState {
+        device: str_of(&v, "device").map(str::trim).filter(|d| !d.is_empty()).map(str::to_string),
         read: ReadOutcome::Read,
         source: StateSource::DomTool,
         running: RunningSystem::Unknown,
@@ -606,11 +610,49 @@ pub struct RestoreOutcome {
     pub sha256: String,
     /// The `.img.sha256` file next to the backup agreed with the file. `false` = there was none to compare with.
     pub checked_against_sidecar: bool,
-    /// `synofurb-dom restore` read the flash back and compared it; this is its verdict (exit code 0).
+    /// **True only if this app read the flash back from the unit after the write and its SHA-256 equals the image's.** False when that
+    /// read-back failed or was not possible (see `readback` for which); a mismatch is an error, not an outcome. `synofurb-dom restore`'s
+    /// own exit code 0 is not what this reports.
     pub readback_verified: bool,
+    /// What the read-back found.
+    pub readback: Readback,
     /// Whose image it was, as far as it could be told (`None` when the caller did not ask: [`restore_flash_on`]).
     pub ownership: Option<Ownership>,
     pub state_after: UnitBootState,
+}
+
+/// The read-back of a written boot flash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "result", content = "detail", rename_all = "snake_case")]
+pub enum Readback {
+    /// The flash was read from the unit again and hashes to the image's SHA-256.
+    Verified,
+    /// It was read and does not match (the hash is the flash's).
+    Mismatch(String),
+    /// It could not be read back (no device path, no `sha256sum`, the read failed); the text says why. Nothing is claimed.
+    NotPossible(String),
+}
+
+impl Readback {
+    pub fn verified(&self) -> bool {
+        *self == Readback::Verified
+    }
+}
+
+/// Read the first `bytes` of the boot flash `device` on the unit and compare their SHA-256 with `expect`.
+pub fn readback_flash(p: &mut Privileged<'_>, device: Option<&str>, bytes: u64, expect: &str) -> Readback {
+    let Some(dev) = device else { return Readback::NotPossible("the boot flash tool did not report which device it is".into()) };
+    if !dev.starts_with("/dev/") || !dev.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.')) {
+        return Readback::NotPossible(format!("'{dev}' is not a device path that is read back"));
+    }
+    match p.run(&format!("head -c {bytes} '{dev}' 2>/dev/null | sha256sum")) {
+        Err(e) => Readback::NotPossible(format!("{e:#}")),
+        Ok(r) => match r.stdout.split_whitespace().next().filter(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit())) {
+            None => Readback::NotPossible(format!("the unit gave no checksum for {dev} (exit {})", r.code)),
+            Some(h) if h.eq_ignore_ascii_case(expect) => Readback::Verified,
+            Some(h) => Readback::Mismatch(h.to_ascii_lowercase()),
+        },
+    }
 }
 
 fn hash_file(p: &Path) -> std::io::Result<(String, u64)> {
@@ -744,12 +786,25 @@ pub fn restore_flash_on(
     };
     log.info(out.trim());
     let state_after = read_boot_state(p);
+    // our own read-back, independent of the tool's: the flash as the unit now has it, hashed
+    let readback = readback_flash(p, state_after.device.as_deref(), bytes, &sha);
+    if let Readback::Mismatch(h) = &readback {
+        return Err(RecoveryError::Unverified {
+            what: "restoring the boot flash",
+            why: format!("the flash read back from the unit hashes to {h} but the image is {sha}"),
+            flash_may_have_changed: true,
+        });
+    }
+    if let Readback::NotPossible(why) = &readback {
+        log.warn(format!("the restored flash could not be read back for comparison: {why}"));
+    }
     Ok(RestoreOutcome {
         backup: backup.to_path_buf(),
         bytes,
         sha256: sha,
         checked_against_sidecar: sidecar,
-        readback_verified: true,
+        readback_verified: readback.verified(),
+        readback,
         ownership: None,
         state_after,
     })
@@ -757,6 +812,9 @@ pub fn restore_flash_on(
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RemoveOutcome {
+    /// The menu was read again and shows none of our entries and a DSM default (an error is returned otherwise, so this is always true
+    /// in an `Ok`; it is here so that every outcome has the same field).
+    pub readback_verified: bool,
     pub output: String,
     pub state_after: UnitBootState,
 }
@@ -773,7 +831,7 @@ pub fn remove_our_entries_on(p: &mut Privileged<'_>, log: &Logger) -> Result<Rem
     log.info(out.trim());
     let state_after = read_boot_state(p);
     match (&state_after.read, state_after.our_entries.is_empty(), state_after.default_entry.is_dsm()) {
-        (ReadOutcome::Read, true, true) => Ok(RemoveOutcome { output: out, state_after }),
+        (ReadOutcome::Read, true, true) => Ok(RemoveOutcome { readback_verified: true, output: out, state_after }),
         (ReadOutcome::Read, false, _) => Err(RecoveryError::Unverified {
             what: "removing the entries",
             why: format!("the boot menu still lists {}", state_after.our_entries.join(", ")),
@@ -796,6 +854,8 @@ pub fn remove_our_entries_on(p: &mut Privileged<'_>, log: &Logger) -> Result<Rem
 pub struct BootDsmOutcome {
     /// The default boot entry was read back and is DSM.
     pub default_is_dsm: bool,
+    /// Same as `default_is_dsm` (the read-back of the action; always true in an `Ok`, because an unverified default is an error).
+    pub readback_verified: bool,
     /// A reboot command was sent. **Only that**: it does not mean the unit rebooted or that DSM started. Use [`wait_for_dsm`].
     pub reboot_requested: bool,
     pub state_after: UnitBootState,
@@ -828,6 +888,7 @@ pub fn boot_dsm_on(p: &mut Privileged<'_>, reboot: bool, log: &Logger) -> Result
     if !reboot {
         return Ok(BootDsmOutcome {
             default_is_dsm,
+            readback_verified: default_is_dsm,
             reboot_requested: false,
             state_after,
             message: "The default boot entry is DSM. The unit was not rebooted: it keeps running what it runs now until you reboot it."
@@ -839,6 +900,7 @@ pub fn boot_dsm_on(p: &mut Privileged<'_>, reboot: bool, log: &Logger) -> Result
     match sent {
         Ok(_) => Ok(BootDsmOutcome {
             default_is_dsm,
+            readback_verified: default_is_dsm,
             reboot_requested: true,
             state_after,
             message: "Reboot requested. This only means the command was sent: DSM is back when it answers, and that is checked separately."
@@ -1243,8 +1305,11 @@ mod tests {
         m.push_ok(""); // rm
         m.push_ok("dsm\n");
         m.push_ok(&clean_json());
+        m.push_ok(&format!("{sha}  -\n")); // our own read-back: the flash hashed on the unit
         let o = restore_flash_on(&mut priv_with(&mut m), &img, checks.clone(), &Logger::memory(None)).unwrap();
         assert!(o.checked_against_sidecar && o.readback_verified && o.state_after.is_pristine() == Some(true));
+        assert_eq!(o.readback, Readback::Verified);
+        assert!(m.commands.last().unwrap().contains("head -c 16777216 '/dev/synoboot' 2>/dev/null | sha256sum"), "{:?}", m.commands.last());
         assert_eq!(m.uploads.len(), 1);
         assert_eq!(m.uploads[0].2, 0o600);
         assert!(m.uploads[0].0.starts_with("/tmp/.synofurb-restore-") && m.uploads[0].1.len() == 16 << 20);
@@ -1465,6 +1530,7 @@ mod tests {
             m.push_ok("");
             m.push_ok("dsm\n");
             m.push_ok(&clean_json());
+            m.push_ok(&format!("{}  -\n", checks.0));
             let o = restore_flash_for_unit_on(&mut priv_with(&mut m), &img, checks.clone(), &id, allow, &Logger::memory(None)).unwrap();
             assert_eq!(o.ownership, Some(want));
         }
@@ -1505,5 +1571,100 @@ mod tests {
         assert_eq!(backups_for_unit(&dir, &a).len(), 1);
         assert_eq!(find_local_backups(&dir, "SN1").len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The scripted unit for a restore whose tool run succeeded; `readback` is what the unit answers to the final hash command.
+    fn restored_unit(sha: &str, readback: Option<ExecResult>) -> MockShell {
+        let mut m = MockShell::default();
+        m.push_ok(""); // mkdir
+        m.push_ok(&format!("{sha}  f\n")); // sha256sum of the upload
+        m.push_ok("restored\n"); // synofurb-dom restore
+        m.push_ok(""); // rm
+        m.push_ok("dsm\n");
+        m.push_ok(&clean_json());
+        if let Some(r) = readback {
+            m.results.push_back(r);
+        }
+        m
+    }
+
+    #[test]
+    fn readback_verified_reflects_what_was_really_read_back() {
+        let dir = std::env::temp_dir().join(format!("sf-rec-rb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let img = write_image(&dir, "synofurb-dom-backup-U1-20260101-000000.img", 6, true);
+        let checks = check_backup_file(&img).unwrap();
+        let sha = checks.0.clone();
+        let log = Logger::memory(None);
+        let ok = |out: &str, code| ExecResult { code, stdout: out.into(), stderr: String::new() };
+
+        // flash hashes to the image: verified
+        let mut m = restored_unit(&sha, Some(ok(&format!("{}  -\n", sha.to_uppercase()), 0)));
+        let o = restore_flash_on(&mut priv_with(&mut m), &img, checks.clone(), &log).unwrap();
+        assert!(o.readback_verified && o.readback == Readback::Verified);
+
+        // the tool said fine but the flash hashes to something else: an error, never a success
+        let other = "0".repeat(64);
+        let mut m = restored_unit(&sha, Some(ok(&format!("{other}  -\n"), 0)));
+        let e = restore_flash_on(&mut priv_with(&mut m), &img, checks.clone(), &log).unwrap_err();
+        assert!(
+            matches!(&e, RecoveryError::Unverified { why, flash_may_have_changed: true, .. } if why.contains(&other) && why.contains(&sha)),
+            "{e}"
+        );
+
+        // the read-back itself failed (no checksum came back): the restore is reported, but NOT as verified
+        for r in [ok("", 1), ok("sha256sum: command not found\n", 127)] {
+            let mut m = restored_unit(&sha, Some(r));
+            let o = restore_flash_on(&mut priv_with(&mut m), &img, checks.clone(), &log).unwrap();
+            assert!(!o.readback_verified, "{:?}", o.readback);
+            assert!(matches!(&o.readback, Readback::NotPossible(w) if w.contains("no checksum")), "{:?}", o.readback);
+        }
+        // the command could not even be sent
+        let mut m = restored_unit(&sha, None); // the mock answers the missing result with empty output, exit 0
+        let o = restore_flash_on(&mut priv_with(&mut m), &img, checks.clone(), &log).unwrap();
+        assert!(!o.readback_verified && matches!(o.readback, Readback::NotPossible(_)));
+
+        // the tool did not say which device: nothing to read back, not verified
+        let mut m = MockShell::default();
+        m.push_ok("");
+        m.push_ok(&format!("{sha}  f\n"));
+        m.push_ok("restored\n");
+        m.push_ok("");
+        m.push_ok("dsm\n");
+        let mut v: Value = serde_json::from_str(&clean_json()).unwrap();
+        v.as_object_mut().unwrap().remove("device");
+        m.push_ok(&v.to_string());
+        let o = restore_flash_on(&mut priv_with(&mut m), &img, checks.clone(), &log).unwrap();
+        assert!(!o.readback_verified && matches!(&o.readback, Readback::NotPossible(w) if w.contains("device")), "{:?}", o.readback);
+        assert!(!m.commands.iter().any(|c| c.contains("head -c")), "no read was attempted");
+
+        // a device name that is not a plain path is never put into a command
+        assert!(matches!(
+            readback_flash(&mut priv_with(&mut MockShell::default()), Some("/dev/x'; reboot #"), 1, &sha),
+            Readback::NotPossible(_)
+        ));
+        assert!(matches!(readback_flash(&mut priv_with(&mut MockShell::default()), Some("relative"), 1, &sha), Readback::NotPossible(_)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_other_outcomes_carry_the_same_field_and_only_when_they_read_back() {
+        let mut m = MockShell::default();
+        m.push_ok("removed\n");
+        m.push_ok("dsm\n");
+        m.push_ok(&clean_json());
+        assert!(remove_our_entries_on(&mut priv_with(&mut m), &Logger::memory(None)).unwrap().readback_verified);
+        let mut m = MockShell::default();
+        m.push_ok("ok\n");
+        m.push_ok("dsm\n");
+        m.push_ok(&dsm_json());
+        let o = boot_dsm_on(&mut priv_with(&mut m), false, &Logger::memory(None)).unwrap();
+        assert!(o.readback_verified && o.default_is_dsm);
+        // a default that reads back as the agent is an error, so there is no outcome that says verified
+        let mut m = MockShell::default();
+        m.push_ok("ok\n");
+        m.push_ok("dsm\n");
+        m.push_ok(DOM_JSON);
+        assert!(boot_dsm_on(&mut priv_with(&mut m), false, &Logger::memory(None)).is_err());
     }
 }
