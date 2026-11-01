@@ -1,6 +1,7 @@
-//! Recovery (approved mockup): the rows follow the unit's facts. A row that cannot work is a real disabled button with a
-//! reason popover beside it; the destructive rows ask for a typed phrase; when the unit never answered, "Manual
-//! recovery" is the primary. Rows that need the unit's own tools show the exact command to run (no desktop worker).
+//! Recovery (approved mockup): the rows follow the facts this app knows from the session (it cannot read the boot flash
+//! yet). A row that cannot work is a real disabled button with a reason popover beside it; when the unit never
+//! answered, "Manual recovery" is the primary. Rows that need the unit's own tools show the exact command to run in a
+//! neutral note (never a success message): this app does not run them.
 
 use crate::ui::app::{App, Job};
 use crate::ui::copy;
@@ -15,19 +16,17 @@ use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, AppContext, Context, Entity, IntoElement, Render, SharedString, Window, div, px};
+use gpui_kit::{Context, IntoElement, Window, div, px};
 
-/// What a finished recovery action reports (an Alert under the chips).
+/// What a recovery row shows after it was pressed: a neutral note and the commands to run. Never a success message.
 #[derive(Clone, Debug)]
 pub struct RecResult {
-    pub ok: bool,
     pub title: String,
     pub detail: String,
-    /// A command to run on the unit, shown with a Copy button.
-    pub command: Option<String>,
+    /// Commands to run, each with a Copy button.
+    pub commands: Vec<String>,
 }
 
 fn rec_icon(k: RecKind) -> gpui_kit::assets::IconName {
@@ -106,20 +105,20 @@ impl App {
             body = body.child(Alert::info("rec-none", copy::REC_NOTHING.tip).title(copy::REC_NOTHING.short).icon(icons::icon(role::INFO)));
         }
         if let Some(r) = &self.rec_result {
-            let a = if r.ok { Alert::success("rec-res", r.detail.clone()) } else { Alert::error("rec-res", r.detail.clone()) };
-            body = body.child(a.title(r.title.clone()).icon(icons::icon(if r.ok { role::OK } else { role::ERR })));
-            if let Some(cmd) = r.command.clone() {
-                body = body.child(
-                    h_flex()
-                        .gap(px(8.0))
-                        .items_center()
-                        .child(kit::mono(cx, cmd.clone()))
-                        .child(gpui_kit::component::clipboard::Clipboard::new("rec-cmd").value(cmd).tooltip(copy::REC_COPY_CMD.short)),
-                );
+            body = body.child(Alert::info("rec-res", r.detail.clone()).title(r.title.clone()).icon(icons::icon(role::INFO)));
+            for (i, cmd) in r.commands.iter().enumerate() {
+                body = body.child(kit::command_row(cx, ("rec-cmd", i), cmd.clone()));
             }
         }
         match &self.recover {
-            Job::Done(Ok(s)) => body = body.child(Alert::success("rec-ok", s.trim().to_string()).small().icon(icons::icon(role::OK))),
+            Job::Running => {
+                body = body.child(Alert::info("rec-run", copy::REC_BOOT_RUNNING.short).small().icon(icons::icon(role::RUNNING)))
+            }
+            Job::Done(Ok(_)) => {
+                body = body.child(
+                    Alert::info("rec-ok", copy::REC_BOOT_DONE.tip).title(copy::REC_BOOT_DONE.short).small().icon(icons::icon(role::INFO)),
+                )
+            }
             Job::Done(Err(e)) => body = body.child(Alert::error("rec-err", e.clone()).small().icon(icons::icon(role::ERR))),
             _ => {}
         }
@@ -180,47 +179,49 @@ impl App {
         ])
     }
 
-    /// Run one Recovery row: Boot DSM through the engine; the destructive rows ask for their phrase first; rows that
-    /// need the unit's own tools produce the exact command instead of pretending to run it.
+    /// Run one Recovery row. Boot DSM asks first and then really calls the engine (it only sets the default; the unit
+    /// still has to be rebooted). Every other row shows the exact command: this app does not run it.
     pub fn run_recovery_row(&mut self, kind: RecKind, window: &mut Window, cx: &mut Context<App>) {
         let app = cx.entity();
-        let backup = self.cfg_dir.join("dom-backups");
+        let backups = self.cfg_dir.join("dom-backups");
         match kind {
             RecKind::BootDsm => {
                 self.rec_result = None;
-                self.start_recover(cx);
+                let app2 = app.clone();
+                crate::ui::disclosure::dialog_with(window, cx, &copy::DLG_BOOT_DSM, &app, copy::REC_BOOT_DSM_OK.short, move |cx| {
+                    app2.update(cx, |a, cx| a.start_recover(cx))
+                });
             }
             RecKind::Agent => {
+                let host = self.input_value(&self.inp.host, cx);
+                let host = if host.trim().is_empty() { self.selected_ip.clone().unwrap_or_default() } else { host.trim().to_string() };
+                let user = self.input_value(&self.inp.user, cx);
+                let user = if user.trim().is_empty() { "admin".to_string() } else { user.trim().to_string() };
                 self.rec_result = Some(RecResult {
-                    ok: true,
                     title: "Run on this computer".into(),
-                    detail: "The agent boots once and returns to DSM by itself.".into(),
-                    command: Some("synofurb-cli boot-manager enter --host <ip> --user <admin>".into()),
+                    detail: "This app does not start the agent. If it starts, its watchdog reboots the unit into DSM after the login timeout."
+                        .into(),
+                    commands: vec![facts::agent_command(&host, &user)],
                 });
                 cx.notify();
             }
             RecKind::RestoreFlash => {
-                let cmd = format!("synofurb-dom restore {}/<backup>.img", backup.display());
-                typed_confirm(window, cx, &copy::DLG_RESTORE, facts::RESTORE_PHRASE, app, move |a, cx| {
-                    a.rec_result = Some(RecResult {
-                        ok: true,
-                        title: "Run on the unit".into(),
-                        detail: "The engine restores the flash on the unit itself.".into(),
-                        command: Some(cmd.clone()),
-                    });
-                    cx.notify();
+                let cmds = facts::manual_recovery_commands(facts::latest_backup(&backups).map(|p| p.display().to_string()).as_deref());
+                self.rec_result = Some(RecResult {
+                    title: "Run on another Linux computer".into(),
+                    detail: "This app does not write the flash. Attach the boot flash to a Linux computer and copy the saved image there. Replace /dev/sdX with the 128 MB flash; check twice."
+                        .into(),
+                    commands: vec![cmds[1].clone()],
                 });
+                cx.notify();
             }
             RecKind::RemoveEntries => {
-                typed_confirm(window, cx, &copy::DLG_REMOVE, facts::REMOVE_PHRASE, app, |a, cx| {
-                    a.rec_result = Some(RecResult {
-                        ok: true,
-                        title: "Run on the unit".into(),
-                        detail: "After it, the flash holds only Synology's own files.".into(),
-                        command: Some("synofurb-dom remove".into()),
-                    });
-                    cx.notify();
+                self.rec_result = Some(RecResult {
+                    title: "Run on the unit".into(),
+                    detail: "This app does not remove the entries. Run it on DSM, Debian or the agent. DSM stays the default.".into(),
+                    commands: vec!["sudo synofurb-dom remove --yes".into()],
                 });
+                cx.notify();
             }
             RecKind::ReinstallDsm => {
                 window.open_dialog(cx, move |d, _, cx| {
@@ -276,67 +277,3 @@ impl App {
         });
     }
 }
-
-type OnOk = std::rc::Rc<dyn Fn(&mut App, &mut Context<App>)>;
-
-/// A dialog that needs a typed phrase before its confirm button enables (real disabled button + reason popover).
-struct TypedConfirm {
-    item: &'static copy::Item,
-    phrase: &'static str,
-    input: Entity<InputState>,
-    on_ok: OnOk,
-    app: Entity<App>,
-    _sub: gpui_kit::Subscription,
-}
-
-fn typed_confirm(
-    window: &mut Window,
-    cx: &mut gpui_kit::App,
-    item: &'static copy::Item,
-    phrase: &'static str,
-    app: Entity<App>,
-    on_ok: impl Fn(&mut App, &mut Context<App>) + 'static,
-) {
-    let a2 = app.clone();
-    let view = cx.new(|cx| {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(phrase));
-        let sub = cx.subscribe(&input, |_, _, ev: &InputEvent, cx| {
-            if matches!(ev, InputEvent::Change) {
-                cx.notify();
-            }
-        });
-        TypedConfirm { item, phrase, input, on_ok: std::rc::Rc::new(on_ok), app: a2, _sub: sub }
-    });
-    window.open_dialog(cx, move |d, _, _| d.title(item.short).w(px(crate::ui::theme::layout::DIALOG_W)).child(view.clone()));
-}
-
-impl Render for TypedConfirm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let typed = self.input.read(cx).value().trim().to_string();
-        let ok = typed == self.phrase;
-        let (on_ok, app) = (self.on_ok.clone(), self.app.clone());
-        let ok_btn =
-            Button::new("tc-ok").danger().label(self.item.short.trim_end_matches('?').to_string()).on_click(move |_, window, cx| {
-                window.close_dialog(cx);
-                let on_ok = on_ok.clone();
-                app.update(cx, |a, cx| on_ok(a, cx));
-            });
-        v_flex()
-            .gap(px(10.0))
-            .child(div().text_sm().child(self.item.body))
-            .child(kit::mono(cx, self.phrase.to_string()))
-            .child(Input::new(&self.input).aria_label(copy::REC_TYPE.fmt(&[self.phrase])))
-            .child(
-                h_flex()
-                    .gap(px(8.0))
-                    .justify_end()
-                    .child(
-                        Button::new("tc-cancel").outline().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)),
-                    )
-                    .child(kit::with_reason("tc-why", ok_btn, (!ok).then(|| copy::REC_TYPE.fmt(&[self.phrase])))),
-            )
-    }
-}
-
-#[allow(dead_code)]
-fn _s(_: SharedString, _: AnyElement) {}

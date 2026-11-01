@@ -35,10 +35,20 @@ pub enum Msg {
     Finished(Result<Outcome, String>),
     Recovered(Result<String, String>),
     BootManagerDone(Result<(), String>),
+    /// Progress (0..=100) of a management-plane update or rollback.
+    MgmtProgress(u8),
+    /// A management-plane update or rollback finished (the engine's own report), or could not be driven at all.
+    MgmtDone(Result<MgmtDone, String>),
     CompatRefreshed(Box<CompatRefresh>),
     UpdateChecked(Result<Box<UpdateInfo>, String>),
     UpdateProgress(Progress),
     UpdateDownloaded(Result<Box<VerifiedDownload>, String>),
+}
+
+/// What `push_update` / `push_rollback` report, reduced to what the UI shows.
+pub struct MgmtDone {
+    pub outcome: synofurb_core::manage::UpdateOutcome,
+    pub headline: String,
 }
 
 pub struct CompatRefresh {
@@ -263,6 +273,35 @@ pub fn spawn_manage_health(tx: Tx, t: SshTarget) {
             h.map(Box::new)
         })();
         send(&tx, Msg::ManageHealth(r));
+    });
+}
+
+/// Update the converted unit's management plane (or roll it back) with the engine's `push_update` / `push_rollback`.
+/// The unit goes back to the old version by itself if the new one does not answer; the report says which state it is in.
+pub fn spawn_mgmt_update(tx: Tx, t: SshTarget, rollback: bool) {
+    use synofurb_core::manage::{ManageEvent, MgmtBundle, UpdateOptions, push_rollback, push_update};
+    std::thread::spawn(move || {
+        let log = Logger::memory(None);
+        let r = (|| -> Result<MgmtDone, String> {
+            let mut ssh = SshSession::connect(&t.host, t.port, &t.user, &t.auth, &log).map_err(|e| format!("{e:#}"))?;
+            let is_root = t.user == "root";
+            let mut p = synofurb_core::remote::Privileged { sh: &mut ssh, is_root, sudo_password: t.sudo_password.clone() };
+            let opts = UpdateOptions::default();
+            let tx2 = tx.clone();
+            let mut emit = move |e: ManageEvent| {
+                if let ManageEvent::Step { n, total, .. } = e {
+                    send(&tx2, Msg::MgmtProgress((n.saturating_sub(1) * 100 / total.max(1)).min(99) as u8));
+                }
+            };
+            let rep = if rollback {
+                push_rollback(&mut p, &opts, &mut emit)
+            } else {
+                push_update(&mut p, &MgmtBundle::embedded(), &opts, &mut emit)
+            };
+            ssh.close();
+            rep.map(|r| MgmtDone { outcome: r.outcome, headline: r.headline() }).map_err(|e| format!("{e:#}"))
+        })();
+        send(&tx, Msg::MgmtDone(r));
     });
 }
 

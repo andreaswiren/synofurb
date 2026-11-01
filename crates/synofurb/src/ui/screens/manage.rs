@@ -77,13 +77,23 @@ impl App {
         let p = cx.pal();
         let h = self.manage_report.as_ref();
         let state = self.mgmt;
-        let cur = if state == MgmtState::Updated { APP_VERSION } else { UNIT_VERSION };
-        let gate = mgmt::update_gate(h, matches!(state, MgmtState::Updating(_)), cur == APP_VERSION);
+        let demo = self.demo.is_some();
+        // Demo: scripted constants. Real runs: the unit's version comes from its health report, the app's from the
+        // management plane bundled in this program; nothing is shown that was not read.
+        let app_version: String = if demo { APP_VERSION.into() } else { synofurb_core::manage::bundled_mgmt_version().to_string() };
+        let cur: String = if demo {
+            (if state == MgmtState::Updated { APP_VERSION } else { UNIT_VERSION }).into()
+        } else {
+            h.map(|h| h.version.clone()).unwrap_or_default()
+        };
+        let known = !cur.is_empty() && !app_version.is_empty();
+        let gate = mgmt::update_gate(h, matches!(state, MgmtState::Updating(_)), known && cur == app_version);
         let (tag_tone, tag_icon, tag_text) = match state {
-            MgmtState::Updated => (Tone::Ok, role::OK, "Up to date"),
+            _ if !known => (Tone::Neutral, role::TIP, "Version unknown"),
             MgmtState::Updating(_) => (Tone::Info, role::RUNNING, "Updating"),
-            MgmtState::Failed => (Tone::Warn, role::ROTATE_BACK, "Rolled back"),
-            MgmtState::Idle => (Tone::Info, role::DOWNLOAD, "Update available"),
+            MgmtState::Failed => (Tone::Warn, role::WARN, "Not updated"),
+            MgmtState::Updated | MgmtState::Idle if cur == app_version => (Tone::Ok, role::OK, "Up to date"),
+            _ => (Tone::Info, role::DOWNLOAD, "Update available"),
         };
         let reason = match &gate {
             UpdateGate::Blocked(r) => Some((*r).to_string()),
@@ -122,20 +132,17 @@ impl App {
                             h_flex()
                                 .gap(px(8.0))
                                 .child(kit::caption(cx, "On unit"))
-                                .child(kit::mono_sm(cx, cur))
+                                .child(kit::mono_sm(cx, if cur.is_empty() { "-".to_string() } else { cur.clone() }))
                                 .child(kit::caption(cx, "In this app"))
-                                .child(kit::mono_sm(cx, APP_VERSION)),
+                                .child(kit::mono_sm(cx, if app_version.is_empty() { "-".to_string() } else { app_version.clone() })),
                         ),
                 )
-                .children((state == MgmtState::Updated).then(|| {
+                .children((state == MgmtState::Updated && self.mgmt_note.as_deref().is_some_and(|n| n.contains("updated")) || demo && state == MgmtState::Updated).then(|| {
                     Button::new("mgmt-rollback")
                         .ghost()
                         .icon(icons::icon(role::ROTATE_BACK))
                         .label("Roll back")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.mgmt = MgmtState::Idle;
-                            cx.notify();
-                        }))
+                        .on_click(cx.listener(|this, _, window, cx| this.confirm_mgmt_rollback(window, cx)))
                         .into_any_element()
                 }))
                 .child(kit::with_reason("mgmt-why", update, reason))
@@ -143,6 +150,9 @@ impl App {
         );
         if let UpdateGate::AllowedWithWarning(w) = gate {
             col = col.child(Alert::warning("mgmt-warn", w).small().icon(icons::icon(role::WARN)));
+        }
+        if let (false, Some(n)) = (state == MgmtState::Failed, self.mgmt_note.as_ref().filter(|_| !demo)) {
+            col = col.child(Alert::info("mgmt-note", n.clone()).small().icon(icons::icon(role::INFO)));
         }
         if let MgmtState::Updating(pct) = state {
             col = col.child(Progress::new("mgmt-progress").value(pct as f32)).child(h_flex().gap(px(16.0)).children(
@@ -160,7 +170,7 @@ impl App {
         }
         if state == MgmtState::Failed {
             col = col.child(
-                Alert::warning("mgmt-failed", "Health check timed out. Rolled back to 0.9.1.")
+                Alert::warning("mgmt-failed", self.mgmt_note.clone().unwrap_or_else(|| "Health check timed out. Rolled back to 0.9.1.".into()))
                     .title("Update failed.")
                     .small()
                     .icon(icons::icon(role::ROTATE_BACK)),
@@ -517,9 +527,28 @@ impl App {
         cx.notify();
     }
 
-    /// Demo: a scripted update (upload, install, restart, health check). Real runs: see the report ("Engine API").
+    /// Demo: a scripted update. A real run calls the engine's `push_update` on a worker thread (it rolls the unit back by
+    /// itself when the new version does not answer) and shows the engine's own report.
     pub fn start_mgmt_update(&mut self, window: &mut Window, cx: &mut Context<App>) {
         use std::time::Duration;
+        if matches!(self.mgmt, MgmtState::Updating(_)) {
+            return;
+        }
+        self.mgmt_note = None;
+        if self.demo.is_none() {
+            match self.target(cx) {
+                Ok(t) => {
+                    self.mgmt = MgmtState::Updating(4);
+                    crate::ui::worker::spawn_mgmt_update(self.tx.clone(), t, false);
+                }
+                Err(e) => {
+                    self.mgmt = MgmtState::Failed;
+                    self.mgmt_note = Some(e);
+                }
+            }
+            cx.notify();
+            return;
+        }
         self.mgmt = MgmtState::Updating(4);
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
@@ -537,5 +566,31 @@ impl App {
             }
         })
         .detach();
+    }
+
+    /// "Roll back?": asks, then (demo) resets the scripted state or (real) calls `push_rollback`.
+    pub fn confirm_mgmt_rollback(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        let app = cx.entity();
+        let app2 = app.clone();
+        crate::ui::disclosure::dialog_with(window, cx, &copy::DLG_MGMT_ROLLBACK, &app, copy::MGMT_ROLLBACK_OK.short, move |cx| {
+            app2.update(cx, |a, cx| {
+                a.mgmt_note = None;
+                if a.demo.is_some() {
+                    a.mgmt = MgmtState::Idle;
+                } else {
+                    match a.target(cx) {
+                        Ok(t) => {
+                            a.mgmt = MgmtState::Updating(4);
+                            crate::ui::worker::spawn_mgmt_update(a.tx.clone(), t, true);
+                        }
+                        Err(e) => {
+                            a.mgmt = MgmtState::Failed;
+                            a.mgmt_note = Some(e);
+                        }
+                    }
+                }
+                cx.notify();
+            })
+        });
     }
 }

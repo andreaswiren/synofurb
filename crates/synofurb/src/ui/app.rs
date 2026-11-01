@@ -196,10 +196,11 @@ pub struct App {
     pub manage_report: Option<synofurb_core::manage::Health>,
     pub manage_loading: bool,
     pub mgmt: super::screens::manage::MgmtState,
+    /// The engine's one-sentence result of the last management update or rollback.
+    pub mgmt_note: Option<String>,
     /// Demo: the Storage tab shows the Hybrid layout.
     pub manage_hybrid: bool,
     /// The agent was told to return to DSM.
-    pub bm_returned: bool,
     /// The boot agent was armed but never answered (the default boot entry is not confirmed to be DSM).
     pub agent_unknown: bool,
     pub svc_fixed: bool,
@@ -318,7 +319,7 @@ impl App {
             copies_auto: true,
             copies: 2,
             system_gib: 0.0,
-            kernel: KernelChannel::Newest,
+            kernel: KernelChannel::Stable,
             plan: None,
             system_slider,
             system_range: (0.0, 0.0),
@@ -405,8 +406,8 @@ impl App {
             manage_report: None,
             manage_loading: false,
             mgmt: super::screens::manage::MgmtState::Idle,
+            mgmt_note: None,
             manage_hybrid: false,
-            bm_returned: false,
             agent_unknown: false,
             svc_fixed: false,
             settings_auto: Some(App::make_auto_select(window, cx)),
@@ -695,6 +696,29 @@ impl App {
                 self.svc_fixed = false;
             }
             Msg::BootManagerDone(r) => self.bootmgr = Job::Done(r),
+            Msg::MgmtProgress(p) => {
+                if matches!(self.mgmt, super::screens::manage::MgmtState::Updating(_)) {
+                    self.mgmt = super::screens::manage::MgmtState::Updating(p.max(4));
+                }
+            }
+            Msg::MgmtDone(r) => {
+                use super::screens::manage::MgmtState;
+                use synofurb_core::manage::UpdateOutcome as O;
+                match r {
+                    Ok(d) => {
+                        self.mgmt = match d.outcome {
+                            O::Updated | O::UpToDate | O::RolledBack => MgmtState::Updated,
+                            O::Refused | O::Failed => MgmtState::Failed,
+                        };
+                        self.mgmt_note = Some(d.headline);
+                    }
+                    Err(e) => {
+                        self.mgmt = MgmtState::Failed;
+                        self.mgmt_note = Some(e);
+                    }
+                }
+                self.read_manage_health(cx);
+            }
             Msg::CompatRefreshed(r) => {
                 self.compat_refreshing = false;
                 self.compat = r.db;
@@ -783,7 +807,20 @@ impl App {
         self.select_host(&ip, window, cx);
     }
 
+    /// Facts that belong to one unit's session (the app cannot read them from the unit yet): cleared when another unit
+    /// is selected and on "start over", so one unit's failed agent never shows on the next unit.
+    pub fn reset_unit_session(&mut self) {
+        self.agent_unknown = false;
+        self.install_started = false;
+        self.bootmgr = Job::Idle;
+        self.recover = Job::Idle;
+        self.rec_result = None;
+    }
+
     pub fn select_host(&mut self, host: &str, window: &mut Window, cx: &mut Context<App>) {
+        if self.selected_ip.as_deref() != Some(host) {
+            self.reset_unit_session();
+        }
         self.selected_ip = Some(host.to_string());
         self.set_input(&self.inp.host.clone(), host, window, cx);
         self.go(Screen::Connect, window, cx);
@@ -876,7 +913,7 @@ impl App {
         self.form.copies = default_system_copies(n, n).max(1);
         self.form.copies_auto = true;
         self.form.system_gib = 0.0;
-        self.form.kernel = KernelChannel::Newest;
+        self.form.kernel = KernelChannel::Stable;
         let serial = f.serial_console();
         self.set_input(&self.inp.serial_text.clone(), &serial_field_text(&serial), window, cx);
         self.set_input(&self.inp.serial_speed.clone(), &serial.speed.to_string(), window, cx);
@@ -1111,8 +1148,7 @@ impl App {
         self.password_copied = false;
         self.sys.generated_key = None;
         self.reveal_password = false;
-        self.recover = Job::Idle;
-        self.bootmgr = Job::Idle;
+        self.reset_unit_session();
         self.set_input(&self.inp.typed.clone(), "", window, cx);
         self.set_input(&self.inp.new_password.clone(), &generate_password(20), window, cx);
         self.go(Screen::Inventory, window, cx);

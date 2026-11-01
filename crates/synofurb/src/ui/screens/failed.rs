@@ -87,7 +87,9 @@ impl App {
             }));
 
         let status: gpui_kit::AnyElement = match &self.recover {
-            Job::Done(Ok(s)) => Alert::success("rec-ok", s.trim().to_string()).small().icon(icons::icon(role::OK)).into_any_element(),
+            Job::Done(Ok(_)) => {
+                Alert::info("rec-ok", copy::REC_BOOT_DONE.tip).title(copy::REC_BOOT_DONE.short).small().icon(icons::icon(role::INFO)).into_any_element()
+            }
             Job::Done(Err(e)) => Alert::error("rec-err", e.clone()).small().icon(icons::icon(role::ERR)).into_any_element(),
             _ => gpui_kit::div().into_any_element(),
         };

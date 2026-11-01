@@ -129,10 +129,14 @@ impl App {
                         .child(kit::mono(cx, cmd.clone()))
                         .child(Clipboard::new("bm-copy").value(cmd).tooltip("Copy")),
                 )
-                .when(self.bm_returned, |d| {
-                    d.child(
-                        Alert::success("bm-back", copy::BM_BACK_IN_DSM.tip).title(copy::BM_BACK_IN_DSM.short).icon(icons::icon(role::OK)),
-                    )
+                .child(match &self.recover {
+                    Job::Running => Alert::info("bm-back-run", copy::REC_BOOT_RUNNING.short).icon(icons::icon(role::RUNNING)).into_any_element(),
+                    Job::Done(Ok(_)) => Alert::info("bm-back", copy::REC_BOOT_DONE.tip)
+                        .title(copy::REC_BOOT_DONE.short)
+                        .icon(icons::icon(role::INFO))
+                        .into_any_element(),
+                    Job::Done(Err(e)) => Alert::error("bm-back-err", e.clone()).icon(icons::icon(role::ERR)).into_any_element(),
+                    Job::Idle => div().into_any_element(),
                 })
                 .into_any_element()
         };
@@ -173,7 +177,7 @@ impl App {
                 began.then(|| copy::BM_CANCEL_WHY.short.to_string()),
             )]);
         } else if done {
-            let returned = self.bm_returned;
+            let returned = matches!(self.recover, Job::Done(Ok(_)));
             page = page.right(vec![
                 if returned {
                     Button::new("bm-rec")
@@ -187,10 +191,8 @@ impl App {
                         .icon(icons::icon(role::ROTATE_BACK))
                         .label(copy::BM_RETURN.short)
                         .tooltip(copy::BM_RETURN.tip)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.bm_returned = true;
-                            this.start_recover(cx);
-                        }))
+                        .loading(self.recover.running())
+                        .on_click(cx.listener(|this, _, _, cx| this.start_recover(cx)))
                         .into_any_element()
                 },
                 Button::new("bm-done")

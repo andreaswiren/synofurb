@@ -387,7 +387,7 @@ mod strings {
         FAIL_DEFAULT_UNCONFIRMED: Label, "Default: not confirmed", "We cannot tell if the agent ran; if it did not, a power cycle boots it again.", "recovery", "";
         FAIL_CLOCK_AGENT: Label, "DSM may return in", "An estimate, not a promise.", "recovery",
             "If the agent started, its watchdog counts 30 minutes from when it booted. The app already waited 10, so 20 or more remain. If it never started there is no watchdog and DSM does not come back by itself.";
-        FAIL_CLOCK_AGENT_VALUE: Label, "about 20 min or more", "", "", "";
+        FAIL_CLOCK_AGENT_VALUE: Label, "20 min or more", "", "", "";
         DLG_NEXT_AGENT: Dialog, "What happens next", "", "recovery",
             "The app waited 10 minutes and cannot tell what happened. If the agent started, its watchdog reboots the NAS into DSM, 20 minutes or more from now.\n\nIf it never started, the NAS may keep booting the agent after every power cycle. Then choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or restore the boot flash from another computer.\n\nDSM is not confirmed. Your disks are untouched.";
         DLG_NEXT_PRE: Dialog, "What happens next", "", "recovery",
@@ -479,8 +479,7 @@ mod strings {
         BM_STEP4: Label, "Agent answers", "", "", "";
         BM_READY: Label, "Agent ready", "", "", "";
         BM_WATCHDOG: Label, "60 min watchdog", "The agent reboots to DSM after 60 minutes without a login.", "boot-manager", "";
-        BM_BACK_IN_DSM: Label, "Back in DSM.", "Our entries remain on the flash.", "recovery", "";
-        BM_RETURN: Button, "Return to DSM", "Sets DSM as the default and reboots the unit.", "recovery", "";
+        BM_RETURN: Button, "Return to DSM", "Sets DSM as the default; you reboot the unit afterwards.", "recovery", "";
         BM_DONE: Button, "Done", "", "", "";
         BM_CANCEL_WHY: Prose, "Not possible after the first flash write.", "", "", "";
         DLG_BM_CONFIRM: Dialog, "Install the agent?", "Entries and files are added; DSM's entry stays.", "boot-manager", "The whole boot flash is saved to this computer first and verified. Then the agent is added and the unit reboots into it once. DSM stays the default and your disks are not touched.";
@@ -489,12 +488,18 @@ mod strings {
 
         // ===================================================================== D14 recovery
         REC_TITLE: Title, "Recovery", "", "", "";
-        REC_SUB: Subtitle, "State read from the unit.", "", "", "";
+        REC_SUB: Subtitle, "From this session.", "The app cannot read the boot flash yet.", "recovery", "These facts come from what this app did in this session. If you closed it after a failure, they are gone: use Manual recovery.";
         REC_BOOT_DSM: Label, "Boot DSM next", "Sets the default boot entry back to DSM.", "recovery", "";
         REC_OPEN_AGENT: Label, "Open agent", "Boots the SSH agent once; DSM stays the way back.", "boot-manager", "";
         REC_RESTORE_FLASH: Label, "Restore flash", "Writes the saved boot-flash image back; needs a working Linux on the unit.", "recovery", "";
         REC_REMOVE: Label, "Remove our entries", "Takes the agent out of the boot flash again.", "recovery", "";
         REC_REINSTALL: Label, "Reinstall DSM", "Use Synology's page; no data promise.", "recovery", "";
+        REC_BOOT_RUNNING: Label, "Setting default to DSM", "", "", "";
+        REC_BOOT_DONE: Label, "Default set to DSM", "Reboot the NAS to start DSM; this app does not reboot it.", "recovery", "";
+        REC_BOOT_DSM_OK: Button, "Set default", "", "", "";
+        DLG_BOOT_DSM: Dialog, "Boot DSM next?", "Makes DSM the default boot entry.", "recovery", "This makes DSM the default boot entry on the unit. It does not reboot the unit: do that yourself afterwards. If the unit does not answer, use Manual recovery.";
+        MGMT_ROLLBACK_OK: Button, "Roll back", "", "", "";
+        DLG_MGMT_ROLLBACK: Dialog, "Roll back the update?", "Goes back to the version the unit had before.", "", "The unit goes back to the management app version it had before the last update. The web UI restarts and is unavailable for a few seconds. Disks and data are not touched.";
         REC_RUN: Button, "Run", "", "", "";
         REC_SAVED: Label, "Saved here", "First and last 1 MiB of changed disks; not your files.", "backups", "";
         REC_OPEN_FOLDER: Button, "Open folder", "", "", "";
@@ -507,11 +512,9 @@ mod strings {
         REC_DISKS_UNTOUCHED: Label, "Disks: untouched", "", "", "";
         REC_UNKNOWN_ALERT: Prose, "The agent may still be the default.", "DSM may not return by itself.", "recovery", "";
         REC_MANUAL: Button, "Manual recovery", "Steps that work without the unit answering.", "recovery", "";
-        REC_NOTHING: Label, "Nothing to recover.", "The unit is as it was found.", "", "";
+        REC_NOTHING: Label, "Nothing known to recover.", "This session changed nothing; the app cannot read earlier changes.", "", "";
         DLG_MANUAL: Dialog, "Manual recovery", "Steps that work without the unit answering.", "recovery",
             "Both ways need physical access to the NAS.\n\n1. On a serial or VGA console, choose SYNOLOGY_2 in the boot menu. When DSM runs, run the first command in a terminal on the NAS.\n\n2. Or put the boot flash in another Linux computer and restore the saved image with the second command. Replace /dev/sdX with the 128 MB flash; check twice.\n\nYour disks are untouched. We promise nothing about your data.";
-        DLG_RESTORE: Dialog, "Restore boot flash?", "Writes the saved image back to the boot flash.", "backups", "This writes the saved image back to the boot flash. It needs a working Linux on the unit, such as the agent or Debian.";
-        DLG_REMOVE: Dialog, "Remove our entries?", "Leaves only Synology's own files on the flash.", "boot-manager", "This removes our entries from the boot flash and leaves Synology's own files. DSM stays the default.";
         REC_TYPE: Label, "Type {phrase} to continue.", "", "", "";
         REC_COPY_CMD: Button, "Copy command", "", "", "";
         REC_UNAVAILABLE: Label, "Unavailable", "", "", "";

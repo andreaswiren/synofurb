@@ -257,6 +257,11 @@ fn shell_quote(s: &str) -> String {
     }
 }
 
+/// The command that boots the agent once (`boot-manager enter`), with the host and user already filled in.
+pub fn agent_command(host: &str, user: &str) -> String {
+    format!("synofurb-cli boot-manager enter --host {} --user {}", shell_quote(host), shell_quote(user))
+}
+
 /// The newest `synofurb-dom-backup-*.img` in `dir` (the names carry a sortable time stamp), if any.
 pub fn latest_backup(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
@@ -499,5 +504,11 @@ mod tests {
         assert_eq!(latest_backup(&dir).unwrap().file_name().unwrap(), "synofurb-dom-backup-a-20260301.img");
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(latest_backup(&dir).is_none());
+    }
+
+    #[test]
+    fn agent_command_is_filled_in() {
+        assert_eq!(agent_command("192.168.1.20", "admin"), "synofurb-cli boot-manager enter --host 192.168.1.20 --user admin");
+        assert!(agent_command("a b", "x").contains("'a b'"));
     }
 }
