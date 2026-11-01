@@ -3,7 +3,7 @@ function boot(){const b=S.boot;
  return {html:`<div class="page narrow"><div class="ph"><div><h1 class="t-title">Boot manager ${infoBtn('oneshot','One-shot agent')}</h1><div class="sub t-sub">SSH agent on the boot flash.</div></div></div>
  <div class="row wrap">${tag('Flash changes',{v:'warn',i:'triangle-alert',t:'Entries and files are added; DSM’s entry stays.'})}${tag('Disks untouched',{v:'ok',i:'shield-check',t:'No partition table is written.'})}</div>
  <div class="card"><div class="card-b col gap16"><div class="fld"><span class="lab"><span${tip('The key pair is created on this computer.')}>SSH key</span></span><div class="seg" role="group" style="align-self:flex-start">${['Generate','Paste'].map(k=>`<button aria-pressed="${b.key===k}" data-boot-key="${k}">${k}</button>`).join('')}</div></div>
- <div class="fld"><span class="lab"><span${tip('The agent reboots to DSM after 30 minutes without a login.')}>Login timeout</span></span><div class="inp mono" aria-disabled="true"><input class="mono" readonly value="30 min" aria-label="Login timeout"></div></div>
+ <div class="fld"><span class="lab"><span${tip('The agent reboots to DSM after 30 minutes without a login.')}>Login timeout</span></span><div class="mono" style="padding:4px 0">${d('30 min')}</div></div>
  ${alertH('warn','triangle-alert',`<span${tip('After kexec nothing of ours runs; power-cycling returns to the default.')}>Other OS: power cycle returns.</span>`)}</div></div></div>`,
  foot:F(back('goal'),btn('Install agent',{cls:'primary',act:'bootinstall',icon:'download'}))}}
 /* ---- D14 Recovery ---- */
@@ -68,9 +68,9 @@ const SHORTCUTS=[['F1','Help for the focused control'],['Ctrl+,','Settings'],['C
 function openHelp(topic){S.help.topic=topic||null;S.help.q=S.help.q||'';S.help.tab=S.help.tab||'Topics';
   const sc=openSheet({title:'Help',body:'<div id="hb-top"></div><div id="hb"></div>',foot:`<button class="link" data-act="docs">${ic('external-link','s')} Open docs</button>`});
   S.help.open=true;paintHelp();const i=$('#hq');(topic?$('[data-help-back]',sc):i)&&(topic?$('[data-help-back]',sc):i).focus()}
-function paintHelp(){const top=$('#hb-top');if(!top)return;const h=S.help;
+function paintHelp(){const top=$('#hb-top');if(!top)return;const h=S.help;const ae=document.activeElement,keep=ae&&ae.id==='hq'?ae.selectionStart:null;
   top.innerHTML=h.topic?'':`<div class="inp">${ic('search','s')}<input id="hq" placeholder="Search help" value="${esc(h.q)}" aria-label="Search help"></div><div class="tabs" role="tablist" style="margin-top:8px">${['Topics','Shortcuts'].map(t=>`<button role="tab" aria-selected="${h.tab===t}" data-help-tab="${t}">${t}</button>`).join('')}</div>`;
-  $('#hb').innerHTML=helpBody();}
+  $('#hb').innerHTML=helpBody();if(keep!==null){const i=$('#hq');if(i){i.focus();i.setSelectionRange(keep,keep)}}}
 /* ---- D17 About ---- */
 function about(){const cr=[['Debian','DFSG licences'],['Lucide','ISC'],['Inter','OFL 1.1'],['JetBrains Mono','OFL 1.1'],['Montserrat','OFL 1.1'],['GPUI Kit, gpui-component','Apache-2.0'],['synodeb note','GPL-2.0, technique only']];
  return {html:`<div class="page narrow" style="align-items:center;text-align:center;max-width:560px"><div class="ph" style="width:100%"><h1 class="t-title">About</h1></div>

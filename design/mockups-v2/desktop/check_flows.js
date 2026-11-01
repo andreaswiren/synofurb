@@ -3,7 +3,7 @@
 // usage: node check_flows.js     exit 1 on any failed expectation
 const { chromium } = require(process.env.PW || '/opt/node-tools/node_modules/playwright');
 const path = require('path'); const H = __dirname; const URL = 'file://' + H + '/index.html';
-process.on("unhandledRejection", e => { console.log("ERROR", String(e.message).split("\n")[0]); process.exit(2) });
+process.on("unhandledRejection", e => { console.log("ERROR", String(e.message).split("\n").slice(0,6).join(" | ")); process.exit(2) });
 let pass = 0, fail = 0; const ok = (c, m) => { c ? pass++ : (fail++, console.log('FAIL ' + m)); if (c && process.argv.includes('-v')) console.log('ok   ' + m) };
 (async () => {
   const b = await chromium.launch({ executablePath: process.env.CHROME || '/usr/bin/google-chrome', args: ['--no-sandbox'] });
@@ -23,7 +23,7 @@ let pass = 0, fail = 0; const ok = (c, m) => { c ? pass++ : (fail++, console.log
   for (const [lbl, s] of [['Connect', 'goal'], ['Plan install', 'plan'], ['Next: System', 'system'], ['Next: Confirm', 'confirm']]) { const n = lbl === 'Plan install' ? p.locator('.main .btn:has-text("Plan install")') : p.locator('.foot .btn.primary:visible').first(); await n.click(); await p.waitForTimeout(150); ok(await screen(p) === s, `-> ${s}`) }
   // gate: erase must stay locked until all three boxes + phrase
   const erase = p.locator('[data-act="erase"]'); ok(await erase.getAttribute('aria-disabled') === 'true', 'Erase locked at start');
-  await erase.click(); ok(await screen(p) === 'confirm', 'clicking locked Erase does nothing');
+  await erase.click({ force: true }); ok(await screen(p) === 'confirm', 'clicking locked Erase does nothing');
   await erase.hover(); await p.waitForTimeout(600); ok(await p.locator('.tip:visible').count() === 1 && /Tick|Type|Confirm|box/i.test(await p.locator('.tip:visible').innerText()), 'locked Erase explains why in a tooltip: ' + (await p.locator('.tip:visible').innerText().catch(() => '-')).replace(/\s+/g, ' '));
   const boxes = p.locator('.gate .chk'); for (let i = 0; i < await boxes.count(); i++) await boxes.nth(i).click();
   ok(await erase.getAttribute('aria-disabled') === 'true', 'three boxes alone do not unlock');
@@ -34,7 +34,7 @@ let pass = 0, fail = 0; const ok = (c, m) => { c ? pass++ : (fail++, console.log
   await boxes.nth(1).click(); await erase.click(); await p.waitForTimeout(150); ok(await screen(p) === 'install', 'Erase -> Install');
   await p.waitForFunction(() => window.__S.screen === 'done', null, { timeout: 15000 }).catch(() => { }); ok(await screen(p) === 'done', 'install simulation ends on Done');
   const fin = p.locator('[data-act="finish"]'); ok(await fin.getAttribute('aria-disabled') === 'true', 'Finish locked until the password is copied');
-  await p.locator('[data-act="copy-pw"]').click(); ok(await fin.getAttribute('aria-disabled') !== 'true', 'Copy password unlocks Finish');
+  await p.locator('label.chk:has-text("Password copied")').click(); ok(await fin.getAttribute('aria-disabled') !== 'true', 'Ticking "Password copied" unlocks Finish');
   await fin.click(); ok(await screen(p) === 'manage', 'Finish -> Manage');
   ok(await p.locator('.hcards, .toprow').count() > 0 && /Healthy|Needs attention|Critical|Unreachable/.test(await p.locator('.main').innerText()), 'Manage opens on the Health view with an overall status');
   ok(p.errs.length === 0, 'no page errors on main path ' + p.errs.join('|')); await p.close();
@@ -50,11 +50,10 @@ let pass = 0, fail = 0; const ok = (c, m) => { c ? pass++ : (fail++, console.log
 
   // 3. dialog focus trap + Esc returns focus
   p = await mk('fast=1&nofirst=1&bare=1&unit=ds918#connect');
-  await p.locator('.main [data-help-open], .link:has-text("How to")').first().click().catch(() => { });
-  await p.keyboard.press('Escape'); await p.keyboard.press('F1'); await p.waitForTimeout(200); ok(await p.locator('#layer .sheet').count() === 1, 'F1 opens the Help sheet');
+  await p.keyboard.press('F1'); await p.waitForTimeout(200); ok(await p.locator('#layer .sheet').count() === 1, 'F1 opens the Help sheet');
   ok(await p.evaluate(() => !!document.activeElement.closest('.sheet')), 'focus moves into the sheet');
   for (let i = 0; i < 25; i++) await p.keyboard.press('Tab'); ok(await p.evaluate(() => !!document.activeElement.closest('.sheet')), 'Tab stays inside the sheet (focus trap)');
-  await p.keyboard.type('raid'); await p.waitForTimeout(150); const n = await p.locator('#hb .help-list li').count(); ok(n >= 1 && n < 14, `Help search filters topics (${n} of 14)`);
+  await p.locator('#hq').pressSequentially('raid'); ok(await p.evaluate(() => document.activeElement.id) === 'hq', 'typing keeps focus in the search field'); await p.waitForTimeout(150); const n = await p.locator('#hb .help-list li').count(); ok(n >= 1 && n < 14, `Help search filters topics (${n} of 14)`);
   await p.keyboard.press('Escape'); ok(await p.locator('#layer .sheet').count() === 0, 'Esc closes the sheet'); await p.close();
 
   // 4. management: update -> progress -> updated -> roll back; failed state; unreachable disables actions
@@ -71,13 +70,13 @@ let pass = 0, fail = 0; const ok = (c, m) => { c ? pass++ : (fail++, console.log
   await p.locator('[aria-label="Settings"]').click(); ok(await screen(p) === 'settings', 'Settings from the title bar'); await p.locator('.main button:has-text("Close"), .foot button:has-text("Close")').first().click();
   await p.locator('[data-menu]').click(); await p.waitForTimeout(100); const items = await p.locator('#layer [role=menuitem]').allInnerTexts(); ok(items.length >= 3, 'app menu lists items: ' + items.join(' / '));
   await p.locator('#layer [role=menuitem]').filter({ hasText: 'About' }).click(); ok(await screen(p) === 'about', 'menu -> About'); await p.locator('.main .btn:has-text("Close"), .foot .btn:has-text("Close"), .foot .btn:has-text("Back")').first().click().catch(() => { });
-  await p.goto(URL + '?fast=1&nofirst=1&bare=1&unit=ds918#goal'); await p.waitForTimeout(150);
+  await p.goto(URL + '?t=1&fast=1&nofirst=1&bare=1&unit=ds918#goal'); await p.waitForTimeout(150);
   await p.locator('.main .btn:has-text("Set up")').click(); ok(await screen(p) === 'boot', 'Goal -> Boot manager');
-  await p.goto(URL + '?fast=1&nofirst=1&bare=1&unit=ds918#goal'); await p.waitForTimeout(150);
+  await p.goto(URL + '?t=2&fast=1&nofirst=1&bare=1&unit=ds918#goal'); await p.waitForTimeout(150);
   await p.locator('.main .btn:has-text("Open recovery")').click(); ok(await screen(p) === 'recovery', 'Goal -> Recovery');
   await p.locator('[data-rec="restore"]').first().click(); ok(await dlgOpen(p) === 1, 'Restore opens a dialog'); await p.keyboard.press('Escape');
-  await p.goto(URL + '?fast=1&nofirst=1&bare=1&unit=ds918#install'); await p.waitForTimeout(100);
-  await p.goto(URL + '?fast=1&nofirst=1&bare=1&unit=ds918&fail=post#failed'); await p.waitForTimeout(150); ok(await screen(p) === 'failed', 'Failed screen renders');
+  await p.goto(URL + '?t=3&fast=1&nofirst=1&bare=1&unit=ds918#install'); await p.waitForTimeout(100);
+  await p.goto(URL + '?t=4&fast=1&nofirst=1&bare=1&unit=ds918&fail=post#failed'); await p.waitForTimeout(150); ok(await screen(p) === 'failed', 'Failed screen renders');
   await p.locator('[data-dlg="next"], .link:has-text("What happens next")').first().click(); ok(await dlgOpen(p) === 1, 'Failed -> What happens next dialog'); await p.keyboard.press('Escape');
   await p.keyboard.press('Escape'); await p.close();
 
@@ -85,7 +84,7 @@ let pass = 0, fail = 0; const ok = (c, m) => { c ? pass++ : (fail++, console.log
   p = await mk('fast=1&nofirst=1&unit=ds918'); ok(await p.locator('.dev').count() === 0, 'dev menu absent by default'); await p.keyboard.press('Control+Shift+D'); ok(await p.locator('.dev').count() === 1, 'Ctrl+Shift+D opens dev menu');
   await p.keyboard.press('Control+Shift+D'); await p.locator('.mockmark button').click(); ok(await p.locator('.mockmark:visible').count() === 0, 'mock mark can be hidden'); await p.close();
   const list = require('./screens.json'); p = await mk('fast=1&nofirst=1&bare=1', { width: 960, height: 640 }); let hs = 0;
-  for (const s of list) { await p.goto(`${URL}?bare=1&${s.q}#${s.h}`); await p.waitForTimeout(120); if (await p.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth || document.querySelector('.win').scrollWidth > document.querySelector('.win').clientWidth)) { hs++; console.log('HSCROLL ' + s.n) } }
+  for (const s of list) { await p.goto(`${URL}?bare=1&${s.q}#${s.h}`); await p.waitForTimeout(300); if (await p.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth || document.querySelector('.win').scrollWidth > document.querySelector('.win').clientWidth)) { hs++; console.log('HSCROLL ' + s.n) } }
   ok(hs === 0, `no horizontal scroll at 960x640 on ${list.length} states`); await p.close();
   await b.close(); console.log(`${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })();

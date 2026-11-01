@@ -1,5 +1,5 @@
 [
- {"n":"find","h":"find","q":"nofirst=1&sel=ds918"},
+ {"n":"find","h":"find","q":"nofirst=1&unit=ds918"},
  {"n":"find-loading","h":"find","q":"nofirst=1&scan=loading"},
  {"n":"find-empty","h":"find","q":"nofirst=1&filter=zzz"},
  {"n":"find-update","h":"find","q":"nofirst=1&update=1&dlg=update"},

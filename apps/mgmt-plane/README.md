@@ -8,7 +8,7 @@ Needs these Debian packages for the features that use them: `openssl` (first-sta
 `iproute2`, `util-linux`, `mdadm`, `lvm2`, `xfsprogs`/`e2fsprogs`/`btrfs-progs`, `ntfs-3g`, `exfatprogs`,
 `smartmontools` (optional), `openssh-server` (optional).
 
-Version: the `VERSION` file next to this README (currently 0.4.0) is the single source; it is packaged with the script, read at start-up,
+Version: the `VERSION` file next to this README (currently 0.5.0) is the single source; it is packaged with the script, read at start-up,
 shown in the UI (login and sidebar footer) and returned by `GET /api/me`, `/api/status`, `/api/services` and `/api/tls-fingerprint`.
 
 ## What it does
@@ -18,11 +18,13 @@ shown in the UI (login and sidebar footer) and returned by `GET /api/me`, `/api/
 | Dashboard | tiles for health, storage, memory, load, CPU vendor (Intel/AMD), kernel (flagged when >= 7), microcode package state, network; RAID/LVM/mount tables; disks with role, SMART fetched lazily; unit model (from `/proc/sys/kernel/syno_hw_version` or `/var/lib/synofurb/dsm-inspect.txt`); serial console (`console=` on the kernel command line) |
 | RAID | array inventory (level, state, members with slot/model/serial, spares, bitmap, resync/reshape/check progress and speed, mismatch count, what uses it), create (RAID 0/1/5/6/10 and **Hybrid / SHR-style 1 and 2**), add spare, fail/remove, replace (failed or healthy with `--replace --with`), grow, change level, check/repair/stop task, stop/assemble, tuning, monthly check timer, SHR add/replace disk; every change is plan, typed confirmation, commands, audit |
 | Storage | free-device detection, 4-step create-volume wizard (devices, RAID layout, volume, review) with a live plan preview (exact commands, nothing executed), typed-name confirm to execute; extend LV + grow fs; delete |
-| Imported volumes | "Scan RAID and LVM" (mdadm assemble + vgchange), mount unmounted filesystems (xfs/ext4/btrfs/vfat/exfat/ntfs) **read-only by default for foreign volumes**, optional fstab persistence, unmount, fstab view, signatures that need activation or unlocking |
+| Mounts | tabs **Mounted** and **Imported**: "Scan disks" (mdadm assemble + vgchange), mount unmounted filesystems (xfs/ext4/btrfs/vfat/exfat/ntfs) **read-only by default for foreign volumes**, optional fstab persistence, unmount, fstab view, signatures that need activation or unlocking |
 | Network | per-interface DHCP (v4+v6+SLAAC) or static config written to `/etc/systemd/network/10-synofurb-<if>.network`; safe apply with a 90 s automatic rollback and a countdown banner on every page; hostname |
 | Users | list local accounts (uid>=1000 + root marker), create/delete, set password, lock/unlock, add SSH key |
 | Boot manager | units that boot through the internal boot flash (`/usr/local/sbin/synofurb-dom`): entries (DSM, Debian, previous kernel, boot agent), current default, DSM fail-safe note, **Return to DSM**, set default, reboot into an entry, boot-flash free space and DOM backup location. Other units get a "not a boot-flash unit" notice |
-| System | sshd state and host key fingerprints, serial-getty units, restart of an allow-list of services, reboot/poweroff, version and unit info |
+| System | sshd state and host key fingerprints, serial-getty units, restart of an allow-list of services, reboot/poweroff |
+| Help | twelve-plus short topics with search (sign-in, certificate, storage, imports, boot, recovery, report, RAID levels, Hybrid RAID, replace, scrub, safe apply); every (i) button in the UI opens the matching topic |
+| About | logo, version, **Copy diagnostics** (version, host, OS, kernel, service state; no secrets), links to documentation, source and issue tracker, Credits with licence texts (Debian, Lucide ISC, Inter and JetBrains Mono OFL 1.1, Montserrat, synodeb note) |
 
 ## RAID and Hybrid RAID (SHR)
 
@@ -72,8 +74,12 @@ desktop, bottom tab bar plus slide-in menu below 860 px, tables that stack into 
 Colours are the exact tokens from `design/mockups/ui/tokens.json` (revised after the critic review: pressed states, placeholder, `*_border`, darker destructive set; `theme_tokens()`/`accent_tokens()` in the code, a test compares them with the JSON), five accents selectable in the top bar (web plane only),
 as CSS custom properties: light by default, dark via `prefers-color-scheme`, and a toggle in the top bar (stored in `localStorage`).
 No `color-mix()`, gradients or inset shadows (tested). Type floor 12 px, weights 400/600/700, sentence case. Status is never colour alone: every badge and banner has an icon and a word, "off" states use a dashed border, attention rows get a 3 px edge.
-Icons are the inline lucide-style set of the mockups; no external fonts, scripts, images or CDNs. `prefers-reduced-motion` and
+**Fonts**: Inter (400/600/700) and JetBrains Mono (400), subset to Latin and embedded as woff2 `data:` URIs (about 62 KB of base64 in total, `font-src data:` in the CSP); the stacks keep the system fonts as fallback, so nothing breaks if a font fails to decode.
+**Logo**: `assets/brand` mark and wordmark (light and dark variants follow the theme) in the sidebar, the login card and About; `favicon.svg` is an inline `data:` favicon.
+**Icons**: Lucide only (ISC), a fixed list of 56 symbols inlined as an SVG sprite; a test checks that every icon the UI asks for exists and equals the Lucide source. No external fonts, scripts, images or CDNs. `prefers-reduced-motion` and
 `forced-colors` are honoured. Destructive actions use the typed-name confirm dialog (button stays disabled until the text matches).
+**60-word rule** (`design/v2/UX-SPEC.md`): every page shows at most 60 words by default, shell included (headings, labels, column headers, buttons, prose; values that come from the system are data). Explanations live in tooltips (`tip`), popovers (native `popover`, Esc closes) and the Help topics; all text is in the `COPY` module with budgets per kind. `tests/test_ui.py` checks the copy budgets, forbids hard-coded prose in the script and, when node and Playwright are installed, opens every page of the demo (both units, desktop and phone) and counts the words really rendered.
+Regenerate the embedded fonts, logos, favicon, icons and licence texts with `python3 tools/build-assets.py` (needs `pip install fonttools brotli`, `assets/brand` and a Lucide icon directory, `LUCIDE_DIR=...`).
 
 ## API
 

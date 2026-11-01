@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Iterable
 
-DEFAULT_VERSION = "0.4.0"
+DEFAULT_VERSION = "0.5.0"
 
 
 def read_version() -> str:
@@ -4766,12 +4766,28 @@ COPY.update({
     "about.version": _c("Version"), "about.copy": _c("Copy diagnostics", "button", "Version, host and service state; no secrets."), "about.copied": _c("Copied."),
     "about.docs": _c("Documentation", "button"), "about.source": _c("Source code", "button"), "about.issue": _c("Report issue", "button"), "about.credits": _c("Credits"),
     "about.licence": _c("Licence", "button"), "about.synodeb": _c("synodeb", "button", "Boot-flash technique documented by synodeb (GPL-2.0); no code used."),
+    "raid.need2": _c("Needs 2 disks", "tip"), "raid.need4": _c("Needs 4 disks", "tip"), "raid.needeven": _c("Needs an even number", "tip"), "api.expired": _c("Session expired.", "prose"),
     "help.back": _c("Back", "button"), "help.docs": _c("Open docs", "button"),
 })
 # keys that are visible on the default RAID screen (no dialog open): the prose among them must stay within the page budget
-COPY_SCREENS = {"raid": ["raid.title", "raid.create", "raid.arrays", "raid.hybrid", "raid.empty", "raid.members", "raid.size", "raid.usedby", "raid.monthly", "raid.actions",
-                         "state.clean", "state.degraded", "ms.active", "act.add_spare", "act.replace", "act.check", "shr.add", "shr.slice"],
-                "help": ["help.title", "help.search", "help.none"]}
+# Every key whose text is visible by default on a page (dialogs, popovers, tooltips and closed menus are not). Values shown from the system itself
+# (host names, sizes, states of real devices) are data and not counted. The budget: shell + page <= 60 words (design/v2/UX-SPEC.md section 9).
+COPY_SHELL = ["shell.brand", "shell.role", "nav.dashboard", "nav.storage", "nav.raid", "nav.mounts", "nav.network", "nav.users", "nav.boot", "nav.system", "nav.help", "nav.about"]
+COPY_SCREENS = {
+    "login": ["login.title", "login.user", "login.password", "login.go", "login.cert", "nav.help"],
+    "dashboard": ["nav.dashboard", "dash.health", "dash.storage", "dash.memory", "dash.load", "dash.cpu", "dash.kernel", "dash.microcode", "nav.network", "dash.disks", "act.smart",
+                  "col.device", "col.model", "col.size", "col.type", "col.role", "dash.arrays", "col.array", "col.level", "col.state", "col.interface", "col.address"],
+    "storage": ["nav.storage", "nav.raid", "st.create", "st.volumes", "col.volume", "col.mount", "col.size", "col.used", "act.extend", "act.delete"],
+    "raid": ["raid.title", "raid.create", "raid.arrays", "raid.hybrid", "raid.empty", "raid.members", "raid.size", "raid.usedby", "raid.monthly", "raid.actions",
+             "state.clean", "state.degraded", "ms.active", "act.add_spare", "act.replace", "act.check", "shr.add", "shr.slice"],
+    "mounts": ["nav.mounts", "mnt.mounted", "mnt.imported", "col.mount", "col.device", "col.type", "col.used", "mnt.fstab", "act.unmount"],
+    "network": ["nav.network", "net.ipv4", "net.mac", "act.edit"],
+    "users": ["nav.users", "usr.new", "col.name", "col.groups", "col.keys", "col.state"],
+    "boot": ["nav.boot", "boot.return_dsm", "boot.entries", "boot.default", "boot.failsafe", "boot.missing", "boot.set_default", "boot.reboot_go", "boot.flash", "boot.part1", "boot.part2", "boot.backup"],
+    "system": ["nav.system", "sys.ssh", "sys.enabled", "sys.hostkeys", "sys.consoles", "col.device", "col.state", "sys.services", "act.restart", "sys.power", "sys.reboot", "sys.shutdown"],
+    "help": ["help.title", "help.search", "help.none", "help.docs"],
+    "about": ["nav.about", "about.copy", "about.docs", "about.source", "about.issue", "about.credits"],
+}
 HELP_TOPICS: list[dict] = [
     {"id": "raid-levels", "title": "RAID levels", "keywords": "raid0 raid1 raid5 raid6 raid10 mirror parity stripe",
      "body": "RAID joins several disks into one array. The level decides capacity and how many failures it survives.\n\nRAID 0 stripes data: fast, no protection. RAID 1 mirrors: usable space of one disk, survives all but one failure. RAID 5 keeps one disk of parity: survives one failure. RAID 6 keeps two. RAID 10 mirrors pairs and stripes them.\n\nRAID is not a backup. Deleted files and bad writes are copied to every member."},
@@ -4987,6 +5003,7 @@ pre.code{background:var(--surface-2);border:1px solid var(--border);border-radiu
 .log :focus-visible{outline-color:var(--ring-inverse)}
 /* dialog */
 dialog{border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--fg);width:min(520px,calc(100vw - 24px));padding:0;box-shadow:var(--e3);overflow:hidden}
+dialog.wide{width:min(840px,calc(100vw - 24px))}
 dialog::backdrop{background:rgb(0 0 0/.6)}
 .dh{display:flex;gap:12px;align-items:flex-start;padding:20px 20px 0}.dh h3{font-size:16px;line-height:21px;font-weight:600}.dh p{margin:2px 0 0;color:var(--fg-2);font-size:13px}
 .dh>.ic{width:22px;height:22px;margin-top:1px;color:var(--accent-fg)}.dh.bad>.ic{color:var(--err-solid)}
@@ -5100,7 +5117,9 @@ input[type=search]{width:100%}
 .tab{display:inline-flex;gap:8px;align-items:center;min-height:40px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:none;color:var(--fg-2);font:600 13px/19px var(--font-ui)}
 .tab:hover{color:var(--fg)}.tab[aria-selected=true]{color:var(--accent-fg);border-bottom-color:var(--accent)}
 .about{display:flex;flex-direction:column;gap:16px;align-items:flex-start}
+ul.cred{list-style:none;margin:0;padding:0}ul.cred li{display:flex;align-items:center;gap:12px;padding:8px 16px;border-top:1px solid var(--border);min-height:48px}ul.cred li b{min-width:140px}ul.cred .chip{font-size:12px}ul.cred li .btn{margin-left:auto}
 pre.lic{max-height:60vh;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:18px}
+.cb>.btn+h2{margin-top:14px}.card article p,.helpbody p{max-width:68ch}
 textarea.mono{width:100%}
 @media (max-width:1000px){.helpcols{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}.spin{animation:none}}
@@ -5172,7 +5191,7 @@ async function api(method, path, body) {
   const r = await fetch(path, opt);
   let j = {};
   try { j = await r.json(); } catch (e) { /* non-JSON */ }
-  if (r.status === 401 && path !== '/api/login') { showLogin(); throw new Error('Session expired, please log in again'); }
+  if (r.status === 401 && path !== '/api/login') { showLogin(); throw new Error(T('api.expired')); }
   if (!r.ok || j.ok === false) { const e = new Error(j.error || ('HTTP ' + r.status)); e.data = j; throw e; }
   return j;
 }
@@ -5193,7 +5212,8 @@ const KIND_ICON = {ok: 'check', warn: 'triangle-alert', err: 'ban', info: 'info'
 const badge = (kind, text, icon) => h('span', {class: 'badge ' + kind}, ic(icon || KIND_ICON[kind] || 'info', 'sm'), text);
 const chip = (a, b) => h('span', {class: 'chip'}, h('b', {}, a), b ? h('span', {class: 'mono'}, b) : null);
 function banner(kind, title, text, ...acts) {
-  const el = h('div', {class: 'banner ' + kind}, ic(kind === 'neutral' ? 'info' : KIND_ICON[kind], 'lg'),
+  const bi = kind === 'neutral' ? 'info' : KIND_ICON[kind];
+  const el = h('div', {class: 'banner ' + kind}, ic(bi, 'lg'),
     h('div', {class: 'bt'}, h('b', {}, title), text ? h('p', {}, text) : null),
     acts.length ? h('div', {class: 'acts'}, acts) : null);
   if (kind === 'warn' || kind === 'err') el.setAttribute('role', 'alert');
@@ -5235,7 +5255,7 @@ function usage(used, total) {
 function field(label, input, help) { return h('label', {class: 'f'}, h('span', {}, label), input, help ? h('small', {class: 'help'}, help) : null); }
 /* ---------- dialogs (also the confirm-action pattern: simple / typed name) ---------- */
 function dialog(title, o, bodyFn, footerFn) {
-  const dlg = h('dialog', {'aria-labelledby': 'dlg-t'});
+  const dlg = h('dialog', {'aria-labelledby': 'dlg-t', class: o.wide ? 'wide' : null});
   const close = () => dlg.close();
   dlg.append(h('div', {class: 'dh' + (o.danger ? ' bad' : '')}, ic(o.icon || (o.danger ? 'octagon-x' : 'info')),
     h('div', {}, h('h3', {id: 'dlg-t'}, title), o.sub ? h('p', {}, o.sub) : null)));
@@ -5349,7 +5369,7 @@ async function showLogin() {
     try { const r = await api('POST', '/api/login', {username: u.value, password: p.value}); S.csrf = r.csrf; S.user = r.user; p.value = ''; await start(); }
     catch (e) { err.hidden = false; err.replaceChildren(ic('octagon-x'), e.message); busy(go, false); }
   }}, h('div', {class: 'brand2'}, logo('wordmark'), h('h1', {}, T('login.title')), host),
-    field(T('login.user'), tip(u, TIP('login.user'))), field(T('login.password'), h('div', {class: 'pw'}, p, eye)), err, go,
+    field(T('login.user'), u), field(T('login.password'), h('div', {class: 'pw'}, p, eye)), err, go,
     h('div', {class: 'row lrow'}, popover(T('login.cert'), [h('p', {}, TIP('login.cert')), fp], 'lock'), btn(T('nav.help'), {kind: 'ghost', size: 'sm', icon: 'life-buoy', onclick: () => helpDialog('sign-in')})));
   $('#root').replaceChildren(h('main', {class: 'lw', id: 'main'}, h('div', {}, h('div', {class: 'lc'}, form), h('div', {class: 'ver'}, 'synofurb-mgmt ' + S.version))));
   u.focus();
@@ -5766,13 +5786,13 @@ PAGES.about = async () => {
     try { await navigator.clipboard.writeText(diag()); toast(T('about.copied')); }
     catch (e) { const ta = h('textarea', {class: 'mono', rows: 8, readonly: true}, diag()); dialog(T('about.copy'), {icon: 'clipboard-copy'}, () => ta, close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))]); ta.select(); }
   }});
-  const lic = (id, name) => btn(T('about.licence'), {size: 'sm', kind: 'ghost', icon: 'scroll-text', onclick: () => dialog(name, {icon: 'scroll-text'}, () => h('pre', {class: 'code lic'}, LIC[id]), close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))])});
+  const lic = (id, name) => btn(T('about.licence'), {size: 'sm', kind: 'ghost', icon: 'scroll-text', onclick: () => dialog(name, {icon: 'scroll-text', wide: true}, () => h('pre', {class: 'code lic'}, LIC[id]), close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))])});
   const link = (k, key, icon) => h('a', {class: 'btn', href: LINKS[k], target: '_blank', rel: 'noopener noreferrer'}, ic(icon), T(key));
   const credits = [['Debian', 'DFSG', null], ['Lucide', 'ISC', 'Lucide'], ['Inter', 'OFL 1.1', 'Inter'], ['JetBrains Mono', 'OFL 1.1', 'JetBrains Mono'], ['Montserrat', 'OFL 1.1', null]];
   return h('div', {}, h('div', {class: 'ph'}, h('h1', {}, T('nav.about'))),
     h('section', {class: 'card'}, h('div', {class: 'cb about'}, logo('wordmark'), h('div', {class: 'row'}, chip(T('about.version'), me.version), chip(me.hostname)), h('div', {class: 'row'}, tip(copy, TIP('about.copy')), link('docs', 'about.docs', 'book-open'), link('src', 'about.source', 'external-link'), link('issue', 'about.issue', 'external-link')))),
-    h('details', {class: 'card'}, h('summary', {class: 'cb'}, T('about.credits')), h('div', {class: 'cb flush'}, table(['', '', ''], credits.map(([n, l, k]) => [n, l, k ? lic(k, n) : '']),
-      '', {})), h('div', {class: 'cb'}, popover(T('about.synodeb'), TIP('about.synodeb'), 'info'))));
+    h('details', {class: 'card'}, h('summary', {class: 'cb'}, T('about.credits')), h('ul', {class: 'cred'}, credits.map(([n, l, k]) => h('li', {}, h('b', {}, n), h('span', {class: 'chip'}, l), k ? lic(k, n) : null)),
+      h('li', {}, popover(T('about.synodeb'), TIP('about.synodeb'), 'info')))));
 };
 /*ENDPAGE*/
 /* ---------- copy, tooltips, menus, help (short / tip / help; word budgets are enforced by the tests) ---------- */
@@ -5860,11 +5880,11 @@ function levelPreview(level, sizes) {   // -> {usable, tolerance, ok, why}
   if (level === 'shr1' || level === 'shr2') {
     const d = {}; sizes.forEach((s, i) => { d['d' + i] = Math.max(0, s - 2 * MIBN); });
     const r = shrSlices(d, level);
-    return r ? {usable: r.usable, tolerance: level === 'shr1' ? 1 : 2, ok: r.usable > 0, shr: r} : {ok: false, why: level === 'shr1' ? 'Needs 2 disks' : 'Needs 4 disks'};
+    return r ? {usable: r.usable, tolerance: level === 'shr1' ? 1 : 2, ok: r.usable > 0, shr: r} : {ok: false, why: level === 'shr1' ? T('raid.need2') : T('raid.need4')};
   }
   const need = {raid0: 2, raid1: 2, raid5: 3, raid6: 4, raid10: 4}[level];
   if (n < need) return {ok: false, why: 'Needs ' + need + ' disks'};
-  if (level === 'raid10' && n % 2) return {ok: false, why: 'Needs an even number'};
+  if (level === 'raid10' && n % 2) return {ok: false, why: T('raid.needeven')};
   const u = {raid0: mn * n, raid1: mn, raid5: mn * (n - 1), raid6: mn * (n - 2), raid10: Math.floor(mn * n / 2)}[level];
   return {ok: true, usable: u, tolerance: {raid0: 0, raid1: n - 1, raid5: 1, raid6: 2, raid10: 1}[level]};
 }
@@ -5939,7 +5959,7 @@ function arrayState(a) {
     return [k === 'checking' || k === 'repairing' ? 'info' : 'warn', k, a.sync.action === 'check' ? 'search' : 'refresh-cw'];
   }
   if (a.inactive) return ['neutral', 'inactive', 'x'];
-  if (a.degraded) return ['err', 'degraded', 'alert'];
+  if (a.degraded) return ['err', 'degraded', 'triangle-alert'];
   return ['ok', 'clean', 'check'];
 }
 function memberChip(mb) {
@@ -5976,7 +5996,7 @@ function arrayCard(a, R) {
     Object.assign({label: T('act.stop'), icon: 'power', danger: true, onclick: flow('stop', T('act.stop') + ' ' + a.name, 'power', [], () => ({}), T('act.stop'))}, dis(a.in_use || a.busy || a.holds_system, T('raid.inuse'))),
   ];
   const cap = h('div', {class: 'kvrow'}, h('span', {class: 'muted'}, T('raid.size')), h('b', {}, fmtBytes(a.size)),
-    a.mismatch_cnt ? tip(badge('warn', T('raid.mismatch', {n: a.mismatch_cnt}), 'alert'), TIP('raid.mismatch')) : null,
+    a.mismatch_cnt ? tip(badge('warn', T('raid.mismatch', {n: a.mismatch_cnt}), 'triangle-alert'), TIP('raid.mismatch')) : null,
     a.bitmap ? tip(chip(T('raid.bitmap')), TIP('raid.bitmap')) : null);
   const prog = a.sync && a.sync.percent != null ? h('div', {class: 'pr big'}, bar(a.sync.percent, 100, kind === 'warn' ? 'warn' : ''), h('span', {class: 'num'}, [a.sync.percent + ' %', a.sync.speed_kbs ? Math.round(a.sync.speed_kbs / 1024) + ' MB/s' : null, a.sync.finish_min ? fmtDur(a.sync.finish_min * 60) : null].filter(Boolean).join(' - '))) : null;
   return h('section', {class: 'card arr' + (a.degraded ? ' bad' : ''), 'aria-label': a.name}, h('div', {class: 'ch'},
@@ -6015,7 +6035,7 @@ PAGES.raid = async () => {
   const wiz = h('div', {id: 'rwiz', hidden: !R.arrays.length ? false : true}); parts.push(wiz);
   parts.push(h('h2', {class: 'sec'}, T('raid.arrays'), tip(h('span', {class: 'badge neutral'}, String(R.arrays.length)), null)));
   parts.push(R.arrays.length ? h('div', {class: 'stack'}, R.arrays.map(a => arrayCard(a, R))) : h('div', {class: 'empty'}, ic('info'), T('raid.empty')));
-  if (R.shr_volumes.length) { parts.push(h('h2', {class: 'sec'}, T('raid.hybrid'), infoBtn('shr', 'Hybrid RAID'))); parts.push(h('div', {class: 'stack'}, R.shr_volumes.map(v => shrVolumeCard(v, R)))); }
+  if (R.shr_volumes.length) { parts.push(h('h2', {class: 'sec'}, T('raid.hybrid'), infoBtn('shr', T('raid.hybrid')))); parts.push(h('div', {class: 'stack'}, R.shr_volumes.map(v => shrVolumeCard(v, R)))); }
   raidWizard(wiz, R);
   return h('div', {}, parts);
 };
@@ -6068,7 +6088,7 @@ function raidWizard(host, R) {
     }
     stage.replaceChildren(stepsBar(), ...[c].flat(Infinity).filter(Boolean));
   }
-  const infoBtnInline = l => (l === 'shr1' || l === 'shr2') ? infoBtn('shr', 'Hybrid RAID') : null;
+  const infoBtnInline = l => (l === 'shr1' || l === 'shr2') ? infoBtn('shr', T('raid.hybrid')) : null;
   function shrTable(r) {
     return h('div', {class: 'cb flush shrt'}, h('div', {class: 'cap'}, T('shr.slices')), table([T('shr.slice'), T('raid.members'), T('raid.level'), T('raid.usable')],
       r.slices.map(s => ({cls: s.unusable ? 'attn' : '', cells: [s.index, s.members.length + '  ×  ' + fmtBytes(s.length), s.level ? LEVEL_NAME[s.level] : badge('neutral', T('shr.unused'), 'x'), s.level ? fmtBytes(s.usable) : '-']})), '', {right: [3]}));

@@ -29,11 +29,11 @@ function openPop(anchor,key){
 document.addEventListener('click',e=>{if(popEl&&!e.target.closest('.pop')&&!e.target.closest('[data-pop]'))closePop(false)},true);
 /* dialog and sheet with focus trap */
 const dlgStack=[];
-function trap(root,ev){if(ev.key!=='Tab')return;const f=$$('button:not([aria-disabled=true]),[href],input:not([type=hidden]),select,[tabindex]:not([tabindex="-1"])',root).filter(x=>x.offsetParent!==null);if(!f.length)return;const a=f[0],z=f[f.length-1];
+function trap(root,ev){if(ev.key!=='Tab')return;const f=$$('button:not([aria-disabled=true]),a[href],input:not([type=hidden]),select,[tabindex]:not([tabindex="-1"])',root).filter(x=>x.offsetParent!==null);if(!f.length)return;const a=f[0],z=f[f.length-1];
   if(ev.shiftKey&&document.activeElement===a){ev.preventDefault();z.focus()}else if(!ev.shiftKey&&document.activeElement===z){ev.preventDefault();a.focus()}else if(!root.contains(document.activeElement)){ev.preventDefault();a.focus()}}
 function openDialog({id,title,icon,body,buttons=[],wide=false,danger=false,onopen,onclose,initial}){
   hideTip();closePop(false);const prev=document.activeElement;
-  const sc=document.createElement('div');sc.className='scrim';sc.dataset.dlg=id;
+  const sc=document.createElement('div');sc.className='scrim';sc.dataset.dname=id;
   sc.innerHTML=`<div class="dlg ${wide?'wide':''} ${danger?'dng':''}" role="dialog" aria-modal="true" aria-labelledby="dt-${id}"><div class="dlg-h">${icon?ic(icon,'l'):''}<span id="dt-${id}">${title}</span></div><div class="dlg-b">${body}</div><div class="dlg-f">${buttons.map((b,i)=>`<button class="btn ${b.cls||''}" data-dbtn="${i}"${b.off?' aria-disabled="true"':''}${b.tip?tip(b.tip):''}>${b.icon?ic(b.icon):''}${b.label}</button>`).join('')}</div></div>`;
   L().appendChild(sc);const dlg=$('.dlg',sc);
   const close=()=>{sc.remove();dlgStack.pop();onclose&&onclose();if(prev&&document.contains(prev))prev.focus({preventScroll:true})};
