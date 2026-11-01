@@ -784,6 +784,16 @@ pub fn compare(nas_version: &str, bundled: &str) -> VersionRelation {
 
 // ---------------------------------------------------------------------------------------------- the files we ship
 
+/// `dir` is an offline bundle (has `manifest.json`), or the `mgmt/` folder of one (its parent has `manifest.json`): the bundle's root.
+fn offline_bundle_root(dir: &Path) -> Option<PathBuf> {
+    if dir.join(crate::offline::MANIFEST_FILE).is_file() {
+        return Some(dir.to_path_buf());
+    }
+    let parent = dir.parent()?;
+    (dir.file_name().is_some_and(|n| n == crate::offline::MGMT_SUBDIR) && parent.join(crate::offline::MANIFEST_FILE).is_file())
+        .then(|| parent.to_path_buf())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleFile {
     pub name: String,
@@ -843,9 +853,28 @@ impl MgmtBundle {
     }
 
     /// Load a management plane from a directory: either the files themselves (`synofurb_mgmt.py`, `synofurb-mgmt.service`, `VERSION`,
-    /// optional `README.md`) or an offline bundle / release folder that keeps them in a `mgmt/` subfolder. Symbolic links are refused.
+    /// optional `README.md`) or an offline bundle / release folder that keeps them in a `mgmt/` subfolder. For a real offline bundle
+    /// (`manifest.json` next to `mgmt/`), pass either the bundle or its `mgmt/` folder. Symbolic links are refused.
     /// A `MANIFEST.sha256` in that folder is checked; a mismatch is an error. Files outside the list above are ignored.
     pub fn from_dir(dir: &Path) -> Result<MgmtBundle> {
+        // An offline bundle (or its `mgmt/` folder): the engine also checks every file against the bundle's `manifest.json`, so a
+        // pushed update is exactly what `bundle create` put there.
+        if let Some(bundle_root) = offline_bundle_root(dir) {
+            let b = crate::offline::Bundle::open(&bundle_root)
+                .with_context(|| format!("{} looks like an offline bundle but cannot be opened", bundle_root.display()))?;
+            return match b.mgmt()? {
+                Some(m) => Ok(m),
+                None => bail!(
+                    "the offline bundle {} has no mgmt/ folder (it was built by an older synofurb). Run `synofurb bundle create` again with the same --out directory to add it, or point --from-bundle at a folder made by apps/mgmt-plane/tools/make-update-bundle.py",
+                    bundle_root.display()
+                ),
+            };
+        }
+        MgmtBundle::from_plain_dir(dir)
+    }
+
+    /// [`MgmtBundle::from_dir`] without the offline-bundle detection (the bundle code itself reads its `mgmt/` folder this way).
+    pub(crate) fn from_plain_dir(dir: &Path) -> Result<MgmtBundle> {
         let root = if dir.join("synofurb_mgmt.py").exists() || !dir.join("mgmt").is_dir() { dir.to_path_buf() } else { dir.join("mgmt") };
         if !root.is_dir() {
             bail!("{} is not a directory", dir.display());

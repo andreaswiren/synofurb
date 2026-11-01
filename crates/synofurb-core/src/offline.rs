@@ -9,6 +9,8 @@
 //! installer/<arch>/        kernel, initrd.gz, DTBs, plus the InRelease and SHA256SUMS the hashes came from
 //! installer/firmware.cpio.gz   optional, shared by all archs (non-free firmware for the installer)
 //! agent/agent-<arch>.{vmlinuz,initrd}   boot agent for internal-flash (DOM) units, optional
+//! mgmt/                    the management-app update bundle (`synofurb_mgmt.py`, `VERSION`, `README.md`, the unit file and
+//!                          `MANIFEST.sha256`): what `synofurb manage update --from-bundle <bundle>` pushes to a unit offline
 //! mirror/debian/dists/<suite>[-backports]/{InRelease,Release,Release.gpg,<comp>/.../Packages.{gz,xz}}
 //! mirror/debian/pool/...   only the .deb/.udeb files of the dependency closure
 //! ```
@@ -24,6 +26,7 @@
 use crate::config::{KernelChannel, valid_package_name};
 use crate::debian::{self, InstallerFiles};
 use crate::logs::Logger;
+use crate::manage::{MANIFEST_NAME as MGMT_MANIFEST, MgmtBundle};
 use crate::model::Arch;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -49,6 +52,8 @@ pub const COMPONENTS: [&str; 3] = ["main", "contrib", "non-free-firmware"];
 pub const MIRROR_ROOT: &str = "mirror";
 /// Name of the mirror inside [`MIRROR_ROOT`]; the NAS uses `/<token>/mirror/debian` as `mirror_dir`.
 pub const MIRROR_NAME: &str = "debian";
+/// The management-app update bundle inside a bundle (`mgmt/`), in the layout `synofurb_mgmt.py update --from` takes.
+pub const MGMT_SUBDIR: &str = "mgmt";
 
 // ============================================================================================================
 // Public data types
@@ -126,11 +131,18 @@ pub struct VerifyReport {
     pub extra: Vec<String>,
     /// Mismatches between a `Packages` index and the `InRelease` that lists it.
     pub chain_problems: Vec<String>,
+    /// Problems with the management-app update bundle in `mgmt/` (its own `MANIFEST.sha256` does not match its files, a file is
+    /// missing, or it disagrees with `manifest.json`). Empty when `mgmt/` is fine or the bundle has none.
+    pub mgmt_problems: Vec<String>,
+    /// Version of the management app in `mgmt/` when it verified.
+    pub mgmt_version: Option<String>,
+    /// Things worth saying that are not errors (a bundle from an older synofurb without `mgmt/`).
+    pub notes: Vec<String>,
 }
 
 impl VerifyReport {
     pub fn ok(&self) -> bool {
-        self.missing.is_empty() && self.changed.is_empty() && self.chain_problems.is_empty()
+        self.missing.is_empty() && self.changed.is_empty() && self.chain_problems.is_empty() && self.mgmt_problems.is_empty()
     }
 }
 
@@ -164,6 +176,8 @@ pub struct BundleInfo {
     pub pgp_verified: bool,
     pub extra_packages: Vec<String>,
     pub warnings: Vec<String>,
+    /// Version of the management-app update bundle in `mgmt/`; `None` for a bundle from a synofurb that did not add it.
+    pub mgmt_version: Option<String>,
 }
 
 pub fn human_bytes(b: u64) -> String {
@@ -203,6 +217,13 @@ impl BundleInfo {
                 "Debian InRelease PGP-verified when built"
             } else {
                 "built on the HTTPS + SHA-256 chain (no local PGP check); the NAS still verifies Debian's signatures"
+            }
+        ));
+        line(format!(
+            "Mgmt app:  {}",
+            match &self.mgmt_version {
+                Some(v) => format!("synofurb-mgmt {v} (for `synofurb manage update --from-bundle`)"),
+                None => "not included (built by an older synofurb; `manage update` then uses the copy built into synofurb)".into(),
             }
         ));
         for a in &self.archs {
@@ -1850,6 +1871,14 @@ pub fn create_bundle_from(
         }
     }
 
+    // -- 7b. the management-app update bundle (small, from the copy built into this program, always rewritten) -------
+    let mgmt = write_mgmt(out_dir).context("writing the management-app update bundle (mgmt/)")?;
+    log.info(format!(
+        "management app {} written to mgmt/ ({} files; `synofurb manage update --from-bundle` uses it offline)",
+        mgmt.version,
+        mgmt.files.len()
+    ));
+
     // -- 8. manifest -------------------------------------------------------------------------------------------------
     progress("manifest", 0.0);
     let files = index_tree(out_dir, &mut |f| progress("hashing the bundle", f))?;
@@ -1877,6 +1906,22 @@ pub fn create_bundle_from(
     log.info(format!("bundle ready: {} in {} files at {}", human_bytes(total_bytes), manifest.files.len(), out_dir.display()));
     progress("done", 1.0);
     Ok(manifest)
+}
+
+/// Write `mgmt/`: the management plane shipped in this program plus its `MANIFEST.sha256` (the layout of
+/// `apps/mgmt-plane/tools/make-update-bundle.py`, which the tests compare it with). An existing `mgmt/` is replaced.
+fn write_mgmt(out_dir: &Path) -> Result<MgmtBundle> {
+    let dir = out_dir.join(MGMT_SUBDIR);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).with_context(|| format!("replacing {}", dir.display()))?;
+    }
+    std::fs::create_dir_all(&dir)?;
+    let b = MgmtBundle::embedded();
+    for f in &b.files {
+        std::fs::write(dir.join(&f.name), &f.data).with_context(|| format!("writing {}", dir.join(&f.name).display()))?;
+    }
+    std::fs::write(dir.join(MGMT_MANIFEST), b.manifest())?;
+    Ok(b)
 }
 
 /// Read `Packages.gz` (or `Packages.xz`, the only compression `<suite>-backports` publishes) of one index directory;
@@ -2029,6 +2074,41 @@ impl Bundle {
         &self.manifest.suites
     }
 
+    /// Does the manifest list a `mgmt/` folder? (Bundles built before it existed have none and are still valid.)
+    pub fn has_mgmt(&self) -> bool {
+        let prefix = format!("{MGMT_SUBDIR}/");
+        self.manifest.files.iter().any(|f| f.path.starts_with(&prefix))
+    }
+
+    /// The bundle's `mgmt/` folder when it has one.
+    pub fn mgmt_dir(&self) -> Option<PathBuf> {
+        self.has_mgmt().then(|| self.root.join(MGMT_SUBDIR))
+    }
+
+    /// Load and **check** the management-app update bundle: `mgmt/MANIFEST.sha256` must exist and match the files, and every file
+    /// (and the manifest itself) must be what `manifest.json` recorded when the bundle was built. `Ok(None)` for a bundle without
+    /// `mgmt/`. This is what `manage update --from-bundle <bundle>` uses, so a pushed update is always the one that was bundled.
+    pub fn mgmt(&self) -> Result<Option<MgmtBundle>> {
+        let Some(dir) = self.mgmt_dir() else { return Ok(None) };
+        if !dir.join(MGMT_MANIFEST).is_file() {
+            bail!("{MGMT_SUBDIR}/{MGMT_MANIFEST} is missing; the management-app update bundle is incomplete");
+        }
+        let b = MgmtBundle::from_plain_dir(&dir).with_context(|| format!("the management-app update bundle in {}", dir.display()))?;
+        let recorded = |name: &str| self.manifest.files.iter().find(|f| f.path == format!("{MGMT_SUBDIR}/{name}"));
+        let mut hashes: Vec<(String, String)> = b.files.iter().map(|f| (f.name.clone(), f.sha256())).collect();
+        hashes.push((MGMT_MANIFEST.to_string(), sha256_file(&dir.join(MGMT_MANIFEST))?));
+        for (name, have) in hashes {
+            match recorded(&name) {
+                None => bail!("{MGMT_SUBDIR}/{name} is not in the bundle manifest (it was added after the bundle was built)"),
+                Some(e) if e.sha256 != have => {
+                    bail!("{MGMT_SUBDIR}/{name} does not match the bundle manifest (the bundle is damaged or was modified)")
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(Some(b))
+    }
+
     pub fn has_firmware(&self) -> bool {
         self.manifest.with_firmware && self.root.join("installer").join("firmware.cpio.gz").is_file()
     }
@@ -2123,6 +2203,19 @@ impl Bundle {
                 }
             }
         }
+        // the management-app update bundle: its own manifest, and agreement with manifest.json
+        if self.has_mgmt() {
+            match self.mgmt() {
+                Ok(Some(b)) => rep.mgmt_version = Some(b.version),
+                Ok(None) => {}
+                Err(e) => rep.mgmt_problems.push(format!("{e:#}")),
+            }
+        } else {
+            rep.notes.push(
+                "the bundle has no mgmt/ folder (built by an older synofurb). It installs and verifies as before, but `manage update --from-bundle` cannot take the management app from it; run `synofurb bundle create` again with the same directory to add it"
+                    .into(),
+            );
+        }
         progress("verifying", 1.0);
         Ok(rep)
     }
@@ -2165,6 +2258,10 @@ impl Bundle {
             pgp_verified: self.manifest.pgp_verified,
             extra_packages: self.manifest.extra_packages.clone(),
             warnings: self.manifest.warnings.clone(),
+            mgmt_version: self.mgmt_dir().and_then(|d| std::fs::read_to_string(d.join("VERSION")).ok()).and_then(|t| {
+                let v = t.lines().next().unwrap_or("").trim().to_string();
+                (!v.is_empty()).then_some(v)
+            }),
         }
     }
 
@@ -2195,6 +2292,9 @@ impl Bundle {
                 self.manifest.kernel.label(),
                 kernel.label()
             );
+        }
+        if self.has_mgmt() {
+            self.mgmt().context("the bundle's management-app update bundle is damaged; run `synofurb bundle verify`")?;
         }
         let missing: Vec<&str> = extra_packages.iter().filter(|p| !self.manifest.extra_packages.contains(p)).map(|s| s.as_str()).collect();
         if !missing.is_empty() {
@@ -2596,6 +2696,170 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A small but structurally complete bundle written without any network: one mirror file, optionally the `mgmt/` folder that
+    /// `create_bundle` writes, and a `manifest.json` that lists everything on disk.
+    fn tiny_bundle(tag: &str, with_mgmt: bool) -> (PathBuf, Bundle) {
+        let dir = std::env::temp_dir().join(format!("sf-tiny-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("mirror/debian/dists/trixie")).unwrap();
+        std::fs::write(dir.join("mirror/debian/dists/trixie/InRelease"), "Origin: Debian\nCodename: trixie\n").unwrap();
+        if with_mgmt {
+            write_mgmt(&dir).unwrap();
+        }
+        let mut m = sample_manifest();
+        m.files = index_tree(&dir, &mut |_| {}).unwrap();
+        write_manifest(&dir, &m).unwrap();
+        let b = Bundle::open(&dir).unwrap();
+        (dir, b)
+    }
+
+    /// Rewrite `mgmt/<name>` and keep `mgmt/MANIFEST.sha256` consistent with it (what a careless hand edit of a USB copy does),
+    /// so only the bundle's own `manifest.json` can notice.
+    fn edit_mgmt_consistently(dir: &Path, name: &str, data: &[u8]) {
+        std::fs::write(dir.join("mgmt").join(name), data).unwrap();
+        let mut b = MgmtBundle::embedded();
+        for f in &mut b.files {
+            if f.name == name {
+                f.data = data.to_vec();
+            }
+        }
+        std::fs::write(dir.join("mgmt").join(MGMT_MANIFEST), b.manifest()).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_carries_a_verified_management_app() {
+        let (dir, b) = tiny_bundle("mgmt", true);
+        for f in ["synofurb_mgmt.py", "VERSION", "README.md", "synofurb-mgmt.service", "MANIFEST.sha256"] {
+            assert!(b.manifest.files.iter().any(|e| e.path == format!("mgmt/{f}")), "mgmt/{f} is in manifest.json");
+        }
+        assert!(b.has_mgmt() && b.mgmt_dir() == Some(dir.join("mgmt")));
+        let rep = b.verify(&mut |_, _| {}).unwrap();
+        assert!(rep.ok() && rep.extra.is_empty() && rep.notes.is_empty(), "{rep:?}");
+        assert_eq!(rep.mgmt_version.as_deref(), Some(crate::manage::bundled_mgmt_version()));
+        // what the bundle gives `manage update` is exactly the copy built into this program
+        let m = b.mgmt().unwrap().unwrap();
+        assert_eq!(m.files, MgmtBundle::embedded().files);
+        assert_eq!(m.version, crate::manage::bundled_mgmt_version());
+        // `--from-bundle <bundle>` and `--from-bundle <bundle>/mgmt` both reach it
+        for d in [dir.clone(), dir.join("mgmt")] {
+            let l = MgmtBundle::from_dir(&d).unwrap();
+            assert_eq!((l.files.clone(), l.version.clone()), (m.files.clone(), m.version.clone()), "{}", d.display());
+            assert_eq!(l.source, crate::manage::BundleSource::Dir(dir.join("mgmt")));
+        }
+        // the offline plan: an empty unit gets an install of the bundled copy
+        let plan = crate::manage::plan_update(&crate::manage::InstalledInfo::default(), &MgmtBundle::from_dir(&dir).unwrap(), false);
+        assert!(plan.decision.applies(), "{plan:?}");
+        // info and the install-time check
+        let i = b.info();
+        assert_eq!(i.mgmt_version.as_deref(), Some(crate::manage::bundled_mgmt_version()));
+        assert!(i.render().contains(&format!("Mgmt app:  synofurb-mgmt {}", crate::manage::bundled_mgmt_version())), "{}", i.render());
+        assert!(b.check_for_install(Arch::X86_64, "trixie", KernelChannel::Stable, &["htop".into()], false).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bundle_without_mgmt_still_verifies_with_a_note() {
+        let (dir, b) = tiny_bundle("nomgmt", false);
+        assert!(!b.has_mgmt() && b.mgmt_dir().is_none() && b.mgmt().unwrap().is_none());
+        let rep = b.verify(&mut |_, _| {}).unwrap();
+        assert!(rep.ok(), "{rep:?}");
+        assert!(rep.mgmt_version.is_none() && rep.mgmt_problems.is_empty());
+        assert!(rep.notes.len() == 1 && rep.notes[0].contains("no mgmt/") && rep.notes[0].contains("bundle create"), "{:?}", rep.notes);
+        assert!(b.info().mgmt_version.is_none() && b.info().render().contains("Mgmt app:  not included"));
+        assert!(b.check_for_install(Arch::X86_64, "trixie", KernelChannel::Stable, &["htop".into()], false).is_ok());
+        // an old manifest.json is read as it always was (nothing in it names mgmt)
+        let raw = std::fs::read_to_string(dir.join(MANIFEST_FILE)).unwrap();
+        assert!(!raw.contains("mgmt"));
+        // `manage update --from-bundle <bundle>` says what to do instead of "not a management plane folder"
+        let e = format!("{:#}", MgmtBundle::from_dir(&dir).unwrap_err());
+        assert!(e.contains("no mgmt/ folder") && e.contains("bundle create") && e.contains("make-update-bundle"), "{e}");
+        // adding the folder by hand without a new manifest.json is not accepted as part of the bundle
+        write_mgmt(&dir).unwrap();
+        let rep = b.verify(&mut |_, _| {}).unwrap();
+        assert!(rep.ok() && rep.extra.iter().any(|e| e == "mgmt/VERSION"), "{rep:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn damage_to_the_management_app_is_found_by_verify_install_and_update() {
+        // 1. a file changed behind the back of both manifests
+        let (dir, b) = tiny_bundle("mgmt-bad1", true);
+        std::fs::write(dir.join("mgmt/synofurb_mgmt.py"), "print('evil')\n").unwrap();
+        let rep = b.verify(&mut |_, _| {}).unwrap();
+        assert!(!rep.ok() && rep.changed == vec!["mgmt/synofurb_mgmt.py"], "{rep:?}");
+        assert!(rep.mgmt_problems.len() == 1 && rep.mgmt_problems[0].contains("does not match"), "{:?}", rep.mgmt_problems);
+        assert!(rep.mgmt_version.is_none());
+        let e = format!("{:#}", b.check_for_install(Arch::X86_64, "trixie", KernelChannel::Stable, &[], false).unwrap_err());
+        assert!(e.contains("management-app") && e.contains("bundle verify"), "{e}");
+        for d in [dir.clone(), dir.join("mgmt")] {
+            assert!(MgmtBundle::from_dir(&d).is_err(), "{}", d.display());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // 2. the script and mgmt/MANIFEST.sha256 edited together: only manifest.json can tell
+        let (dir, b) = tiny_bundle("mgmt-bad2", true);
+        edit_mgmt_consistently(&dir, "synofurb_mgmt.py", b"print('patched')\n");
+        assert!(MgmtBundle::from_plain_dir(&dir.join("mgmt")).is_ok(), "the folder alone looks fine");
+        let rep = b.verify(&mut |_, _| {}).unwrap();
+        assert!(!rep.ok() && rep.mgmt_problems.iter().any(|p| p.contains("does not match the bundle manifest")), "{rep:?}");
+        let e = format!("{:#}", MgmtBundle::from_dir(&dir).unwrap_err());
+        assert!(e.contains("does not match the bundle manifest"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // 3. mgmt/MANIFEST.sha256 gone
+        let (dir, b) = tiny_bundle("mgmt-bad3", true);
+        std::fs::remove_file(dir.join("mgmt/MANIFEST.sha256")).unwrap();
+        let rep = b.verify(&mut |_, _| {}).unwrap();
+        assert!(!rep.ok() && rep.missing == vec!["mgmt/MANIFEST.sha256"], "{rep:?}");
+        assert!(rep.mgmt_problems.iter().any(|p| p.contains("MANIFEST.sha256 is missing")), "{:?}", rep.mgmt_problems);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // 4. a symbolic link in place of a file is not followed
+        #[cfg(unix)]
+        {
+            let (dir, b) = tiny_bundle("mgmt-bad4", true);
+            std::fs::remove_file(dir.join("mgmt/VERSION")).unwrap();
+            std::os::unix::fs::symlink("/etc/hostname", dir.join("mgmt/VERSION")).unwrap();
+            let rep = b.verify(&mut |_, _| {}).unwrap();
+            assert!(!rep.ok(), "{rep:?}");
+            assert!(MgmtBundle::from_dir(&dir).is_err());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// `create_bundle` writes what `apps/mgmt-plane/tools/make-update-bundle.py` writes (the documented way to make such a folder).
+    #[test]
+    fn mgmt_folder_equals_the_output_of_make_update_bundle() {
+        let tool = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/mgmt-plane/tools/make-update-bundle.py");
+        let out = std::env::temp_dir().join(format!("sf-mub-{}", std::process::id()));
+        let ours = std::env::temp_dir().join(format!("sf-mub-ours-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_dir_all(&ours);
+        std::fs::create_dir_all(&ours).unwrap();
+        let Ok(run) = std::process::Command::new("python3").arg("-I").arg(&tool).arg(&out).output() else {
+            eprintln!("python3 is not installed: skipping the comparison with make-update-bundle.py");
+            return;
+        };
+        assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+        write_mgmt(&ours).unwrap();
+        let names = |d: &Path| -> BTreeSet<String> {
+            std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect()
+        };
+        assert_eq!(names(&out), names(&ours.join("mgmt")));
+        for n in names(&out) {
+            let (a, b) = (std::fs::read_to_string(out.join(&n)).unwrap(), std::fs::read_to_string(ours.join("mgmt").join(&n)).unwrap());
+            if n == MGMT_MANIFEST {
+                // same lines; the order of the lines is not part of the format
+                assert_eq!(a.lines().collect::<BTreeSet<_>>(), b.lines().collect::<BTreeSet<_>>());
+            } else {
+                assert_eq!(a, b, "{n}");
+            }
+        }
+        assert_eq!(MgmtBundle::from_dir(&out).unwrap().files, MgmtBundle::from_dir(&ours.join("mgmt")).unwrap().files);
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_dir_all(&ours);
+    }
+
     #[test]
     fn info_renders_sizes() {
         let mut m = sample_manifest();
@@ -2950,6 +3214,9 @@ mod tests {
         let b = Bundle::open(&out).unwrap();
         let rep = b.verify(&mut |_, _| {}).unwrap();
         assert!(rep.ok() && rep.extra.is_empty(), "{rep:?}");
+        assert!(rep.notes.is_empty() && rep.mgmt_version.as_deref() == Some(crate::manage::bundled_mgmt_version()), "{rep:?}");
+        assert!(m.files.iter().any(|f| f.path == "mgmt/synofurb_mgmt.py") && m.files.iter().any(|f| f.path == "mgmt/MANIFEST.sha256"));
+        assert_eq!(b.mgmt().unwrap().unwrap().files, MgmtBundle::embedded().files);
         b.verify_installer(Arch::X86_64).unwrap();
         let inst = b.installer_files(Arch::X86_64).unwrap();
         assert!(inst.firmware.is_some() && inst.kernel.is_file());
