@@ -119,6 +119,12 @@ pub fn create(
     let total: u64 = m.files.iter().map(|f| f.size).sum();
     println!("bundle ready: {} ({}, {} files)", out.display(), human_bytes(total), m.files.len());
     println!("install with: synofurb install --offline-bundle {}   (the bundle can be copied to another computer)", out.display());
+    println!(
+        "management app {} is in {}/mgmt: synofurb manage update --host <ip> --from-bundle {}   (updates a unit offline)",
+        synofurb_core::manage::bundled_mgmt_version(),
+        out.display(),
+        out.display()
+    );
     Ok(())
 }
 
@@ -137,18 +143,28 @@ pub fn verify(dir: PathBuf) -> Result<()> {
     for c in &rep.chain_problems {
         println!("CHAIN    {c}");
     }
+    for c in &rep.mgmt_problems {
+        println!("MGMT     {c}");
+    }
     for e in &rep.extra {
         println!("EXTRA    {e}   (not in the manifest, never served as part of the bundle)");
     }
+    for n in &rep.notes {
+        println!("note: {n}");
+    }
     if rep.ok() {
+        if let Some(v) = &rep.mgmt_version {
+            println!("management app {v} in mgmt/ verified (usable with `synofurb manage update --from-bundle`)");
+        }
         println!("bundle OK");
         Ok(())
     } else {
         bail!(
-            "the bundle is damaged: {} missing, {} changed, {} index problems. Build it again with `synofurb bundle create` (only the broken files are downloaded)",
+            "the bundle is damaged: {} missing, {} changed, {} index problems, {} management-app problems. Build it again with `synofurb bundle create` (only the broken files are downloaded)",
             rep.missing.len(),
             rep.changed.len(),
-            rep.chain_problems.len()
+            rep.chain_problems.len(),
+            rep.mgmt_problems.len()
         )
     }
 }

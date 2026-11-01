@@ -641,13 +641,14 @@ pub enum ManageCmd {
     },
     /// Update the management plane on the unit: upload, verify, swap, restart the web UI, check. The unit rolls back by itself on failure
     #[command(
-        after_help = "Restarts the web UI for a few seconds. Disks, arrays, shares and the boot flash are not touched.\n\nEXAMPLES\n  synofurb-cli manage update --host 192.168.1.20\n  synofurb-cli manage update --host 192.168.1.20 --dry-run          # only say what would happen\n  synofurb-cli manage update --host 192.168.1.20 --yes              # no question\n  synofurb-cli manage update --host 10.0.0.5 --from-bundle /srv/bundle/mgmt   # an offline copy\n  synofurb-cli manage update --host 192.168.1.20 --force            # reinstall, or go back to an older version"
+        after_help = "Restarts the web UI for a few seconds. Disks, arrays, shares and the boot flash are not touched.\n\nEXAMPLES\n  synofurb-cli manage update --host 192.168.1.20\n  synofurb-cli manage update --host 192.168.1.20 --dry-run          # only say what would happen\n  synofurb-cli manage update --host 192.168.1.20 --yes              # no question\n  synofurb-cli manage update --host 10.0.0.5 --from-bundle /srv/bundle        # offline: the mgmt/ folder of an offline bundle\n  synofurb-cli manage update --host 192.168.1.20 --force            # reinstall, or go back to an older version"
     )]
     Update {
         #[command(flatten)]
         conn: Conn,
-        /// take the management plane from this folder instead of the copy built into this program: the files themselves, or an
-        /// offline bundle / release folder that has them in `mgmt/` (a MANIFEST.sha256 in it is checked)
+        /// take the management plane from this folder instead of the copy built into this program: an offline bundle made by
+        /// `bundle create` (or its `mgmt/` folder; checked against the bundle's manifest), or a folder with the files themselves
+        /// (a MANIFEST.sha256 in it is checked)
         #[arg(long, value_name = "DIR")]
         from_bundle: Option<PathBuf>,
         /// reinstall identical files, or install an older version than the unit has
@@ -722,7 +723,7 @@ pub enum LogsCmd {
 pub enum BundleCmd {
     /// Download everything an offline install needs into a directory
     Create(BundleCreateArgs),
-    /// Check a bundle against its manifest
+    /// Check a bundle against its manifest (including the management app in mgmt/)
     Verify {
         #[arg(value_name = "DIR")]
         dir: PathBuf,
