@@ -422,7 +422,7 @@ impl App {
             (vec![(q.raid, String::new())], label(&auto_plan))
         };
         let summary = format!(
-            "Wipe all \u{00b7} system {} GiB \u{00d7} {} \u{00b7} free {} % \u{00b7} Stable kernel \u{00b7} {}",
+            "Wipe all \u{00b7} system {} GiB \u{00d7} {} \u{00b7} free {} % \u{00b7} Newest kernel \u{00b7} {}",
             q.system_gib, q.copies, q.free_percent, summary_layout
         );
         let raids: Vec<DataRaid> = opts.iter().map(|o| o.0).collect();
@@ -469,7 +469,7 @@ impl App {
         self.form.copies = copies;
         self.form.system_gib = system_gib as f32;
         self.sys.boot = BootChoice::Auto;
-        self.form.kernel = synofurb_core::config::KernelChannel::Stable;
+        self.form.kernel = synofurb_core::config::KernelChannel::Newest;
         if let Some(ix) = synofurb_core::plan::DataRaid::ALL.iter().position(|r| *r == raid) {
             self.form.raid_select.update(cx, |s, cx| s.set_selected_index(Some(IndexPath::default().row(ix)), window, cx));
         }

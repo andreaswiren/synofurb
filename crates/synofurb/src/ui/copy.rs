@@ -295,7 +295,7 @@ mod strings {
         SYS_TIMEZONE: Label, "Time zone", "", "", "";
         SYS_CONSOLE: Label, "Console", "Read from DSM; a USB serial adapter also works.", "serial-console", "";
         SYS_WEB_UI: Label, "Web UI", "HTTPS on port 8443, self-signed certificate.", "first-install", "";
-        SYS_KERNEL: Label, "Kernel", "Stable is 6.12 LTS; Newest comes from backports.", "first-install",
+        SYS_KERNEL: Label, "Kernel", "Newest, the default, is Linux 7.x from backports; Stable is 6.12 LTS.", "first-install",
             "Newest falls back to Stable if it cannot be installed. Neither has run on this model.";
         SYS_STABLE: Label, "Stable", "", "", "";
         SYS_NEWEST: Label, "Newest", "", "", "";
@@ -622,7 +622,7 @@ mod strings {
 
         // ===================================================================== Help topics (bodies: markdown, at most 150 words)
         T_FIRST_INSTALL: Topic, "First install", "Scan, connect, inspect, plan, confirm.", "",
-            "1. Scan, pick your unit and connect. Enable SSH in DSM first (Control Panel, Terminal and SNMP).\n2. Inspect is read-only.\n3. Choose Boot manager to try the agent, or Install Debian.\n4. Plan storage, set the system options, then confirm.\n\nThe install takes about 25 minutes. Kernel: Stable is Debian's 6.12 LTS; Newest is 7.x from trixie-backports and falls back to Stable if it cannot be installed. Source: Online needs Internet on the NAS; Offline uses a bundle you downloaded in Settings. Afterwards the data array syncs for about 9 hours; the NAS works meanwhile with reduced protection. Copy the generated password on the last screen: synofurb does not keep it.";
+            "1. Scan, pick your unit and connect. Enable SSH in DSM first (Control Panel, Terminal and SNMP).\n2. Inspect is read-only.\n3. Choose Boot manager to try the agent, or Install Debian.\n4. Plan storage, set the system options, then confirm.\n\nThe install takes about 25 minutes. Kernel: Newest (the default) is 7.x from trixie-backports and falls back to Stable if it cannot be installed; Stable is Debian's 6.12 LTS. Source: Online needs Internet on the NAS; Offline uses a bundle you downloaded in Settings. Afterwards the data array syncs for about 9 hours; the NAS works meanwhile with reduced protection. Copy the generated password on the last screen: synofurb does not keep it.";
         T_COMPAT_STATUS: Topic, "Status meanings", "What Verified, Untested and the others mean.", "",
             "Each model has one status.\n\n**Verified**: maintainers or two independent people installed it, with logs. No model has this yet.\n\n**Community-reported**: at least one report exists. DS923+ has one, from another project.\n\n**Untested**: no report. The hardware class should work in theory; that is not a promise, and your install is the test.\n\n**Known issues**: reports show something fails or only partly works.\n\n**Unsupported**: Debian 13 cannot run on this hardware; synofurb refuses to install.\n\nOnly Unsupported blocks. The list ships with the app and refreshes from the project repository; offline it uses the cached copy.";
         T_BACKUPS: Topic, "Backups", "Your backup and what synofurb saves.", "",

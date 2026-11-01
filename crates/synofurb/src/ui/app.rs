@@ -343,7 +343,7 @@ impl App {
             copies_auto: true,
             copies: 2,
             system_gib: 0.0,
-            kernel: KernelChannel::Stable,
+            kernel: KernelChannel::Newest,
             plan: None,
             system_slider,
             system_range: (0.0, 0.0),
@@ -980,7 +980,7 @@ impl App {
         self.form.copies = default_system_copies(n, n).max(1);
         self.form.copies_auto = true;
         self.form.system_gib = 0.0;
-        self.form.kernel = KernelChannel::Stable;
+        self.form.kernel = KernelChannel::Newest;
         let serial = f.serial_console();
         self.set_input(&self.inp.serial_text.clone(), &serial_field_text(&serial), window, cx);
         self.set_input(&self.inp.serial_speed.clone(), &serial.speed.to_string(), window, cx);

@@ -240,7 +240,7 @@ mod tests {
             copies: None,
             raid: DataRaid::Auto,
             free_percent: 20,
-            kernel: KernelChannel::Stable,
+            kernel: KernelChannel::Newest,
             hostname: "nas".into(),
             username: "nasadmin".into(),
             authorize_key: "generate".into(),
@@ -271,7 +271,7 @@ mod tests {
     fn plan_form_is_read_only_and_has_no_gate() {
         let c = sample().plan_command();
         assert!(c.starts_with("synofurb-cli plan --host 192.168.1.40 --user admin"), "{c}");
-        assert!(c.contains("--mode wipe") && c.contains("--kernel stable") && c.contains("--system-gib 32"));
+        assert!(c.contains("--mode wipe") && c.contains("--kernel newest") && c.contains("--system-gib 32"));
         assert!(!c.contains("--confirm") && !c.contains("install"));
     }
 
@@ -312,7 +312,7 @@ mod tests {
         assert!(c.matches(&text, None));
         assert!(c.matches(&text.replace("--mode wipe", "--mode   wipe"), None), "spacing does not matter");
         assert!(!c.matches(&text.replace("--mode wipe", "--mode keep"), None), "a changed choice no longer matches");
-        assert!(!c.matches(&text.replace("--kernel stable", "--kernel newest"), None));
+        assert!(!c.matches(&text.replace("--kernel newest", "--kernel stable"), None));
         assert!(!c.matches(&format!("{text} --have-backup"), None), "an extra flag does not match");
         let confirmed = c.install_command(Some("ERASE DS918+ 3456"));
         assert!(c.matches(&confirmed, Some("ERASE DS918+ 3456")));
@@ -345,7 +345,7 @@ mod tests {
         c.keep_mode = true;
         c.keep_arrays = vec!["md2".into(), "md3".into()];
         c.copies = Some(3);
-        c.kernel = KernelChannel::Newest;
+        c.kernel = KernelChannel::Stable;
         c.method = BootChoice::Kit;
         c.kit_dir = Some("/tmp/kit dir".into());
         c.bundle = Some("/data/bundle".into());
@@ -355,7 +355,7 @@ mod tests {
             "--mode keep",
             "--keep md2,md3",
             "--copies 3",
-            "--kernel newest",
+            "--kernel stable",
             "--method kit",
             "--kit-dir '/tmp/kit dir'",
             "--source offline",
