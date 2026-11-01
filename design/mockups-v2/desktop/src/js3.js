@@ -8,7 +8,7 @@ const instN=()=>S.inst.step>=4?Math.min(12,S.inst.step-3):0;
 /* Risk Tag = ONE pure function of the unit's facts (S.F), never of the screen name. Settings and About are not about a unit: no Tag. */
 function syncFacts(){const F=S.F,s=S.screen;
   if(s==='install'){if(S.inst.step>=1)F.flash=true;if(instN()>=3)F.disks=true;if(S.inst.step>=18){F.debian=true;F.dflt='debian'}}
-  if(s==='failed'&&S.fail){F.flash=true;if(S.fail.kind!=='stopped')F.fail=true;if(S.fail.kind==='post')F.disks=true}
+  if(s==='failed'&&S.fail){F.flash=S.fail.kind!=='backup'||F.flash;if(S.fail.kind!=='stopped')F.fail=true;if(S.fail.kind==='post')F.disks=true;if(S.fail.kind==='agent'){F.agentUnknown=S.fail.phase!=='back';if(S.fail.phase==='back'){F.dflt='dsm'}}}
   if(s==='done'){F.flash=true;F.disks=true;F.debian=true;F.dflt='debian'}
   if(s==='boot'&&S.boot.done)F.flash=true}
 function risk(){const s=S.screen,F=S.F;if(['settings','about'].includes(s))return null;
@@ -19,6 +19,7 @@ function risk(){const s=S.screen,F=S.F;if(['settings','about'].includes(s))retur
     return{t:'Debian running',v:'ok',i:'circle-check'}}
   if(F.debian&&!F.fail)return{t:'Debian running',v:'ok',i:'circle-check'};
   if(F.disks)return{t:'Disks changed',v:'warn',i:'triangle-alert'};
+  if(F.agentUnknown)return{t:'Boot unconfirmed',v:'warn',i:'circle-question-mark'};   // the engine resets nothing after the 10 minute wait: DSM as default is NOT confirmed
   if(F.fail)return{t:'Failed safely',v:'warn',i:'shield-check'};
   if(F.flash)return{t:'Flash changed',v:'warn',i:'triangle-alert'};
   if(['plan','system','setup','confirm'].includes(s))return{t:'Plan only',v:'',i:'square-pen'};
@@ -41,8 +42,8 @@ function titlebar(){return `<header class="titlebar"><div class="brand"><span cl
  <div class="wc" aria-hidden="true"><i>${ic('minus','s')}</i><i>${ic('square','s')}</i><i>${ic('x','s')}</i></div></header>`}
 const F=(left,right)=>`<footer class="foot">${left||''}<span class="sp"></span>${right||''}</footer>`;
 /* A control that is unavailable keeps the widget's disabled look and stays focusable; the reason is a visible info icon and a popover (GPUI tooltips are hover only, a disabled Button cannot be focused). */
-const btn=(label,{cls='',icon='',go='',act='',off='',tipT='',id='',trail=''}={})=>{
-  const b=`<button class="btn ${cls}"${id?` id="${id}"`:''}${go?` data-go="${go}"`:''}${act?` data-act="${act}"`:''}${off?` aria-disabled="true" tabindex="-1" data-reason="${esc(off)}"`:''}${(!off&&tipT)?tip(tipT):''}>${icon?ic(icon):''}${label}${trail?ic(trail):''}</button>`;
+const btn=(label,{cls='',icon='',go='',act='',off='',tipT='',id='',trail='',aria=''}={})=>{
+  const b=`<button class="btn ${cls}"${aria?` aria-label="${esc(aria)}"`:''}${id?` id="${id}"`:''}${go?` data-go="${go}"`:''}${act?` data-act="${act}"`:''}${off?` aria-disabled="true" tabindex="-1" data-reason="${esc(off)}"`:''}${(!off&&tipT)?tip(tipT):''}>${icon?ic(icon):''}${label}${trail?ic(trail):''}</button>`;
   return off?`<span class="dbw">${b}<button type="button" class="ib" data-reason="${esc(off)}" aria-label="Why unavailable"${tip('Why unavailable')}>${ic('info','s')}</button></span>`:b};
 const back=(go)=>btn('Back',{cls:'ghost',icon:'arrow-left',go});
 const cmdBtn=()=>`<button class="btn ghost" data-act="cmd"${tip('Shows the equivalent command for the plan.')}>${ic('terminal')}Command</button>`;
@@ -57,7 +58,7 @@ function find(){
   let body;
   if(S.scan==='loading') body=`<div class="card"><table class="tbl"><tbody>${[1,2,3].map(()=>`<tr><td class="rc"></td>${[70,60,40,50,60].map(w=>`<td><div class="skel" style="width:${w}%"></div></td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
   else if(!list.length) body=`<div class="card"><div class="empty"><div class="big">${ic('search','xl')}</div><h2>No NAS found</h2><div class="row"><button class="btn" data-act="rescan">${ic('refresh-cw')}Scan again</button><button class="btn" data-dlg="addip">${ic('plus')}Add by IP</button><button class="link" data-help-open="troubleshooting">Help</button></div></div></div>`;
-  else body=`<div class="card cardtbl"><table class="tbl"><thead><tr><th class="rc"></th><th>Model</th><th>Address</th><th>DSM</th><th class="hide-md">Found by ${infoBtn('found','Scan details')}</th><th>Status ${infoBtn('status','Status')}</th></tr></thead><tbody>${list.map(u=>`<tr tabindex="0" role="row" data-sel="${u.id}" class="${S.sel===u.id?'sel':''}" aria-selected="${S.sel===u.id}"><td class="rc"><span class="rad" aria-hidden="true"><i></i></span></td><td><b>${d(u.model)}</b> ${mono('SN '+u.sn)}${twinOf(u)?' '+tag('Twin',{v:'warn',i:'triangle-alert',t:'Another '+u.model+' is on the network; check serials.'}):''}${S.boot.unit===u.id?' '+tag('Boot agent installed',{v:'info',i:'terminal',t:'Our entries are on the boot flash; remove them under Recovery.'}):''}</td><td>${mono(u.ip)}</td><td>${d(u.dsm)}</td><td class="hide-md">${d(u.found.join(' · '))}</td><td>${compatTag(u.compat)}</td></tr>`).join('')}</tbody></table></div>`;
+  else body=`<div class="card cardtbl"><table class="tbl"><thead><tr><th class="rc"></th><th>Model</th><th>Address</th><th>DSM</th><th class="hide-md">Found by ${infoBtn('found','Scan details')}</th><th>Status ${infoBtn('status','Status')}</th></tr></thead><tbody>${list.map(u=>`<tr tabindex="0" role="row" data-sel="${u.id}" class="${S.sel===u.id?'sel':''}" aria-selected="${S.sel===u.id}"><td class="rc"><span class="rad" aria-hidden="true"><i></i></span></td><td><b>${d(u.model)}</b> ${mono('SN '+u.sn)}</td><td>${mono(u.ip)}</td><td>${d(u.dsm)}</td><td class="hide-md">${d(u.found.join(' · '))}</td><td><div class="row wrap" style="gap:.25rem">${compatTag(u.compat)}${twinOf(u)?tag('Twin',{v:'warn',i:'triangle-alert',t:'Another '+u.model+' is on the network; check serials.'}):''}${S.boot.unit===u.id?tag('Boot agent',{v:'info',i:'terminal',t:'Boot agent installed: our entries are on the boot flash; remove them under Recovery.'}):''}</div></td></tr>`).join('')}</tbody></table></div>`;
   const deb=`<div class="col"><h2>Running Debian</h2><div class="card cardtbl"><table class="tbl sm"><tbody>${DEBIAN_UNITS.map(u=>`<tr><td><b>${d(u.model)}</b> ${d('attic')}</td><td>${mono(u.ip)}</td><td>${d(u.os+' · '+u.kernel)}</td><td class="r"><button class="btn ghost sm" data-act="manage">Manage</button></td></tr>`).join('')}</tbody></table></div></div>`;
   const upd=S.update&&S.update.state==='available';
   return {html:`<div class="page"><div class="ph"><div><h1 class="t-title">Find NAS</h1><div class="sub t-sub">Select the unit to work on.</div></div><span class="sp"></span><div class="inp" style="width:12.5rem">${ic('search','s')}<input id="flt" placeholder="Filter units" value="${esc(S.filter)}" aria-label="Filter units"></div>
