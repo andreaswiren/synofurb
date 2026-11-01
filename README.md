@@ -44,7 +44,7 @@ synofurb fetch-installer amd64|arm64|armhf             # download + verify the D
 | Network | systemd-networkd: **DHCPv4 + DHCPv6 + SLAAC** on all Ethernet ports, MAC-based DHCP client id, mDNS (`<host>.local`) |
 | Serial console | kernel + GRUB + login on the port DSM used (from its kernel command line, default `ttyS0` 115200 8N1) **and** on any USB serial adapter the moment it is plugged in (udev -> `serial-getty`) |
 | Local console | VGA/HDMI text console, USB keyboard/mouse (USB HID + xHCI in the initramfs, `gpm` for the mouse) |
-| Management plane | `https://<ip>:8443`, see [payload/mgmt/README.md](payload/mgmt/README.md) |
+| Management plane | `https://<ip>:8443`, see [apps/mgmt-plane/README.md](apps/mgmt-plane/README.md) |
 | Updates | `unattended-upgrades` for Debian security fixes (never reboots on its own) |
 
 ### Management plane
@@ -171,10 +171,10 @@ Done for real in the development environment (no Synology hardware available):
 ```
 cargo build --release          # Rust 1.85+; Linux needs the usual X11/Wayland + OpenGL runtime libs
 cargo test --workspace
-python3 -m unittest discover -s payload/mgmt/tests
+python3 -m unittest discover -s apps/mgmt-plane/tests
 ```
 
-Layout: `crates/synofurb-core` (engine, no GUI), `crates/synofurb` (GUI + CLI), `payload/` (everything copied to the NAS),
+Layout: `crates/synofurb-core` (engine, no GUI), `crates/synofurb` (GUI + CLI), `apps/mgmt-plane` (the NAS web UI, its own project), `payload/` (files copied to the NAS),
 `scripts/`, `docs/`.
 
 ## Roadmap / known gaps

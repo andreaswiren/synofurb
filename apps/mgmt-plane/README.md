@@ -89,7 +89,7 @@ Configuration (all optional) in `/etc/synofurb/mgmt.json`: `port`, `bind`, `idle
 ## Development without root (dry run)
 
 ```sh
-cd payload/mgmt
+cd apps/mgmt-plane
 python3 synofurb_mgmt.py --dry-run --no-tls --port 8080          # sandbox root in a temp dir; login admin / admin
 python3 synofurb_mgmt.py --dry-run --root /tmp/fv --port 8443    # with TLS, files under /tmp/fv
 # open http://127.0.0.1:8080/

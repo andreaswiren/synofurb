@@ -18,6 +18,13 @@ macro_rules! asset {
     };
 }
 
+/// The management plane is its own project in the monorepo (`apps/mgmt-plane`); it is bundled under `mgmt/`.
+macro_rules! mgmt_asset {
+    ($bundle:literal, $file:literal) => {
+        ($bundle, include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/mgmt-plane/", $file)))
+    };
+}
+
 /// (path inside the bundle, content, mode)
 const STATIC_FILES: &[(&str, &str)] = &[
     asset!("chroot-setup.sh"),
@@ -31,9 +38,9 @@ const STATIC_FILES: &[(&str, &str)] = &[
     asset!("files/etc/systemd/system/synofurb-firstboot.service"),
     asset!("files/usr/local/sbin/synofurb-firstboot"),
     asset!("files/usr/local/sbin/synofurb-uboot-update"),
-    asset!("mgmt/synofurb_mgmt.py"),
-    asset!("mgmt/synofurb-mgmt.service"),
-    asset!("mgmt/README.md"),
+    mgmt_asset!("mgmt/synofurb_mgmt.py", "synofurb_mgmt.py"),
+    mgmt_asset!("mgmt/synofurb-mgmt.service", "synofurb-mgmt.service"),
+    mgmt_asset!("mgmt/README.md", "README.md"),
 ];
 
 pub struct Payload {

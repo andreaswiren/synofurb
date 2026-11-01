@@ -24,10 +24,10 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
       - run: shellcheck -s dash payload/chroot-setup.sh payload/files/usr/local/sbin/* 
       - run: shellcheck -s sh scripts/build-kexec.sh
-      - run: python3 -m unittest discover -s payload/mgmt/tests -v
+      - run: python3 -m unittest discover -s apps/mgmt-plane/tests -v
         working-directory: .
         env:
-          PYTHONPATH: payload/mgmt
+          PYTHONPATH: apps/mgmt-plane
   release-binaries:
     if: startsWith(github.ref, 'refs/tags/v')
     strategy:
