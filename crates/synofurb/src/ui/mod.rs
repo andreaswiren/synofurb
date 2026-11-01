@@ -33,6 +33,7 @@ pub mod format;
 pub mod icons;
 pub mod kit;
 pub mod logview;
+pub mod mgmt;
 mod overlays;
 pub mod raid;
 mod render;
@@ -68,7 +69,7 @@ pub fn run(demo: Option<&str>) -> anyhow::Result<()> {
         render::bind_keys(cx);
         screens::logviewer::bind_keys(cx);
         let dark = settings.theme.is_dark(theme::os_is_dark(cx));
-        theme::apply(dark, scale, cx);
+        theme::apply(dark, scale, settings.accent, cx);
 
         // SYNOFURB_WINDOW=960x640 opens at a given size (used to test the minimum size).
         let (w, h) = std::env::var("SYNOFURB_WINDOW")

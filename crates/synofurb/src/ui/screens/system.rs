@@ -16,7 +16,7 @@ use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::form::Form;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{Sizable, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, IntoElement, Window, div, px};
 use synofurb_core::config::{KernelChannel, generate_password, validate_hostname, validate_ssh_public_key, validate_username};

@@ -1,7 +1,7 @@
 //! Small per-user UI preferences (theme, text size, update channel), stored as JSON next to the inventory.
 //! Pure data + file IO; no GPUI types, so it is unit-tested directly.
 
-use super::theme::{TextScale, ThemeChoice};
+use super::theme::{Accent, TextScale, ThemeChoice};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 pub struct UiSettings {
     pub theme: ThemeChoice,
     pub text_scale: TextScale,
+    pub accent: Accent,
     /// `stable` or `prerelease` (matches `updater::Channel`).
     pub update_channel: String,
     /// Look for a new release once at startup (and daily while running).
@@ -33,6 +34,7 @@ impl Default for UiSettings {
         UiSettings {
             theme: ThemeChoice::System,
             text_scale: TextScale::Default,
+            accent: Accent::Purple,
             update_channel: "stable".into(),
             check_updates: true,
             skip_version: None,

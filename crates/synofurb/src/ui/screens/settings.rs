@@ -41,6 +41,7 @@ impl App {
         let app = cx.entity();
         let theme_ix = ThemeChoice::ALL.iter().position(|t| *t == self.settings.theme).unwrap_or(0);
         let scale_ix = TextScale::ALL.iter().position(|t| *t == self.settings.text_scale).unwrap_or(0);
+        let accent_ix = crate::ui::theme::Accent::ALL.iter().position(|a| *a == self.settings.accent).unwrap_or(0);
         let beta = self.settings.update_channel == "prerelease";
         let reduce = self.settings.reduce_motion;
         let check = self.settings.check_updates;
@@ -87,12 +88,25 @@ impl App {
                                 a.settings.text_scale = TextScale::ALL[ix];
                                 a.save_settings();
                                 let dark = a.settings.theme.is_dark(crate::ui::theme::os_is_dark(cx));
-                                crate::ui::theme::apply(dark, a.settings.text_scale, cx);
+                                crate::ui::theme::apply(dark, a.settings.text_scale, a.settings.accent, cx);
                                 let _ = &window;
                                 cx.notify();
                             })
                         },
                     )
+                    .into_any_element()
+                }))
+                .item(row(&app, "s-accent", &copy::SET_ACCENT, move |app, _, _| {
+                    let app = app.clone();
+                    kit::segmented("accent", &["Purple", "Blue", "Green", "Amber", "Rose"], accent_ix, move |ix, _, cx| {
+                        app.update(cx, |a, cx| {
+                            a.settings.accent = crate::ui::theme::Accent::ALL[ix];
+                            a.save_settings();
+                            let dark = a.settings.theme.is_dark(crate::ui::theme::os_is_dark(cx));
+                            crate::ui::theme::apply(dark, a.settings.text_scale, a.settings.accent, cx);
+                            cx.notify();
+                        })
+                    })
                     .into_any_element()
                 }))
                 .item(row(&app, "s-motion", &copy::SET_MOTION, move |app, _, _| {

@@ -29,7 +29,16 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 31] = [
+pub const DEMO_SCREEN_NAMES: [&str; 40] = [
+    "manage-rebuild",
+    "manage-faildisk",
+    "manage-services",
+    "manage-unreachable",
+    "manage-update",
+    "manage-storage",
+    "manage-storage-degraded",
+    "manage-storage-hybrid",
+    "manage-health-ok",
     "recovery-fresh",
     "recovery-debian",
     "recovery-agent",
@@ -95,6 +104,11 @@ pub struct DemoTarget {
     pub keep: bool,
     /// Unit facts the Recovery and Manage demos start from.
     pub fixture: Fixture,
+    /// Manage: which sample health report, which tab, and the update row's state.
+    pub health: super::mgmt::DemoHealth,
+    pub tab: usize,
+    pub hybrid_view: bool,
+    pub updating: bool,
 }
 
 /// What a demo run pretends to know about the unit (drives the risk Tag and the Recovery rows).
@@ -112,7 +126,18 @@ pub enum Fixture {
 
 impl DemoTarget {
     fn at(screen: Screen) -> DemoTarget {
-        DemoTarget { screen, overlay: Overlay::None, past_no_return: false, offline: false, keep: false, fixture: Fixture::None }
+        DemoTarget {
+            screen,
+            overlay: Overlay::None,
+            past_no_return: false,
+            offline: false,
+            keep: false,
+            fixture: Fixture::None,
+            health: super::mgmt::DemoHealth::Ok,
+            tab: 0,
+            hybrid_view: false,
+            updating: false,
+        }
     }
 
     /// Parses a `--screen` value. The old names (`layout`, `account`, `find`, ...) keep working.
@@ -142,7 +167,17 @@ impl DemoTarget {
             "recovery-debian" => DemoTarget { fixture: Fixture::Debian, ..DemoTarget::at(Screen::Recover) },
             "recovery-agent" => DemoTarget { fixture: Fixture::Agent, ..DemoTarget::at(Screen::Recover) },
             "recover" | "recovery" | "restore" => DemoTarget { fixture: Fixture::Failed, ..DemoTarget::at(Screen::Recover) },
-            "manage" => DemoTarget::at(Screen::Manage),
+            "manage" | "manage-health-ok" => DemoTarget::at(Screen::Manage),
+            "manage-rebuild" => DemoTarget { health: super::mgmt::DemoHealth::Rebuild, ..DemoTarget::at(Screen::Manage) },
+            "manage-faildisk" => DemoTarget { health: super::mgmt::DemoHealth::FailedDisk, ..DemoTarget::at(Screen::Manage) },
+            "manage-services" => DemoTarget { health: super::mgmt::DemoHealth::ServicesDown, ..DemoTarget::at(Screen::Manage) },
+            "manage-unreachable" => DemoTarget { health: super::mgmt::DemoHealth::Unreachable, ..DemoTarget::at(Screen::Manage) },
+            "manage-update" => DemoTarget { updating: true, ..DemoTarget::at(Screen::Manage) },
+            "manage-storage" => DemoTarget { tab: 1, ..DemoTarget::at(Screen::Manage) },
+            "manage-storage-degraded" => {
+                DemoTarget { tab: 1, health: super::mgmt::DemoHealth::FailedDisk, ..DemoTarget::at(Screen::Manage) }
+            }
+            "manage-storage-hybrid" => DemoTarget { tab: 1, hybrid_view: true, ..DemoTarget::at(Screen::Manage) },
             "help" => DemoTarget { overlay: Overlay::Help(None), ..DemoTarget::at(Screen::Inventory) },
             "help-topic" => DemoTarget { overlay: Overlay::Help(Some("recovery")), ..DemoTarget::at(Screen::Confirm) },
             "dlg-recovery" => DemoTarget { overlay: Overlay::RecoveryDialog, ..DemoTarget::at(Screen::Confirm) },

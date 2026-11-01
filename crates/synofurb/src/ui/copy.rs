@@ -133,16 +133,16 @@ mod strings {
         STEP_CONFIRM: Label, "Confirm", "", "", "";
         STEP_INSTALL: Label, "Install", "", "", "";
         STEP_DONE: Label, "Done", "", "", "";
-        RISK_READ_ONLY: Label, "Read-only", "Nothing to undo.", "recovery", "";
-        RISK_PLAN_ONLY: Label, "Plan only", "Nothing to undo.", "recovery", "";
-        RISK_FLASH_CHANGED: Label, "Flash changed", "Power-cycle or Cancel: DSM boots. Our entries stay until removed.", "recovery", "";
-        RISK_DISKS_CHANGED: Label, "Disks changed", "Rescue shell 15 min, then the DSM loader; no data promise.", "recovery", "";
-        RISK_FAILED_SAFELY: Label, "Failed safely", "DSM boots again by itself.", "recovery", "";
-        RISK_DEBIAN_RUNNING: Label, "Debian running", "Recovery stays under Manage.", "recovery", "";
-        RISK_BOOT_UNCONFIRMED: Label, "Boot unconfirmed", "DSM may not return by itself: see Help, Recovery.", "recovery", "";
-        RISK_NEEDS_ATTENTION: Label, "Needs attention", "Recovery stays under Manage. Repair the flagged item first.", "recovery", "";
-        RISK_CRITICAL: Label, "Critical", "Recovery stays under Manage. Replace the failed disk soon.", "recovery", "";
-        RISK_UNREACHABLE: Label, "Unreachable", "Check power and network; Recovery stays under Manage.", "recovery", "";
+        RISK_READ_ONLY: Label, "Read-only", "", "recovery", "Nothing to undo.";
+        RISK_PLAN_ONLY: Label, "Plan only", "", "recovery", "Nothing to undo.";
+        RISK_FLASH_CHANGED: Label, "Flash changed", "", "recovery", "Power-cycle or Cancel: DSM boots. Our entries stay until removed.";
+        RISK_DISKS_CHANGED: Label, "Disks changed", "", "recovery", "Rescue shell 15 min, then the DSM loader; no data promise.";
+        RISK_FAILED_SAFELY: Label, "Failed safely", "", "recovery", "DSM boots again by itself.";
+        RISK_DEBIAN_RUNNING: Label, "Debian running", "", "recovery", "Recovery stays under Manage.";
+        RISK_BOOT_UNCONFIRMED: Label, "Boot unconfirmed", "", "recovery", "DSM may not return by itself: see Help, Recovery.";
+        RISK_NEEDS_ATTENTION: Label, "Needs attention", "", "recovery", "Recovery stays under Manage. Repair the flagged item first.";
+        RISK_CRITICAL: Label, "Critical", "", "recovery", "Recovery stays under Manage. Replace the failed disk soon.";
+        RISK_UNREACHABLE: Label, "Unreachable", "", "recovery", "Check power and network; Recovery stays under Manage.";
         WAY_BACK: Button, "Way back", "What returns the unit to DSM from here.", "recovery", "";
         TAG_DEMO: Label, "Demo", "Built-in sample unit; nothing touches the network or any disk.", "", "";
         TAG_OFFLINE: Label, "Offline", "Compatibility list is {n} days old; LAN scan still works.", "offline-mode", "";
@@ -328,7 +328,7 @@ mod strings {
         CONF_UNTESTED: Label, "Untested", "No one has reported this model; your install is the test.", "compat-status", "";
         CONF_ABOUT_TIME: Label, "About 25 min", "Keep this computer awake and the NAS online.", "first-install",
             "Stay awake and on the network.\n\nThe NAS needs Internet unless Source is Offline.\n\nUnplug USB and eSATA disks.\n\nThe first RAID sync takes about 9 hours.";
-        CONF_BACKUP: Label, "I have a tested backup", "", "", "";
+        CONF_BACKUP: Prose, "I have a tested backup", "", "", "";
         CONF_LOSS: Label, "I accept data loss", "", "", "";
         CONF_UNIT: Label, "This is {unit}", "Compare the identity line with the label on the NAS.", "", "";
         CONF_PHRASE: Label, "Type phrase", "Case matters; pasting is fine.", "", "";
@@ -428,6 +428,7 @@ mod strings {
         SET_SYSTEM: Label, "System", "", "", "";
         SET_LIGHT: Label, "Light", "", "", "";
         SET_DARK: Label, "Dark", "", "", "";
+        SET_ACCENT: Label, "Accent", "The colour of buttons, links and focus.", "", "";
         SET_TEXT_SIZE: Label, "Text size", "Scales the whole window.", "", "";
         SET_DEFAULT: Label, "Default", "", "", "";
         SET_LARGE: Label, "Large", "", "", "";
@@ -454,8 +455,20 @@ mod strings {
             "The whole flash is saved to this computer first and verified.";
         BM_DISKS_UNTOUCHED: Label, "Disks untouched", "No partition table is written.", "boot-manager", "";
         BM_SSH_KEY: Label, "SSH key", "The key pair is created on this computer.", "first-install", "";
-        BM_LOGIN_TIMEOUT: Label, "Login timeout", "The agent reboots to DSM after 30 minutes without a login.", "boot-manager", "";
+        BM_LOGIN_TIMEOUT: Label, "Login timeout", "The agent reboots to DSM after 60 minutes without a login.", "boot-manager", "";
         BM_OTHER_OS: Prose, "Other OS: power cycle returns.", "After kexec nothing of ours runs; power-cycling returns to the default.", "boot-manager", "";
+        BM_AFTER_OS: Prose, "After another OS starts, only a power cycle returns.", "", "boot-manager", "";
+        BM_STEP1: Label, "Boot flash backup", "", "", "";
+        BM_STEP2: Label, "Agent added", "", "", "";
+        BM_STEP3: Label, "Reboot into the agent", "", "", "";
+        BM_STEP4: Label, "Agent answers", "", "", "";
+        BM_READY: Label, "Agent ready", "", "", "";
+        BM_WATCHDOG: Label, "60 min watchdog", "The agent reboots to DSM after 60 minutes without a login.", "boot-manager", "";
+        BM_BACK_IN_DSM: Label, "Back in DSM.", "Our entries remain on the flash.", "recovery", "";
+        BM_RETURN: Button, "Return to DSM", "Sets DSM as the default and reboots the unit.", "recovery", "";
+        BM_DONE: Button, "Done", "", "", "";
+        BM_CANCEL_WHY: Prose, "Not possible after the first flash write.", "", "", "";
+        DLG_BM_CONFIRM: Dialog, "Install the agent?", "Entries and files are added; DSM's entry stays.", "boot-manager", "The whole boot flash is saved to this computer first and verified. Then the agent is added and the unit reboots into it once. DSM stays the default and your disks are not touched.";
         BM_INSTALL: Button, "Install agent", "", "", "";
         BM_NOT_EDITABLE: Label, "Flash not editable", "Needs an editable internal boot flash (DOM).", "boot-manager", "";
 
@@ -477,7 +490,7 @@ mod strings {
         REC_DEFAULT_UNKNOWN: Label, "Default: not confirmed", "We cannot tell if the agent ran; if it did not, a power cycle boots it again.", "recovery", "";
         REC_DISKS_MODIFIED: Label, "Disks: modified", "", "", "";
         REC_DISKS_UNTOUCHED: Label, "Disks: untouched", "", "", "";
-        REC_UNKNOWN_ALERT: Label, "The agent may still be the default.", "DSM may not return by itself.", "recovery", "";
+        REC_UNKNOWN_ALERT: Prose, "The agent may still be the default.", "DSM may not return by itself.", "recovery", "";
         REC_MANUAL: Button, "Manual recovery", "Steps that work without the unit answering.", "recovery", "";
         REC_NOTHING: Label, "Nothing to recover.", "The unit is as it was found.", "", "";
         DLG_MANUAL: Dialog, "Manual recovery", "Steps that work without the unit answering.", "recovery",
@@ -492,7 +505,9 @@ mod strings {
         BTN_OPEN_SYNOLOGY: Button, "Open find.synology.com", "", "", "";
 
         // ===================================================================== D15 manage
+        MAN_TITLE: Title, "Manage", "", "", "";
         MAN_SUB: Subtitle, "Running Debian 13.", "", "", "";
+        MAN_STORAGE_TAB: Label, "Storage", "", "", "";
         MAN_OVERVIEW: Label, "Overview", "", "", "";
         MAN_LOGINS: Label, "Logins", "", "", "";
         MAN_RECOVERY: Label, "Recovery", "", "", "";
@@ -972,7 +987,7 @@ mod tests {
                 Kind::Subtitle => 12,
                 Kind::Label => 4,
                 Kind::Button => 3,
-                Kind::Prose => 6,
+                Kind::Prose => 12,
                 Kind::Topic => 4,
                 Kind::Dialog => 4,
             };

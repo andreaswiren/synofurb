@@ -19,7 +19,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::input::Input;
-use gpui_kit::component::{ActiveTheme, Sizable, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, Hsla, IntoElement, StyleRefinement, Window, div, px};
 
@@ -127,10 +127,7 @@ impl App {
         let sys_gib = if self.form.system_gib > 0.0 { self.form.system_gib } else { plan.sizes.recommended_system_mib as f32 / 1024.0 };
         let copies = plan.system_disks.len().max(1);
         let after_text = if keep {
-            format!(
-                "Debian 13 \u{00b7} volume kept \u{00b7} system {:.0} GiB \u{00d7} {} \u{00b7} {hostname}",
-                sys_gib, copies
-            )
+            format!("Debian 13 \u{00b7} volume kept \u{00b7} system {:.0} GiB \u{00d7} {} \u{00b7} {hostname}", sys_gib, copies)
         } else {
             format!(
                 "Debian 13 \u{00b7} {} \u{00b7} {usable} usable{survives} \u{00b7} system {:.0} GiB \u{00d7} {} \u{00b7} {hostname}",

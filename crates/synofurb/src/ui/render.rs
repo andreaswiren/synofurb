@@ -164,7 +164,7 @@ impl App {
     pub fn risk_where(&self) -> Where {
         match self.screen {
             Screen::Settings | Screen::About => Where::Neutral,
-            Screen::Manage => Where::Manage(self.manage_health, self.svc_fixed),
+            Screen::Manage => Where::Manage(super::mgmt::risk_health(self.manage_report.as_ref(), self.svc_fixed), self.svc_fixed),
             Screen::Plan | Screen::System | Screen::Confirm => Where::Planning,
             _ => Where::Wizard,
         }
@@ -278,11 +278,18 @@ impl App {
             return None;
         }
         let p = cx.pal();
-        let (model, serial, status) = self.selected_unit_model();
-        let host = super::format::display_host(&self.input_value(&self.inp.host, cx));
+        let (mut model, mut serial, status) = self.selected_unit_model();
+        let mut host = super::format::display_host(&self.input_value(&self.inp.host, cx));
+        if self.screen == Screen::Manage
+            && let Some(u) = &self.manage_unit
+        {
+            model = if u.model.is_empty() { u.title() } else { u.model.clone() };
+            serial = u.serial.clone();
+            host = u.primary_ip().map(|i| i.to_string()).unwrap_or_default();
+        }
         let debian = self.unit_facts().debian;
         let twin = self.twin_of_selected(cx);
-        let (disks, cpu, ram, dsm) = match &self.facts {
+        let (disks, cpu, ram, dsm) = match self.facts.as_ref().filter(|_| self.screen != Screen::Manage) {
             Some(f) => (
                 format!(
                     "{} disks \u{00b7} {}",

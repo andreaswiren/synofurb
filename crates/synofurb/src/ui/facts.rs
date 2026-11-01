@@ -308,7 +308,7 @@ mod tests {
             (Risk::Unreachable, &RISK_UNREACHABLE),
         ] {
             assert_eq!(r.label(), it.short);
-            assert_eq!(r.way_back(Where::Wizard), it.tip, "{r:?}");
+            assert_eq!(r.way_back(Where::Wizard), it.body, "{r:?}");
         }
     }
 

@@ -28,6 +28,8 @@ pub enum Msg {
     /// Merged inventory so far (live results).
     ScanPartial(Inventory),
     ScanDone(Inventory),
+    /// The unit's `health --json` (read-only), or why there is none.
+    ManageHealth(Result<Box<synofurb_core::manage::Health>, String>),
     Inspected(Result<(Box<DeviceFacts>, String), String>),
     Ev(Event),
     Finished(Result<Outcome, String>),
@@ -247,6 +249,22 @@ pub fn spawn_update_download(tx: Tx, info: UpdateInfo, dest: PathBuf) {
 
 /// Pace for scripted demo events.
 pub const DEMO_TICK: Duration = Duration::from_millis(220);
+
+/// Read the converted unit's health over SSH (`synofurb_core::manage::fetch_health`). Read-only.
+pub fn spawn_manage_health(tx: Tx, t: SshTarget) {
+    std::thread::spawn(move || {
+        let log = Logger::memory(None);
+        let r = (|| -> Result<Box<synofurb_core::manage::Health>, String> {
+            let mut ssh = SshSession::connect(&t.host, t.port, &t.user, &t.auth, &log).map_err(|e| format!("{e:#}"))?;
+            let is_root = t.user == "root";
+            let mut p = synofurb_core::remote::Privileged { sh: &mut ssh, is_root, sudo_password: t.sudo_password.clone() };
+            let h = synofurb_core::manage::fetch_health(&mut p).map_err(|e| e.to_string());
+            ssh.close();
+            h.map(Box::new)
+        })();
+        send(&tx, Msg::ManageHealth(r));
+    });
+}
 
 #[cfg(test)]
 mod tests {

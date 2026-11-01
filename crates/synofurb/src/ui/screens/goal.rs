@@ -11,7 +11,7 @@ use crate::ui::theme::{Themed, Tone};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
-use gpui_kit::component::{ActiveTheme, Disableable, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, Entity, IntoElement, Window, px};
 use synofurb_core::compat::Status;

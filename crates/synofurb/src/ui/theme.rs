@@ -218,6 +218,49 @@ pub fn os_is_dark(cx: &App) -> bool {
 
 // ------------------------------------------------------------------------------------------------ applying
 
+/// Accent colour choice (Settings > General). The five sets live in tokens-v2.json (`accent.<name>.<mode>.*`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Accent {
+    #[default]
+    Purple,
+    Blue,
+    Green,
+    Amber,
+    Rose,
+}
+
+impl Accent {
+    pub const ALL: [Accent; 5] = [Accent::Purple, Accent::Blue, Accent::Green, Accent::Amber, Accent::Rose];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Accent::Purple => "Purple",
+            Accent::Blue => "Blue",
+            Accent::Green => "Green",
+            Accent::Amber => "Amber",
+            Accent::Rose => "Rose",
+        }
+    }
+
+    /// `[accent, hover, pressed, on_accent, bg, fg, ring]` for the mode.
+    pub fn values(self, dark: bool) -> [u32; 7] {
+        let table = if dark { &super::tokens::ACCENTS_DARK } else { &super::tokens::ACCENTS_LIGHT };
+        table[Accent::ALL.iter().position(|a| *a == self).unwrap_or(0)].1
+    }
+
+    pub fn apply_to_palette(self, p: &mut Palette, dark: bool) {
+        let [acc, hover, pressed, on, bg, fg, ring] = self.values(dark).map(|h| gpui_kit::rgb(h).into());
+        p.accent = acc;
+        p.accent_hover = hover;
+        p.accent_pressed = pressed;
+        p.on_accent = on;
+        p.accent_bg = bg;
+        p.accent_fg = fg;
+        p.ring = ring;
+    }
+}
+
 /// The parsed light and dark `ThemeConfig` of [`THEME_JSON`].
 struct Configs {
     light: Rc<ThemeConfig>,
@@ -242,7 +285,7 @@ pub fn theme_configs() -> (Rc<ThemeConfig>, Rc<ThemeConfig>) {
 
 /// Install the synofurb theme in the GPUI Kit, pick light or dark, scale text and theme the scrollbars.
 /// Call again to switch mode or text size; it repaints every window.
-pub fn apply(dark: bool, scale: TextScale, cx: &mut App) {
+pub fn apply(dark: bool, scale: TextScale, accent: Accent, cx: &mut App) {
     if !cx.has_global::<Configs>() {
         let (light, dark) = theme_configs();
         cx.set_global(Configs { light, dark });
@@ -257,8 +300,38 @@ pub fn apply(dark: bool, scale: TextScale, cx: &mut App) {
         t.dark_theme = dark_cfg;
     }
     Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, None, cx);
-    cx.set_global(ActivePalette(Palette::for_mode(dark)));
+    let mut palette = Palette::for_mode(dark);
+    accent.apply_to_palette(&mut palette, dark);
+    cx.set_global(ActivePalette(palette));
+    let v = accent.values(dark).map(|h| gpui_kit::rgb(h).into());
     Theme::update(cx, |t| {
+        // The accent re-colours everything the designer's theme paints with the purple accent.
+        let [acc, hover, pressed, on, bg, fg, ring]: [Hsla; 7] = v;
+        t.primary = acc;
+        t.primary_hover = hover;
+        t.primary_active = pressed;
+        t.primary_foreground = on;
+        t.button_primary = acc;
+        t.button_primary_hover = hover;
+        t.button_primary_active = pressed;
+        t.button_primary_foreground = on;
+        t.ring = ring;
+        t.link = fg;
+        t.link_hover = hover;
+        t.link_active = pressed;
+        t.list_active = bg;
+        t.list_active_border = acc;
+        t.table_active = bg;
+        t.table_active_border = acc;
+        t.sidebar_accent = bg;
+        t.sidebar_accent_foreground = fg;
+        t.sidebar_primary = acc;
+        t.sidebar_primary_foreground = on;
+        t.progress_bar = acc;
+        t.slider_bar = acc;
+        t.slider_thumb = acc;
+        t.drag_border = acc;
+        t.drop_target = bg;
         // The window's rem size follows the theme's font size (see gpui-component's Root), so this is the text-size setting.
         t.font_size = px(scale.rem_px());
         t.scrollbar_mode = gpui_kit::component::scroll::ScrollbarMode::Always;
@@ -408,6 +481,21 @@ mod tests {
                 checked += 1;
             }
             assert!(checked > 60, "{theme}: only {checked} mapped keys checked");
+        }
+    }
+
+    #[test]
+    fn accents_come_from_the_tokens_and_the_default_is_the_designers_purple() {
+        for dark in [false, true] {
+            let h = if dark { &DARK } else { &LIGHT };
+            assert_eq!(Accent::Purple.values(dark)[0], h.accent, "default accent == tokens accent");
+            assert_eq!(Accent::Purple.values(dark)[4], h.accent_bg);
+            for a in Accent::ALL {
+                let v = a.values(dark);
+                // text on the accent and the accent's own text colour must stay readable
+                assert!(contrast(v[3], v[0]) >= 4.5, "{a:?} dark={dark}: on_accent/accent {:.2}", contrast(v[3], v[0]));
+                assert!(contrast(v[5], v[4]) >= 4.5, "{a:?} dark={dark}: accent_fg/accent_bg {:.2}", contrast(v[5], v[4]));
+            }
         }
     }
 

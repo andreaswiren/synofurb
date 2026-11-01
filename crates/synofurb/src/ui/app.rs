@@ -192,9 +192,16 @@ pub struct App {
     pub page_scroll: gpui_kit::ScrollHandle,
     pub help_view: Option<gpui_kit::WeakEntity<crate::ui::screens::help::HelpView>>,
     pub manage_tab: usize,
+    /// The last `health --json` of the managed unit; `None` = it did not answer.
+    pub manage_report: Option<synofurb_core::manage::Health>,
+    pub manage_loading: bool,
+    pub mgmt: super::screens::manage::MgmtState,
+    /// Demo: the Storage tab shows the Hybrid layout.
+    pub manage_hybrid: bool,
+    /// The agent was told to return to DSM.
+    pub bm_returned: bool,
     /// The boot agent was armed but never answered (the default boot entry is not confirmed to be DSM).
     pub agent_unknown: bool,
-    pub manage_health: super::facts::Health,
     pub svc_fixed: bool,
     pub settings_auto: Option<Entity<SelectState<Vec<SharedString>>>>,
 }
@@ -272,7 +279,7 @@ impl App {
         subs.push(cx.observe_window_appearance(window, |this: &mut App, _window, cx| {
             if this.settings.theme == ThemeChoice::System {
                 let scale = this.settings.text_scale;
-                theme::apply(theme::os_is_dark(cx), scale, cx);
+                theme::apply(theme::os_is_dark(cx), scale, this.settings.accent, cx);
             }
         }));
 
@@ -395,8 +402,12 @@ impl App {
             page_scroll: gpui_kit::ScrollHandle::new(),
             help_view: None,
             manage_tab: 0,
+            manage_report: None,
+            manage_loading: false,
+            mgmt: super::screens::manage::MgmtState::Idle,
+            manage_hybrid: false,
+            bm_returned: false,
             agent_unknown: false,
-            manage_health: super::facts::Health::Ok,
             svc_fixed: false,
             settings_auto: Some(App::make_auto_select(window, cx)),
         };
@@ -465,7 +476,7 @@ impl App {
         self.settings.theme = choice;
         self.save_settings();
         let dark = choice.is_dark(theme::os_is_dark(cx));
-        theme::apply(dark, self.settings.text_scale, cx);
+        theme::apply(dark, self.settings.text_scale, self.settings.accent, cx);
         cx.notify();
     }
 
@@ -550,6 +561,12 @@ impl App {
             }
             Screen::Manage => {
                 self.manage_unit = demo::inventory().devices.into_iter().find(|d| d.synofurb_debian);
+                self.manage_report = (t.health != super::mgmt::DemoHealth::Unreachable).then(|| super::mgmt::demo_health(t.health));
+                self.manage_tab = t.tab;
+                self.manage_hybrid = t.hybrid_view;
+                if t.updating {
+                    self.mgmt = super::screens::manage::MgmtState::Updating(62);
+                }
             }
             _ => {}
         }
@@ -651,6 +668,14 @@ impl App {
                 window.focus(&self.focus, cx);
             }
             Msg::Recovered(r) => self.recover = Job::Done(r),
+            Msg::ManageHealth(r) => {
+                self.manage_loading = false;
+                match r {
+                    Ok(h) => self.manage_report = Some(*h),
+                    Err(_) => self.manage_report = None,
+                }
+                self.svc_fixed = false;
+            }
             Msg::BootManagerDone(r) => self.bootmgr = Job::Done(r),
             Msg::CompatRefreshed(r) => {
                 self.compat_refreshing = false;

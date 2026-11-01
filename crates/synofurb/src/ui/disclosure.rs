@@ -100,3 +100,33 @@ pub fn dialog(window: &mut Window, cx: &mut GpuiApp, item: &'static Item, app: &
             )
     });
 }
+
+/// Like [`dialog`], but the primary button runs `on_ok` (and closes); "Cancel" closes without it.
+pub fn dialog_with(
+    window: &mut Window,
+    cx: &mut GpuiApp,
+    item: &'static Item,
+    app: &Entity<App>,
+    ok_label: &'static str,
+    on_ok: impl Fn(&mut GpuiApp) + 'static,
+) {
+    let _ = app;
+    let on_ok = std::rc::Rc::new(on_ok);
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let on_ok = on_ok.clone();
+        dialog
+            .title(item.short)
+            .w(px(super::theme::layout::DIALOG_W))
+            .child(paragraphs(if item.body.is_empty() { item.tip } else { item.body }, cx))
+            .footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("dw-cancel").outline().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(Button::new("dw-ok").primary().label(ok_label).on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        on_ok(cx);
+                    })),
+            )
+    });
+}
