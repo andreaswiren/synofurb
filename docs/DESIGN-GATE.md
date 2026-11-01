@@ -22,7 +22,8 @@ every build job depends on.
 
 | What | Why it is part of the design |
 |---|---|
-| `design/mockups/**` (every file) | the approved visual and flow design, tokens, contrast tool |
+| `design/mockups/**` (every file) | the withdrawn v1 mockups; still hashed so nothing changes silently |
+| `design/mockups-v2/**`, `design/v2/**` | the owner-approved v2 desktop mockup, design system, tokens and UX spec |
 | `design/DESIGN-SYSTEM*` (`DESIGN-SYSTEM.md` or a `DESIGN-SYSTEM*/` directory) | the rules the implementation is held to |
 | `design/screenshots/**` (every file) | the evidence of what was actually built |
 | `apps/mgmt-plane/**/*.html`, `*.htm`, `*.css`, `*.js`, `*.svg` (not under `tests/`) | stand-alone web UI files of the management plane |
@@ -52,7 +53,7 @@ Approvals also expire after **30 days** even if nothing changed, because reviews
    `accessibility`, `copy`; UI: `consistency`, `contrast`, `hierarchy`, `density`, `states`, `theming`, `platform_conformance`,
    `implementation_fidelity`), each a number 0-10, and (for an approval) none below **6**;
 4. `blocking_findings` is an **empty list**; every entry of `blocking_findings` / `non_blocking_findings` must be an object with a non-empty `title` and `evidence`;
-5. there is something to approve: at least one file under `design/mockups/`.
+5. there is something to approve: at least one file under `design/mockups/` or `design/mockups-v2/`.
 
 Otherwise it exits 1 and prints a precise explanation, e.g. `missing design/approvals/ux-critic-<hash>.json` or
 `approval is 41 days old (limit 30); run the critic again`. Options: `--print-hash`, `--list`, `--dry-run` (report only, exit 0),

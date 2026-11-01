@@ -8,7 +8,9 @@ and invalidates all earlier approvals.
 
 Files that feed the design hash (paths are relative to the repository root, POSIX separators):
 
-  design/mockups/**                          every file
+  design/mockups/**                          every file (the withdrawn v1 mockups; kept in the hash)
+  design/mockups-v2/**                       the v2 desktop mockup and its checks
+  design/v2/**                               v2 design system, tokens, UX spec
   design/DESIGN-SYSTEM*                      DESIGN-SYSTEM.md, or a DESIGN-SYSTEM*/ directory (every file in it)
   design/screenshots/**                      every file (if the directory exists)
   apps/mgmt-plane/**/*.html|css|js|svg       standalone web UI files of the management plane (if any)
@@ -144,8 +146,9 @@ def collect_design_files(root: Path) -> list[tuple[str, str]]:
         rel, digest = _entry(path, root)
         found[rel] = digest
 
-    for p in _walk(root / "design" / "mockups", root):
-        add(p)
+    for sub in ("mockups", "mockups-v2", "v2"):
+        for p in _walk(root / "design" / sub, root):
+            add(p)
     design = root / "design"
     if design.is_dir():
         for child in sorted(design.iterdir()):
@@ -370,8 +373,8 @@ def evaluate(root: Path, now: dt.datetime, approvals_dir: Path | None = None, ma
     files = collect_design_files(root)
     dh = compute_design_hash(files)
     res = Result(design_hash=dh, files=files)
-    if not any(rel.startswith("design/mockups/") for rel, _ in files):
-        res.problems["design"] = ["no files found under design/mockups/ - there is no design to approve"]
+    if not any(rel.startswith(("design/mockups/", "design/mockups-v2/")) for rel, _ in files):
+        res.problems["design"] = ["no files found under design/mockups/ or design/mockups-v2/ - there is no design to approve"]
     for critic in CRITICS:
         path = approvals / f"{critic}-{dh}.json"
         probs: list[str] = []

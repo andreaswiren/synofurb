@@ -93,6 +93,8 @@ class HashTests(Fixture):
     def test_new_file_in_each_included_area_changes_hash(self):
         areas = [
             "design/mockups/ui/d1/new.html",
+            "design/mockups-v2/desktop/new.html",
+            "design/v2/UX-SPEC.md",
             "design/DESIGN-SYSTEM.md",
             "design/screenshots/win/main.png",
             "apps/mgmt-plane/ui/page.html",
