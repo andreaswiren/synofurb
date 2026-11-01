@@ -27,11 +27,25 @@
   `manage update --from-bundle <bundle>` (or `<bundle>/mgmt`) takes the files from there, offline, after the same checks. Bundles from earlier builds without `mgmt/` still verify and install (a note says so;
   `manage update --from-bundle` on one explains how to add it). No change to the bundle format number.
 
+- **Typed boot-flash failures** (`synofurb_core::session::SessionError`): `AgentTimeout { waited_min, watchdog_min }` when the boot agent does not answer, with a message that states both outcomes (watchdog resets
+  to DSM, counted from the agent's start; or the agent never ran and the unit may boot it again after every power cycle) and the manual recovery, and no longer says DSM is the default or boots normally; `FlashBackupFailed`
+  (the boot flash was not written to), distinct from later failures. CLI exit codes **10** (agent timeout) and **11** (SSH host key refused).
+- **Unit boot state read from the unit** (`recovery::read_unit_boot_state`, `UnitBootState`, `recover status [--json]`): default entry, synofurb's entries, agent files, flash backup, agent watchdog. "Could not read" is its own state
+  (`ReadOutcome`, `DefaultEntry::Unknown`) and is never shown as "DSM is the default".
+- **Recovery actions as engine functions** with typed `RecoveryError`s and an explicit `confirmed` flag: `enter_agent`, `restore_flash` (image checked, uploaded, hashed on the unit, read back), `remove_our_entries`,
+  `boot_dsm` (verifies the default by reading it back, reboots only when asked, reports "reboot requested" only). CLI: `recover boot-dsm|remove|restore`.
+- **DSM probe** (`recovery::probe_unit`, `wait_for_dsm`, `recover wait`): DsmBack / LoaderOnly / AgentStillUp / SshOnly / Unreachable from the SSH banner and DSM's web ports.
+- **SSH host-key pinning** (`hostkey::HostKeyPolicy`: `Pinned`, `Tofu` with a confirm callback, `KeyAuthOnly` for the agent, `Insecure`; `SshSession::connect_with`): the key is checked before any password is sent, a changed key is a hard
+  error naming both fingerprints, pins live in `known_hosts.json`. CLI: `--host-key`, `--known-hosts`, `--accept-new-host-key`, `--insecure-host-key`, `host-key list|forget`, and a first-contact question in the wizard.
+- **All time limits in one module** (`synofurb_core::timing`): install watchdog 30 min, boot manager 60, agent default 20, app wait 10, installer failure reboot 60 s / 15 min.
+
 ### Changed
 - Installer failure handling: on units with a boot flash a failed or cancelled install reboots into DSM (60 s before the point of no return, 15 min after).
 - ARM boards: the installer prints the exact U-Boot commands before the reboot.
 
 ### Fixed
+- The installer's failure messages and the CLI texts no longer promise a rescue shell (there is none), no longer say that reinstalling DSM keeps data volumes, and the 60 s / 15 min reboot is only described for boot-flash units;
+  other units halt and do not reboot by themselves.
 - **A freshly installed unit now has `/opt/synofurb-mgmt/VERSION`.** The installer payload shipped `synofurb_mgmt.py` without it, so `synofurb_mgmt.py health --json` and `synofurb-cli manage health|version`
   reported the script's built-in default version instead of the installed one. `apps/mgmt-plane/VERSION` is the single source for the payload, the built-in `manage update` copy and the bundle's `mgmt/`.
 - Password hashes now use the canonical 16-character salt (glibc `crypt()` rejects longer ones, which would have broken the first login).

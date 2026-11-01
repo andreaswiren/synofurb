@@ -79,6 +79,7 @@ plainly that it is too late: the disks have been changed and the installer on th
 | `~/.local/share/synofurb/logs/` | one debug log per run, plus the generated `stage2-*.sh` and `plan-*.json` of installs |
 | `.../inventory.json` | units found by `scan` / added by `inventory add` |
 | `.../keys/` | SSH keys generated for new systems and for the boot agent (mode 0600) |
+| `.../known_hosts.json` | pinned SSH host keys of the units, `host:port` -> `SHA256:` fingerprint (`host-key list`) |
 | `.../dom-backups/`, `.../backups/` | boot flash images, partition-table backups |
 | `.../cache/` | downloaded Debian installer files, boot agent |
 | `.../compat-models.json` | the compatibility list refreshed with `compat --refresh` |
@@ -101,9 +102,27 @@ Settings are not read from the environment beyond this list; there is no config 
 | 7 | the install failed or was cancelled **before** the point of no return: the disks are untouched |
 | 8 | `manage health` only: the unit answered and its verdict is **warn** (something needs attention). The report is printed |
 | 9 | `manage health` only: the unit answered and its verdict is **crit** (a degraded array, a failed disk, a full volume). The report is printed |
+| 10 | the **boot agent never answered** after the reboot request (`install` on a boot-flash unit, `boot-manager enter`). The message states both outcomes (agent started: its watchdog resets the default to DSM and reboots, counted from the agent's start; agent never ran: the unit may boot the agent after every power cycle) and the manual recovery. It does **not** say DSM boots normally. Nothing was reset. See [RECOVERY.md](RECOVERY.md). In `install` no disk had been changed |
+| 11 | the **SSH host key was refused**: it changed since it was pinned, does not match `--host-key`, or a first-time key was not trusted. The message names the fingerprints. **Nothing was sent**, not even the password |
 
 With `--log-format json` the failure is also the last event on stdout: `{"event":"failure","kind":"refused","exit_code":3,...}`. Usage errors found by the argument parser itself
 (unknown flag) print clap's message on stderr and exit 2.
+
+## SSH host keys
+
+Every command that logs in to a unit checks the unit's SSH host key **before** the password (or the key signature) is sent.
+
+| Flag | Meaning |
+|---|---|
+| (none) | the key must match the one pinned for `host:port` in `known_hosts.json` (data directory). A **first** key is shown with its fingerprint and asked about on a terminal ("Trust this NAS and remember its key?"); without a terminal the connection is refused with exit 11 and the fingerprint is printed |
+| `--host-key SHA256:...` / `@FILE` | the unit must present exactly this key (`ssh-keygen -l` output; nothing is remembered) |
+| `--known-hosts FILE` | use another pin file |
+| `--accept-new-host-key` | for scripts: pin a first-time key without asking. A **changed** key is still refused |
+| `--insecure-host-key` | check nothing. Prints a loud warning on every run; lab networks only |
+
+A changed key is a hard error (exit 11) that names the pinned and the presented fingerprint. If you reinstalled or replaced the unit on purpose, `synofurb-cli host-key forget --host H [--port P]`
+removes the pin; `host-key list [--json]` shows them. A finished install gives the unit a new key (it is Debian now): the key the app saw while verifying the new system replaces the pin of that address (logged), unless you use `--host-key`.
+The boot agent has a new key at every boot; it is reached with a per-unit client key and no password is ever sent to it, so its key is not checked. `wizard` asks the same first-contact question before it asks for a password.
 
 ## Commands
 
@@ -218,6 +237,11 @@ synofurb-cli boot-manager install --host H [--agent-dir DIR] [--backup-dir DIR] 
 synofurb-cli boot-manager enter   --host H [--yes]
 synofurb-cli boot-manager status  --host H [--json]
 synofurb-cli recover              --host H
+synofurb-cli recover status       --host H [--json]
+synofurb-cli recover wait         --host H [--timeout MINUTES] [--port 22] [--json]
+synofurb-cli recover boot-dsm     --host H [--reboot] [--yes]
+synofurb-cli recover remove       --host H --yes
+synofurb-cli recover restore      --host H --backup FILE.img --yes
 synofurb-cli backup-dom           --host H [--backup-dir DIR]
 synofurb-cli disk-backup          --host H [--disk sata1,sata2] [--out-dir DIR]
 ```
@@ -225,7 +249,12 @@ synofurb-cli disk-backup          --host H [--disk sata1,sata2] [--out-dir DIR]
 *Boot manager mode* adds a small SSH-controllable boot environment to the internal boot flash of x86 units; DSM stays the default entry ([BOOT.md](BOOT.md)). `install` backs the whole flash up first
 (verified against a hash computed on the NAS); `enter` arms the agent, reboots DSM and waits until the agent answers, then prints the `ssh -i` line to control it; `status` reports whether the
 unit can do this and what the on-unit tool says. `install` and `enter` change the boot flash, so they need `--yes` or a terminal to confirm.
-`recover` makes the unit boot DSM again (works from DSM, an installed Debian, or the agent) and prints what to do if DSM's system partition is gone ([RECOVERY.md](RECOVERY.md)).
+`recover` alone sets the default boot entry to DSM (works from DSM, an installed Debian, or the agent; it does not reboot) and prints what to do if DSM's system partition is gone ([RECOVERY.md](RECOVERY.md)). The subcommands:
+
+* `recover status` **reads** the unit: running system, whether the boot menu could be read, the default entry, synofurb's entries, agent files, the flash backup on the unit, plus the images saved on this computer. Unreadable is printed as `NOT READ` / `NOT KNOWN` (JSON: `state.read.result` = `tool_missing|refused|failed`, `state.default_entry.kind` = `unknown`, `pristine: null`), never as a DSM default. `--json`: `{"schema":1,"host","pristine":true|false|null,"state":{read,source,running,default_entry,entries,our_entries,agent_present,flash_backup,agent,notes},"local_backups":[...]}`.
+* `recover boot-dsm` sets the default to DSM and reads it back. With `--reboot` (which needs `--yes` or a terminal) it then asks the unit to reboot and reports **"reboot requested"** only; if the read-back did not show DSM no reboot is sent. Follow it with `recover wait`.
+* `recover wait` probes the unit every few seconds (no login) and exits 0 only when DSM answers (SSH banner and web port 5000/5001); otherwise exit 1 with what was seen last (loader-only, still the agent, other system, nothing). `--timeout` is in minutes (default 15). Ctrl-C stops it.
+* `recover remove` and `recover restore` change the boot flash and need `--yes` (or a terminal); both read the result back and say so only when it verified. `restore` checks the image first (size, its `.sha256` file), uploads it to a private directory on the unit, compares hashes there, then runs `synofurb-dom restore`; it works only while the unit answers over SSH (otherwise restore the flash from another computer: [RECOVERY.md](RECOVERY.md)).
 `backup-dom` only takes the boot flash image. `disk-backup` saves the first and last MiB of the disks (partition tables, **not** your files) with a README on how to put them back.
 
 ### manage

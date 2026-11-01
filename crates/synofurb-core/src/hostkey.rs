@@ -265,6 +265,16 @@ pub fn default_policy() -> HostKeyPolicy {
     DEFAULT_POLICY.lock().unwrap().clone().unwrap_or_else(HostKeyPolicy::app_default)
 }
 
+/// A finished install replaced the operating system, so the unit has a new host key. Replace the pin of `host:port` with the key the
+/// app saw when it verified the new system (only when the default policy is trust-on-first-use; a `--host-key` pin or `--insecure-host-key`
+/// is left alone). Returns whether a pin was written.
+pub fn repin_after_install(host: &str, port: u16, fingerprint: &str) -> bool {
+    match default_policy() {
+        HostKeyPolicy::Tofu { store, .. } => store.pin(host, port, fingerprint).is_ok(),
+        _ => false,
+    }
+}
+
 /// Load a pin from the CLI's `--host-key` value: a fingerprint, or `@FILE` whose first non-comment line is one (`ssh-keygen -l` output
 /// is accepted too: the `SHA256:...` word is used).
 pub fn pin_from_arg(arg: &str) -> Result<String> {
@@ -355,6 +365,19 @@ mod tests {
         let e = no.check("other", 22, FP2).unwrap_err();
         assert!(matches!(e, HostKeyError::NotTrusted { .. }) && e.to_string().contains(FP2));
         assert!(s.get("other", 22).unwrap().is_none());
+        let _ = std::fs::remove_file(s.path());
+    }
+
+    #[test]
+    fn a_finished_install_replaces_the_pin_but_only_under_trust_on_first_use() {
+        let s = store("repin");
+        set_default_policy(HostKeyPolicy::Tofu { store: s.clone(), confirm: None });
+        s.pin("10.0.0.9", 22, FP1).unwrap();
+        assert!(repin_after_install("10.0.0.9", 22, FP2));
+        assert_eq!(s.get("10.0.0.9", 22).unwrap().unwrap().fingerprint, FP2);
+        set_default_policy(HostKeyPolicy::Pinned(FP1.into()));
+        assert!(!repin_after_install("10.0.0.9", 22, FP1), "an explicit --host-key is never overwritten");
+        set_default_policy(HostKeyPolicy::app_default());
         let _ = std::fs::remove_file(s.path());
     }
 

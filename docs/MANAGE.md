@@ -19,7 +19,8 @@ Contents: [Commands](#commands) - [The contract with the unit](#the-contract-wit
 ## Commands
 
 All commands log in like `inspect` does (`--host`, `--user`, `--port`, `--key`; password from `$SYNOFURB_PASSWORD` or a file, never on the
-command line). If the SSH user is not root, `sudo` is used (the password goes through stdin, never argv). Full option list: [CLI.md](CLI.md#manage).
+command line). The unit's SSH host key is checked first: pinned on first use, a changed key is refused with exit 11 and nothing is sent (`--host-key`, `--known-hosts`,
+`--accept-new-host-key`, `--insecure-host-key`, `host-key forget`: [CLI.md](CLI.md#ssh-host-keys)). If the SSH user is not root, `sudo` is used (the password goes through stdin, never argv). Full option list: [CLI.md](CLI.md#manage).
 
 | Command | What it does | Exit |
 |---|---|---|

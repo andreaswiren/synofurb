@@ -41,11 +41,27 @@ What `synofurb` writes there, and how safely ([boot/dom](../boot/dom/README.md))
 * Only units whose flash matches Synology's loader (FAT volume id `10EE-589C`, ext2 UUID `45e5b07d-...`, sizes at least 16/64 MiB) are
   edited. Anything else is refused.
 * Entries added: `SYNOFURB_BOOT` (the agent), `DEBIAN`, `DEBIAN_OLD` (previous kernel). The DSM entry is never altered, and **is the
-  default** except during an install that is actively progressing; every failure path sets the default back to DSM, provided the agent or
+  default** except while the agent is armed (one boot) or after an install has switched to Debian; every failure path sets the default back to DSM, provided the agent or
   the app got to run ([RECOVERY.md](RECOVERY.md) describes the exception and the manual recovery).
 * The flash is small (the ext2 partition is at least 64 MiB and DSM's own files take most of it), so the installed system's initramfs is
   built with an explicit module list and `xz` (`MODULES=list`), and a kernel update that does not fit is refused, leaving the previous
   entry in place. Kernel updates are registered by a hook; the previous kernel is kept as `DEBIAN_OLD`.
+
+### The time limits, in one place
+
+They are constants in `synofurb_core::timing` (the GUI and the CLI texts read them there; a test keeps the agent's built-in 20 in step with `boot/agent`):
+
+| What | Value | Counted from |
+|---|---|---|
+| Agent watchdog, install (`INSTALL_WATCHDOG_MIN`) | 30 min | the agent starting |
+| Agent watchdog, boot manager mode (`BOOT_MANAGER_WATCHDOG_MIN`) | 60 min | the agent starting |
+| Agent watchdog, built-in default (`AGENT_DEFAULT_WATCHDOG_MIN`) | 20 min | the agent starting |
+| The app's wait for the agent (`AGENT_WAIT_MIN`) | 10 min | the reboot request |
+| Installer failure reboot, before the point of no return | 60 s | the failure (boot-flash units only) |
+| Installer failure reboot, after the point of no return | 15 min | the failure (boot-flash units only) |
+| The app's wait for the installed system (`NEW_SYSTEM_WAIT_MIN`) / for DSM after a recovery (`DSM_WAIT_MIN`) | 20 min / 15 min | the end of the install / the probe starting |
+
+Because the watchdog and the app's wait start at different moments, an app timeout does not mean the watchdog has fired or will not: at least `watchdog - wait` minutes (20 in an install) can still be left.
 
 ### The boot agent and "boot manager mode"
 
@@ -55,7 +71,7 @@ uncompressed, which is fine: only x86 units have a boot flash. It:
 
 1. resets the default entry to DSM as its **first action** (so it is one-shot: any later reboot returns to DSM),
 2. brings up DHCPv4 + SLAAC/DHCPv6 on every Ethernet port and starts SSH with a per-unit key that the desktop app baked in,
-3. announces itself by a UDP beacon, and reboots into DSM by itself if nobody logs in within the timeout (60 minutes in boot manager mode, 30 during an install, the agent's own default is 20; this only works once the agent is running: if it never boots, see "Manual recovery" in [boot/dom](../boot/dom/README.md)),
+3. announces itself by a UDP beacon, and reboots into DSM by itself if nobody logs in within the timeout (the **watchdog**: 60 minutes in boot manager mode, 30 during an install, the agent's own default is 20, **counted from the moment the agent starts**; this only works once the agent is running: if it never boots, see [RECOVERY.md](RECOVERY.md) and "Manual recovery" in [boot/dom](../boot/dom/README.md)). The app itself waits only **10 minutes** for the agent to answer; when that wait ends the app resets nothing and says so (CLI exit 10),
 4. offers `sf-boot` to download any kernel + initrd and `kexec` into it. Downloads over HTTP(S) are **refused without SHA-256 hashes** (its `wget` does not
    verify TLS); the app always passes them.
 

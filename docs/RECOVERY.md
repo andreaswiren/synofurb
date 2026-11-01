@@ -14,6 +14,23 @@ This applies to x86 units (Intel and AMD) that boot through the internal boot fl
 uses on those units (see [boot/dom](../boot/dom/README.md)). The mechanism is the same idea the
 [synodeb](https://github.com/rylos/synodeb) project uses for the DS923+.
 
+## When the boot agent does not answer (read this first)
+
+If the app asked the unit to reboot into the boot agent and the agent did not answer within **10 minutes**, the app stops and does **not** reset anything
+(CLI exit code **10**, `SessionError::AgentTimeout` in the engine). It cannot know which of two things happened:
+
+1. **The agent started** but is not reachable (network, DHCP, address). Its watchdog counts from the moment the *agent* started, not from the reboot
+   request: after **30 minutes** (install) or **60 minutes** (boot manager mode) without a login or `sf-boot claim` it sets the default boot entry back to
+   DSM and reboots. So the unit can still come back by itself, possibly 20 minutes or more after the app gave up.
+2. **The agent never ran** (it failed to boot). Nothing has reset the default and there is no watchdog, so the unit may boot the agent **again after every
+   power cycle**. A power cycle is not a recovery in this case.
+
+What to do, in this order: wait (the watchdog may still fire); look at the unit's serial or VGA console; run `synofurb-cli recover wait --host <ip>`
+to watch for DSM; if nothing changes, recover by hand, which needs physical access: choose **`SYNOLOGY_2`** in the boot loader menu on a serial or VGA
+console for one boot and then run `synofurb-dom default dsm --yes` on DSM, **or** take the boot flash to another Linux computer and restore the
+saved image (`synofurb-dom restore --yes FILE` with `SYNOFURB_DOM=/dev/sdX`; see "Manual recovery" in [boot/dom](../boot/dom/README.md)).
+Once you can reach the agent or DSM over SSH, `synofurb-cli recover status --host <ip>` shows what the boot flash says and the actions below fix it.
+
 ## What protects you, by phase
 
 | Phase | What has changed on the NAS | If it fails or you cancel | You get back |
@@ -21,8 +38,8 @@ uses on those units (see [boot/dom](../boot/dom/README.md)). The mechanism is th
 | Scan, connect, inspect, plan | Nothing (read-only script) | Nothing to undo | DSM, untouched |
 | **Boot flash backup** | Nothing; the whole DOM is streamed to *your computer*, hashed, and compared with a hash computed on the NAS | Abort, nothing changed | DSM, untouched. The backup file is kept (`dom-backups/`) |
 | **Agent installed, armed** | Files + a menu entry added on the boot flash (DSM entry untouched, still the fallback) | The agent resets the default to DSM *as its first action*; if nobody claims it within its timeout (30 minutes in an install, 60 in boot manager mode, counted from when the agent boots; the app itself gives up after waiting 10 minutes) it reboots, which boots DSM. The app also resets the default if any step before the reboot fails | DSM, after a reboot. **Exception: if the agent never runs at all** (it fails to boot), nothing resets the default and there is no watchdog, so a power cycle boots the agent again. The app cannot tell this apart from an agent that runs but is unreachable. Recover from the boot menu on a console, or restore the boot flash from another computer (see "Manual recovery" in [boot/dom](../boot/dom/README.md)) |
-| **Installer running, before the point of no return** | Still no disk changed | The generated installer script's failure handler sets the default to DSM and reboots after 60 s. A power cycle does the same, because the default is already DSM | DSM, untouched |
-| **After the point of no return** (disks being repartitioned) | The reclaimed partitions are gone (in *Keep volumes* mode DSM's own system partition; in *Wipe* mode everything) | Default is set to DSM; the unit reboots after 15 minutes (so you can read the log) into the DSM loader | The DSM **loader** runs, but DSM's operating system is gone: see "Reinstalling DSM" below. Preserved data volumes are untouched unless the failure was a hardware problem |
+| **Installer running, before the point of no return** | Still no disk changed | The generated installer script's failure handler sets the default to DSM and reboots after 60 s (boot-flash units only). A power cycle does the same once the agent has run, because the default is then already DSM | DSM, untouched |
+| **After the point of no return** (disks being repartitioned) | The reclaimed partitions are gone (in *Keep volumes* mode DSM's own system partition; in *Wipe* mode everything) | Default is set to DSM; the unit reboots after 15 minutes (so you can read the log on the console) into the DSM loader. There is **no rescue shell and no SSH server** in the installer; on units without a boot flash (arm64/armhf, BIOS/UEFI kexec or kit installs) the installer halts and does **not** reboot by itself: read the log on the console, then power-cycle | The DSM **loader** runs, but DSM's operating system is gone: see "Reinstalling DSM" below. Preserved data volumes are untouched unless the failure was a hardware problem |
 | **Debian installed** | Debian entry on the boot flash; previous kernel kept as `DEBIAN_OLD` | A kernel that fails to boot: pick `DEBIAN_OLD` (or DSM) in the boot menu / `synofurb recover` | Debian with the previous kernel, or DSM loader |
 
 ### Why "one-shot" matters when you cannot see a screen
@@ -37,9 +54,22 @@ first action). If the agent never started, a power cycle boots it again; use the
 ## Commands
 
 ```
-synofurb recover --host <ip> --user <admin>        # make the unit boot DSM next time (works from DSM, Debian or the agent)
-synofurb boot-manager enter --host <ip>            # boot the SSH-controlled agent to try anything else; returns to DSM by itself
+synofurb-cli recover status  --host <ip>           # READ the unit's boot state (default entry, our entries, agent files, flash backup). "not known" is reported as such
+synofurb-cli recover boot-dsm --host <ip>          # set the default to DSM and read it back; does NOT reboot
+synofurb-cli recover boot-dsm --host <ip> --reboot --yes   # ... and ask the unit to reboot ("reboot requested", nothing more)
+synofurb-cli recover wait    --host <ip> [--timeout 15]    # probe until DSM answers (SSH banner + DSM web port); needs no login
+synofurb-cli recover remove  --host <ip> --yes     # take synofurb's entries out of the boot menu, default DSM, verified by reading it back
+synofurb-cli recover restore --host <ip> --backup FILE.img --yes   # write a saved flash image back (checked, read back)
+synofurb-cli recover         --host <ip>           # older form: set the default to DSM (works from DSM, Debian or the agent), no reboot
+synofurb-cli boot-manager enter --host <ip> --yes  # boot the SSH-controlled agent to try anything else
 ```
+`recover status` is the only honest way to know where a unit stands. It runs `synofurb-dom status --json` on the unit (and `sf-boot status` on the agent). If the tool is
+not installed or refuses, the answer is **NOT READ / NOT KNOWN**, which is a different thing from "DSM is the default": nothing is claimed about a menu that was not read.
+`boot-dsm` verifies the default by reading it back and sends **no reboot if that did not verify**; `wait` reports `DSM is back` only when an OpenSSH banner and a DSM web
+port (5000/5001) both answer. The states: *DSM is back*, *only DSM's web port answers* (DSM still starting, or only the DSM loader runs: keep waiting a few minutes, then see
+"Reinstalling DSM"), *the boot agent answers* (dropbear: the unit is in the agent), *SSH answers but not DSM's web ports* (another system), *nothing answers*.
+These checks are heuristics tested on this computer, not on a Synology.
+
 On the unit itself: `synofurb-dom status`, `synofurb-dom default dsm`, `synofurb-dom restore <backup.img>`, `synofurb-dom remove`.
 After `remove`, the boot flash contains only Synology's own files again (the tool refuses to finish if `zImage`/`rd.gz` are missing).
 

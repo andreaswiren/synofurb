@@ -688,6 +688,11 @@ pub fn run_install(job: &InstallJob, logger: &Logger, cancel: Arc<AtomicBool>, p
     let outcome = wait_for_new_system(job, Some(peer), &cancel, logger);
     match &outcome {
         Ok(o) => {
+            if let (Some(ip), Some(fp)) = (o.ip, o.ssh_fingerprint.as_deref())
+                && crate::hostkey::repin_after_install(&ip.to_string(), 22, fp)
+            {
+                logger.info(format!("pinned the new system's SSH host key {fp} for {ip} (the old key was DSM's)"));
+            }
             logger.phase(Phase::Finished);
             logger.info(format!(
                 "done: ssh {}@{}  |  {}",
