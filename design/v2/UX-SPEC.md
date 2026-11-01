@@ -511,7 +511,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 
 **Keyboard:** Footer button pinned and focusable first; `Tab` order: primary, secondary, Rescue copy buttons, links; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: n/a; *error*: Variants: flash backup did not verify (nothing changed, DSM running, primary Back to Confirm); agent did not appear (Phase 3 of 7; the app waits up to 10 minutes for it and the install agent's watchdog is 30 minutes from its start, so the clock reads "DSM returns in up to 20:00"; Wait for DSM); stopped by you before step 3 (60 s clock, Flash changed); failed before step 3; failed after step 3 Wipe or Keep running (15:00 clock, Rescue panel); waiting (clock 0: "The shell closed. The NAS is rebooting.", no Rescue panel); loader (only Reinstall DSM); lost (Reconnect; the clock keeps running on the NAS); *loading*: Waiting for DSM shows Spinner and elapsed time.
+**States:** *empty*: n/a; *error*: Variants: flash backup did not verify (nothing changed, DSM running, primary Back to Confirm); agent did not appear (Phase 4 of 7, Booting; the app waits 10 minutes for it and the install agent's watchdog is 30 minutes from its start, so the clock is an estimate: "DSM returns in about 20 min"; Wait for DSM); stopped by you before step 3 (60 s clock, Flash changed); failed before step 3; failed after step 3 Wipe or Keep running (15:00 clock, Rescue panel); waiting (clock 0: "The shell closed. The NAS is rebooting.", no Rescue panel); loader (only Reinstall DSM); lost (Reconnect; the clock keeps running on the NAS); *loading*: Waiting for DSM shows Spinner and elapsed time.
 
 ### D10 Done
 
@@ -1109,7 +1109,7 @@ Web screens use the same table format. Interaction rules: every Tooltip is reach
 
 | Element | Pattern | short (visible) | tip (one sentence) | help |
 |---|---|---|---|---|
-| Boot agent | Popover | Boot agent | It resets the default to DSM and reboots after 30 idle minutes. | kexec starts Linux kernels only; after kexec nothing of ours runs; help: boot |
+| Boot agent | Popover | Boot agent | It resets the default to DSM and reboots after 60 idle minutes. | kexec starts Linux kernels only; after kexec nothing of ours runs; help: boot |
 | DSM loader | Popover | DSM loader | Starts Synology's loader; DSM's own system may be gone. | Shows Synology's install page; help: recovery |
 | Reboot | Dialog | Reboot now? | Running tasks and SSH sessions are listed. | RAID sync pauses and resumes; buttons Reboot / Cancel |
 | Make default | Dialog | Make default? | A headless NAS starts this entry after a power loss. | Type phrase `make default {entry}`; button danger |
@@ -1613,7 +1613,7 @@ Disks from an old Synology are assembled and mounted read-only at `/mnt/dsm/<nam
 
 #### web:boot: Boot page
 
-These are the entries in the boot flash menu: Debian (default), the previous kernel, the one-shot boot agent and the DSM loader. Power-cycling always returns to the default entry. The agent returns to DSM after 30 idle minutes. Once another system is started with kexec, nothing of ours is running. The DSM loader shows Synology's install page; DSM's own system may be gone.
+These are the entries in the boot flash menu: Debian (default), the previous kernel, the one-shot boot agent and the DSM loader. Power-cycling always returns to the default entry. The agent returns to DSM after 60 idle minutes. Once another system is started with kexec, nothing of ours is running. The DSM loader shows Synology's install page; DSM's own system may be gone.
 
 #### web:recovery: Recovery
 
