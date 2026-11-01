@@ -682,7 +682,7 @@ impl App {
                     port: 22,
                     fingerprint: fp,
                 });
-                self.open_hostkey_dialog(Box::new(ask), window, cx)
+                self.open_hostkey_dialog(ask, window, cx)
             }
             Overlay::HostKeyChanged => self.open_hostkey_changed(
                 "192.168.1.20".into(),
@@ -752,7 +752,7 @@ impl App {
                 self.screen = if ok { Screen::Done } else { Screen::Failed };
                 window.focus(&self.focus, cx);
             }
-            Msg::HostKeyAsk(ask) => self.open_hostkey_dialog(ask, window, cx),
+            Msg::HostKeyAsk(ask) => self.open_hostkey_dialog(*ask, window, cx),
             Msg::HostKeyChanged { host, port, pinned, presented } => self.open_hostkey_changed(host, port, pinned, presented, window, cx),
             Msg::FailureKind { agent_timeout, flash_untouched } => {
                 self.agent_unknown = agent_timeout;

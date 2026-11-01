@@ -484,11 +484,11 @@ impl App {
 impl App {
     /// "Trust this NAS?": first contact with a unit. The worker thread is blocked on the answer; Cancel, Escape and closing the
     /// dialog all refuse (the question is dropped), and nothing was sent to the unit (not even the password).
-    pub fn open_hostkey_dialog(&mut self, ask: Box<super::trust::TrustAsk>, window: &mut Window, cx: &mut Context<App>) {
+    pub fn open_hostkey_dialog(&mut self, ask: super::trust::TrustAsk, window: &mut Window, cx: &mut Context<App>) {
         let host = ask.prompt.host.clone();
         let lines = super::trust::fingerprint_lines(&ask.prompt.fingerprint);
         let full = ask.prompt.fingerprint.clone();
-        let slot = std::rc::Rc::new(std::cell::RefCell::new(Some(*ask)));
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(Some(ask)));
         window.open_dialog(cx, move |d, _, cx| {
             let (s_no, s_yes) = (slot.clone(), slot.clone());
             let (lines, full) = (lines.clone(), full.clone());
