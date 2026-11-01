@@ -1,0 +1,15 @@
+[package]
+name = "synofurb"
+description = "Desktop tool that reinstalls Synology NAS units with plain Debian 13"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+directories = "6.0.0"
+eframe = "0.37.0"
+log = "0.4.35"
+rfd = "0.17.2"
+serde_json = "1.0.154"
+synofurb-core = { path = "../synofurb-core" }
