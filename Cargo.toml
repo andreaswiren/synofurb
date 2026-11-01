@@ -13,7 +13,3 @@ rust-version = "1.85"
 lto = "thin"
 codegen-units = 4
 strip = true
-
-# Local fix so GPUI builds on Linux with current libc (see vendor/xattr/README.synofurb.md)
-[patch.crates-io]
-xattr = { path = "vendor/xattr" }

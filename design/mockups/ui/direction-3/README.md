@@ -1,3 +1,5 @@
+> **Alternative, not revised after review.** The independent UI critic rejected this direction as the base for synofurb: D3 leaves the ForgeVault family, its 44 px controls and 16 px type do not fit a 960 x 640 window (the gate is about 1100 px tall), and its cream canvas weakens amber warnings. It is kept for reference and for the ideas listed in `../RECOMMENDATION.md`. It still shows the **first-round** layout (left step rail, no safety rail), tokens, copy and data (including a Verified model and a hostname phrase), none of which match the revised UX mock or `docs/RECOVERY.md`. Its contrast numbers below cover declared pairs only. The recommended, revised direction is `../direction-1/`.
+
 # Direction 3: Friendly appliance
 
 **Personality in three words: warm, roomy, reassuring.**

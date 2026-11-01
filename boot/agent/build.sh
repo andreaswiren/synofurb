@@ -516,7 +516,7 @@ newc_dev_archive > "$WORKA/dev.cpio"
 compress_cpio() {
     case $COMPRESS in
         xz) xz -c --check=crc32 $XZ_BCJ --lzma2=preset=$XZ_PRESET,dict=16MiB < "$1" ;;
-        zstd) zstd -q -19 --long=26 -c < "$1" ;;
+        zstd) zstd -q -19 -c < "$1" ;;
     esac
 }
 { cat "$WORKA/dev.cpio"; compress_cpio "$INITRD_TMP"; } > "$WORKA/agent.initrd"

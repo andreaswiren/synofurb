@@ -1,255 +1,295 @@
-# synofurb design system (recommended: Direction 1, "ForgeVault family")
+# synofurb design system (Direction 1, "ForgeVault family", revised after the UI critic review)
 
-One visual language for both surfaces: the native desktop installer (Rust + GPUI) and the NAS management web UI on `https://<ip>:8443`.
-It is deliberately the ForgeVault look (shadcn-style neutrals, a single violet accent, hairline borders, 8-12 px radii, lucide-style strokes) with four additions that this product needs: a **status system that never relies on colour alone**, a **data-loss language** (destroyed vs preserved), a **log/severity language**, and a **storage-diagram language**.
+One visual language for the native installer (Rust + GPUI) and the NAS management plane (`https://<ip>:8443`). It is a **derivative** of ForgeVault's tokens (neutral ramp, one violet accent, hairline cards, 8 and 12 px radii, lucide-style strokes, pill badges), not a copy. Live reference: `direction-1/index.html` (all screens, light and dark, 960 x 640 / 1180 x 760 / 1440 x 900 windows, 1180 / 768 / 390 px web viewports, 100% and 130% text) and `direction-1/states.html`. Tokens: `tokens.json`. Gate: `python3 tools/contrast.py`.
 
-Live reference: `direction-1/index.html` (all 17 screens, light and dark). Machine-readable tokens: `tokens.json`.
+Layout comes from the revised UX concept A (stepper across the top, persistent **safety rail** on the right, pinned action bar) and management plane mgmt-A (sidebar shell, status strip, "Needs attention", docked edit panel, persistent safe-apply banner). Screens drawn: Find, Connect, Inspect, Goal, Plan (valid and blocking error), Confirm (gate incomplete and satisfied), Install (staging and after the point of no return), Failed before and after the point of no return, Done, Update dialog, States sheet; Web: Login, Dashboard, Storage, Network (pending), Users, Boot, and the dashboard, network and users pages at 390 px. Not drawn (they reuse the same components): the System step, find-scan / empty / offline, Settings, Boot manager and Restore screens, Manage and About, the edge-state sheet of the UX mock.
 
 ## 1. Principles
 
-1. **Calm by default, loud only for data loss.** 95% of the UI is neutral. Red fills are reserved for the destructive button, the data-loss banner and errors. Accent violet means "primary action / selected / progress", never "status".
-2. **Never colour alone.** Every status is colour + icon + word, and uses a distinct shape or border style where it matters (Untested is dashed, Unsupported has a ban glyph, errors carry a 3 px edge or a bold border).
-3. **Say what will happen to the data.** Every action that writes names its effect up front (Erases / Keeps / Depends; "Will be destroyed" next to "Will be preserved").
-4. **Same tokens on both surfaces.** The web UI is the desktop app's design with a sidebar instead of a step rail. A token change is one JSON edit.
-5. **Cheap to build in GPUI.** Flat fills, 1 px borders, small radii, one soft shadow, monochrome SVG icons. No blur, no inset shadows, no gradients in the base set.
+1. **Calm everywhere, one loud thing.** On the data-loss gate red appears on exactly two things: the *enabled* destructive button and the "Will be destroyed" marker and heading (a 12 px square and a text line). The banner, the unit card, the "changed" and "preserved" lists and the disabled button are neutral. The red budget is measured by script (3 coloured elements when the button is enabled, 2 when it is not, both themes).
+2. **Never colour alone.** Every status has colour, a drawn icon, a word and, where it matters, a border style (Untested and disabled controls are dashed).
+3. **Say what happens to the data.** Destroyed, changed (backed up first) and preserved are separate lists; the boot flash is never "preserved".
+4. **One token set, two surfaces.** Desktop and web read the same `tokens.json`.
+5. **Only what GPUI draws cheaply.** Flat fills, 1 px borders, small radii, one soft shadow, monochrome SVG icons. Excluded everywhere (and linted): gradients, patterns, inset shadows, `color-mix`, `backdrop-filter`, all-caps transforms, text under 12 px.
 
 ## 2. Colour tokens
 
-Opaque sRGB hex values (no alpha tricks) so they map 1:1 to GPUI `rgb(0x......)` and to CSS custom properties. Source values are OKLCH, derived from ForgeVault's `app/globals.css` (neutral ramp `oklch(L 0 0)`; accent hue 295). Deltas from ForgeVault: accent darkened from `oklch(0.55 0.22 295)` to `oklch(0.50 0.21 295)` (white label ratio 6.67 instead of 5.38, leaves room for a visible hover), and the purple-tinted `accent_fg` / `accent_bg` pair added for selected rows. The accent can be swapped for ForgeVault's blue / green / amber / rose in the **web** plane; only violet has been contrast-verified here (re-run the check, section 3, for any other accent).
+Opaque sRGB hex (alpha only for the scrim, 0.60), so every token is one `rgb(0x......)` in GPUI and one custom property in CSS (underscores become hyphens). Light and dark are re-derived, not inverted.
 
 | Token | Light | Dark | Role |
 |---|---|---|---|
 | `canvas` | `#FAFAFA` | `#0A0A0A` | Window / page background |
-| `surface` | `#FFFFFF` | `#171717` | Cards, dialogs, inputs, popovers |
-| `surface_2` | `#F3F3F3` | `#202020` | Sunken areas: table header, code chips, hover |
-| `surface_3` | `#E9E9E9` | `#2B2B2B` | Track fills (progress, slider), pressed, stage |
-| `border` | `#E5E5E5` | `#2A2A2A` | Decorative hairlines (cards, row dividers) |
-| `border_strong` | `#868686` | `#747474` | Interactive boundaries: inputs, checkboxes, outline buttons (>= 3:1) |
+| `surface` | `#FFFFFF` | `#171717` | Cards, dialogs, inputs |
+| `surface_2` | `#F3F3F3` | `#202020` | Table header, hover, disabled fill, code chips |
+| `surface_3` | `#E9E9E9` | `#2B2B2B` | Progress and slider track (with a 1 px border_strong outline), pressed |
+| `sidebar` | `#F7F7F7` | `#101010` | Safety rail and web sidebar |
+| `border` | `#E5E5E5` | `#2A2A2A` | Decorative hairlines only (carry no meaning) |
+| `border_strong` | `#808080` | `#868686` | Control boundaries: inputs, checkboxes, outline buttons, tracks (3:1 on every surface) |
 | `fg` | `#0A0A0A` | `#FAFAFA` | Primary text |
-| `fg_2` | `#525252` | `#ABABAB` | Secondary text, labels |
-| `fg_3` | `#7A7A7A` | `#808080` | Placeholder, disabled hints (never essential info) |
-| `sidebar` | `#F7F7F7` | `#101010` | Step rail / sidebar background |
-| `overlay` | `#0A0A0A` | `#000000` | Dialog scrim base (used at 55% alpha) |
-| `accent` | `#7139CB` | `#A37BFE` | Primary button fill, selection edge, progress, focus ring |
-| `accent_hover` | `#622CB5` | `#B091FE` | Primary button hover |
-| `on_accent` | `#FFFFFF` | `#0E0C15` | Text/icon on accent |
-| `accent_bg` | `#F1EDFE` | `#31254D` | Selected row / card tint, step current |
-| `accent_fg` | `#5C29AA` | `#C3AFFE` | Accent-coloured text and links |
-| `ring` | `#7139CB` | `#A37BFE` | Focus ring (2 px, 2 px offset) |
-| `danger` | `#C60014` | `#E23439` | Destructive button fill (only the data-loss actions) |
-| `danger_hover` | `#AC0311` | `#F14D4C` | Destructive hover |
-| `on_danger` | `#FFFFFF` | `#0C0403` | Text/icon on danger |
-| `ok_solid` | `#03A14A` | `#37BB62` | Success icon / bar / dot |
+| `fg_2` | `#525252` | `#B1B1B1` | Secondary text, labels, captions |
+| `placeholder` | `#696969` | `#9E9E9E` | Placeholder text only (4.5:1) |
+| `accent` | `#7139CB` | `#A37BFE` | Primary button, selection edge, progress fill, checked box |
+| `accent_hover` | `#622CB5` | `#B091FE` | Primary hover |
+| `accent_pressed` | `#541EA0` | `#946AEE` | Primary pressed |
+| `on_accent` | `#FFFFFF` | `#0E0C15` | Label on accent fills |
+| `accent_bg` | `#F1EDFE` | `#31254D` | Selected row/card tint, current step |
+| `accent_fg` | `#5C29AA` | `#C8B7FF` | Accent-coloured text and links |
+| `accent_border` | `#B193E4` | `#6A50A6` | Opaque border for accent tints |
+| `ring` | `#7139CB` | `#A37BFE` | Focus ring (2 px, offset 2 px) |
+| `ring_inverse` | `#A37BFE` | `#A37BFE` | Focus ring inside the always-dark log panel |
+| `danger` | `#C60014` | `#B7191C` | Destructive button fill (only data-loss actions) |
+| `danger_hover` | `#AC0311` | `#A50E15` | Destructive hover |
+| `danger_pressed` | `#94020D` | `#8D0B11` | Destructive pressed |
+| `danger_edge` | `#C60014` | `#FF9592` | Destructive button 2 px outline (dark theme: a light red that keeps the button visible on dark surfaces) |
+| `on_danger` | `#FFFFFF` | `#FFFFFF` | Destructive label (white in both themes) |
+| `ok_solid` | `#047E39` | `#37BB62` | Success dots, bars, step discs |
 | `ok_fg` | `#005725` | `#6ED889` | Success text |
-| `ok_bg` | `#DEF8E2` | `#0F3118` | Success badge / banner fill |
-| `warn_solid` | `#C68206` | `#F0B135` | Warning icon / bar / dot |
+| `ok_bg` | `#DEF8E2` | `#0F3118` | Success tint |
+| `ok_border` | `#66B585` | `#257D41` | Opaque tint border |
+| `warn_solid` | `#A76C01` | `#F0B135` | Warning dots, bars |
 | `warn_fg` | `#6F4606` | `#F1C45E` | Warning text |
-| `warn_bg` | `#FFF3D3` | `#3D2A02` | Warning badge / banner fill |
-| `err_solid` | `#E30117` | `#F4514F` | Error icon / bar / dot |
+| `warn_bg` | `#FFF3D3` | `#3D2A02` | Warning tint |
+| `warn_border` | `#CFA95F` | `#9F741E` | Opaque tint border |
+| `err_solid` | `#C60014` | `#FC5855` | Error dots, bars, failed step discs (the same red family as danger) |
 | `err_fg` | `#A70311` | `#FFA09C` | Error text |
-| `err_bg` | `#FEEFEF` | `#4F1A18` | Error badge / banner fill |
-| `info_solid` | `#3280DD` | `#539AF2` | Info icon / bar / dot |
+| `err_bg` | `#FEEFEF` | `#4F1A18` | Error tint |
+| `err_border` | `#DF6C77` | `#AE3C3A` | Opaque tint border |
+| `info_solid` | `#1570D1` | `#539AF2` | Info dots |
 | `info_fg` | `#004B96` | `#91C1FF` | Info text |
-| `info_bg` | `#E7F1FF` | `#132946` | Info badge / banner fill |
-| `log_bg` | `#121114` | `#060607` | Log viewer background |
-| `log_fg` | `#DEDEDE` | `#DEDEDE` | Log message text |
-| `log_dim` | `#9E9E9E` | `#989898` | Log timestamps, DEBUG message text |
-| `log_dbg` | `#9DA5B1` | `#979FAB` | DBG level label |
-| `log_inf` | `#89C3FE` | `#89C3FE` | INF level label |
-| `log_wrn` | `#F7C243` | `#F7C243` | WRN level label |
-| `log_err` | `#FE8A88` | `#FE8A88` | ERR level label |
+| `info_bg` | `#E7F1FF` | `#132946` | Info tint |
+| `info_border` | `#73AAE6` | `#3667A5` | Opaque tint border |
+| `log_bg` | `#121114` | `#060607` | Log panel (dark in both themes) |
+| `log_fg` | `#DEDEDE` | `#DEDEDE` | Log text |
+| `log_dim` | `#9E9E9E` | `#989898` | Timestamps, debug text |
+| `log_dbg` | `#9DA5B1` | `#979FAB` | DBG label |
+| `log_inf` | `#89C3FE` | `#89C3FE` | INF label |
+| `log_wrn` | `#F7C243` | `#F7C243` | WRN label and edge |
+| `log_err` | `#FE8A88` | `#FE8A88` | ERR label and edge |
+| `log_wrn_bg` | `#322A1B` | `#28200F` | Opaque warn line tint |
+| `log_err_bg` | `#3C2729` | `#331E1E` | Opaque error line tint |
+| `scrim` | `#000000` | `#000000` | Dialog scrim base colour, used at alpha 0.60 |
 
-Status colour triple (`*_solid`, `*_fg`, `*_bg`): `solid` is for icons, dots and bars (non-text, needs 3:1), `fg` for text on either `bg` or `surface` (needs 4.5:1), `bg` is the tint behind badges and banners. Status mapping:
+### Accents (web plane)
 
-| Meaning | Triple | Icon | Word | Shape cue |
-|---|---|---|---|---|
-| Verified / OK / Pass / Clean | `ok` | shield-check / check | Verified, OK, Pass | solid border |
-| Community-reported / Info | `info` | users / info | Community-reported | solid border |
-| Untested / Off / No cable | neutral (`surface_2`, `fg_2`) | help (dashed circle) / x | Untested | **dashed border** |
-| Known issues / Note / Watch | `warn` | alert triangle | Known issues, Note | solid border |
-| Unsupported / Fail / Error / Locked | `err` | ban / octagon-x / lock | Unsupported, Fail | solid border, 3 px edge on banners |
+ForgeVault's accent switcher ships five accents. Measured on white, their own values are: purple 5.38:1 (white label), blue 4.93, rose 4.79, **green 3.99 (fails)** and **amber 2.78 (fails as button, ring and fill)**. synofurb therefore offers each accent only through the derived sets below (every set has `accent`, `accent_hover`, `accent_pressed`, `on_accent`, `accent_bg`, `accent_fg`, `ring` in `tokens.json` under `accent.<name>.<theme>`), all tested by `contrast.py`: label on fill and hover and pressed 4.5:1, link text on surface, canvas and tint 4.5:1, ring and fill 3:1 on surface, tint and track. Light themes use a white label; dark themes use a near-black label. Amber is a deep amber in light mode (the bright ForgeVault amber cannot carry a label or a ring on white). The desktop installer is violet only.
 
-## 3. Contrast (WCAG 2.x, computed)
+| Accent | Light: fill / hover / link text / tint | Dark: fill / label / link text | Label (light, dark) |
+|---|---|---|---|
+| purple (default) | `#7139CB` / `#6327BA` / `#5E1EB3` / `#F1EDFE` | `#A37BFE` / `#0E0C15` / `#C8B7FF` | white, near-black |
+| blue | `#036ED4` / `#0260BB` / `#015AB1` / `#E7F1FF` | `#4197FF` / `#080E16` / `#9DC7FE` | white, near-black |
+| green | `#0E803B` / `#026F31` / `#03692E` / `#E5F5E7` | `#47AA62` / `#071009` / `#8FD89E` | white, near-black |
+| amber | `#9B6200` / `#875503` / `#805002` / `#FBEEDF` | `#CE871B` / `#130C05` / `#F2B772` | white, near-black |
+| rose | `#D6224E` / `#C30040` / `#B9003D` / `#FEEBEB` | `#FF5C74` / `#150A0A` / `#FEA9AF` | white, near-black |
 
-Method: relative luminance per WCAG 2.x (sRGB linearisation, 0.2126/0.7152/0.0722), ratio = (L1 + 0.05) / (L2 + 0.05), computed by `tools/contrast.py` (included; reads `tokens.json`, exits non-zero on failure) from the exact hex values above. Targets: 4.5:1 for text, 3:1 for non-text UI boundaries, focus ring and status glyphs (WCAG 1.4.11). `fg_3` is capped at 3:1 and is only allowed on non-essential hints. **66 of 66 pairs pass in each theme; lowest text ratio 4.63:1, lowest non-text ratio 3.18:1.**
+## 3. Contrast gate
 
-### Light
+`tools/contrast.py` (WCAG 2.x relative luminance, ratio = (L1 + 0.05) / (L2 + 0.05)) checks 472 pairs: **228 token-matrix pairs over both themes** (every text token on every surface it may sit on, every non-text token on every surface it may touch), **100 accent-variant pairs**, and **144 pairs extracted from `direction-1/styles.css`** (every colour/background and border/background combination that really occurs in one rule). It then fails if a colour token used in a colour property takes part in no tested pair, and lints `styles.css` and `index.html` for gradient, pattern, inset shadow, `color-mix`, `backdrop-filter`, uppercase transforms and font sizes under 12 px. Result for the files in this folder: **472 of 472 pairs pass, no lint or coverage failure.** Lowest text ratio: **4.78:1** (placeholder on the accent tint, light). Lowest non-text ratio: **3.25:1** (`border_strong` on `surface_3`, light). Text needs 4.5, non-text 3.
 
-| Foreground | Background | Ratio | Need | Result | Used for |
-|---|---|---:|---:|:---:|---|
-| `fg` #0A0A0A | `canvas` #FAFAFA | **18.97** | 4.5 | PASS | Body text on page |
-| `fg` #0A0A0A | `surface` #FFFFFF | **19.80** | 4.5 | PASS | Body text on card |
-| `fg_2` #525252 | `surface` #FFFFFF | **7.81** | 4.5 | PASS | Secondary text on card |
-| `fg_2` #525252 | `surface_2` #F3F3F3 | **7.04** | 4.5 | PASS | Secondary text on sunken/table header |
-| `fg_2` #525252 | `canvas` #FAFAFA | **7.49** | 4.5 | PASS | Secondary text on page |
-| `fg_2` #525252 | `accent_bg` #F1EDFE | **6.80** | 4.5 | PASS | Secondary text on selected card |
-| `fg` #0A0A0A | `accent_bg` #F1EDFE | **17.24** | 4.5 | PASS | Text on selected row |
-| `fg_3` #7A7A7A | `surface` #FFFFFF | **4.29** | 3 | PASS | Placeholder / disabled hint (non-essential) |
-| `on_accent` #FFFFFF | `accent` #7139CB | **6.67** | 4.5 | PASS | Primary button label |
-| `accent_fg` #5C29AA | `surface` #FFFFFF | **8.93** | 4.5 | PASS | Accent text/link on card |
-| `accent_fg` #5C29AA | `accent_bg` #F1EDFE | **7.77** | 4.5 | PASS | Accent text on selected row/tint |
-| `ok_fg` #005725 | `ok_bg` #DEF8E2 | **7.80** | 4.5 | PASS | Verified / success badge |
-| `ok_fg` #005725 | `surface` #FFFFFF | **8.79** | 4.5 | PASS | Success text on card |
-| `warn_fg` #6F4606 | `warn_bg` #FFF3D3 | **7.44** | 4.5 | PASS | Warning badge / banner |
-| `warn_fg` #6F4606 | `surface` #FFFFFF | **8.22** | 4.5 | PASS | Warning text on card |
-| `err_fg` #A70311 | `err_bg` #FEEFEF | **7.06** | 4.5 | PASS | Error badge / banner |
-| `err_fg` #A70311 | `surface` #FFFFFF | **7.88** | 4.5 | PASS | Error text on card |
-| `info_fg` #004B96 | `info_bg` #E7F1FF | **7.53** | 4.5 | PASS | Info badge / banner |
-| `info_fg` #004B96 | `surface` #FFFFFF | **8.58** | 4.5 | PASS | Info text on card |
-| `on_danger` #FFFFFF | `danger` #C60014 | **6.16** | 4.5 | PASS | Destructive button label |
-| `log_fg` #DEDEDE | `log_bg` #121114 | **13.99** | 4.5 | PASS | Log text |
-| `log_dim` #9E9E9E | `log_bg` #121114 | **7.02** | 4.5 | PASS | Log timestamps |
-| `log_dbg` #9DA5B1 | `log_bg` #121114 | **7.57** | 4.5 | PASS | Log DEBUG |
-| `log_inf` #89C3FE | `log_bg` #121114 | **10.13** | 4.5 | PASS | Log INFO |
-| `log_wrn` #F7C243 | `log_bg` #121114 | **11.43** | 4.5 | PASS | Log WARN |
-| `log_err` #FE8A88 | `log_bg` #121114 | **8.25** | 4.5 | PASS | Log ERROR |
-| `border_strong` #868686 | `surface` #FFFFFF | **3.64** | 3 | PASS | Input / checkbox boundary (WCAG 1.4.11) |
-| `ring` #7139CB | `surface` #FFFFFF | **6.67** | 3 | PASS | Focus ring |
-| `ring` #7139CB | `canvas` #FAFAFA | **6.39** | 3 | PASS | Focus ring on page |
-| `ok_solid` #03A14A | `surface` #FFFFFF | **3.39** | 3 | PASS | Status icon/bar OK |
-| `warn_solid` #C68206 | `surface` #FFFFFF | **3.18** | 3 | PASS | Status icon/bar Warn |
-| `err_solid` #E30117 | `surface` #FFFFFF | **4.90** | 3 | PASS | Status icon/bar Error |
-| `info_solid` #3280DD | `surface` #FFFFFF | **3.99** | 3 | PASS | Status icon/bar Info |
+What it cannot see: text whose background is an ancestor's (covered by the matrix of allowed surfaces, not by the rule extractor), anything drawn in SVG attributes in the diagram (its fills are the same tokens and were checked by eye), and GPUI rendering. Treat a new token or a new surface as a change to the matrix in `contrast.py`.
 
-### Dark
+### Text (ratios, light and dark)
 
-| Foreground | Background | Ratio | Need | Result | Used for |
-|---|---|---:|---:|:---:|---|
-| `fg` #FAFAFA | `canvas` #0A0A0A | **18.97** | 4.5 | PASS | Body text on page |
-| `fg` #FAFAFA | `surface` #171717 | **17.18** | 4.5 | PASS | Body text on card |
-| `fg_2` #ABABAB | `surface` #171717 | **7.81** | 4.5 | PASS | Secondary text on card |
-| `fg_2` #ABABAB | `surface_2` #202020 | **7.10** | 4.5 | PASS | Secondary text on sunken/table header |
-| `fg_2` #ABABAB | `canvas` #0A0A0A | **8.62** | 4.5 | PASS | Secondary text on page |
-| `fg_2` #ABABAB | `accent_bg` #31254D | **6.09** | 4.5 | PASS | Secondary text on selected card |
-| `fg` #FAFAFA | `accent_bg` #31254D | **13.39** | 4.5 | PASS | Text on selected row |
-| `fg_3` #808080 | `surface` #171717 | **4.54** | 3 | PASS | Placeholder / disabled hint (non-essential) |
-| `on_accent` #0E0C15 | `accent` #A37BFE | **6.30** | 4.5 | PASS | Primary button label |
-| `accent_fg` #C3AFFE | `surface` #171717 | **9.29** | 4.5 | PASS | Accent text/link on card |
-| `accent_fg` #C3AFFE | `accent_bg` #31254D | **7.24** | 4.5 | PASS | Accent text on selected row/tint |
-| `ok_fg` #6ED889 | `ok_bg` #0F3118 | **8.04** | 4.5 | PASS | Verified / success badge |
-| `ok_fg` #6ED889 | `surface` #171717 | **10.11** | 4.5 | PASS | Success text on card |
-| `warn_fg` #F1C45E | `warn_bg` #3D2A02 | **8.36** | 4.5 | PASS | Warning badge / banner |
-| `warn_fg` #F1C45E | `surface` #171717 | **10.93** | 4.5 | PASS | Warning text on card |
-| `err_fg` #FFA09C | `err_bg` #4F1A18 | **7.21** | 4.5 | PASS | Error badge / banner |
-| `err_fg` #FFA09C | `surface` #171717 | **9.19** | 4.5 | PASS | Error text on card |
-| `info_fg` #91C1FF | `info_bg` #132946 | **7.87** | 4.5 | PASS | Info badge / banner |
-| `info_fg` #91C1FF | `surface` #171717 | **9.63** | 4.5 | PASS | Info text on card |
-| `on_danger` #0C0403 | `danger` #E23439 | **4.63** | 4.5 | PASS | Destructive button label |
-| `log_fg` #DEDEDE | `log_bg` #060607 | **15.05** | 4.5 | PASS | Log text |
-| `log_dim` #989898 | `log_bg` #060607 | **7.02** | 4.5 | PASS | Log timestamps |
-| `log_dbg` #979FAB | `log_bg` #060607 | **7.58** | 4.5 | PASS | Log DEBUG |
-| `log_inf` #89C3FE | `log_bg` #060607 | **10.90** | 4.5 | PASS | Log INFO |
-| `log_wrn` #F7C243 | `log_bg` #060607 | **12.30** | 4.5 | PASS | Log WARN |
-| `log_err` #FE8A88 | `log_bg` #060607 | **8.88** | 4.5 | PASS | Log ERROR |
-| `border_strong` #747474 | `surface` #171717 | **3.84** | 3 | PASS | Input / checkbox boundary (WCAG 1.4.11) |
-| `ring` #A37BFE | `surface` #171717 | **5.82** | 3 | PASS | Focus ring |
-| `ring` #A37BFE | `canvas` #0A0A0A | **6.43** | 3 | PASS | Focus ring on page |
-| `ok_solid` #37BB62 | `surface` #171717 | **7.21** | 3 | PASS | Status icon/bar OK |
-| `warn_solid` #F0B135 | `surface` #171717 | **9.43** | 3 | PASS | Status icon/bar Warn |
-| `err_solid` #F4514F | `surface` #171717 | **5.24** | 3 | PASS | Status icon/bar Error |
-| `info_solid` #539AF2 | `surface` #171717 | **6.21** | 3 | PASS | Status icon/bar Info |
+| Foreground | Background | Light | Dark | Need |
+|---|---|---:|---:|---:|
+| `accent_fg` | `accent_bg` | 7.77 | 7.77 | 4.5 |
+| `accent_fg` | `canvas` | 8.55 | 11.01 | 4.5 |
+| `accent_fg` | `sidebar` | 8.33 | 10.58 | 4.5 |
+| `accent_fg` | `surface` | 8.93 | 9.97 | 4.5 |
+| `accent_fg` | `surface_2` | 8.04 | 9.06 | 4.5 |
+| `accent_fg` | `surface_3` | 7.35 | 7.87 | 4.5 |
+| `err_fg` | `accent_bg` | 6.86 | 7.16 | 4.5 |
+| `err_fg` | `canvas` | 7.55 | 10.14 | 4.5 |
+| `err_fg` | `err_bg` | 7.06 | 7.21 | 4.5 |
+| `err_fg` | `surface` | 7.88 | 9.19 | 4.5 |
+| `err_fg` | `surface_2` | 7.10 | 8.35 | 4.5 |
+| `err_fg` | `surface_3` | 6.49 | 7.26 | 4.5 |
+| `fg` | `accent_bg` | 17.24 | 13.39 | 4.5 |
+| `fg` | `canvas` | 18.97 | 18.97 | 4.5 |
+| `fg` | `sidebar` | 18.48 | 18.23 | 4.5 |
+| `fg` | `surface` | 19.80 | 17.18 | 4.5 |
+| `fg` | `surface_2` | 17.84 | 15.61 | 4.5 |
+| `fg` | `surface_3` | 16.31 | 13.57 | 4.5 |
+| `fg_2` | `accent_bg` | 6.80 | 6.52 | 4.5 |
+| `fg_2` | `canvas` | 7.49 | 9.23 | 4.5 |
+| `fg_2` | `sidebar` | 7.29 | 8.87 | 4.5 |
+| `fg_2` | `surface` | 7.81 | 8.36 | 4.5 |
+| `fg_2` | `surface_2` | 7.04 | 7.60 | 4.5 |
+| `fg_2` | `surface_3` | 6.44 | 6.60 | 4.5 |
+| `info_fg` | `accent_bg` | 7.47 | 7.51 | 4.5 |
+| `info_fg` | `canvas` | 8.22 | 10.63 | 4.5 |
+| `info_fg` | `info_bg` | 7.53 | 7.87 | 4.5 |
+| `info_fg` | `surface` | 8.58 | 9.63 | 4.5 |
+| `info_fg` | `surface_2` | 7.73 | 8.75 | 4.5 |
+| `info_fg` | `surface_3` | 7.07 | 7.60 | 4.5 |
+| `log_dbg` | `log_bg` | 7.57 | 7.58 | 4.5 |
+| `log_dim` | `log_bg` | 7.02 | 7.02 | 4.5 |
+| `log_dim` | `log_err_bg` | 5.18 | 5.41 | 4.5 |
+| `log_dim` | `log_wrn_bg` | 5.29 | 5.58 | 4.5 |
+| `log_err` | `log_bg` | 8.25 | 8.88 | 4.5 |
+| `log_err` | `log_err_bg` | 6.08 | 6.84 | 4.5 |
+| `log_fg` | `log_bg` | 13.99 | 15.05 | 4.5 |
+| `log_fg` | `log_err_bg` | 10.31 | 11.60 | 4.5 |
+| `log_fg` | `log_wrn_bg` | 10.53 | 11.97 | 4.5 |
+| `log_inf` | `log_bg` | 10.13 | 10.90 | 4.5 |
+| `log_wrn` | `log_bg` | 11.43 | 12.30 | 4.5 |
+| `log_wrn` | `log_wrn_bg` | 8.60 | 9.78 | 4.5 |
+| `ok_fg` | `accent_bg` | 7.65 | 7.89 | 4.5 |
+| `ok_fg` | `canvas` | 8.42 | 11.17 | 4.5 |
+| `ok_fg` | `ok_bg` | 7.80 | 8.04 | 4.5 |
+| `ok_fg` | `surface` | 8.79 | 10.11 | 4.5 |
+| `ok_fg` | `surface_2` | 7.92 | 9.19 | 4.5 |
+| `ok_fg` | `surface_3` | 7.24 | 7.99 | 4.5 |
+| `on_accent` | `accent` | 6.67 | 6.30 | 4.5 |
+| `on_accent` | `accent_hover` | 8.25 | 7.70 | 4.5 |
+| `on_accent` | `accent_pressed` | 10.14 | 5.13 | 4.5 |
+| `on_danger` | `danger` | 6.16 | 6.63 | 4.5 |
+| `on_danger` | `danger_hover` | 7.57 | 7.85 | 4.5 |
+| `on_danger` | `danger_pressed` | 9.24 | 9.60 | 4.5 |
+| `placeholder` | `accent_bg` | 4.78 | 5.22 | 4.5 |
+| `placeholder` | `canvas` | 5.26 | 7.39 | 4.5 |
+| `placeholder` | `surface` | 5.49 | 6.69 | 4.5 |
+| `placeholder` | `surface_2` | 4.95 | 6.08 | 4.5 |
+| `warn_fg` | `accent_bg` | 7.16 | 8.52 | 4.5 |
+| `warn_fg` | `canvas` | 7.88 | 12.07 | 4.5 |
+| `warn_fg` | `surface` | 8.22 | 10.93 | 4.5 |
+| `warn_fg` | `surface_2` | 7.41 | 9.93 | 4.5 |
+| `warn_fg` | `surface_3` | 6.77 | 8.63 | 4.5 |
+| `warn_fg` | `warn_bg` | 7.44 | 8.36 | 4.5 |
 
-Not covered by the table (check in implementation): text over the 55% dialog scrim (dialogs are opaque, so unaffected), hover states (`fg` on `surface_2` is 17.84:1 light / 15.61:1 dark), disabled controls (WCAG-exempt, but the `fg_2` label on `surface_2` is still 7.04:1 light / 7.10:1 dark, so they stay legible).
+### Non-text (ratios, light and dark)
+
+| Foreground | Background | Light | Dark | Need |
+|---|---|---:|---:|---:|
+| `accent` | `accent_bg` | 5.81 | 4.54 | 3 |
+| `accent` | `canvas` | 6.39 | 6.43 | 3 |
+| `accent` | `surface` | 6.67 | 5.82 | 3 |
+| `accent` | `surface_2` | 6.01 | 5.29 | 3 |
+| `accent` | `surface_3` | 5.49 | 4.60 | 3 |
+| `border_strong` | `accent_bg` | 3.44 | 3.84 | 3 |
+| `border_strong` | `canvas` | 3.78 | 5.44 | 3 |
+| `border_strong` | `err_bg` | 3.54 | 3.86 | 3 |
+| `border_strong` | `info_bg` | 3.46 | 4.02 | 3 |
+| `border_strong` | `ok_bg` | 3.50 | 3.92 | 3 |
+| `border_strong` | `sidebar` | 3.69 | 5.23 | 3 |
+| `border_strong` | `surface` | 3.95 | 4.92 | 3 |
+| `border_strong` | `surface_2` | 3.56 | 4.48 | 3 |
+| `border_strong` | `surface_3` | 3.25 | 3.89 | 3 |
+| `border_strong` | `warn_bg` | 3.58 | 3.77 | 3 |
+| `danger_edge` | `canvas` | 5.90 | 9.40 | 3 |
+| `danger_edge` | `sidebar` | 5.75 | 9.03 | 3 |
+| `danger_edge` | `surface` | 6.16 | 8.51 | 3 |
+| `err_solid` | `accent_bg` | 5.36 | 4.44 | 3 |
+| `err_solid` | `canvas` | 5.90 | 6.28 | 3 |
+| `err_solid` | `surface` | 6.16 | 5.69 | 3 |
+| `err_solid` | `surface_2` | 5.55 | 5.17 | 3 |
+| `err_solid` | `surface_3` | 5.07 | 4.49 | 3 |
+| `info_solid` | `accent_bg` | 4.28 | 4.84 | 3 |
+| `info_solid` | `canvas` | 4.71 | 6.86 | 3 |
+| `info_solid` | `surface` | 4.92 | 6.21 | 3 |
+| `info_solid` | `surface_2` | 4.43 | 5.64 | 3 |
+| `info_solid` | `surface_3` | 4.05 | 4.90 | 3 |
+| `ok_solid` | `accent_bg` | 4.52 | 5.62 | 3 |
+| `ok_solid` | `canvas` | 4.97 | 7.96 | 3 |
+| `ok_solid` | `surface` | 5.19 | 7.21 | 3 |
+| `ok_solid` | `surface_2` | 4.67 | 6.55 | 3 |
+| `ok_solid` | `surface_3` | 4.27 | 5.70 | 3 |
+| `on_accent` | `accent` | 6.67 | 6.30 | 3 |
+| `ring` | `accent_bg` | 5.81 | 4.54 | 3 |
+| `ring` | `canvas` | 6.39 | 6.43 | 3 |
+| `ring` | `err_bg` | 5.97 | 4.57 | 3 |
+| `ring` | `info_bg` | 5.85 | 4.76 | 3 |
+| `ring` | `ok_bg` | 5.92 | 4.63 | 3 |
+| `ring` | `sidebar` | 6.22 | 6.18 | 3 |
+| `ring` | `surface` | 6.67 | 5.82 | 3 |
+| `ring` | `surface_2` | 6.01 | 5.29 | 3 |
+| `ring` | `surface_3` | 5.49 | 4.60 | 3 |
+| `ring` | `warn_bg` | 6.04 | 4.46 | 3 |
+| `ring_inverse` | `log_bg` | 6.11 | 6.58 | 3 |
+| `warn_solid` | `accent_bg` | 3.82 | 7.35 | 3 |
+| `warn_solid` | `canvas` | 4.20 | 10.41 | 3 |
+| `warn_solid` | `surface` | 4.39 | 9.43 | 3 |
+| `warn_solid` | `surface_2` | 3.95 | 8.57 | 3 |
+| `warn_solid` | `surface_3` | 3.61 | 7.45 | 3 |
 
 ## 4. Typography
 
-Production fonts: **Inter** (variable) for UI text and **JetBrains Mono** (or IBM Plex Mono) for data, both SIL OFL, bundled in the app so GPUI renders identically on Windows, macOS and Linux; the web UI uses the same families with the system stack as fallback. The mockups use system stacks only (they must open from disk without assets).
+One stack, in the mock and in `tokens.json`: `Inter, "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text", Roboto, "Helvetica Neue", Arial, sans-serif`; mono: `"JetBrains Mono", "Cascadia Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace`. Production bundles **Inter** and **JetBrains Mono** (SIL OFL), static weights **400, 600, 700 only**, so GPUI renders identically on Windows, macOS and Linux. The mock renders with whichever of these the viewing machine has, so line breaks are indicative. **Tabular numerals (`tnum`) on every text style.** **Sentence case; no all-caps** (acronyms and codes such as RAID, DSM, SSH, SMART and the log levels DBG, INF, WRN, ERR are the only capitals). **Minimum 12 px**, enforced by lint. Text scale setting 100 / 115 / 130%: every size and line height scales, spacing does not; the layouts above were checked at 130% on 960 x 640.
 
 | Style | Size/line (px) | Weight | Tracking | Used for |
 |---|---|---:|---|---|
-| `display` | 28/34 | 650 | -0.02em | Metric numbers (tiles), big status words · tabular-nums |
-| `h1` | 24/29 | 650 | -0.015em | Screen title |
-| `h2` | 16/21 | 620 | 0 | Card / section title, goal card title |
-| `body` | 14/21 | 400 | 0 | Default text, descriptions, form values |
-| `body_sm` | 13/19 | 400 | 0 | Table cells, helper text, buttons (600) |
-| `caption` | 12/16 | 600 | 0 | Badges, field labels, table headers, window title meta |
-| `mono` | 13/20 | 400 | 0 | IPs, MACs, device paths, fingerprints, commands · tabular-nums |
-| `log` | 12/20 | 400 | 0 | Log viewer lines (line-height 1.65) · tabular-nums |
+| `display` | 28/34 | 700 | -0.02em | Metric numbers, big status words |
+| `h1` | 24/30 | 700 | -0.015em | Screen title |
+| `h2` | 16/21 | 600 | 0 | Card and section titles |
+| `body` | 14/21 | 400 | 0 | Default text, descriptions |
+| `body_sm` | 13/19 | 400 | 0 | Table cells, helper text, button labels (600) |
+| `caption` | 12/16 | 400 | 0 | Badges (600), field hints, table headers (600) |
+| `mono` | 13/20 | 400 | 0 | IPs, MACs, device paths, fingerprints, commands |
+| `log` | 12/20 | 400 | 0 | Log lines |
 
-Rules: sentence case everywhere; no all-caps in Direction 1. Numbers in tiles, tables and logs use tabular figures. Never go below 12 px. Offer a text scale setting (100 / 115 / 130%) that multiplies every size and line height; layouts must reflow at 130% on a 960 x 640 window.
+## 5. Spacing, radius, elevation, layout
 
-## 5. Spacing, radius, elevation, density
+- **Spacing (px):** 2 · 4 · 6 · 8 · 12 · 16 · 20 · 24 · 32 · 40 · 48. Card padding 16, page padding 24 (12 on phones), gap between cards 16.
+- **Controls:** 28 / 36 / 42 px; 44 px for every control in the web plane below 700 px. Table cell padding 12 x 16. Radii: 6 (chips, checkbox), 8 (buttons, inputs, banners), 12 (cards, dialogs, window), pill (badges, progress, step discs).
+- **Elevation:** `e1` `0 1px 2px rgb(0 0 0 / .05)` cards; `e3` `0 24px 48px -12px rgb(0 0 0 / .5)` windows and dialogs; menus use `e2`. No inset shadows.
+- **Desktop window (min 960 x 640):** title bar 38 px (with the "Mockup · sample data" tag in the mocks), stepper 48 px, content (one scroll area, 24 px padding), pinned action bar 64 px, safety rail 216 px fixed on the right. Below 1100 px the stepper shows only the current step's label; below 1000 px two-column grids become one column and secondary table columns drop. The Compatibility column of Find never drops.
+- **Web plane:** sidebar 224 px, top bar 52 px, status strip 36 px (worst component wins: "Needs attention"), persistent rollback banner under the strip, content scroll area. Below 700 px: bottom tab bar, tiles in two columns, tables as cards, docked panels stacked, controls 44 px. Docked edit panels (320 px) on wide layouts.
+- **Scrollbars:** 12 px hit area, thin thumb in `border_strong` on a transparent track; keyboard scrolling must work on every scroll area.
+- **OS chrome:** custom title bar; controls on the right for Windows and Linux, on the left (native traffic lights) for macOS. The mock draws neutral stand-ins.
 
-- **Spacing scale (px):** 2 · 4 · 6 · 8 · 12 · 16 · 20 · 24 · 32 · 40 · 48. Base unit 4. Card padding 16, dialog padding 20, page padding 28 (desktop) / 24 (web) / 16 (phone), gap between cards 16, gap inside a form 14.
-- **Control heights:** small 28, default 36, large 42; table cell padding 10 x 14 (row about 44 single-line, 52 two-line). Phone controls and tab targets are 44 px.
-- **Window:** min 960 x 640, step rail 212 px fixed, content max width not capped (tables breathe), action bar pinned to the bottom of the window with content scrolling above it.
+| Radius | px |
+|---|---:|
+| `sm` | 6 |
+| `md` | 8 |
+| `lg` | 12 |
+| `pill` | 999 |
 
-| Radius | Value | Used for |
-|---|---:|---|
-| `sm` | 6 px | Badges, chips, checkbox, code chips |
-| `md` | 8 px | Buttons, inputs, banners, rows, rail items |
-| `lg` | 12 px | Cards, dialogs, window |
-| `pill` | 999 px | Progress bars, avatar, step dots |
+| Elevation | Value |
+|---|---|
+| `e0` | `none` |
+| `e1` | `0 1px 2px rgb(0 0 0 / 0.05)` |
+| `e2` | `0 4px 12px -2px rgb(0 0 0 / 0.14)` |
+| `e3` | `0 24px 48px -12px rgb(0 0 0 / 0.5)` |
 
-| Elevation | CSS / GPUI | Used for |
-|---|---|---|
-| `e0` | `none` | Flat: border only (inputs, table, banners) |
-| `e1` | `0 1px 2px rgb(0 0 0 / 0.05)` | Cards, tiles |
-| `e2` | `0 4px 12px -2px rgb(0 0 0 / 0.14), 0 1px 3px rgb(0 0 0 / 0.08)` | Menus, popovers, select lists |
-| `e3` | `0 24px 60px -12px rgb(0 0 0 / 0.5)` | Dialogs (over a 55% scrim) |
+## 6. Components and states
 
-In dark mode elevation is expressed by one step lighter surface plus the 1 px border; shadows stay but are nearly invisible, which is fine.
+Every component below has default, hover, pressed, focus-visible, disabled and (where it applies) error and loading drawn in `states.html`. **Focus** is always a 2 px `ring` outline with a 2 px offset (inside the always-dark log it is `ring_inverse`); the parents of edge controls must reserve room for it (no `overflow: hidden` clipping the ring). **Hover** moves one surface step (`surface_2`), **pressed** two (`surface_3`).
 
-## 6. Components
-
-**Buttons** (height 36, radius 8, label 13 px / 600, icon 16 px + 7 px gap). Variants: *primary* (`accent` fill, `on_accent` label; one per screen, bottom right), *secondary* (`surface`, 1 px `border_strong`), *ghost* (no border, `surface_2` on hover), *destructive* (`danger` fill, `on_danger` label, always with a trash icon and a verb + object label such as "Erase 4 disks and install Debian"; never a bare "OK"; sits to the right of, and never replaces, the safe "Back to plan" primary). Disabled = dashed `border_strong` + `surface_2` fill + `fg_2` label; the destructive button is disabled until every gate item passes. States: hover (`accent_hover` / `danger_hover` / `surface_2`), pressed (same fill as hover, no translate), focus (2 px `ring`, 2 px offset).
-
-**Inputs** (height 36, radius 8, `surface`, 1 px `border_strong`, 13 px). Focus: 2 px `ring` outline. Error: 1 px `err_solid` border + `err_fg` helper text with an icon. Monospace for hosts, IPs, device paths, fingerprints. Labels above the field (13 px / 620), helper text below (12 px, `fg_2`). Checkbox 20 px, radio card with 20 px dot and full-card hit area. Segmented control for 2-4 mutually exclusive filters (log level, next-boot scope).
-
-**Badges** (height 22, radius 6, 12 px / 620, 14 px icon, 1 px border at 50% of the solid colour, tinted `*_bg` fill, `*_fg` text). Compatibility set (exact mapping):
-
-| Status | Icon | Style | Meaning |
-|---|---|---|---|
-| Verified | shield-check | ok, solid border | Maintainer-tested end to end on this model |
-| Community-reported | users | info, solid border | Users report success, not maintainer-tested |
-| Untested | help-circle (dashed) | neutral, **dashed border** | No data; read-only checks run first |
-| Known issues | alert-triangle | warn, solid border | Works with documented limits |
-| Unsupported | ban | err, solid border | Installer refuses to start |
-
-Vendor chips (Intel / AMD / ARM): neutral outline chip, bold vendor name + mono architecture tag (`x86_64`, `armv7`). No vendor logos or brand colours (trademarks, and colour would collide with status).
-
-**Cards and tiles** (`surface`, 1 px `border`, radius 12, `e1`). Card header 12 x 16 padding with a 1 px bottom border, title 14 px / 620, optional status badge right-aligned. Metric tile: caption label + icon (top), 28 px display value with a 13 px unit, 12 px sub-line, optional sparkline (46 px high, 1.8 px stroke, 12% area).
-
-**Tables** (13 px; header `surface_2`, 12 px / 620 `fg_2`; 1 px row dividers; numbers right-aligned, tabular, mono for IDs). Selected row = `accent_bg` fill + 3 px `accent` left edge (not colour alone: the edge is a shape and the row also shows a "selected" summary in the action bar). Max 7 columns on the desktop app; below 960 px the web tables become stacked cards.
-
-**Progress and stepper.** Linear bar 8 px, pill, `surface_3` track, `accent` fill (`ok` when done, `warn` for degraded such as RAID resync, `err` on failure), percentage as text next to it, `role=progressbar`. Step rail (desktop): 22 px numbered circle - done = filled accent with check, current = 2 px accent ring + `accent_bg` row + bold label, upcoming = hollow. The 12-step install list uses the same circles, grouped under four phase captions (Prepare, Install, Configure, Verify), with the **point of no return** as a dashed `err_solid` rule with a flag icon between step 4 and 5; once passed it reads "passed" and the Cancel button becomes disabled with the reason in the action bar.
-
-**Banners** (radius 8, 1 px border at 50% solid, `*_bg` fill, `*_fg` text, 18 px icon, bold title + one sentence, actions right). Kinds: info, ok, warn, err, accent. `role=alert` for warn/err. The data-loss banner (err) is the only banner allowed to be above the fold on the Confirm screen and is paired with a two-segment "reversible / point of no return" strip.
-
-**Dialogs** (520 px, radius 12, `surface`, `e3`, 55% `overlay` scrim). Header with icon + title + one-line context, body, footer on `surface_2` with the ghost "dismiss" left and primary right. Escape closes unless the dialog is a data-loss gate (the gate is a full screen, not a dialog, on purpose: it needs room for two lists).
-
-**Data-loss gate pattern** (Confirm screen). Order is fixed: (1) title with the target device name, (2) err banner, (3) two cards side by side, **Will be destroyed** (err top edge 4 px, trash icons) and **Will be preserved** (ok top edge 4 px, shield icons), each with item + one-line detail, (4) backup finding as a warn banner, (5) two checkboxes, (6) typed hostname with live character count (`role=status`, `aria-live=polite`, paste disabled), (7) action bar: safe primary "Back to plan", secondary "Cancel", destructive disabled until 4 + 5 + 6 are satisfied. The typed text must equal the NAS hostname exactly.
-
-**Log viewer.** `log_bg` surface, radius 8, 12 px mono, line-height 1.65, grid columns 70 px time / 50 px level / message. Level is a **glyph + 3-letter word + colour**: `· DBG`, `● INF`, `▲ WRN`, `✖ ERR`. Warn lines get a 12% `log_wrn` wash and a 3 px left edge; error lines the same with `log_err`. Debug message text is dimmed (`log_dim`). Filter = segmented control "Debug / Info / Warn / Error" with live counts (minimum level, cumulative). Footer: follow-output checkbox, line and warning counts. Copy and Save buttons live in the card header. Always dark in Direction 1, in both themes (terminal convention; contrast verified against the dark `log_bg`).
-
-**Disk diagram.** Four labelled layers top to bottom: DISKS, PARTITIONS, RAID (mdadm), LVM / FS. Boxes: disk = `surface` + `border_strong`; partition = `surface_3` (small system partitions) or `accent_bg` + `accent` (data); RAID array = `ok_bg` + `ok_solid` for mirrors, `accent_bg` for the data array; LV = `accent_bg`; problems = 2 px `warn_solid` outline (disk with SMART note) or `err_solid` + diagonal hatch (overflowing LV), always with a text label ("+0.40 TiB over VG"). Connectors are 1.2 px `fg_3` lines at 55% opacity. Text 11-12 px; sizes in TiB/GiB with two decimals. Warnings and the blocking error repeat below as banners, so the diagram is never the only carrier of the message.
-
-**Slider.** 6 px track `surface_3`, filled part `accent` (`err_solid` when invalid), 20 px thumb with a 2 px ring, dashed marker for the maximum with its value written above, min and max labels below; paired with a numeric input and unit. Keyboard: arrows 1 step, Shift 10 steps.
+- **Buttons** (36 px, radius 8, 13 px / 600). *Primary*: `accent` fill, `on_accent` label; hover `accent_hover`, pressed `accent_pressed`; one per screen. *Secondary*: `surface`, 1 px `border_strong`. *Ghost*: no border. *Destructive*: `danger` fill, `on_danger` label (white in both themes), 2 px `danger_edge` outline, trash icon, verb + object label ("Erase DS918+ and install Debian"), 700 weight; only data-loss actions; hover `danger_hover`, pressed `danger_pressed`. *Disabled* (all variants): `surface_2` fill, dashed `border_strong`, `fg_2` label, no red. *Loading*: busy glyph (static under reduced motion) plus a present-tense label ("Starting installer…"), clicks ignored, `aria-busy`. Back and Cancel next to the destructive button are secondary and ghost; there is no violet fill on the gate.
+- **Inputs** (36 px, 1 px `border_strong`, radius 8). Hover: border `fg_2`. Focus: ring. Error: 2 px `err_solid` border + `err_fg` helper with a drawn icon. Match: 2 px `ok_solid` + `ok_fg` helper. Disabled: dashed. Placeholder: `placeholder`. Mono for hosts, IPs, serials, fingerprints, the typed phrase.
+- **Typed phrase** (the gate). Phrase `ERASE <MODEL>` (here `ERASE DS918+`), case-sensitive, **paste allowed**, label states what to type; live status line (`role=status`): "N of 12 characters match. Keep typing." (neutral), "Character N differs." (error, never echoes the expected text), "Matches." (ok). The erase button enables only when both boxes are ticked and the phrase matches.
+- **Checkbox** 20 px, 2 px `border_strong`, checked = `accent` + check; whole label is the hit area. **Radio card**: 20 px dot, 1 px `border_strong`; selected = `accent` border + `accent_bg`. **Segmented control** and **tabs**: pressed/selected = `accent` fill / underline; hover `surface_2`.
+- **Badges** (24 px, pill, 12 px / 600, 14 px drawn icon, 1 px opaque `*_border`). Compatibility set: Verified = shield-check (`ok`), Community-reported = users (`info`), Untested = dashed-circle help (neutral, **dashed border**), Known issues = triangle (`warn`), Unsupported = ban (`err`). Verified appears only in the legend until a model earns it. Vendor chips (Intel, AMD, ARM): outline chip + mono architecture tag, no logos.
+- **Cards** (`surface`, 1 px `border`, radius 12, `e1`); header 12 x 16 with a 1 px bottom border. **Tiles**: caption + icon, 28 px value, 12 px sub-line, optional 48 px sparkline. **Tables** (13 px, header `surface_2`); selected row = `accent_bg` + 4 px `accent` child edge; rows are focusable (`tabindex`) with a ring.
+- **Safety rail** (216 px, `sidebar`): status box (icon + title + one sentence), four-level meter (Reading only, Plan prepared, Boot flash changed, Disks changed; passed levels are checks), "Can I cancel?", Target (model, IP, serial), Planned, "Your way back". The status box is neutral for read-only and plan states, amber for "Boot flash changed", "Disks modified" and "Failed, disks untouched", green for "Debian running". It never uses red.
+- **Progress** (12 px pill with a 1 px `border_strong` outline, fill `accent`, `ok_solid` when done, `warn_solid` while degraded such as a RAID resync, `err_solid` on failure; text value beside it). **Stepper** (24 px discs: done = filled `accent` + check, current = `accent` ring + tint + label, failed = `err` disc "!" with the step name kept). **Phase pills** (Connecting, Inspecting, Staging, Booting installer, Installing, Waiting for reboot, Verifying) and the 12 installer steps share the disc language; the **point of no return** is a dashed rule with a flag, between steps 2 and 3, reading "passed hh:mm:ss" afterwards.
+- **Banners** (radius 8, tint + opaque border, drawn icon, bold title + sentence, actions right; `role=alert` for warn and err). The data-loss banner on the gate is the neutral kind (`surface_2`, `border_strong` outline, no red); unit identity sits in a 2 px `fg` outlined card.
+- **Dialog** (520 px, radius 12, `e3`, scrim black at 0.60). **Log viewer** (always dark; 12 px mono; 72 px time, 64 px level, message; level = drawn glyph + word + colour; warn and error lines get opaque tinted rows and a 3 px edge; segmented filter with cumulative counts; Copy and Open log file buttons). **Slider** (8 px outlined track, 20 px thumb, dashed maximum marker with its value above, numeric field and error tag beside it, keyboard arrows). **Disk diagram** (layers: Disks, Partitions, RAID, LVM and file systems; 12 px text; problems are an outline and a drawn icon plus a text label, never a hatch; scrolls horizontally inside its card below 640 px).
+- **Secrets** (Done): hidden by default, "Show" reveals for 30 s, "Copy" always; Finish needs "I have copied the password".
 
 ## 7. Iconography
 
-lucide-style outline icons (ForgeVault already uses lucide): 24 x 24 grid, 2 px stroke, round caps and joins, `currentColor`. Render sizes 14 (inline in badges), 16 (buttons, rows), 20 (card headers), 28 (feature). Icons never carry meaning alone in status contexts: always next to a word. Status glyph set: shield-check, users, help-circle (dashed), alert-triangle, ban, octagon-x, check, x, info, lock, flag. Logo: rounded square with three drive bays, the first one lit; monochrome in `accent`. No vendor logos. In GPUI ship each icon as its own `.svg` file with `stroke="currentColor"` and recolour through `text_color`.
+lucide-style outline icons, 24 grid, 2 px stroke, round caps. Sizes 12 (log), 14 (badges), 16, 20, 28. The check and x glyphs use a 3 px stroke inside discs. Status glyphs: shield-check, users, dashed-circle help, triangle, ban, octagon-x, check, x, info, lock, flag. Never meaning by icon alone in status contexts. Production: one `.svg` file per icon, recoloured by text colour. (The mock draws them with CSS masks so the folder needs no assets.)
 
 ## 8. Motion
 
-Almost none. Transitions only on colour and opacity, 120 ms, ease-out; progress width 200 ms; dialogs fade 120 ms (no slide, no scale). The only looping animation is the 1.2 s linear spinner on the currently running install step; with reduced motion on (setting in the app, `prefers-reduced-motion` on the web) it is replaced by a static refresh glyph plus the word "running". The rollback countdown ring updates once per second without easing. Nothing animates on the Confirm screen except focus.
+Colour and opacity transitions only, 120 ms; progress width 200 ms; dialogs fade 120 ms, no slide. The only loop is the 1.2 s linear busy glyph; with reduced motion it is static and the word "running" or "Starting installer…" carries the meaning. The countdown updates once per second without easing and is exposed to assistive technology at 10 s and 5 s, not every second.
 
-| Duration token | ms | Used for |
+| Token | ms | Used for |
 |---|---:|---|
-| `instant` | 0 ms | Focus ring, checkbox state, disabled/enabled swap |
-| `fast` | 120 ms | Hover/pressed colour, dialog fade-in |
-| `base` | 200 ms | Progress width, banner appear |
-| `spinner` | 1200 ms | Only for "running" glyph; linear, 1 turn |
+| `instant` | 0 | Focus, checkbox state |
+| `fast` | 120 | Hover, pressed, dialog fade |
+| `base` | 200 | Progress, banner appear |
+| `spinner` | 1200 | Busy glyph (linear) |
 
 ## 9. GPUI implementation map
 
-Tokens become one `Palette` struct stored as a GPUI `Global`, switched at runtime for light / dark / follow-OS. Everything below is generated from `tokens.json` (a 30-line build script or `build.rs` emits `theme.rs`), so designers change JSON and engineers never retype a hex. Sizes are plain `px()` constants (`SPACE_4 = px(4.)`, `RADIUS_MD = px(8.)`); type styles are a small `TextStyleRefinement` table keyed by the names in section 4.
+Tokens become one `Palette` global, switched at runtime (light, dark, follow OS). `tokens.json` is the only place a colour is edited; a `build.rs` emits the struct, and `tools/contrast.py` runs in CI. Alpha: only `scrim` (`black.opacity(SCRIM_ALPHA)`).
 
 ```rust
-// crates/synofurb-ui/src/theme.rs  (generated from tokens.json - do not hand-edit)
+// crates/synofurb-ui/src/theme.rs (generated from tokens.json by build.rs; do not hand-edit)
 use gpui::{rgb, Global, Hsla};
-
-fn c(hex: u32) -> Hsla { rgb(hex).into() }     // opaque sRGB hex -> Hsla once, at startup
+fn c(hex: u32) -> Hsla { rgb(hex).into() }          // opaque sRGB hex to Hsla, once at startup
+pub const SCRIM_ALPHA: f32 = 0.60;                      // scrim = black.opacity(SCRIM_ALPHA)
 
 #[derive(Clone)]
 pub struct Palette {
@@ -257,34 +297,42 @@ pub struct Palette {
     pub surface: Hsla,
     pub surface_2: Hsla,
     pub surface_3: Hsla,
+    pub sidebar: Hsla,
     pub border: Hsla,
     pub border_strong: Hsla,
     pub fg: Hsla,
     pub fg_2: Hsla,
-    pub fg_3: Hsla,
-    pub sidebar: Hsla,
-    pub overlay: Hsla,
+    pub placeholder: Hsla,
     pub accent: Hsla,
     pub accent_hover: Hsla,
+    pub accent_pressed: Hsla,
     pub on_accent: Hsla,
     pub accent_bg: Hsla,
     pub accent_fg: Hsla,
+    pub accent_border: Hsla,
     pub ring: Hsla,
+    pub ring_inverse: Hsla,
     pub danger: Hsla,
     pub danger_hover: Hsla,
+    pub danger_pressed: Hsla,
+    pub danger_edge: Hsla,
     pub on_danger: Hsla,
     pub ok_solid: Hsla,
     pub ok_fg: Hsla,
     pub ok_bg: Hsla,
+    pub ok_border: Hsla,
     pub warn_solid: Hsla,
     pub warn_fg: Hsla,
     pub warn_bg: Hsla,
+    pub warn_border: Hsla,
     pub err_solid: Hsla,
     pub err_fg: Hsla,
     pub err_bg: Hsla,
+    pub err_border: Hsla,
     pub info_solid: Hsla,
     pub info_fg: Hsla,
     pub info_bg: Hsla,
+    pub info_border: Hsla,
     pub log_bg: Hsla,
     pub log_fg: Hsla,
     pub log_dim: Hsla,
@@ -292,9 +340,10 @@ pub struct Palette {
     pub log_inf: Hsla,
     pub log_wrn: Hsla,
     pub log_err: Hsla,
+    pub log_wrn_bg: Hsla,
+    pub log_err_bg: Hsla,
 }
 impl Global for Palette {}
-
 impl Palette {
     pub fn light() -> Self {
         Self {
@@ -302,34 +351,42 @@ impl Palette {
             surface: c(0xFFFFFF),
             surface_2: c(0xF3F3F3),
             surface_3: c(0xE9E9E9),
+            sidebar: c(0xF7F7F7),
             border: c(0xE5E5E5),
-            border_strong: c(0x868686),
+            border_strong: c(0x808080),
             fg: c(0x0A0A0A),
             fg_2: c(0x525252),
-            fg_3: c(0x7A7A7A),
-            sidebar: c(0xF7F7F7),
-            overlay: c(0x0A0A0A),
+            placeholder: c(0x696969),
             accent: c(0x7139CB),
             accent_hover: c(0x622CB5),
+            accent_pressed: c(0x541EA0),
             on_accent: c(0xFFFFFF),
             accent_bg: c(0xF1EDFE),
             accent_fg: c(0x5C29AA),
+            accent_border: c(0xB193E4),
             ring: c(0x7139CB),
+            ring_inverse: c(0xA37BFE),
             danger: c(0xC60014),
             danger_hover: c(0xAC0311),
+            danger_pressed: c(0x94020D),
+            danger_edge: c(0xC60014),
             on_danger: c(0xFFFFFF),
-            ok_solid: c(0x03A14A),
+            ok_solid: c(0x047E39),
             ok_fg: c(0x005725),
             ok_bg: c(0xDEF8E2),
-            warn_solid: c(0xC68206),
+            ok_border: c(0x66B585),
+            warn_solid: c(0xA76C01),
             warn_fg: c(0x6F4606),
             warn_bg: c(0xFFF3D3),
-            err_solid: c(0xE30117),
+            warn_border: c(0xCFA95F),
+            err_solid: c(0xC60014),
             err_fg: c(0xA70311),
             err_bg: c(0xFEEFEF),
-            info_solid: c(0x3280DD),
+            err_border: c(0xDF6C77),
+            info_solid: c(0x1570D1),
             info_fg: c(0x004B96),
             info_bg: c(0xE7F1FF),
+            info_border: c(0x73AAE6),
             log_bg: c(0x121114),
             log_fg: c(0xDEDEDE),
             log_dim: c(0x9E9E9E),
@@ -337,6 +394,8 @@ impl Palette {
             log_inf: c(0x89C3FE),
             log_wrn: c(0xF7C243),
             log_err: c(0xFE8A88),
+            log_wrn_bg: c(0x322A1B),
+            log_err_bg: c(0x3C2729),
         }
     }
 
@@ -346,34 +405,42 @@ impl Palette {
             surface: c(0x171717),
             surface_2: c(0x202020),
             surface_3: c(0x2B2B2B),
-            border: c(0x2A2A2A),
-            border_strong: c(0x747474),
-            fg: c(0xFAFAFA),
-            fg_2: c(0xABABAB),
-            fg_3: c(0x808080),
             sidebar: c(0x101010),
-            overlay: c(0x000000),
+            border: c(0x2A2A2A),
+            border_strong: c(0x868686),
+            fg: c(0xFAFAFA),
+            fg_2: c(0xB1B1B1),
+            placeholder: c(0x9E9E9E),
             accent: c(0xA37BFE),
             accent_hover: c(0xB091FE),
+            accent_pressed: c(0x946AEE),
             on_accent: c(0x0E0C15),
             accent_bg: c(0x31254D),
-            accent_fg: c(0xC3AFFE),
+            accent_fg: c(0xC8B7FF),
+            accent_border: c(0x6A50A6),
             ring: c(0xA37BFE),
-            danger: c(0xE23439),
-            danger_hover: c(0xF14D4C),
-            on_danger: c(0x0C0403),
+            ring_inverse: c(0xA37BFE),
+            danger: c(0xB7191C),
+            danger_hover: c(0xA50E15),
+            danger_pressed: c(0x8D0B11),
+            danger_edge: c(0xFF9592),
+            on_danger: c(0xFFFFFF),
             ok_solid: c(0x37BB62),
             ok_fg: c(0x6ED889),
             ok_bg: c(0x0F3118),
+            ok_border: c(0x257D41),
             warn_solid: c(0xF0B135),
             warn_fg: c(0xF1C45E),
             warn_bg: c(0x3D2A02),
-            err_solid: c(0xF4514F),
+            warn_border: c(0x9F741E),
+            err_solid: c(0xFC5855),
             err_fg: c(0xFFA09C),
             err_bg: c(0x4F1A18),
+            err_border: c(0xAE3C3A),
             info_solid: c(0x539AF2),
             info_fg: c(0x91C1FF),
             info_bg: c(0x132946),
+            info_border: c(0x3667A5),
             log_bg: c(0x060607),
             log_fg: c(0xDEDEDE),
             log_dim: c(0x989898),
@@ -381,40 +448,77 @@ impl Palette {
             log_inf: c(0x89C3FE),
             log_wrn: c(0xF7C243),
             log_err: c(0xFE8A88),
+            log_wrn_bg: c(0x28200F),
+            log_err_bg: c(0x331E1E),
         }
     }
 }
 ```
 
-Use: `div().bg(p.surface).border_1().border_color(p.border).rounded(RADIUS_LG).shadow_sm()`, and `cx.global::<Palette>()` in render. Alpha variants (scrim, status borders at 50%, log level wash at 12%) are `color.opacity(x)`, computed at draw time, never stored.
-
-What is simple, medium or costly in GPUI (verify each against the pinned GPUI revision, the API still moves):
+Verify every row against the pinned GPUI revision; the API moves.
 
 | Component | GPUI building blocks | Cost |
 |---|---|---|
-| Layout shells (window, step rail, cards, tiles, banners, two-column grids) | `div().flex().flex_col().gap_*().p_*()`, `.grid()` / `.flex_1()`, `.rounded(px())`, `.border_1().border_color()`, `.bg()` | Simple |
-| Text styles (type scale, mono, tabular nums) | `.text_size(px())`, `.font_weight()`, `.font_family()`, `.line_height()`; fonts registered once with `cx.text_system().add_fonts()` | Simple |
-| Buttons (primary / secondary / ghost / destructive, sizes) | `div().id().on_click()` with `.hover(|s| s.bg())`, `.active()`, `.focus_visible()`; disabled = different style, no handler | Simple |
-| Badges, chips, compat badges, severity labels | `div().flex().items_center().gap_1().rounded().border_1()` + `svg()` + text | Simple |
-| Icons | `svg().path("icons/x.svg").size(px(16.)).text_color(c)` (monochrome SVG assets recoloured by text colour) | Simple |
-| Banners, dialogs, scrim | `div().absolute().inset_0().bg(overlay.opacity(0.55))` + centered child; focus trap handled manually | Simple (focus trap: medium) |
-| Progress bar, stepper, step list, status dots | Nested `div` with width as a fraction (`relative(0.58)`); `Animation` only for the spinner | Simple |
-| Shadows | `.shadow_sm()` / `.shadow(vec![BoxShadow{..}])`. No inset shadows, no blur-behind: the design uses neither | Simple |
-| Disabled "hatched" button | Not needed: disabled = dashed border + muted fill (verify `.border_dashed()` in the pinned GPUI). Hatch is a web-only nicety | Simple (web hatch: skip) |
-| Tables | Header row + `uniform_list` of rows built from flex cells with fixed/flex-1 widths. No sortable-column widget; selection edge = 3 px child div | Medium |
-| Log viewer (virtualised, level filter, follow-tail) | `uniform_list` over a filtered `Vec<LogLine>`; mono font; per-line `div` with fixed-width timestamp and level columns; auto-scroll via `ScrollHandle`. Select/copy-by-drag is not provided by GPUI labels, so "Copy log" and "Save log" buttons are first-class | Medium |
-| Sparklines | `canvas()` + `PathBuilder` (stroke + 12% fill); or pre-render to an SVG string | Medium |
-| Storage diagram (disk > partition > RAID > LVM) | Boxes are `div`s on a CSS-like grid; connector lines drawn in one `canvas()` layer using measured bounds; overflow hatch = `canvas()` stripes or solid red with an icon | Medium to costly |
-| Slider (size) | Custom element: track + thumb `div`s, mouse + keyboard (arrow, shift = 10x, Home/End) handlers, `aria`-style value text exposed in the label next to it | Medium |
-| Text input (typed confirmation, host, user, password) | GPUI has no ready-made input widget; build or adopt one (single-line editor: caret, selection, clipboard, IME). The gate relies on it, so budget for it early | Costly |
-| Checkbox, radio card, segmented control | `div` states + `on_click`; roving focus for radio groups | Simple |
-| Secret reveal / copy | Text swap + `cx.write_to_clipboard()`; auto-hide timer via `cx.spawn` | Simple |
-| Countdown ring (web only) | CSS/SVG in the web UI; not needed in GPUI | n/a |
-| Window chrome (title bar, min 960 x 640) | `WindowOptions` with custom titlebar; controls drawn per OS (left on macOS, right on Windows/Linux) | Medium |
-| Screen-reader / accessibility tree | Not provided by GPUI today (no AccessKit bridge at time of writing; verify) | Costly / risk, see RECOMMENDATION.md |
+| Window shell: title bar, stepper, content, safety rail, pinned action bar | `div()` flex/grid; one scroll container (`.overflow_y_scroll()` + `ScrollHandle`) per screen above a fixed footer; rail is a second fixed column | Simple |
+| Reflow rules (labels hide below 1100 px, columns hide below 1000 px, single column grids) | Read the window width in `render` and branch; no CSS-container equivalent, so these are explicit `if width < px(1100.)` switches | Simple |
+| Text styles, tabular numerals, mono | `.text_size()`, `.font_weight()`, `.font_family()`, `.line_height()`; tnum through font features (verify exposure in the pinned GPUI); fonts bundled via `cx.text_system().add_fonts()` | Simple (tnum: verify) |
+| Buttons, all variants and states | `div().id().on_click()` with `.hover()`, `.active()`, `.focus_visible()`; disabled = dashed border + `surface_2`, no handler; loading = swap icon and label, ignore clicks | Simple |
+| Badges, chips, step discs, phase pills | small `div` with `rounded(px(999.))` + `svg()` + label | Simple |
+| Icons | one `.svg` per icon with `stroke="currentColor"`; `svg().path(..).text_color(c)`. The HTML mock uses CSS masks only because it must run from a single folder | Simple |
+| Banners, dialog, scrim | `div().absolute().inset_0().bg(black.opacity(0.6))`, centred child; focus trap by hand | Simple (trap: medium) |
+| Progress bar, slider track, tracks | nested `div` + `border_1()`; fill width as a fraction | Simple |
+| Shadows | `.shadow_sm()` / `BoxShadow`; no inset shadows are used anywhere | Simple |
+| Selected-row edge | a 4 px child `div` positioned absolute at the left of the first cell | Simple |
+| Tables | header row + `uniform_list`; fixed/flex widths per column; cards below 700 px are a different row renderer | Medium |
+| Log viewer: level filter, follow, copy | `uniform_list` over the filtered `Vec<LogLine>`; level icon + word + time columns; no drag-select in labels, so Copy and Open log file are first-class buttons | Medium |
+| Sparklines | `canvas()` + `PathBuilder` | Medium |
+| Storage diagram | boxes are `div`s; connectors drawn in one `canvas()` using measured bounds; 12 px text minimum so the diagram scrolls horizontally inside its card below 640 px | Medium to costly |
+| Slider | custom element (track, thumb, mouse + keyboard: arrows, Shift = 10x, Home/End); value shown in a numeric field next to it | Medium |
+| Text input (typed phrase, host, user, password) | no stock widget: build or adopt a single-line editor (caret, selection, clipboard, IME, undo, password variant, paste allowed). The gate depends on it: budget it first | Costly |
+| Checkbox, radio card, segmented control, tabs | `div` states + roving focus; whole card is the hit area | Simple |
+| Secret reveal and copy | text swap, `cx.write_to_clipboard()`, hide after 30 s via `cx.spawn` | Simple |
+| Scrollbars | thin custom thumb in `border_strong`, 12 px hit area; keyboard scroll (PgUp/PgDn/Home/End) wired by hand | Medium |
+| Window chrome per OS | custom titlebar; controls right on Windows/Linux, left on macOS (native traffic lights); Linux CSD varies by compositor | Medium |
+| Screen-reader tree | not provided by GPUI to my knowledge; **a one-day spike with NVDA, Narrator and VoiceOver on a button, a text field, a checkbox and a live region is still to be done** | Costly / unknown |
 
-Design decisions made for GPUI: no inset shadows or backdrop blur; selected-row edge is a child element; all tints are opaque tokens; disabled state is dashed + muted (no pattern fill); no text-selection dependence (explicit Copy buttons); one scroll container per screen with a pinned action bar; icon font avoided in favour of SVG assets.
+Open GPUI risks, unchanged by this revision: the accessibility tree (spike not done), the text input, and text selection (hence Copy buttons everywhere a fingerprint, path, command or log line must be copied).
 
-## 10. Web plane specifics
+## 10. Revision log (UI critic review)
 
-Same tokens, plus: left sidebar 236 px (`sidebar`), top bar 54 px with breadcrumb, content padding 24, tiles in a 4-column grid collapsing to 2 below 900 px and to a single column below 480 px; phone layout with a bottom tab bar (44 px targets, 5 destinations). The safe-apply banner (warn, 16 px padding) holds a 60 px countdown ring with seconds in mono, a sentence naming both the new address and the automatic rollback time, and two buttons: "Roll back now" (secondary) and "Keep these settings" (primary); the page is served from the new address, so seeing it is itself the confirmation. All accent options from ForgeVault's accent switcher may stay for the web UI.
+| Id | Finding | Change |
+|---|---|---|
+| B1 | Destructive button never drawn enabled; red appears five times on the gate; dark label 4.63:1 | Drawn in every state (states sheet, both themes) and live on the Confirm screen (7a disabled, 7b enabled, loading on click). Disabled destructive = neutral dashed control, not red. Banner and "preserved/changed" lists are neutral; red appears only on the enabled button (2 px light-red outline in dark) and the 12 px marker + heading of "Will be destroyed": measured with a script, 3 elements on 7b, 2 on 7a, both themes. Dark button is now `#B7191C` with a white label = 6.63:1 (hover 7.85, pressed 9.60), outlined in `#FF9592` (8.51:1 on the card). Back and Cancel are outline and ghost buttons; there is no violet fill on the gate. |
+| B2 | 960 x 640 never rendered; Compatibility column clipped; no pinned bar or scroll state | Window is a fixed-size frame (960 x 640, 1180 x 760, 1440 x 900, switchable) with one scroll area, a pinned 64 px action bar and a fixed 216 px safety rail. Find uses three columns at every width; the stepper drops labels below 1100 px; grids stack below 1000 px; no horizontal scroll at any size (measured). Scrolled state: "Scroll to end" button and `?scroll=end`. 130% text: checked on Find and Confirm at 960 x 640. Windows, macOS and Linux chrome switch. |
+| B3 | Web plane did not reflow at 390 px; Keep button off screen; 36 px targets | Web frame is now a container: below 700 px the sidebar becomes a bottom tab bar (56 px items), tiles go to two columns, tables become cards, the docked panels stack, forms go single column. The safe-apply banner is sticky under the strip, stacks, and both buttons are full width and 44 px (measured: no control under 44 px at 390). W7 to W9 show the same markup at 390; a viewport switch (1180 / 768 / 390) applies to every web screen. |
+| B4 | Placeholder 4.29:1; bars and tracks under 3:1; borders on tints; ring in the log; checker blind | `placeholder` is its own token, 4.78:1 or better on every surface it can sit on (light fg_3 is gone). Tracks have a 1 px `border_strong` outline (3.25:1 or better on every surface); fills are `*_solid` at 3.61:1 or better on the track. `border_strong` is 3.25:1 or better on all ten surfaces including tints. `ring_inverse` is used inside the log panel (6.11:1 and 6.58:1). `tools/contrast.py` now checks 472 pairs (228 token matrix over both themes, 100 accent-variant, 144 extracted from the pairs that really occur in `styles.css` rules), fails on any colour token that takes part in no test, and lints the files. It was run against deliberately bad tokens and fails as it should. |
+| B5 | Mock and doc disagreed on gradients, hatch, inset shadows, 12 px floor, all-caps, tabular figures, fonts | One source of truth: the doc. No gradient, pattern, inset shadow, `color-mix` or `backdrop-filter` anywhere (disabled = dashed border and flat fill; overflow = outline and icon; selected-row edge = child element; tints are opaque tokens). Type floor is 12 px (diagram text 12 px, diagram scrolls instead of shrinking); the lint fails on anything smaller. All-caps labels are not allowed (acronyms and log codes only). `tnum` on the whole UI, so counters, the countdown and tile values do not jitter. One font stack, copied into `tokens.json`; weights 400, 600, 700 only. |
+| B6 | No states, no real controls, no focus demonstration | Real `<button>`, `<input>` (text, checkbox, radio, range), `tabindex` rows and `:focus-visible`. `states.html` (also embedded in the viewer) shows every component in default, hover, pressed, focus, disabled, error and loading in light and dark side by side, plus the typed phrase in empty, partial, mismatch and match. On the real Confirm screen Tab shows the ring on the checkboxes and the phrase field. Row, nav, radio card, tab and segment hover and pressed states are styled. |
+| Accents | ForgeVault accent claim (green and amber fail on white) | ForgeVault values re-measured: purple .55 = 5.38:1 with a white label, blue 4.93, rose 4.79, green 3.99 (fails), amber 2.78 (fails as fill, ring and label). All five accents are offered on the web plane only with the derived sets in the Accents table below (white label in light, near-black label in dark; amber is darkened to a deep amber), each tested in both themes by `contrast.py`. Desktop app: violet only. |
+| UX alignment | Match the revised UX mock | Top stepper + fixed safety rail (Reading only, Plan prepared, Boot flash changed, Disks changed); typed phrase `ERASE DS918+`, paste allowed, mismatch hint does not echo the phrase; the gate shows unit, IP, serial, disk serials and the same-model warning; point of no return is installer step 3 of 12; boot flash is "changed, backed up first"; all data is sample data (tag in every title bar); every unit is Untested except DS923+ (Community-reported) and DS211j (Unsupported); Verified appears only in the legend; failure screens follow `docs/RECOVERY.md` (60 s before step 3, 15 minutes after, DSM loader and Synology’s own reinstall, no promise). |
+
+Non-blocking list:
+
+| # | Resolution |
+|---|---|
+| 1 hierarchy | Not changed: `fg_2` stays about 7.8:1; secondary text is distinguished by size and weight. Revisit after usability tests. |
+| 2 two reds | Kept as two roles of one family: `danger*` for the button, `err_*` for icons, bars and text; documented. |
+| 3 double ring | One focus ring everywhere: 2 px outline, 2 px offset. |
+| 4 paste | Paste allowed (UX decision); the match is exact and case-sensitive. |
+| 5 log counts | Filter counts are cumulative minimum levels (Debug = all lines). |
+| 6 level glyphs | Drawn SVG glyphs plus the word. |
+| 7 failed stepper | The failed step keeps its name and turns red with a "!" disc. |
+| 8 goal cards | Dot bullets; nothing preselected. |
+| 9 amber objects | Not changed; one amber banner per page is the rule. |
+| 10 phone frame | No phone furniture: the real layout at true width. |
+| 11 title bar | Windows, macOS (left, neutral dots) and Linux switch; no OS name in the rail. |
+| 12 scrollbars | Specified (12 px hit area, `border_strong` thumb) and implemented. |
+| 13 slider | Error tag sits next to the field and the slider. |
+| 14 dark border on tint | 3.84:1 now. |
+| 15 track | Outlined track, solids 3.61:1 or better. |
+| 16 accents | See Accents. |
+| 17 fonts | One stack, weights 400/600/700, bundling stated. |
+| 18 resemblance | Documented as a derivative of ForgeVault tokens: pill badges adopted, heavier input border kept (3:1 boundary) and proposed upstream, focus ring differs (2 px, offset 2). |
+| 19 dark dialog | Update dialog checked in dark. |
+| 20 mobile labels | 12 px. |
+
+**Still open:** the GPUI accessibility and text-input spike; real Inter / JetBrains Mono metrics (the mock uses installed fonts); Windows and Linux chrome fidelity (only the control position is switched); the screens listed under "Not drawn" at the top; real screen-reader, colour-blindness and user testing.

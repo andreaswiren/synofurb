@@ -109,10 +109,9 @@ To add an icon: copy the SVG from `gpui-kit-assets/assets/icons/` into `ui/asset
 ## Platform notes
 
 * **Linux**: GPUI needs the X11/Wayland, xkbcommon, freetype and Vulkan (or GL) development packages
-  (`libxkbcommon-x11-dev libxcb1-dev libfreetype-dev libvulkan-dev libwayland-dev` and friends). The root
-  `Cargo.toml` carries `[patch.crates-io] xattr = { path = "vendor/xattr" }` because GPUI's `xattr` 0.2.3 does not
-  compile with current `libc`; keep it (cargo prints "patch was not used" when nothing in the graph needs it any more;
-  then it can go).
+  (`libxkbcommon-x11-dev libxcb1-dev libfreetype-dev libvulkan-dev libwayland-dev` and friends). GPUI's HTTP client pulls `xattr` 0.2.3, which does not compile on Linux with current `libc` (`ENOATTR`); this app
+  does not enable that part, so nothing is needed today. If a future GPUI update does pull it in, patch `xattr`
+  locally (on Linux `ENOATTR` is `ENODATA`).
 * **Windows**: MSVC toolchain and the Windows SDK; GPUI draws with DirectX 11 (no extra packages). Not built here.
 * **macOS**: Xcode command line tools and a Metal-capable Mac. Not built here. Keybindings use `cmd` instead of `ctrl`
   through `modkey!`.

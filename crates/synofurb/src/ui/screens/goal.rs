@@ -111,10 +111,14 @@ impl App {
                     .rounded(px(radius::MD))
                     .bg(p.surface_2)
                     .child(icon_sized("info", 16.0, p.fg_2).mt(px(2.0)))
-                    .child(muted(
-                        &p,
-                        "Compatibility for this unit: Verified means maintainers reproduced a full install; it is still not a guarantee. For Untested and Known-issues units the boot manager is the safe way to try first.",
-                    )),
+                    .child(
+                        muted(
+                            &p,
+                            "Compatibility for this unit: Verified means maintainers reproduced a full install; it is still not a guarantee. For Untested and Known-issues units the boot manager is the safe way to try first.",
+                        )
+                        .flex_1()
+                        .min_w_0(),
+                    ),
             );
 
         let enabled = match self.goal {

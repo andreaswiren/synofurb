@@ -27,9 +27,9 @@ shown in the UI (login and sidebar footer) and returned by `GET /api/me`, `/api/
 
 The UI follows the "ForgeVault family" direction from `design/mockups/ui` (Direction 1): left navigation and a 54 px top bar on
 desktop, bottom tab bar plus slide-in menu below 860 px, tables that stack into cards below 600 px, 44 px touch targets on phones.
-Colours are the exact tokens from `design/mockups/ui/tokens.json` (`theme_tokens()` in the code; a test compares them with the JSON),
+Colours are the exact tokens from `design/mockups/ui/tokens.json` (revised after the critic review: pressed states, placeholder, `*_border`, darker destructive set; `theme_tokens()`/`accent_tokens()` in the code, a test compares them with the JSON), five accents selectable in the top bar (web plane only),
 as CSS custom properties: light by default, dark via `prefers-color-scheme`, and a toggle in the top bar (stored in `localStorage`).
-Status is never colour alone: every badge and banner has an icon and a word, "off" states use a dashed border, attention rows get a 3 px edge.
+No `color-mix()`, gradients or inset shadows (tested). Type floor 12 px, weights 400/600/700, sentence case. Status is never colour alone: every badge and banner has an icon and a word, "off" states use a dashed border, attention rows get a 3 px edge.
 Icons are the inline lucide-style set of the mockups; no external fonts, scripts, images or CDNs. `prefers-reduced-motion` and
 `forced-colors` are honoured. Destructive actions use the typed-name confirm dialog (button stays disabled until the text matches).
 

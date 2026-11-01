@@ -35,13 +35,18 @@ What `synofurb` writes there, and how safely ([boot/dom](../boot/dom/README.md))
 
 ### The boot agent and "boot manager mode"
 
-[boot/agent](../boot/agent/README.md) builds a small Linux (Debian's own kernel + a tiny initramfs: busybox, dropbear SSH, kexec, our scripts;
-well under the space budget) that:
+[boot/agent](../boot/agent/README.md) builds a small Linux (Debian's own kernel + a tiny initramfs: busybox, dropbear SSH, kexec, our scripts).
+With Linux 7.2 it is 21.8 MiB for amd64 (budget 24 MiB; 18.9 MiB with the 6.12 kernel). The arm64 build is 52.8 MiB because Debian ships that kernel
+uncompressed, which is fine: only x86 units have a boot flash. It:
 
 1. resets the default entry to DSM as its **first action** (so it is one-shot: any later reboot returns to DSM),
 2. brings up DHCPv4 + SLAAC/DHCPv6 on every Ethernet port and starts SSH with a per-unit key that the desktop app baked in,
 3. announces itself by a UDP beacon, and reboots into DSM by itself if nobody logs in within the timeout,
-4. offers `sf-boot` to download any kernel + initrd and `kexec` into it.
+4. offers `sf-boot` to download any kernel + initrd and `kexec` into it. Downloads over HTTP(S) are **refused without SHA-256 hashes** (its `wget` does not
+   verify TLS); the app always passes them.
+
+Security notes: anyone with a **serial or VGA console** on the unit gets a root shell from the agent without logging in (switch off with `AGENT_CONSOLE_SHELL=0`
+in the overlay), and it uses per-unit SSH keys; password login exists only as a one-time password that is revoked after its first use.
 
 That is both the transport for installing Debian on a unit with a boot flash (the app uploads the agent, reboots, logs into it
 and has it `kexec` the full Debian installer that it serves from your computer) **and** the "more standard netboot mode" you can use

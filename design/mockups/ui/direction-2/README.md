@@ -1,3 +1,5 @@
+> **Alternative, not revised after review.** The independent UI critic rejected this direction as the base for synofurb: D2 uses 9.5 to 10.5 px labels, 30 px controls, uppercase tracked mono and a cyan accent that is close to its info blue, and it leaves the ForgeVault family. It is kept for reference and for the ideas listed in `../RECOMMENDATION.md`. It still shows the **first-round** layout (left step rail, no safety rail), tokens, copy and data (including a Verified model and a hostname phrase), none of which match the revised UX mock or `docs/RECOVERY.md`. Its contrast numbers below cover declared pairs only. The recommended, revised direction is `../direction-1/`.
+
 # Direction 2: Ops console
 
 **Personality in three words: dense, technical, status-forward.**

@@ -81,7 +81,9 @@ impl App {
                     "Mounted volumes and network cards",
                     "Whether the kernel supports kexec, and the internal boot flash if present",
                 ]
-                .map(|l| h_flex().gap(px(space::S8)).child(icon_sized("check", 14.0, p.ok_fg).mt(px(3.0))).child(muted(&p, l))),
+                .map(|l| {
+                    h_flex().gap(px(space::S8)).child(icon_sized("check", 14.0, p.ok_fg).mt(px(3.0))).child(muted(&p, l).flex_1().min_w_0())
+                }),
             )
             .child(divider(&p))
             .child(muted(&p, "Nothing is written to the NAS until you confirm the data-loss gate at step 7."));

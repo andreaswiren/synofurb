@@ -4,7 +4,7 @@
 --mono:"JetBrains Mono","Cascadia Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
 --r-sm:6px;--r-md:8px;--r-lg:12px;--r-pill:999px;--h:36px;--h-sm:28px;--h-lg:42px;
 --e1:0 1px 2px rgb(0 0 0/.05);--e3:0 24px 48px -12px rgb(0 0 0/.5)}
-*{box-sizing:border-box;margin:0;padding:0}
+*{box-sizing:border-box;margin:0;padding:0}[hidden]{display:none!important}
 html{-webkit-text-size-adjust:100%}
 body{font:400 var(--t-body)/1.5 var(--font);font-variant-numeric:tabular-nums;background:var(--surface-3);color:var(--fg);-webkit-font-smoothing:antialiased}
 /* icons: see mask rules appended below */.ic.lg{width:20px;height:20px}.ic.xl{width:28px;height:28px}.ic.sm{width:14px;height:14px}

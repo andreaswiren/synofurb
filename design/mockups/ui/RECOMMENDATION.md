@@ -1,60 +1,43 @@
 # Recommendation
 
-## Pick: Direction 1, "ForgeVault family", with three borrowed ideas
+## Pick: Direction 1, "ForgeVault family" (revised after the UI critic review)
 
-**Why.** synofurb has two surfaces but one job: make an irreversible operation feel understood. Direction 1 is the only one where (a) the web plane is already specified by an existing product look (ForgeVault), so a second visual language would be pure cost, (b) the palette is quiet enough that the single red destructive button and the data-loss banner are unmistakable, and (c) every element maps to cheap GPUI primitives (flat fills, 1 px borders, small radii, monochrome SVG). It also has the highest primary-text contrast (19.8:1 light, 17.2:1 dark on cards) and the fewest moving parts to keep accessible. Directions 2 and 3 each have a real strength (scan speed, approachability) that Direction 1 can borrow without importing their risks.
+**Why.** The web plane must stay in the ForgeVault family, and Direction 1 is the only direction that does: same neutral ramp, one violet accent, 8 and 12 px radii, pill badges, lucide strokes. Its calm palette is what lets the one red thing on the data-loss gate be unmistakable (measured: red is on two elements on the gate and three once the erase button is enabled), and every element maps to cheap GPUI primitives. The independent critic approved it with conditions and rejected Directions 2 and 3 as a base; all six blocking conditions are addressed in this revision (log in `DESIGN-SYSTEM.md` section 10).
 
-| Criterion (1 low, 5 high; my judgement, not user-tested) | D1 | D2 | D3 |
-|---|:-:|:-:|:-:|
-| Data-loss gate clarity (is the red button the loudest, rarest thing?) | 5 | 4 | 4 |
-| Information density / expert scan speed | 3 | 5 | 2 |
-| Approachability for non-experts | 3 | 2 | 5 |
-| Contrast and non-colour cues (declared pairs pass in all three: 66/66, 66/66, 66/66) | 5 | 4 | 4 |
-| Touch / motor friendliness (control height 36 / 30 / 44 px) | 3 | 2 | 5 |
-| Cost in GPUI (fewer custom pieces is better) | 5 | 4 | 3 |
-| Fit with ForgeVault family (web plane) | 5 | 3 | 2 |
-| Differentiation / personality | 2 | 4 | 4 |
-| **Total (40)** | **31** | **28** | **29** |
+**Directions 2 and 3 are kept as alternatives, not revised after the review.** The critic's reasons, which stand: D2 uses 9.5 to 10.5 px labels, 30 px controls, uppercase tracked mono and a cyan accent close to the info blue, and leaves the ForgeVault family; D3 leaves the family, its 44 px controls and 16 px type do not fit a 960 x 640 window (the gate is about 1100 px tall), and the cream canvas weakens amber warnings. Their pages still open (`../direction-2/`, `../direction-3/`) but still show the old layout, the old tokens and the old copy (for example Verified models and the hostname phrase), so do not use them for decisions about wording or accessibility.
 
-### Borrow into Direction 1
-1. **From D2: status edges and an "expert details" switch.** A 3 px left edge on health tiles and table rows that need attention (ok / warn / err) for glanceability, and a "Show details" toggle that adds the dense columns (RTT, power-on hours, serials). Do not adopt all-caps tracked mono labels (legibility) or the 30 px control height.
-2. **From D3: the large destructive gate and a collapsing stepper.** Use the 42 px "lg" control size for every button on the Confirm screen and for all phone controls (44 px). Below 1100 px window width, collapse the 212 px step rail into D3's horizontal stepper rather than a bare icon rail, which keeps step names for the current step. Optional drive-bay spot illustration for the Done and empty states only; never on the gate.
-3. **Own accent decision.** Keep ForgeVault violet for the web plane (where the accent switcher stays) but consider giving the desktop installer a fixed, product-specific hue later; tokens make that a one-line change (`accent`, `accent_hover`, `accent_bg`, `accent_fg`, `ring`), after re-running the contrast script.
+**Layout it serves.** Revised UX concept A (stepper across the top, persistent safety rail, pinned action bar, typed phrase `ERASE <MODEL>` with paste allowed, point of no return at installer step 3) and management plane mgmt-A with the status strip, "Needs attention", docked edit panel and a persistent safe-apply banner. Wording of failure and recovery states follows `docs/RECOVERY.md`.
+
+### Ideas worth borrowing from the alternatives
+1. From D2: a 4 px status edge on tiles that need attention, and a "show details" switch for expert columns (not all-caps labels, not 30 px controls).
+2. From D3: the 42 px large control for the gate's buttons and 44 px everywhere on phones (done), optional spot illustrations on Done and empty states (never on the gate).
+3. Own accent: tokens make a product-specific desktop accent a five-line change; re-run `tools/contrast.py` afterwards.
+
+## What changed in this revision (summary; details in DESIGN-SYSTEM.md section 10)
+- **B1** the enabled, hover, pressed, focus, disabled and loading destructive button is drawn and live; dark label 6.63:1 (was 4.63:1) with a light-red outline; red budget enforced and measured.
+- **B2** renders at 960 x 640, 1180 x 760 and 1440 x 900, with scroll state, pinned bar, 130% text, three OS chromes; Find never clips Compatibility.
+- **B3** the web plane reflows at 390 px with the same markup; the safe-apply banner is sticky and both buttons are 44 px.
+- **B4** placeholder token fixed, tracks and bars outlined, borders 3:1 on every surface, log ring, and a checker that tests 472 pairs (token matrix 228, accent variants 100, extracted from CSS 144), fails on untested colour tokens and lints the files.
+- **B5** one source of truth: no gradient, pattern, inset shadow or `color-mix`; 12 px floor; sentence case; tabular numerals everywhere; one font stack.
+- **B6** `states.html` and live controls with focus rings.
+- **Accents** only the derived accent sets are allowed on the web plane (green and amber of ForgeVault fail on white).
 
 ## Accessibility risks (highest first)
-
-1. **GPUI exposes no screen-reader tree.** To my knowledge there is no AccessKit bridge in GPUI yet (verify against the pinned revision). The native installer may therefore be unusable with NVDA, JAWS, Narrator or VoiceOver. This is the largest risk of the whole surface choice, and no visual direction fixes it. Mitigations: keyboard-complete flows; every destructive step also reachable as a documented, non-interactive CLI path (`synofurb install --dry-run`, `--yes --hostname`), so blind users are never forced through the GUI; or watch for / contribute AccessKit support.
-2. **Typed-confirmation input is custom.** GPUI has no stock text field, so IME, selection, clipboard, paste and password-manager behaviour all have to be built. The mock says "paste is disabled on purpose"; paste blocking harms assistive tech and password managers. Recommendation: allow paste, still require exact hostname equality (copying the name is already a deliberate act), and decide with usability data.
-3. **Dark destructive button uses a near-black label on red** (`on_danger` #0C0403 on `danger` #E23439 = 4.63:1, the narrowest text pair, 13 px / 600). It passes AA but is the pair most likely to fail on cheap panels or with colour filters. Alternative to test: white label on a darker red (about #C62828) in dark mode.
-4. **Small type.** Captions, badges and table headers are 12 px; log lines 12 px mono. Ship the 115 / 130% text-scale setting from day one and test the 960 x 640 minimum at 130%.
-5. **Colour independence is designed in but unverified on people.** I checked greyscale and a deuteranopia simulation of Inventory and Install screens by eye (badges stay separable through icon, word and dashed border; step state through glyph). Protanopia / tritanopia and low-vision simulation were not run.
-6. **Custom-drawn UI ignores OS high-contrast modes** (Windows Contrast Themes, macOS Increase Contrast). Provide a first-party high-contrast palette (`border` becomes `border_strong`, fills become `surface` / `fg` pairs) and honour `forced-colors` in the web plane.
-7. **Motion.** One looping spinner; replace it by a static glyph with the word "running" under reduced motion. The 1-per-second countdown ring is not animation, but the text must be exposed in the live region at 10 s and 5 s, not every second.
-8. **Focus order and accidental activation on the gate.** Enter on a focused field must never trigger the destructive action; the destructive button must not be the default button; initial focus on the Confirm screen goes to the heading, not to a checkbox or button.
-9. **Fonts.** Inter and the mono font must be bundled, or GPUI falls back to whatever the OS has, changing metrics (the mocks use system fonts, so their line breaks will differ slightly).
-10. **Web plane.** Tables become stacked cards below 600 px; 44 px targets; `aria-current`, `role=alert` for the safe-apply banner and `aria-live` for the countdown are in the mockup markup but untested with a screen reader.
+1. **GPUI exposes no screen-reader tree, to my knowledge, and this has not been verified.** The brief mentions possible AccessKit support in a GPUI kit; the two statements disagree, so the baseline is unknown. Do the one-day spike first (a button, a text field, a checkbox and a live region with NVDA, Narrator and VoiceOver). Until then the UI states plainly that screen readers are not supported in this window and offers the equivalent command (`synofurb install --host ... --have-backup --accept-data-loss --confirm`).
+2. **The typed-phrase field is custom.** Caret, selection, clipboard, IME, undo, paste and password-manager behaviour all have to be built; paste is allowed by decision. Budget it before any screen.
+3. **Text selection and copy.** Fingerprints, device paths, serials and commands must be copyable; the design gives them Copy buttons (log, fingerprint, passwords), but the serial numbers and the boot-flash backup path on the gate do not have one yet.
+4. **Small type and scaling.** Floor is 12 px (lint-enforced); the 130% setting was checked on 960 x 640 for Find and Confirm only. Check every screen.
+5. **Colour independence is designed in but only partly tested.** Greyscale and a deuteranopia simulation were eyeballed on the first-round mock; the revised screens have not been simulated. Protanopia, tritanopia and low vision were never run.
+6. **OS contrast modes.** Custom-drawn UI ignores Windows Contrast Themes and macOS Increase Contrast; no high-contrast palette is drawn. Web: `forced-colors` is untested.
+7. **Dark destructive button** now has 6.63:1 and a light outline; test that a dark-red fill with a white label still reads as the loudest element on cheap panels.
+8. **Focus order and accidental activation.** Enter in the phrase field must never trigger the erase button; initial focus on Confirm goes to the heading; the destructive button is never the default button; rings are not clipped by `overflow: hidden` parents.
+9. **Motion.** One busy glyph; static under reduced motion. Countdown announced at 10 s and 5 s only.
+10. **Web plane.** `aria-current`, `role=alert`, `aria-live` are in the markup but not screen-reader tested.
 
 ## What to test
+**Usability (6 to 8 people, mixed home-lab and non-technical):** gate comprehension (what is erased, what is changed, what survives, what happens if it fails), wrong-unit detection with two DS918+ units on the network (does the serial catch it), the typed phrase with and without paste, the Untested story (do people choose Boot manager first), failure screens before and after the point of no return, the safe-apply banner on a phone, and a greyscale print of the compatibility badges.
+**Technical:** keyboard-only walkthrough of every desktop screen in a real GPUI build; 125 / 150 / 200% OS scaling; real Inter and JetBrains Mono metrics (the mock uses installed fonts); Windows Contrast Themes and macOS Increase Contrast; NVDA with Firefox and VoiceOver with Safari on the web plane; 360 px phones; colour-blindness simulators on every screen.
 
-**Usability (n = 6-8, mixed: 3 homelab users, 3 non-technical; moderated, think-aloud)**
-- *Gate comprehension.* Show the Confirm screen for a DS918+; ask them to say in their own words what will be erased and what will not. Pass: 100% name "all four disks / all data"; at least 90% understand DSM data cannot be brought back; nobody expects the PC copy to be erased.
-- *Wrong-NAS guard.* Put two NAS on the network (DS918+ and DS923+); can they tell which one is about to be erased from the title bar, banner and typed hostname alone? Count near-misses.
-- *Typed confirmation.* Compare "paste allowed" vs "paste blocked" on error rate, time, and annoyance; also hostname length 9 vs 20 characters.
-- *Compatibility badges.* Five-second recognition test with a greyscale print: map each badge to its meaning and to "can I install here".
-- *Failure screen.* Do users choose "Retry without sdc" vs "Restore DSM"; do they understand the NAS is not bootable and must stay powered?
-- *Log filter.* Can they find the first warning in the install log in under 15 seconds.
-
-**Technical / accessibility**
-- Re-run the contrast script on every token change and for any accent other than violet (`tools/contrast.py` reads `tokens.json`; the numbers in `DESIGN-SYSTEM.md` section 3 come from the same formula).
-- Keyboard-only walkthrough of all 10 desktop screens; focus ring visible on every control in both themes (needs a real GPUI build).
-- Windows at 125 / 150 / 200% scaling, macOS Retina and a 1x external display; Inter and mono rendering and hinting on each.
-- Windows Contrast Themes and macOS Increase Contrast; web `forced-colors`.
-- NVDA + Firefox and VoiceOver + Safari on the web plane (login, dashboard, network rollback, boot manager); verify the safe-apply countdown announcement.
-- 960 x 640 minimum window at 130% text scale: nothing clipped, action bar always visible.
-- 360 px phone width for the web dashboard; touch target sizes.
-- Colour-blind simulations (protan, deutan, tritan) and a 50% blur test on all screens, especially the gate and the log.
-- Dark theme destructive button alternatives (item 3 above).
-
-## What I did and did not verify
-- Verified: every declared text/background pair (66 per theme in each direction) computed with the WCAG 2.x formula from the exact hex values used in the CSS; no unclosed tags; all pages open from disk with no network; screenshots of representative screens in light and dark checked in headless Chrome; sizes: each direction page is under 150 KB.
-- Not verified: behaviour in GPUI (the mapping in `DESIGN-SYSTEM.md` section 9 is from knowledge of its API, check against the pinned revision), real screen readers, real users, Safari and Firefox rendering (`color-mix()` is used for tints in the HTML only; GPUI uses the opaque tokens).
+## What I verified and did not
+- **Verified:** `python3 tools/contrast.py` passes 472 of 472 pairs (lowest text 4.78:1, lowest non-text 3.25:1) and its lint finds no gradient, pattern, inset shadow, `color-mix`, backdrop filter, uppercase transform or text under 12 px; it fails on deliberately bad tokens. Playwright screenshots of the desktop screens at 960 x 640, 1180 x 760 and 1440 x 900 (light and dark, 130% text, macOS chrome) and of the web screens at 1180 and 390 px; no horizontal overflow and no web control under 44 px at 390; red budget on the gate counted by script.
+- **Not verified:** GPUI behaviour (mapping is from knowledge of the API), real screen readers, real users, Safari and Firefox rendering, real fonts, OS-native window chrome.

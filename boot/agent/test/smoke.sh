@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # QEMU smoke test of the synofurb boot agent (amd64, TCG - no KVM needed).
 #
-#   test/smoke.sh [--dist DIR] [--cache DIR] [--only "A B C D" (any subset)] [--keep]
+#   test/smoke.sh [--dist DIR] [--cache DIR] [--only "A B C D E" (any subset)]
 #
-# Two guests are booted from the built agent-amd64.vmlinuz/.initrd, each with a per-run overlay appended:
+# Five guests (A-E) are booted from the built agent-amd64.vmlinuz/.initrd, each with a per-run overlay appended:
 #   A  e1000 NIC, DHCP, key + one-time password, real synofurb-dom (no DOM in QEMU -> must fail gracefully):
 #        DHCP v4 lease, SSH key login, sf-boot status/net/claim, kexec --version, UDP beacon (seen on the guest),
 #        one-time password, sf-boot kexec of a second kernel from a local HTTP server (hash enforcement included)
@@ -25,7 +25,6 @@ DIST=$AGENT/dist
 CACHE=${SYNOFURB_AGENT_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/synofurb-agent}
 WORK=$HERE/work
 ONLY=""
-KEEP=0
 PORT_A=${PORT_A:-2222}
 PORT_B=${PORT_B:-2223}
 HTTP_PORT=${HTTP_PORT:-8099}
@@ -36,7 +35,6 @@ while [[ $# -gt 0 ]]; do
         --dist) DIST=$(realpath "$2"); shift 2 ;;
         --cache) CACHE=$(realpath "$2"); shift 2 ;;
         --only) ONLY=$2; shift 2 ;;
-        --keep) KEEP=1; shift ;;
         -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
         *) echo "unknown argument $1" >&2; exit 2 ;;
     esac
@@ -68,7 +66,6 @@ cleanup() {
     [[ -n $QPID ]] && kill "$QPID" 2>/dev/null
     [[ -n ${HPID:-} ]] && kill "$HPID" 2>/dev/null
     [[ -n ${HSPID:-} ]] && kill "$HSPID" 2>/dev/null
-    [[ $KEEP == 1 ]] || true
 }
 trap cleanup EXIT
 

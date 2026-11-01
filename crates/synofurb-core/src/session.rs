@@ -286,7 +286,9 @@ fn dom_install_flow(
     agent.exec("sf-boot claim", None)?;
     let k = format!("{}/files/installer-kernel", staged.http_base);
     let i = format!("{}/files/installer-initrd", staged.http_base);
-    let cmd = agent_kexec_command(&k, &i, &staged.cmdline)?;
+    let kh = crate::debian::sha256_hex(&std::fs::read(&staged.files.kernel)?);
+    let ih = crate::debian::sha256_hex(&std::fs::read(&staged.initrd)?);
+    let cmd = agent_kexec_command(&k, &i, &staged.cmdline, &kh, &ih)?;
     logger.info("handing over to the Debian installer from the boot agent");
     let r = agent.exec(&cmd, None)?;
     if !r.ok() {

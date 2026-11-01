@@ -1437,13 +1437,57 @@ class VersionAndUiTests(HttpTestCase):
         for theme in ("light", "dark"):
             expect = {k.split(".", 2)[2]: v for k, v in tok.items() if k.startswith("color.%s." % theme)}
             self.assertEqual(ours[theme], expect, theme)
+        acc = m.accent_tokens()
+        for a in m.ACCENTS:
+            for theme in ("light", "dark"):
+                expect = {k.split(".", 3)[3]: v for k, v in tok.items() if k.startswith("accent.%s.%s." % (a, theme))}
+                self.assertEqual(acc[a][theme], expect, (a, theme))
+        self.assertEqual(tok["font.ui"].split(",")[0], "Inter")
+        norm = lambda x: x.replace('"', "").replace(", ", ",")                    # noqa: E731
+        self.assertIn(norm(tok["font.ui"]), norm(m.INDEX_HTML))
+        self.assertIn(norm(tok["font.mono"]), norm(m.INDEX_HTML))
 
-    def test_theme_css_light_dark_and_toggle(self):
+    def test_pressed_placeholder_and_border_tokens_exist(self):
+        t = m.theme_tokens()
+        for theme in ("light", "dark"):
+            for name in ("placeholder", "accent_pressed", "danger_pressed", "danger_edge", "border_strong", "ring_inverse",
+                         "ok_border", "warn_border", "err_border", "info_border", "accent_border", "log_err_bg", "log_wrn_bg", "scrim"):
+                self.assertIn(name, t[theme], (theme, name))
+        self.assertNotIn("fg_3", t["light"])                               # replaced by the dedicated placeholder token
+        self.assertNotIn("overlay", t["light"])
         css = m.theme_css()
-        self.assertIn("--accent:#7139CB", css)
-        self.assertIn("--accent:#A37BFE", css)
-        self.assertIn("@media (prefers-color-scheme:dark){:root:not([data-theme=light])", css)
-        self.assertIn(":root[data-theme=dark]", css)
+        for var in ("--placeholder:#696969", "--accent-pressed:#541EA0", "--danger-pressed:#94020D", "--danger-edge:#FF9592", "--border-strong:#808080"):
+            self.assertIn(var, css)
+        html = m.INDEX_HTML
+        for use in ("input::placeholder{color:var(--placeholder)", ".btn.primary:active{background:var(--accent-pressed)",
+                    ".btn.danger:active{background:var(--danger-pressed)", ".btn:active{background:var(--surface-3)",
+                    ".btn.danger{background:var(--danger);color:var(--on-danger);border:2px solid var(--danger-edge)",
+                    ".btn.danger:disabled", ".is-loading", ":focus-visible{outline:2px solid var(--ring);outline-offset:2px}",
+                    "progress{", "border:1px solid var(--border-strong)", "#pend{position:sticky"):
+            self.assertIn(use, html)
+        self.assertNotIn("var(--fg-3)", html)
+        self.assertNotIn("var(--overlay)", html)
+
+    def test_no_color_mix_gradients_or_inset_shadows(self):
+        css = m.INDEX_HTML.split("<style", 1)[1].split("</style>", 1)[0]
+        self.assertNotIn("color-mix(", m.INDEX_HTML)
+        for bad in ("gradient(", "backdrop-filter", "repeating-", "inset ", "text-transform"):
+            self.assertNotIn(bad, css, bad)
+
+    def test_type_floor_and_weights(self):
+        css = m.INDEX_HTML.split("<style", 1)[1].split("</style>", 1)[0]
+        sizes = [int(x) for x in m.re.findall(r"font(?:-size)?:(?:[^;{}]*?\s)?(\d+(?:\.\d+)?)px", css)]
+        self.assertTrue(sizes and min(sizes) >= 12, sorted(set(sizes)))
+        for w in m.re.findall(r"font(?:-weight)?:\s*(\d{3})\b", css):
+            self.assertIn(w, ("400", "600", "700"))
+
+    def test_phone_layout_targets(self):
+        css = m.INDEX_HTML.split("<style", 1)[1].split("</style>", 1)[0]
+        phone = css.split("@media (max-width:700px){", 1)[1]
+        self.assertIn("height:44px;min-height:44px", phone)               # buttons, selects, inputs
+        self.assertIn("min-height:56px", phone)                           # tab bar items
+        self.assertIn(".rb .acts .btn{width:100%}", phone)                # Keep / Roll back full width
+        self.assertIn("table.st thead{display:none}", phone)              # tables become cards
 
     def test_ui_is_self_contained_and_csp_clean(self):
         html = m.INDEX_HTML
@@ -1454,7 +1498,7 @@ class VersionAndUiTests(HttpTestCase):
         self.assertIn("<style nonce=\"__NONCE__\">", html)
         for needle in ("Boot manager", "Imported volumes", "Return to DSM", "Plan preview", "Keep these settings", "prefers-reduced-motion", "forced-colors"):
             self.assertIn(needle, html)
-        self.assertIn("max-width:860px", html)                                 # phone layout
+        self.assertIn("max-width:700px", html)                                 # phone layout (tokens: layout.phone_breakpoint_px)
 
 
 class TlsTests(unittest.TestCase):

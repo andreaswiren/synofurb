@@ -332,13 +332,24 @@ pub fn agent_session_key(unit: &str) -> Result<crate::config::SshKeypair> {
 }
 
 /// `sf-boot kexec` command line on the agent for a kernel/initrd served by this computer.
-pub fn agent_kexec_command(kernel_url: &str, initrd_url: &str, cmdline: &str) -> Result<String> {
+///
+/// The agent's busybox `wget` does not verify TLS and the installer is fetched over plain HTTP from this computer, so the
+/// agent REFUSES to load URLs without checksums: the hashes of both files are passed and checked there. `exec` is detached
+/// because the SSH connection dies the moment the new kernel starts.
+pub fn agent_kexec_command(kernel_url: &str, initrd_url: &str, cmdline: &str, kernel_sha256: &str, initrd_sha256: &str) -> Result<String> {
     for v in [kernel_url, initrd_url, cmdline] {
         if v.contains(['\'', '\n']) {
             bail!("unsafe characters in kexec arguments");
         }
     }
-    Ok(format!("sf-boot kexec '{kernel_url}' '{initrd_url}' --cmdline '{cmdline}' && sf-boot exec"))
+    for h in [kernel_sha256, initrd_sha256] {
+        if h.len() != 64 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+            bail!("kexec arguments need SHA-256 hex digests");
+        }
+    }
+    Ok(format!(
+        "sf-boot kexec '{kernel_url}' '{initrd_url}' --cmdline '{cmdline}' --sha256 kernel={kernel_sha256},initrd={initrd_sha256} && sf-boot exec --detach --delay 3"
+    ))
 }
 
 /// Ask DSM (or Debian) to boot DSM next time: the recovery command.
@@ -439,8 +450,14 @@ mod tests {
 
     #[test]
     fn unsafe_arguments_are_refused() {
-        assert!(agent_kexec_command("http://a/k", "http://a/i", "auto=true console=ttyS0").is_ok());
-        assert!(agent_kexec_command("http://a/k'; reboot", "http://a/i", "x").is_err());
+        let h = "a".repeat(64);
+        let c = agent_kexec_command("http://a/k", "http://a/i", "auto=true console=ttyS0", &h, &h).unwrap();
+        assert!(c.contains(&format!("--sha256 kernel={h},initrd={h}")) && c.ends_with("sf-boot exec --detach --delay 3"));
+        assert!(agent_kexec_command("http://a/k'; reboot", "http://a/i", "x", &h, &h).is_err());
+        assert!(
+            agent_kexec_command("http://a/k", "http://a/i", "x", "short", &h).is_err(),
+            "the agent refuses unverified downloads, so do not even build the command"
+        );
         let ov = AgentOverlay { hostname: "n'x".into(), timeout_min: 5, authorized_keys: vec![] };
         assert!(!ov.render_conf().contains("n'x"));
     }

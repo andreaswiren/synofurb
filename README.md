@@ -111,7 +111,7 @@ reports the current state (today: not approved, on purpose).
 Done for real in the development sandbox (no Synology available):
 
 * Rust unit tests for the planner, parsers, script generator, payload, preseed, logging, discovery packets, the boot-flash flow with a mock shell, the
-  compatibility database and the updater; Python tests for the management plane (113), the install scripts and the release gate; `clippy -D warnings`,
+  compatibility database and the updater; Python tests for the management plane (116), the install scripts and the release gate; `clippy -D warnings`,
   `rustfmt`, `shellcheck`, `actionlint` clean.
 * The generated partition commands run with real `parted` on a loop device laid out like DSM (a preserved partition stayed identical).
 * The SSH layer against a real `sshd`; the inspection script on a real Linux host.

@@ -69,7 +69,7 @@
   <header>
     <span class="status">Awaiting your approval</span>
     <h1>synofurb design review</h1>
-    <p class="lede">Three layouts and three visual directions for the desktop app, and two layouts for the web interface that runs on the NAS. Open them, click through the screens, then tell me which to build. Nothing here is approved yet, and the release build stays blocked until it is.</p>
+    <p class="lede">Three layouts and three visual directions for the desktop app, and two layouts for the web interface that runs on the NAS. Two independent critics reviewed them and the recommended options were revised to fix every blocking finding. The alternatives were not revised. Nothing is approved yet, and the release build stays blocked until it is.</p>
   </header>
   <button class="theme" id="themeBtn" type="button">Switch light / dark</button>
 
@@ -88,7 +88,7 @@
     <div class="tablewrap"><table>
       <thead><tr><th>Concept</th><th>Idea</th><th>Open</th></tr></thead>
       <tbody>
-        <tr><td>A <span class="tag">recommended</span></td><td>Linear guided wizard with a persistent step list and a persistent safety rail (what has changed, can I cancel, what is my way back).</td><td class="links"><a href="ux/concept-a/index.html">Mockup</a><a href="ux/concept-a/README.md">Notes</a></td></tr>
+        <tr><td>A <span class="tag">recommended</span></td><td>Linear guided wizard with a persistent step list and a persistent safety rail (what has changed, can I cancel, what is my way back).</td><td class="links"><a href="ux/concept-a/index.html">Mockup</a><a href="ux/concept-a/states.html">Edge states</a><a href="ux/concept-a/README.md">Notes</a></td></tr>
         <tr><td>B</td><td>Unit-centred dashboard: a sidebar of NAS units, each with a timeline and action cards; the wizard opens as a focused flow.</td><td class="links"><a href="ux/concept-b/index.html">Mockup</a><a href="ux/concept-b/README.md">Notes</a></td></tr>
         <tr><td>C</td><td>One canvas: inspect, plan and confirm are three panes of one screen, with the disk diagram in the middle.</td><td class="links"><a href="ux/concept-c/index.html">Mockup</a><a href="ux/concept-c/README.md">Notes</a></td></tr>
         <tr><td>mgmt-A <span class="tag">recommended</span></td><td>NAS web interface with a ForgeVault-style sidebar, breadcrumb bar and tabs inside Storage.</td><td class="links"><a href="ux/mgmt-a/index.html">Mockup</a><a href="ux/mgmt-a/README.md">Notes</a></td></tr>
@@ -104,7 +104,7 @@
     <div class="tablewrap"><table>
       <thead><tr><th>Direction</th><th>Personality</th><th>Open</th></tr></thead>
       <tbody>
-        <tr><td>1 ForgeVault family <span class="tag">recommended</span></td><td>Calm, neutral, dependable. Neutral ramp, one violet accent, 14 px text, 36 px controls.</td><td class="links"><a href="ui/direction-1/index.html">Mockup</a><a href="ui/direction-1/README.md">Notes</a></td></tr>
+        <tr><td>1 ForgeVault family <span class="tag">recommended</span></td><td>Calm, neutral, dependable. Neutral ramp, one violet accent, 14 px text, 36 px controls.</td><td class="links"><a href="ui/direction-1/index.html">Mockup</a><a href="ui/direction-1/states.html">All component states</a><a href="ui/direction-1/README.md">Notes</a></td></tr>
         <tr><td>2 Ops console</td><td>Dense, technical, status-forward. Monospace labels, cyan accent, 13 px text, 30 px controls.</td><td class="links"><a href="ui/direction-2/index.html">Mockup</a><a href="ui/direction-2/README.md">Notes</a></td></tr>
         <tr><td>3 Friendly appliance</td><td>Warm, roomy, reassuring. 16 px text, 44 px controls, illustrations, conversational copy.</td><td class="links"><a href="ui/direction-3/index.html">Mockup</a><a href="ui/direction-3/README.md">Notes</a></td></tr>
       </tbody>
@@ -112,10 +112,21 @@
     <p class="links"><a href="ui/index.html">All three on the data-loss confirmation</a><a href="ui/DESIGN-SYSTEM.md">Design system, contrast numbers, GPUI map</a><a href="ui/RECOMMENDATION.md">Recommendation</a><a href="ui/tokens.json">tokens.json</a></p>
   </section>
 
+  <section aria-labelledby="critics">
+    <h2 id="critics">What the critics said</h2>
+    <p class="lede">Both reviews were written before the revisions and are kept unedited. The UX critic found 13 blocking problems, mostly screens that promised recovery the product cannot give. The UI critic found 6, among them that the enabled destructive button had never been drawn and that nothing had been rendered at the 960 by 640 minimum.</p>
+    <p class="links"><a href="reviews/ux-critic-mockups.md">UX critic review</a><a href="reviews/ui-critic-mockups.md">UI critic review</a></p>
+    <ul>
+      <li>UX: Concept A and mgmt-A approved with conditions. The conditions are met in the revised files; a re-review is the real test.</li>
+      <li>UI: Direction 1 approved with conditions; Directions 2 and 3 rejected as a base. After revision all 472 colour pairs pass; the lowest text ratio is 4.78:1.</li>
+      <li>These are advisory reviews. The formal gate verdicts are separate and still missing.</li>
+    </ul>
+  </section>
+
   <section aria-labelledby="what">
     <h2 id="what">What you are not seeing yet</h2>
     <ul>
-      <li>The running app. The GPUI port builds from these mockups after you choose; it is in progress using Direction 1 and Concept A so the structure is ready.</li>
+      <li>A signed-off design. The GPUI app already exists and follows Concept A and Direction 1 so you can judge the real thing, but its look will change if you choose differently.</li>
       <li>Any usability testing. The test plan in <a href="ux/RECOMMENDATION.md">the UX recommendation</a> starts with the data-loss confirmation, because that screen carries the most risk.</li>
       <li>Screen-reader support in the native app. GPUI Kit has accessibility support, but it has not been tested with a real screen reader. The mockups assume a documented command-line path as the fallback.</li>
       <li>Protanopia, tritanopia and Windows high-contrast checks. All 66 text and background pairs pass WCAG AA in both themes as computed; the lowest ratio is 4.63:1.</li>

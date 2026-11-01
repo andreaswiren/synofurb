@@ -3,6 +3,10 @@
 # packages, nothing foreign is executed) and uploads them as artifacts. The amd64 agent is additionally
 # booted in QEMU (TCG) by test/smoke.sh.
 #
+# NOTE: the repository's release.yml already builds the agents through scripts/package-agent.sh (which calls
+# build.sh <arch> --version V --out DIR and renames agent-<arch>.* to synofurb-agent-<arch>-<version>.*). This snippet is the
+# stand-alone variant (raw build.sh names + the QEMU smoke test); use it for a CI job that exercises test/smoke.sh.
+#
 # Paths are relative to the repository root; the agent lives in boot/agent.
 # The build fails if kernel + initrd exceed the 24 MiB DOM budget.
 

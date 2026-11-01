@@ -7697,7 +7697,7 @@ dependencies = [
 
 [[package]]
 name = "synofurb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -7713,7 +7713,7 @@ dependencies = [
 
 [[package]]
 name = "synofurb-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10175,7 +10175,3 @@ dependencies = [
  "syn 3.0.9",
  "winnow 1.0.4",
 ]
-
-[[patch.unused]]
-name = "xattr"
-version = "0.2.3"

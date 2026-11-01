@@ -19,7 +19,7 @@ ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@127
 To see the watchdog: `--timeout-min 1` and do not log in. To see the beacon: `ssh ... 'nc.traditional -l -u -p 9988'` on the guest (QEMU user networking does not forward guest broadcasts to the host).
 
 Everything the smoke test does is in `test/smoke.sh`; `test/smoke.sh --only "A B"` runs a subset (A: DHCP/SSH/kexec/beacon/password, B: virtio + static + watchdog,
-C: claim mode + autorun failure + re-arm, D: autorun success + `sf-boot reboot`, E: console handling), `--dist DIR` points at another build, `--keep` is accepted for symmetry (the work directory is `test/work`, kept).
+C: claim mode + autorun failure + re-arm, D: autorun success + `sf-boot reboot`, E: console handling), `--dist DIR` points at another build. Artifacts and serial logs of the last run stay in `test/work/` (git-ignored).
 
 ## Structural check of any architecture
 
