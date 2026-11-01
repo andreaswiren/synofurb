@@ -46,6 +46,8 @@ function openSelect(btn){
     else if(e.key==='Home'){e.preventDefault();ops[0].focus()}else if(e.key==='End'){e.preventDefault();ops[ops.length-1].focus()}
     else if(e.key==='Tab'){e.preventDefault();closePop()}})}
 /* dialog and sheet with focus trap */
+/* focus goes back to the control that opened the dialog; when nothing did (opened by URL or by a timer) it goes to the page title */
+function restoreFocus(prev){if(prev&&prev!==document.body&&document.contains(prev)){prev.focus({preventScroll:true});return}const h=$('.main h1');if(h){h.setAttribute('tabindex','-1');h.focus({preventScroll:true})}}
 const dlgStack=[];
 function trap(root,ev){if(ev.key!=='Tab')return;const f=$$('button:not([aria-disabled=true]),a[href],input:not([type=hidden]),select,[tabindex]:not([tabindex="-1"])',root).filter(x=>x.offsetParent!==null);if(!f.length)return;const a=f[0],z=f[f.length-1];
   if(ev.shiftKey&&document.activeElement===a){ev.preventDefault();z.focus()}else if(!ev.shiftKey&&document.activeElement===z){ev.preventDefault();a.focus()}else if(!root.contains(document.activeElement)){ev.preventDefault();a.focus()}}
@@ -54,7 +56,7 @@ function openDialog({id,title,icon,body,buttons=[],wide=false,danger=false,onope
   const sc=document.createElement('div');sc.className='scrim';sc.dataset.dname=id;
   sc.innerHTML=`<div class="dlg ${wide?'wide':''} ${danger?'dng':''}" role="dialog" aria-modal="true" aria-labelledby="dt-${id}"><div class="dlg-h">${icon?ic(icon,'l'):''}<span id="dt-${id}">${title}</span></div><div class="dlg-b">${body}</div><div class="dlg-f">${buttons.map((b,i)=>`<button class="btn ${b.cls||''}" data-dbtn="${i}"${b.off?` aria-disabled="true" tabindex="-1" data-reason="${esc(typeof b.off==='string'?b.off:'Type the phrase first.')}"`:''}>${b.icon?ic(b.icon):''}${b.label}</button>`).join('')}</div></div>`;
   L().appendChild(sc);const dlg=$('.dlg',sc);
-  const close=()=>{sc.remove();dlgStack.pop();onclose&&onclose();if(prev&&document.contains(prev))prev.focus({preventScroll:true})};
+  const close=()=>{sc.remove();dlgStack.pop();onclose&&onclose();restoreFocus(prev)};
   const api={el:sc,close,btn:i=>$(`[data-dbtn="${i}"]`,sc)};
   sc.addEventListener('keydown',ev=>{if(ev.key==='Escape'){ev.stopPropagation();if(!buttons.some(b=>b.noesc))close()}trap(dlg,ev)});
   sc.addEventListener('click',ev=>{const b=ev.target.closest('[data-dbtn]');if(b&&b.getAttribute('aria-disabled')!=='true'){const bt=buttons[+b.dataset.dbtn];if(bt.fn){if(bt.fn(api)===false)return}if(!bt.keep)close()}});
@@ -67,7 +69,7 @@ function openSheet({title,body,foot,onopen}){
   sc.addEventListener('keydown',ev=>{if(ev.key==='Escape'){ev.stopPropagation();closeSheet()}trap($('.sheet',sc),ev)});
   sc.addEventListener('click',ev=>{if(ev.target.matches('.sheetscrim,[data-sheet-close]')||ev.target.closest('[data-sheet-close]'))closeSheet()});
   onopen&&onopen(sc);return sc}
-function closeSheet(ret=true){const s=$('#sheet');if(!s)return;const p=s._prev;s.remove();S.help.open=false;document.documentElement.dataset.sheet='';if(ret&&p&&document.contains(p))p.focus({preventScroll:true})}
+function closeSheet(ret=true){const s=$('#sheet');if(!s)return;const p=s._prev;s.remove();S.help.open=false;document.documentElement.dataset.sheet='';if(ret)restoreFocus(p)}
 function toast(msg,icon='check'){const t=document.createElement('div');t.className='toast';t.setAttribute('role','status');t.innerHTML=ic(icon)+esc(msg);$('.toasts').appendChild(t);setTimeout(()=>t.remove(),2600)}
 function copy(text,label){try{navigator.clipboard&&navigator.clipboard.writeText(text)}catch(e){}toast(label||'Copied')}
 

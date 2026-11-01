@@ -1504,21 +1504,21 @@ synofurb also saves on this computer:
 
 #### recovery: Recovery
 
-DSM stays the default boot entry; every failure points it back at DSM, except the unconfirmed case in the last row.
+DSM stays the default boot entry; every failure points it back at DSM, except the "Agent silent" row.
 | When | What happens |
 |---|---|
 | Before the boot flash is changed | Nothing to undo |
-| Agent started | It resets the default to DSM first and reboots if nobody logs in |
+| Agent started | It sets DSM as default first; reboots if nobody logs in |
 | Before step 3 | A failure reboots to DSM after 60 s; a power cycle also works |
-| Agent silent after 10 minutes | Not confirmed. Agent started: it reboots to DSM, 20 minutes or more later. Never started: the default stays the agent and a power cycle loops. Use SYNOLOGY_2 in the boot menu (serial or VGA console), or restore the flash from another computer. |
-| After step 3 | Rescue shell 15 minutes, then the DSM loader; DSM may be gone, reinstall from Synology; no data promise |
+| Agent silent after 10 minutes | Not confirmed. If it started, DSM returns 20 minutes or more later. If not, a power cycle loops: use SYNOLOGY_2 in the boot menu (serial or VGA console), or restore the flash from another computer. |
+| After step 3 | Rescue shell 15 minutes, then the DSM loader; DSM may be gone, reinstall it from Synology; no data promise |
 | Debian installed | Pick the previous kernel or DSM in the boot menu |
 Commands: `synofurb recover`, `synofurb boot-manager enter`.
 
 #### boot-manager: Boot manager
 
-x86 units boot through a small internal boot flash. Boot manager adds an SSH agent entry to it. The whole flash is saved to this computer first; disks are untouched; DSM's entry stays and stays the default.
-The agent is one-shot: it resets the default to DSM when it starts and reboots to DSM after 60 minutes without a login. From it, `sf-boot kexec <kernel-url> <initrd-url>` starts another Linux kernel. kexec starts Linux kernels only, not Windows or UEFI-only ISOs. Once another system runs, nothing of ours is running: power-cycling returns to the default entry. That system can see and change your disks. If the agent never runs, nothing resets the default and there is no watchdog: the NAS keeps booting the agent. Choose SYNOLOGY_2 in the boot menu on a console, or restore the flash from another computer. If the agent never starts, nothing resets the default and nothing reboots the unit: choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or restore the boot flash from another computer.
+x86 units boot through a small internal boot flash. Boot manager adds an SSH agent entry to it. The whole flash is saved to this computer first; disks are untouched; DSM's entry stays the default.
+The agent is one-shot: it resets the default to DSM when it starts and reboots to DSM after 60 minutes without a login. From it, `sf-boot kexec <kernel-url> <initrd-url>` starts another Linux kernel (not Windows or UEFI-only ISOs). Once another system runs, nothing of ours is running: power-cycling returns to the default entry, and that system can change your disks. If the agent never starts, nothing resets the default and nothing reboots the unit: choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or restore the boot flash from another computer.
 
 #### serial-console: Serial console
 

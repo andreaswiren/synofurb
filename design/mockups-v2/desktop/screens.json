@@ -533,5 +533,10 @@
 "n": "failed-agent-next",
 "h": "failed",
 "q": "nofirst=1&unit=ds918&fail=agent&dlg=next"
+},
+{
+"n": "recovery-agent-fail",
+"h": "recovery",
+"q": "nofirst=1&unit=ds918&facts=agent&rec=fail"
 }
 ]

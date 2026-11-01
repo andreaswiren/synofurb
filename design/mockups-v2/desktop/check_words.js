@@ -37,6 +37,8 @@ const countJS = () => {
     if (r.sheet > 400) probs.push(`sheet ${r.sheet}`);
     rows.push([s.n, r.screen, r.dialogs.map(d => d.n).join(','), r.sheet || '', probs.length ? 'FAIL ' + probs.join('; ') : 'ok']); if (probs.length) bad++;
   }
+  { const p = await b.newPage(); await p.goto(`file://${H}/index.html?bare=1&nofirst=1#find`); const tw = await p.evaluate(() => HELP.map(t => [t.id, t.text.trim().split(/\s+/).length])); await p.close();
+    const over = tw.filter(([, n]) => n > 150); over.forEach(([id, n]) => { bad++; rows.push([`help:${id}`, n, '', '', `FAIL help topic ${n} > 150`]) }); console.log(`Help topics: ${tw.length}, longest ${Math.max(...tw.map(x => x[1]))} words (limit 150)`); }
   await b.close();
   console.log(`Visible words per screen state at ${size.join('x')} (budget ${BUDGET}; shell included; data excluded)`);
   console.log('state'.padEnd(28) + 'words'.padEnd(7) + 'dialog'.padEnd(8) + 'sheet'.padEnd(7) + 'result');

@@ -21,3 +21,9 @@ node check_deadends.js       # clicks every enabled button of every screen: some
 node shots.js [regex|all]    # screenshots (scrollbars shown) -> design/screenshots/v2-mockup-desktop-<screen>[-960|-960-130]-<light|dark>.png
 ```
 Playwright at `/opt/node-tools/node_modules/playwright` and `/usr/bin/google-chrome` are assumed (override with `PW`, `CHROME`).
+
+## Known limits to test in GPUI (carried, unchanged on purpose)
+- Copy and show icon buttons inside data rows (Done, Manage) are 24 px (DEV-UI-3 in `design/v2/DESIGN-SYSTEM-V2.md`); row-level actions are 32 px.
+- "Recommended" on the Boot manager card of an Untested unit needs a usability test: does it slow people who came to reinstall?
+- Everything is HTML in Chromium: widget behaviour (Popover focus return, Select popup placement, `RadioGroup` roving focus, `tnum`, Enter-on-Erase interceptor, px-sized widgets at Largest text) is unverified until a gpui-component build exists.
+- At Largest text on a 960 x 640 window the Confirm consent controls need a scroll (Erase stays pinned).

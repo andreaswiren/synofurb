@@ -144,7 +144,7 @@ function failed(){const f=S.fail,post=f.kind==='post',stopped=f.kind==='stopped'
   ['DSM','server',f.kind==='backup'?['Running','ok','circle-check']:f.kind==='agent'?(dsmBack?['Running','ok','circle-check']:['Default: not confirmed','warn','circle-question-mark']):(post&&!dsmBack)||ph==='loader'?['Loader only','warn','triangle-alert']:['Default','ok','circle-check']]];
  const rec=btn('Recovery options',{go:'recovery'});
  const man=btn('Manual recovery',{act:'manualrec',icon:'life-buoy'});
- const foot=f.kind==='agent'&&ph!=='back'?F('',rec+man+(ph==='notback'?btn('Check again',{cls:'primary',act:'waitdsm',icon:'refresh-cw'}):ph==='waiting'?'':btn('Wait for DSM',{cls:'primary',act:'waitdsm',icon:'loader-circle'})))
+ const foot=f.kind==='agent'&&ph!=='back'?F('',man+(ph==='notback'?btn('Check again',{cls:'primary',act:'waitdsm',icon:'refresh-cw'}):ph==='waiting'?'':btn('Wait for DSM',{cls:'primary',act:'waitdsm',icon:'loader-circle'})))   // two buttons at most; Recovery options moved into the What happens next dialog
   :ph==='back'?F('',rec+btn('Done',{cls:'primary',go:'find'}))
   :ph==='done'?F('',rec+btn('Back to Confirm',{cls:'primary',go:'confirm',icon:'arrow-left'}))
   :ph==='notback'?F('',rec+btn('Check again',{cls:'primary',act:'waitdsm',icon:'refresh-cw'}))
@@ -156,7 +156,7 @@ function failed(){const f=S.fail,post=f.kind==='post',stopped=f.kind==='stopped'
  return {html:`<div class="page"><div class="ph"><div><h1 class="t-title">Install stopped</h1><div class="sub t-sub">${sub}</div></div></div>
   ${ph==='clock'||ph==='waiting'||ph==='done'?alertTop:''}${cardH}${rescue}
   <div class="cards3 statecards">${st.map(([l,i,t])=>`<div class="card"><div class="card-b row">${ic(i,'l')}<b>${l}</b><span class="sp"></span>${tag(t[0],{v:t[1],i:t[2],t:t[0].startsWith('Default: not')?'We cannot tell if the agent ran; if it did not, a power cycle boots it again.':''})}</div></div>`).join('')}</div>
-  <div class="row"><button class="link" data-dlg="next">What happens next</button></div>${acc('flog','Log excerpt',`<div class="logbox d">${logLine(['14:27:19','e',stopped?'user: stop requested before step 3':f.kind==='backup'?'dom: sha256 NAS != local (flash backup rejected)':f.kind==='agent'?'agent: did not appear within 10 minutes':pre_(f)?'preflight: sdc partition table differs from the plan':'dom: read-back checksum mismatch on p2 (2/2)'])}${logLine(['14:27:19','e',stage?'@@FAIL phase '+(f.kind==='backup'?3:5)+'/7 staging stopped':'@@FAIL '+f.step+'/12 refusing to continue'])}</div>`)}</div>`,foot}}
+  <div class="row"><button class="link" data-dlg="next">What happens next</button></div>${acc('flog','Log excerpt',`<div class="logbox d">${logLine(['14:27:19','e',stopped?'user: stop requested before step 3':f.kind==='backup'?'dom: sha256 NAS != local (flash backup rejected)':f.kind==='agent'?'agent: did not appear within 10 minutes':pre_(f)?'preflight: sdc partition table differs from the plan':'dom: read-back checksum mismatch on p2 (2/2)'])}${logLine(['14:27:19','e',stage?'@@FAIL phase '+(f.kind==='backup'?3:4)+'/7 staging stopped':'@@FAIL '+f.step+'/12 refusing to continue'])}</div>`)}</div>`,foot}}
 const pre_=f=>f.kind==='pre';
 /* ---- D10 Done ---- */
 function done(){const u=cur(),y=S.sys,dn=S.done;
