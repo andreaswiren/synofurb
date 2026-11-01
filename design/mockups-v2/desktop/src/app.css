@@ -313,15 +313,17 @@ tr.sel .rad{background:var(--accent);border-color:var(--accent)}tr.sel .rad i{ba
 @container win (max-width:52rem){.fgrid{grid-template-columns:minmax(0,1fr)}.grid2{grid-template-columns:minmax(0,1fr)}}
 .sheet-b .tbl td,.dlg-b .tbl td{white-space:normal}.sheet-b .tbl td:first-child{white-space:nowrap}
 /* round-3: Confirm grid (gate beside the consequences, never below them at 960x640), connectors, small fixes */
-.cgrid{display:grid;grid-template-columns:minmax(0,1fr) 22rem;grid-template-areas:"a g" "r g";gap:1rem 1.25rem;align-items:start}
-.ca{grid-area:a}.dz{grid-area:g;position:sticky;top:0}.cr{grid-area:r}
+.cgrid{display:grid;grid-template-columns:minmax(0,1fr) 22rem;grid-template-areas:"a g" "t g" "l g";gap:1rem 1.25rem;align-items:start}
+.ca{grid-area:a}.dz{grid-area:g;position:sticky;top:0}.ct{grid-area:t}.cl{grid-area:l}
 .step-line.done{background:var(--accent)}
 .tri .h .ib{margin-left:auto}
 .dz-b{gap:.5rem}
 .chk{min-height:2rem}
 .btn[tabindex="-1"]:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
 @container win (max-width:68.75rem){.cgrid{grid-template-columns:minmax(0,1fr) 20rem}}
-@container win (max-width:52rem){.cgrid{grid-template-columns:minmax(0,1fr);grid-template-areas:"a" "g" "r"}.dz{position:static}}
+@container win (max-width:52rem){.cgrid{grid-template-columns:minmax(0,1fr);grid-template-areas:"a" "t" "g" "l"}.dz{position:static}}
 :root[data-sheet=open] .statusbar .tag,:root[data-sheet=open] .statusbar .link{visibility:hidden}
 @container win (max-width:52rem){:root[data-screen=confirm] .unithdr{display:none}}
 @container win (max-width:52rem){:root[data-screen=confirm] .page{gap:.5rem}:root[data-screen=confirm] .cgrid{gap:.5rem}:root[data-screen=confirm] .ca{gap:.5rem}:root[data-screen=confirm] .alert{padding:.375rem .75rem}:root[data-screen=confirm] .main{padding-top:.75rem;padding-bottom:.75rem}}
+.rrow{display:flex;gap:.75rem;align-items:flex-start;text-align:left;padding:.5rem .75rem;border:1px solid var(--border-strong);border-radius:var(--r);width:100%}
+.rrow:hover{background:var(--surface-2)}.rrow[aria-checked=true]{background:var(--accent-bg);border-color:var(--accent)}.rrow[aria-checked=true] .rad{background:var(--accent);border-color:var(--accent)}.rrow[aria-checked=true] .rad i{background:var(--on-accent)}

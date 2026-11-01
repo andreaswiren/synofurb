@@ -57,8 +57,8 @@ const norm=s=>s.trim();
 function gateOk(){const g=S.gate;return g.b1&&g.b2&&g.b3&&norm(g.phrase)===PHRASE()}
 function missingList(){const g=S.gate,m=[];if(!g.b1)m.push('tested backup');if(!g.b2)m.push('data loss accepted');if(!g.b3)m.push('unit confirmed');if(norm(g.phrase)!==PHRASE())m.push('the phrase');return m}
 const missing=()=>'Missing: '+missingList().join(', ')+'.';
-const hostOf=u=>u.model.toLowerCase().replace(/[^a-z0-9]/g,'');
-function afterText(){const u=cur(),p=S.plan,cap=capacity(p.raid,u.disks);if(p.mode==='keep')return 'Debian 13 · volume1 kept · system '+p.sys+' GiB × '+p.copies+' · '+S.sys.host;return 'Debian 13 · '+(cap.error?'—':LEVEL_LABEL[cap.level]+' · '+TiB(cap.usable)+' usable')+' · system '+p.sys+' GiB × '+p.copies+' · '+S.sys.host}
+const hostOf=u=>u.model.toLowerCase().replace(/[^a-z0-9]/g,'')+(twinOf(u)?'-'+u.sn.slice(-4):'');   // twins would collide on LAN names, so they get the serial tail
+function afterText(){const u=cur(),p=S.plan,cap=capacity(p.raid,u.disks);if(p.mode==='keep')return 'Debian 13 · volume1 kept · system '+p.sys+' GiB × '+p.copies+' · '+S.sys.host;return 'Debian 13 · '+(cap.error?'—':LEVEL_LABEL[cap.level]+' · '+TiB(cap.usable)+' usable · survives '+cap.survives)+' · system '+p.sys+' GiB × '+p.copies+' · '+S.sys.host}
 function confirm(){const u=cur(),g=S.gate,bad=u.disks.find(x=>x[3]),keep=S.plan.mode==='keep',tw=twinOf(u),nobk=u.bk==='none found',raw=TiB(u.disks.reduce((a,x)=>a+x[2],0));
  const li=(i,t,sz)=>`<li>${ic(i,'s')}<span>${d(t)}</span><span class="sz d">${sz}</span></li>`;
  const chk=(k,l)=>`<label class="chk"><input type="checkbox" data-gate="${k}" ${g[k]?'checked':''}><span class="bx">${ic('check')}</span><span>${l}</span></label>`;
@@ -72,14 +72,14 @@ function confirm(){const u=cur(),g=S.gate,bad=u.disks.find(x=>x[3]),keep=S.plan.
  <div class="cgrid"><div class="ca col gap16">${bk}${twa}</div>
   <aside class="dz" aria-label="Confirmation"><div class="dz-h">${ic('octagon-x','l')}<span>${d(PHRASE())}</span></div><div class="dz-b">
    ${chk('b1','I have a tested backup')}${chk('b2','I accept data loss')}${chk('b3','This is '+d(u.ip+' · '+snTail(u)))}
-   <div class="fld"><span class="lab">${d(PHRASE(),'code')}</span><div class="inp ${phraseState()==='ok'?'ok':''}" id="phw"><input id="g-phrase" autocomplete="off" spellcheck="false" value="${esc(g.phrase)}" aria-label="Type the phrase" class="mono"><span id="phtag">${phraseTag()}</span></div>${tw?`<span class="sub">Add serial last 4.</span>`:''}</div></div></aside>
-  <div class="cr col gap16"><div class="row"><span class="sub">Free to cancel until step 3; then no undo.</span>${infoBtn('recov','How recovery works')}</div>${tri}${list}</div></div></div>`,
+   <div class="fld"><span class="lab">${d(PHRASE(),'code')}</span><div class="inp ${phraseState()==='ok'?'ok':''}" id="phw"><input id="g-phrase" autocomplete="off" spellcheck="false" value="${esc(g.phrase)}" aria-label="Type the phrase" class="mono"><span id="phtag">${phraseTag()}</span></div>${tw?`<span class="sub" id="phint"${phraseState()==='ok'?' hidden':''}>Add serial last 4.</span>`:''}</div></div></aside>
+  <div class="ct col gap16"><div class="row"><span class="sub">Free to cancel until step 3; then no undo.</span>${infoBtn('recov','How recovery works')}</div>${tri}</div><div class="cl">${list}</div></div></div>`,
   foot:F(back('setup')+cmdBtn(),(ok?'':`<button type="button" class="ib" data-reason="${esc(missing())}" aria-label="Why locked"${tip('Why locked')}>${ic('info','s')}</button>`)+`<button class="btn danger" id="f-erase" data-act="erase" ${ok?'':`aria-disabled="true" tabindex="-1" data-reason="${esc(missing())}"`}>${ic('trash')}Erase and install</button>`)}}
 /* the typed-phrase feedback is neutral progress ("n of m") while the text is a prefix of the phrase; a red "No match" only after a wrong character */
 function phraseState(){const g=S.gate,v=norm(g.phrase),P=PHRASE();if(!v)return '';if(v===P)return 'ok';return P.startsWith(v)?'typing':'bad'}
 function phraseTag(){const s=phraseState();return s==='ok'?tag('Matches',{v:'ok',i:'circle-check'}):s==='bad'?tag('No match',{v:'err',i:'circle-x'}):s==='typing'?tag(d(norm(S.gate.phrase).length+' of '+PHRASE().length),{}):''}
 function refreshGate(){const ok=gateOk(),b=$('#f-erase');if(b){b.setAttribute('aria-disabled',!ok);if(ok){b.removeAttribute('data-reason');b.removeAttribute('tabindex')}else{b.setAttribute('data-reason',missing());b.setAttribute('tabindex','-1')}const w=b.parentElement;let i=$('.ib[aria-label="Why locked"]',w);if(ok&&i)i.remove();else if(!ok&&!i){b.insertAdjacentHTML('beforebegin',`<button type="button" class="ib" data-reason="${esc(missing())}" aria-label="Why locked"${tip('Why locked')}>${ic('info','s')}</button>`)}else if(i)i.dataset.reason=missing()}
-  const t=$('#phtag');if(t)t.innerHTML=phraseTag();const w=$('#phw');if(w)w.classList.toggle('ok',phraseState()==='ok')}
+  const t=$('#phtag');if(t)t.innerHTML=phraseTag();const hn=$('#phint');if(hn)hn.hidden=phraseState()==='ok';const w=$('#phw');if(w)w.classList.toggle('ok',phraseState()==='ok')}
 /* ---- D8 Install ---- */
 const FLASH=['Boot flash backup','Boot agent added','Reboot into the agent','Send installer'];
 const ISTEPS=['Load installer components','Preflight: match disks','Release RAID/LVM, wipe reclaimed areas','Partition the disks','Create RAID arrays','Create LVM volumes','Create filesystems','Mount the new system','Install the Debian base system','Write fstab and unpack the payload','Configure packages, users, boot','Finish: save logs, unmount, reboot'];
@@ -100,19 +100,25 @@ function install(){const s=S.inst.step,n=instN(),pct=Math.min(100,Math.round(Mat
   <div class="col">${acc('isteps','Steps',`<ol class="stp">${steps}</ol>`,false)}${acc('iflash','Boot flash',`<ol class="stp d">${flash}</ol>`,s<4,tag('Backed up',{v:'ok',i:'shield-check'}))}${acc('ilog','Log',`<div class="logbox d" role="log">${lg}</div><div class="row" style="margin-top:.5rem"><button class="btn sm" data-act="copylog">${ic('copy')}Copy</button><button class="btn sm" data-act="openlog">${ic('file-text')}Open file</button></div>`,false,`<span class="logone d">${S.acc.ilog?'':esc(last[0]+' '+last[2])}</span>`)}</div></div>`,
   foot:F('',btn('Cancel',{id:'f-cancel',act:'cancelinst',off:post?'Not possible after step 3.':''})),after(){const r=$('.stp li.run');if(r&&S.acc.isteps)r.scrollIntoView({block:'nearest'})}}}
 /* ---- D9 Install stopped ----
-   kinds: stopped (by you, before step 3), pre (failed before step 3), agent (staging: the agent never answered; 30 min watchdog), backup (staging: flash backup did not verify; nothing changed), post (after step 3). */
+   kinds: stopped (by you, before step 3), pre (failed before step 3), agent (staging: the agent never answered; see AGENT_* below), backup (staging: flash backup did not verify; nothing changed), post (after step 3). */
 const STAGE_NAMES=['Connecting','Inspecting','Boot flash backup','Boot agent added','Reboot into the agent','Send installer','Verifying'];
-function mkFail(kind,o={}){const post=kind==='post',stage=kind==='agent'||kind==='backup';return Object.assign({kind,keep:false,phase:kind==='backup'?'done':'clock',t:post?900:kind==='agent'?1800:60,el:0,out:null,step:kind==='stopped'?Math.max(1,instN()||1):post?11:kind==='agent'?5:kind==='backup'?3:2,rpw:false},o)}
+/* Agent timing, derived from the engine (crates/synofurb-core/src/session.rs):
+   - line ~330 (install flow): the agent is armed with timeout_min: 30, counted from when the agent boots;
+   - line ~362: the app waits Duration::from_secs(10 * 60) = 10 minutes for the agent to appear (domboot.rs:318 says usually 1-3 minutes);
+   - line ~422 (Boot manager): armed with timeout_min: 60.
+   When the app gives up the watchdog has been running for up to those 10 minutes, so at most 30 - 10 = 20 minutes remain. */
+const AGENT_WATCHDOG_INSTALL=30,AGENT_WAIT=10,AGENT_WATCHDOG_BOOTMGR=60;
+function mkFail(kind,o={}){const post=kind==='post',stage=kind==='agent'||kind==='backup';return Object.assign({kind,keep:false,phase:kind==='backup'?'done':'clock',t:post?900:kind==='agent'?(AGENT_WATCHDOG_INSTALL-AGENT_WAIT)*60:60,el:0,out:null,step:kind==='stopped'?Math.max(1,instN()||1):post?11:kind==='agent'?5:kind==='backup'?3:2,rpw:false},o)}
 const fmt=t=>t>=3600?Math.floor(t/3600)+':'+String(Math.floor(t%3600/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0'):Math.floor(t/60)+':'+String(t%60).padStart(2,'0');
 const STEPNAMES=['Load installer components','Preflight: match disks','Release RAID/LVM, wipe reclaimed areas','Partition the disks','Create RAID arrays','Create LVM volumes','Create filesystems','Mount the new system','Install the Debian base system','Write fstab and unpack the payload','Configure packages, users, boot','Finish: save logs, unmount, reboot'];
 function failed(){const f=S.fail,post=f.kind==='post',stopped=f.kind==='stopped',stage=f.kind==='agent'||f.kind==='backup',u=cur(),ph=f.phase;
  const untouched=!post&&!(S.F.disks);
- const sub=stage?(f.kind==='backup'?'Phase 3 of 7':'Phase 5 of 7'):'Step '+f.step+' of 12';
+ const sub=stage?'Phase 3 of 7':'Step '+f.step+' of 12';
  const cause={pre:'Disk changed after confirm',post:'Boot entry check failed',agent:'The agent did not answer',backup:'Flash backup did not verify'}[f.kind];
  const meaning=post?(f.step>=11?'Debian is installed.':'Disks are partly changed.'):(stage?(f.kind==='backup'?'Nothing was changed. DSM is untouched.':'DSM is untouched.'):'');
  const alertTop=stopped?alertH('info','info','<b>Stopped by you.</b>'):alertH('err','octagon-x',`<b>${cause}</b> ${infoBtn('cause','Engine message')}`);
- const clockLbl=post?'Rescue shell closes in':f.kind==='agent'?'Agent reboots to DSM in':'DSM returns in';
- const clockInfo=post?'Then DSM becomes the default and the NAS reboots into the DSM loader.':f.kind==='agent'?'The agent’s watchdog sets DSM as the default and reboots. Power-cycling the NAS now also boots DSM.':'Then DSM becomes the default and the NAS reboots.';
+ const clockLbl=post?'Rescue shell closes in':f.kind==='agent'?'DSM returns in up to':'DSM returns in';
+ const clockInfo=post?'Then DSM becomes the default and the NAS reboots into the DSM loader.':f.kind==='agent'?'The agent’s watchdog is 30 minutes from when it started. The app waited up to 10 minutes for it, so at most 20 minutes remain. Power-cycling the NAS now also boots DSM.':'Then DSM becomes the default and the NAS reboots.';
  let card='';
  if(ph==='clock')card=`<div class="card"><div class="card-b row gap16"><div class="col" style="gap:.25rem"><span class="sub">${clockLbl} ${infoTxt(clockInfo,'About the clock')}</span><span class="cd" id="cd" role="timer">${fmt(f.t)}</span></div><span class="sp"></span>${meaning?`<span class="sub">${meaning}</span>`:''}</div></div>`;
  else if(ph==='waiting')card=`<div class="card"><div class="card-b row gap16"><div class="col" style="gap:.25rem"><span class="sub">Waiting for DSM</span><span class="cd" id="cd" role="timer">${fmt(f.el)}</span></div><span class="sp"></span>${post?'<span class="sub">The shell closed. The NAS is rebooting.</span>':''}${ic('loader-circle','xl spin')}</div></div>`;
@@ -121,13 +127,13 @@ function failed(){const f=S.fail,post=f.kind==='post',stopped=f.kind==='stopped'
  else if(ph==='notback')card=alertH('err','octagon-x','<b>DSM did not return.</b> Power-cycle the NAS.')
  else if(ph==='loader')card=alertH('warn','triangle-alert','<b>The NAS is in the DSM loader.</b> DSM’s system may be gone.');
  else if(ph==='lost')card=alertH('warn','wifi-off','<b>Lost contact with the NAS.</b> The clock keeps running on the NAS.');
- const acts={notback:`<button class="btn" data-act="waitdsm">${ic('refresh-cw')}Check again</button>`,loader:`<button class="btn" data-dlg="reinstall">${ic('life-buoy')}Reinstall DSM</button>`,lost:`<button class="btn" data-act="reconnect">${ic('refresh-cw')}Reconnect</button>`}[ph];
+ const acts={loader:`<button class="btn" data-dlg="reinstall">${ic('life-buoy')}Reinstall DSM</button>`,lost:`<button class="btn" data-act="reconnect">${ic('refresh-cw')}Reconnect</button>`}[ph];
  const cardH=acts?`<div class="alrow">${card}${acts}</div>`:card;
  const shellOpen=post&&(ph==='clock'||ph==='lost');
  const rescue=shellOpen?`<section class="card" aria-label="Rescue"><div class="card-h">${ic('terminal','s')}Rescue ${infoBtn('rescueinfo','Rescue shell')}<span class="sp"></span><span class="sub">Export first.</span></div><div class="card-b col">
-   <div class="copyv">${mono('ssh root@'+u.ip)}<button class="btn ghost icon sm" data-copy="ssh root@${u.ip}" aria-label="Copy command"${tip('Copy')}>${ic('copy','s')}</button></div>
-   <div class="copyv"><span class="sub">Password</span><span class="mono" id="rpw">${f.rpw?'rescue-Tn4k-Qe7':'•'.repeat(12)}</span><button class="btn ghost icon sm" data-act="showrpw" aria-label="${f.rpw?'Hide':'Show'} password">${ic(f.rpw?'eye-off':'eye','s')}</button><button class="btn ghost icon sm" data-copy="rescue-Tn4k-Qe7" aria-label="Copy password"${tip('Copy')}>${ic('copy','s')}</button></div>
-   <div class="row"><button class="btn sm" data-dlg="rescuenotes">${ic('file-text')}Rescue notes</button></div></div></section>`:'';
+   <div class="copyv">${mono('ssh root@'+u.ip)}<button class="btn ghost icon" data-copy="ssh root@${u.ip}" aria-label="Copy command"${tip('Copy')}>${ic('copy','s')}</button></div>
+   <div class="copyv"><span class="sub">Password</span><span class="mono" id="rpw">${f.rpw?'rescue-Tn4k-Qe7':'•'.repeat(12)}</span><button class="btn ghost icon" data-act="showrpw" aria-label="${f.rpw?'Hide':'Show'} password">${ic(f.rpw?'eye-off':'eye','s')}</button><button class="btn ghost icon" data-copy="rescue-Tn4k-Qe7" aria-label="Copy password"${tip('Copy')}>${ic('copy','s')}</button></div>
+   <div class="row"><button class="btn" data-dlg="rescuenotes">${ic('file-text')}Rescue notes</button></div></div></section>`:'';
  const dsmBack=ph==='back';
  const st=[['Disks','hard-drive',untouched?['Untouched','ok','shield-check']:['Changed','err','triangle-alert']],
   ['Boot flash','power',f.kind==='backup'?['Untouched','ok','shield-check']:post?['Restored','ok','circle-check']:['Entries added','warn','triangle-alert']],
@@ -144,7 +150,7 @@ function failed(){const f=S.fail,post=f.kind==='post',stopped=f.kind==='stopped'
  return {html:`<div class="page"><div class="ph"><div><h1 class="t-title">Install stopped</h1><div class="sub t-sub">${sub}</div></div></div>
   ${ph==='clock'||ph==='waiting'||ph==='done'?alertTop:''}${cardH}${rescue}
   <div class="cards3 statecards">${st.map(([l,i,t])=>`<div class="card"><div class="card-b row">${ic(i,'l')}<b>${l}</b><span class="sp"></span>${tag(t[0],{v:t[1],i:t[2]})}</div></div>`).join('')}</div>
-  <div class="row"><button class="link" data-dlg="next">What happens next</button></div>${acc('flog','Log excerpt',`<div class="logbox d">${logLine(['14:27:19','e',stopped?'user: stop requested before step 3':f.kind==='backup'?'dom: sha256 NAS != local (flash backup rejected)':f.kind==='agent'?'ssh: agent did not answer within 180 s':pre_(f)?'preflight: sdc partition table differs from the plan':'dom: read-back checksum mismatch on p2 (2/2)'])}${logLine(['14:27:19','e',stage?'@@FAIL phase '+(f.kind==='backup'?3:5)+'/7 staging stopped':'@@FAIL '+f.step+'/12 refusing to continue'])}</div>`)}</div>`,foot}}
+  <div class="row"><button class="link" data-dlg="next">What happens next</button></div>${acc('flog','Log excerpt',`<div class="logbox d">${logLine(['14:27:19','e',stopped?'user: stop requested before step 3':f.kind==='backup'?'dom: sha256 NAS != local (flash backup rejected)':f.kind==='agent'?'agent: did not appear within 10 minutes':pre_(f)?'preflight: sdc partition table differs from the plan':'dom: read-back checksum mismatch on p2 (2/2)'])}${logLine(['14:27:19','e',stage?'@@FAIL phase '+(f.kind==='backup'?3:5)+'/7 staging stopped':'@@FAIL '+f.step+'/12 refusing to continue'])}</div>`)}</div>`,foot}}
 const pre_=f=>f.kind==='pre';
 /* ---- D10 Done ---- */
 function done(){const u=cur(),y=S.sys,dn=S.done;

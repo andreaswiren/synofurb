@@ -1,3 +1,4 @@
+/* Boot manager: the agent is armed with timeout_min: 60 (crates/synofurb-core/src/session.rs ~422); the install flow arms it with 30 (~330), see js4.js AGENT_*. */
 /* ===== Boot manager, Recovery, Manage, Help, About ===== */
 /* ---- D13 Boot manager: confirm, progress, result ---- */
 const BOOTSTEPS=['Boot flash backup','Agent added','Reboot into the agent','Agent answers'];
@@ -5,10 +6,11 @@ function boot(){const b=S.boot,m=S.bootm,u=cur(),ph=m.phase;
  const steps=BOOTSTEPS.map((t,i)=>{const c=m.pct>i?'done':m.pct===i&&ph==='progress'?'run':'';return `<li class="d ${c}"><span class="si">${c==='done'?ic('check'):''}</span>${t}</li>`}).join('');
  let body;
  if(ph==='idle')body=`<div class="card"><div class="card-b col gap16"><div class="fld"><span class="lab">${lab('SSH key','The key pair is created on this computer.')}</span><div class="seg" role="group" style="align-self:flex-start">${['Generate','Paste'].map(k=>`<button aria-pressed="${b.key===k}" data-boot-key="${k}">${k}</button>`).join('')}</div>${b.key==='Paste'?`<input class="inp mono" id="b-pub" placeholder="ssh-ed25519 AAAA…" value="${esc(b.pub)}" aria-label="Public key">`:''}</div>
-  <div class="fld"><span class="lab">${lab('Login timeout','The agent reboots to DSM after 30 minutes without a login.')}</span><div class="mono" style="padding:.25rem 0">${d('30 min')}</div></div>
+  <div class="fld"><span class="lab">${lab('Login timeout','The agent reboots to DSM after 60 minutes without a login.')}</span><div class="mono" style="padding:.25rem 0">${d('60 min')}</div></div>
   ${alertH('warn','triangle-alert',`<b>After another OS starts, only a power cycle returns.</b> ${infoBtn('oneshot','One-shot agent')}`)}</div></div>`;
  else if(ph==='progress')body=`<div class="card"><div class="card-b col"><div class="row"><b>Boot flash</b>${tag('Working',{v:'info',i:'loader-circle'})}<span class="sp"></span>${mono(Math.min(100,m.pct*25)+'%')}</div><div class="prog" role="progressbar" aria-valuenow="${m.pct*25}"><i style="width:${m.pct*25}%"></i></div><ol class="stp">${steps}</ol></div></div>`;
- else body=`<div class="card"><div class="card-b col gap16"><div class="row gap12 wrap">${tag('Agent ready',{v:'ok',i:'circle-check',lg:true})}${tag('30 min watchdog',{i:'clock',t:'The agent reboots to DSM after 30 minutes without a login.'})}</div>
+ else if(m.returned)body=`<div class="card"><div class="card-b col gap16"><div class="row gap12 wrap">${tag('Agent stopped',{i:'circle-check'})}</div>${alertH('ok','circle-check','<b>Back in DSM.</b> Our entries remain on the flash.')}</div></div>`;
+ else body=`<div class="card"><div class="card-b col gap16"><div class="row gap12 wrap">${tag('Agent ready',{v:'ok',i:'circle-check',lg:true})}${tag('60 min watchdog',{i:'clock',t:'The agent reboots to DSM after 60 minutes without a login.'})}</div>
   <div class="copyv">${mono('ssh boot@'+u.ip)}<button class="btn ghost icon sm" data-copy="ssh boot@${u.ip}" aria-label="Copy command"${tip('Copy')}>${ic('copy','s')}</button></div>
   ${m.returned?alertH('ok','circle-check','<b>Back in DSM.</b> Our entries remain on the flash.'):''}</div></div>`;
  const foot=ph==='idle'?F(back('goal'),btn('Install agent',{cls:'primary',act:'bootconfirm',icon:'download'}))
@@ -19,12 +21,14 @@ function boot(){const b=S.boot,m=S.bootm,u=cur(),ph=m.phase;
 /* ---- D14 Recovery: every row reads the unit's facts and has a real outcome ---- */
 function recRows(){const F=S.F,dm=F.disks,dsmDefault=F.dflt==='dsm';
  return [
-  {k:'bootdsm',label:'Boot DSM',btn:'Boot DSM',icon:'rotate-ccw',desc:dm?'Reboots into the DSM loader; it may show Synology’s install page.':'Makes the unit boot DSM next time.',off:dsmDefault&&!F.flash?'DSM is already the default.':''},
-  {k:'agent',label:'Open agent',btn:'Open agent',icon:'terminal',desc:'Boots the SSH agent; returns to DSM by itself.',off:F.flash?'':'No agent on the flash. Set it up under Boot manager.'},
-  {k:'restore',label:'Restore flash',btn:'Restore flash',icon:'hard-drive',desc:'Writes the saved image back to the boot flash.',off:F.flash?'':'Nothing of ours is on the flash.',danger:true},
-  {k:'remove',label:'Remove entries',btn:'Remove entries',icon:'trash',desc:'Leaves only Synology’s own files on the flash.',off:!F.flash?'Nothing of ours is on the flash.':F.dflt==='debian'?'Debian starts through these entries. Boot DSM first.':'',danger:true},
+  {k:'bootdsm',label:'Boot DSM',btn:'Boot',icon:'rotate-ccw',desc:dm?'Reboots into the DSM loader; it may show Synology’s install page.':'Makes the unit boot DSM next time.',off:dsmDefault?'DSM is already the default.':''},
+  {k:'agent',label:'Open agent',btn:'Start',icon:'terminal',desc:'Boots the SSH agent; returns to DSM by itself.',off:F.flash?'':'No agent on the flash. Set it up under Boot manager.'},
+  {k:'restore',label:'Restore flash',btn:'Restore',icon:'hard-drive',desc:'Writes the saved image back to the boot flash.',off:F.flash?'':'Nothing of ours is on the flash.',danger:true},
+  {k:'remove',label:'Remove entries',btn:'Remove',icon:'trash',desc:'Leaves only Synology’s own files on the flash.',off:!F.flash?'Nothing of ours is on the flash.':F.dflt==='debian'?'Debian starts through these entries. Boot DSM first.':'',danger:true},
   {k:'guide',label:'Reinstall DSM',btn:'Open guide',icon:'life-buoy',desc:'Use Synology’s page; no data promise.',off:''}]}
-function recPrimary(){const F=S.F;if(F.disks)return 'guide';if(F.flash&&F.dflt!=='dsm')return 'bootdsm';return ''}
+/* The primary follows the facts: a unit whose default is already DSM but whose disks were written boots into Synology's loader, so the one useful first step is the reinstall guide (Boot DSM is disabled: nothing to switch).
+   If the default is not DSM (Debian or the agent boots), switching back to DSM is the safe first step. A unit with nothing changed has no primary. */
+function recPrimary(){const F=S.F;if(F.dflt!=='dsm'&&(F.flash||F.disks))return 'bootdsm';if(F.disks)return 'guide';return ''}
 function recoveryBody(){const F=S.F,rows=recRows(),pr=recPrimary(),r=S.rec.result;
  const chips=`<div class="row wrap">${tag(d('Flash: '+(F.flash?'ours present':'clean')),{i:'hard-drive',v:F.flash?'warn':''})}${tag(d('Default: '+(F.dflt==='dsm'?'DSM':'Debian')),{i:'server'})}${tag(d(F.disks?'Disks: modified 14:25':'Disks: untouched'),{v:F.disks?'warn':'ok',i:F.disks?'triangle-alert':'shield-check'})}</div>`;
  const none=!F.flash&&!F.disks?alertH('info','info','<b>Nothing to recover.</b> The unit is as it was found.'):'';

@@ -112,7 +112,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | Enable write? (web) | W5 Mounts | Enable write / Cancel | 24 | DSM btrfs volumes can use features Debian handles poorly. Read-only is the safe default. Write only if you have a copy of the files. |
 | Hybrid slices (desktop Plan) | D5 Plan (Slices link) | Close | 89 | Hybrid (SHR-style) cuts your disks' data space into slices at the sizes of the different disks. Each slice present on two or more disks becomes one array: RAID 1 for two members, RAID 5 for three or more (Hybrid 2-disk: RAID 6 for four or more). A slice on one disk has no partner and stays unused. The arrays are joined by LVM into one volume. This is built by synofurb with mdadm and LVM; DSM may not adopt it, and nothing here has run on a real Synology. |
 | Update management app | D15 Manage | Update / Cancel | 47 | Copies version {0.9.2} to the unit (now {0.9.1}). The web UI restarts for about 10 seconds; signed-in sessions sign in again. If the health check fails, the previous version is restored automatically. You can also roll back afterwards. A warning line appears if an array is degraded or rebuilding. |
-| Install boot agent? | D13 Boot manager | Install / Cancel | 53 | The whole boot flash is saved to this computer first and verified. Then entries and files are added to the flash; Synology's entry stays and stays the default. Your disks are not touched. The agent resets the default to DSM when it starts and reboots to DSM after 30 minutes without a login. |
+| Install boot agent? | D13 Boot manager | Install / Cancel | 53 | The whole boot flash is saved to this computer first and verified. Then entries and files are added to the flash; Synology's entry stays and stays the default. Your disks are not touched. The agent resets the default to DSM when it starts and reboots to DSM after 60 minutes without a login. |
 | Operation plan | D18 / W13 to W17 | Run / Cancel | 58 | Shows the ordered steps for this operation, re-derived on the server when you run it, and the exact commands (collapsed). Destructive steps ask you to type a phrase such as REPLACE sdc. It refuses to touch a device that is mounted, holds the system or swap, belongs to another array, or while the array is resyncing or reshaping. |
 
 ## 5. Desktop screens
@@ -268,7 +268,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 
 | Element | Pattern | short (visible) | tip (one sentence) | help |
 |---|---|---|---|---|
-| Boot manager (i) | Popover | Boot manager | Adds a small SSH agent to the boot flash. | Flash changes, disks untouched, one-shot, 30 min watchdog; help: boot-manager |
+| Boot manager (i) | Popover | Boot manager | Adds a small SSH agent to the boot flash. | Flash changes, disks untouched, one-shot, 60 min watchdog; help: boot-manager |
 | Install Debian (i) | Popover | Install Debian | Erases disks; needs your backup. | Wipe or advanced Keep, about 25 minutes; data layout from None to RAID 10 or Hybrid (SHR-style); help: first-install, raid-levels |
 | Restore (i) | Popover | Restore / Recover | Reads the unit's state before offering anything. | help: recovery |
 | Recommended tag | Tooltip | Recommended | No one has reported this model; try the agent first. | help: compat-status |
@@ -511,7 +511,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 
 **Keyboard:** Footer button pinned and focusable first; `Tab` order: primary, secondary, Rescue copy buttons, links; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: n/a; *error*: Variants: flash backup did not verify (nothing changed, DSM running, primary Back to Confirm); agent did not answer (Phase 5 of 7, "Agent reboots to DSM in 30:00", Wait for DSM); stopped by you before step 3 (60 s clock, Flash changed); failed before step 3; failed after step 3 Wipe or Keep running (15:00 clock, Rescue panel); waiting (clock 0: "The shell closed. The NAS is rebooting.", no Rescue panel); loader (only Reinstall DSM); lost (Reconnect; the clock keeps running on the NAS); *loading*: Waiting for DSM shows Spinner and elapsed time.
+**States:** *empty*: n/a; *error*: Variants: flash backup did not verify (nothing changed, DSM running, primary Back to Confirm); agent did not appear (Phase 3 of 7; the app waits up to 10 minutes for it and the install agent's watchdog is 30 minutes from its start, so the clock reads "DSM returns in up to 20:00"; Wait for DSM); stopped by you before step 3 (60 s clock, Flash changed); failed before step 3; failed after step 3 Wipe or Keep running (15:00 clock, Rescue panel); waiting (clock 0: "The shell closed. The NAS is rebooting.", no Rescue panel); loader (only Reinstall DSM); lost (Reconnect; the clock keeps running on the NAS); *loading*: Waiting for DSM shows Spinner and elapsed time.
 
 ### D10 Done
 
@@ -641,11 +641,11 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | 5 | SSH key | Field + ToggleGroup | 2 |
 | 6 | Generate | ToggleGroup option | 1 |
 | 7 | Paste | ToggleGroup option | 1 |
-| 8 | Login timeout | Field + Input (read-only, 30 min) | 2 |
+| 8 | Login timeout | Field + Input (read-only, 60 min) | 2 |
 | 9 | After another OS starts, only a power cycle returns. | Alert (warning) | 9 |
 | 10 | Install agent | Button (primary): opens the confirm AlertDialog "Install boot agent?" | 2 |
 | 11 | Back | Button (ghost) | 1 |
-| 12 | Agent ready | Result panel: Tag (success), mono {ssh boot@192.168.1.40} + Clipboard, Tag {30 min watchdog}, Buttons "Return to DSM" and "Done"; after Return to DSM: "Back in DSM. Our entries remain on the flash." with Buttons "Recovery options" and "Done". NO Stepper on this screen | cond. |
+| 12 | Agent ready | Result panel: Tag (success), mono {ssh boot@192.168.1.40} + Clipboard, Tag {60 min watchdog}, Buttons "Return to DSM" and "Done"; after Return to DSM: "Back in DSM. Our entries remain on the flash." with Buttons "Recovery options" and "Done". NO Stepper on this screen | cond. |
 
 **Word budget:** screen 31 + shell 12 = **43** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
@@ -655,7 +655,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 |---|---|---|---|---|
 | Flash changes | Popover | Flash changes | Entries and files are added; DSM's entry stays. | Whole flash saved to this computer first and verified; help: boot-manager |
 | Disks untouched | Tooltip | Disks untouched | No partition table is written. | help: boot-manager |
-| Login timeout | Tooltip | Login timeout | The agent reboots to DSM after 30 minutes without a login. | help: boot-manager |
+| Login timeout | Tooltip | Login timeout | The agent reboots to DSM after 60 minutes without a login. | help: boot-manager |
 | Title (i) | Popover | One-shot agent | It resets the default to DSM when it starts. | kexec starts Linux kernels only; help: boot-manager |
 | Alert | Popover | Other OS | After kexec nothing of ours runs; power-cycling returns to the default. | help: boot-manager |
 | Install agent | AlertDialog | Install boot agent? | The boot flash is saved here first, then modified. | Text: Install boot agent dialog, section 4; buttons Install / Cancel |
@@ -1513,7 +1513,7 @@ Commands: `synofurb recover`, `synofurb boot-manager enter`.
 #### boot-manager: Boot manager
 
 x86 units boot through a small internal boot flash. Boot manager adds an SSH agent entry to it. The whole flash is saved to this computer first; disks are untouched; DSM's entry stays and stays the default.
-The agent is one-shot: it resets the default to DSM when it starts and reboots to DSM after 30 minutes without a login. From it, `sf-boot kexec <kernel-url> <initrd-url>` starts another Linux kernel. kexec starts Linux kernels only, not Windows or UEFI-only ISOs. Once another system runs, nothing of ours is running: power-cycling returns to the default entry. That system can see and change your disks.
+The agent is one-shot: it resets the default to DSM when it starts and reboots to DSM after 60 minutes without a login. From it, `sf-boot kexec <kernel-url> <initrd-url>` starts another Linux kernel. kexec starts Linux kernels only, not Windows or UEFI-only ISOs. Once another system runs, nothing of ours is running: power-cycling returns to the default entry. That system can see and change your disks.
 
 #### serial-console: Serial console
 
