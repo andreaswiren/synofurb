@@ -230,7 +230,7 @@ mod strings {
         GOAL_TITLE: Title, "Choose goal", "", "", "";
         GOAL_SUB: Subtitle, "What should happen to this NAS?", "", "", "";
         GOAL_BOOTMGR: Label, "Boot manager", "Adds a small SSH agent to the boot flash.", "boot-manager",
-            "The flash changes, the disks stay untouched. The agent is one-shot and has a 30 minute watchdog.";
+            "The flash changes, the disks stay untouched. The agent is one-shot and has a 60 minute watchdog.";
         GOAL_BOOTMGR_LINE: Prose, "Try Linux. Disks untouched.", "", "", "";
         GOAL_RECOMMENDED: Label, "Recommended", "No one has reported this model; try the agent first.", "compat-status", "";
         GOAL_SET_UP: Button, "Set up", "", "", "";
@@ -382,6 +382,14 @@ mod strings {
         FAIL_RECOVERY: Button, "Recovery options", "", "", "";
         FAIL_NEXT: Button, "What happens next", "Order of actions and what survives.", "recovery", "";
         FAIL_LOG: Label, "Log excerpt", "", "", "";
+        FAIL_AGENT_TITLE: Label, "Agent did not answer", "The engine message is in the log excerpt.", "recovery", "";
+        FAIL_AGENT_TEXT: Prose, "No answer within 10 minutes. Nothing was reset after the wait.", "", "", "";
+        FAIL_DEFAULT_UNCONFIRMED: Label, "Default: not confirmed", "We cannot tell if the agent ran; if it did not, a power cycle boots it again.", "recovery", "";
+        FAIL_CLOCK_AGENT: Label, "DSM may return in", "An estimate, not a promise.", "recovery",
+            "If the agent started, its watchdog counts 30 minutes from when it booted. The app already waited 10, so 20 or more remain. If it never started there is no watchdog and DSM does not come back by itself.";
+        FAIL_CLOCK_AGENT_VALUE: Label, "about 20 min or more", "", "", "";
+        DLG_NEXT_AGENT: Dialog, "What happens next", "", "recovery",
+            "The app waited 10 minutes and cannot tell what happened. If the agent started, its watchdog reboots the NAS into DSM, 20 minutes or more from now.\n\nIf it never started, the NAS may keep booting the agent after every power cycle. Then choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or restore the boot flash from another computer.\n\nDSM is not confirmed. Your disks are untouched.";
         DLG_NEXT_PRE: Dialog, "What happens next", "", "recovery",
             "No disk was changed. The NAS sets DSM as the default and reboots in 60 seconds, then DSM starts as before.\n\nIf DSM is not back after 10 minutes, power-cycle the NAS. Our entries stay on the boot flash until you remove them under Recovery.";
         DLG_NEXT_WIPE: Dialog, "What happens next", "", "recovery",
@@ -501,7 +509,7 @@ mod strings {
         REC_MANUAL: Button, "Manual recovery", "Steps that work without the unit answering.", "recovery", "";
         REC_NOTHING: Label, "Nothing to recover.", "The unit is as it was found.", "", "";
         DLG_MANUAL: Dialog, "Manual recovery", "Steps that work without the unit answering.", "recovery",
-            "Power the NAS off, wait ten seconds, power it on. If DSM starts, you are done.\n\nIf it does not, use the unit's console (VGA or serial) to restore the saved boot-flash image, or reinstall DSM from find.synology.com with the .pat file for your model.\n\nThe agent never changes your disks. We promise nothing about your data.";
+            "Both ways need physical access to the NAS.\n\n1. On a serial or VGA console, choose SYNOLOGY_2 in the boot menu. When DSM runs, run the first command in a terminal on the NAS.\n\n2. Or put the boot flash in another Linux computer and restore the saved image with the second command. Replace /dev/sdX with the 128 MB flash; check twice.\n\nYour disks are untouched. We promise nothing about your data.";
         DLG_RESTORE: Dialog, "Restore boot flash?", "Writes the saved image back to the boot flash.", "backups", "This writes the saved image back to the boot flash. It needs a working Linux on the unit, such as the agent or Debian.";
         DLG_REMOVE: Dialog, "Remove our entries?", "Leaves only Synology's own files on the flash.", "boot-manager", "This removes our entries from the boot flash and leaves Synology's own files. DSM stays the default.";
         REC_TYPE: Label, "Type {phrase} to continue.", "", "", "";
@@ -603,9 +611,9 @@ mod strings {
         T_BACKUPS: Topic, "Backups", "Your backup and what synofurb saves.", "",
             "Your own backup is essential. In Wipe mode nothing on the disks is preserved; in Keep mode the data volume is left alone on a best-effort basis with no guarantee.\n\nsynofurb also saves on this computer:\n\n- **Boot-flash image**: the whole flash, hash-verified, before the first flash write. Keep it off the NAS.\n- **Disk metadata backup**: the first and last 1 MiB of every disk we change (partition tables, GPT headers). That is metadata only, not your files, and it cannot bring back a formatted filesystem.\n- The plan, the install script and the log.";
         T_RECOVERY: Topic, "Recovery", "What returns the unit to DSM, by phase.", "",
-            "DSM stays the default boot entry; every failure points it back at DSM.\n\n- **Before the boot flash is changed**: nothing to undo.\n- **Agent installed**: the agent resets the default to DSM first; it reboots to DSM if nobody logs in.\n- **Before step 3**: a failure reboots to DSM after 60 s; a power cycle also works.\n- **After step 3**: rescue shell for 15 minutes, then the DSM loader runs; DSM's own system may be gone, reinstall it from Synology (find.synology.com); no data promise.\n- **Debian installed**: pick the previous kernel in the boot menu or boot DSM.\n\nCommands: `synofurb recover`, `synofurb boot-manager enter`.";
+            "DSM stays the default boot entry and failures point it back at DSM, except when the agent never answered: then the default is not confirmed.\n\n- **Before the boot flash is changed**: nothing to undo.\n- **Agent installed**: the agent resets the default to DSM first; it reboots to DSM if nobody logs in.\n- **Before step 3**: a failure reboots to DSM after 60 s; a power cycle also works.\n- **After step 3**: rescue shell for 15 minutes, then the DSM loader runs; DSM's own system may be gone, reinstall it from Synology (find.synology.com); no data promise.\n- **Agent never answered**: DSM is not confirmed and may not return by itself; use Manual recovery (SYNOLOGY_2 in the boot menu).\n- **Debian installed**: pick the previous kernel in the boot menu or boot DSM.\n\nCommands: `synofurb recover`, `synofurb boot-manager enter`.";
         T_BOOT_MANAGER: Topic, "Boot manager", "A one-shot SSH agent on the boot flash.", "",
-            "x86 units boot through a small internal boot flash. Boot manager adds an SSH agent entry to it. The whole flash is saved to this computer first; disks are untouched; DSM's entry stays and stays the default.\n\nThe agent is one-shot: it resets the default to DSM when it starts and reboots to DSM after 30 minutes without a login. From it, `sf-boot kexec <kernel-url> <initrd-url>` starts another Linux kernel. kexec starts Linux kernels only, not Windows or UEFI-only ISOs. Once another system runs, nothing of ours is running: power-cycling returns to the default entry. That system can see and change your disks.";
+            "x86 units boot through a small internal boot flash. Boot manager adds an SSH agent entry to it. The whole flash is saved to this computer first; disks are untouched; DSM's entry stays and stays the default.\n\nThe agent is one-shot: it resets the default to DSM when it starts and reboots to DSM after 60 minutes without a login. If it never starts, the unit may keep booting it; see Recovery. From it, `sf-boot kexec <kernel-url> <initrd-url>` starts another Linux kernel. kexec starts Linux kernels only, not Windows or UEFI-only ISOs. Once another system runs, nothing of ours is running: power-cycling returns to the default entry. That system can see and change your disks.";
         T_SERIAL_CONSOLE: Topic, "Serial console", "Boot messages without a network.", "",
             "A serial console shows boot messages and lets you log in without a network. Intel units usually use `ttyS0` at 115200 8N1; the app reads the setting from DSM's kernel command line. AMD units have a memory-mapped UART; the exact console argument is copied from DSM. ARM boards need a 3.3 V TTL serial adapter (not RS-232 levels); without it you cannot recover an ARM unit over SSH alone. Debian also opens a login on any USB serial adapter you plug in later.";
         T_OFFLINE_MODE: Topic, "Offline mode", "Install from a downloaded bundle.", "",
@@ -613,7 +621,7 @@ mod strings {
         T_CLI: Topic, "Command line", "Everything in the app is also a command.", "",
             "Everything in the app is also a command, and the command line is the screen-reader accessible path (the app window does not support screen readers).\n\n`synofurb scan` discovers units.\n\n`synofurb plan --host <ip> --user <admin>` shows the plan, read-only.\n\n`synofurb install ... --have-backup --accept-data-loss --confirm` converts a unit.\n\n`synofurb recover` and `synofurb boot-manager enter` handle recovery.\n\nThe Copy command button on Plan, System and Confirm copies the equivalent command. On Confirm the three confirmation flags are included only after you confirm.";
         T_TROUBLESHOOTING: Topic, "Troubleshooting", "No units, SSH off, login failed, installer stuck.", "",
-            "**No units found**: wrong network or VLAN, NAS still booting, firewall (UDP 9999, mDNS 5353, TCP 22). Use Add by IP.\n\n**SSH is off**: enable it in DSM, Control Panel, Terminal and SNMP.\n\n**Login failed**: DSM may auto-block this computer after a few failures; check the account is an administrator.\n\n**Installer did not come up**: DSM is already the default; wait, then power-cycle.\n\n**Boot flash write failed**: the tool restores the flash and verifies it; use the rescue shell within 15 minutes.\n\nLogs: `~/.local/share/synofurb/logs` (secrets removed). Settings, Logs opens the folder; About copies diagnostics.";
+            "**No units found**: wrong network or VLAN, NAS still booting, firewall (UDP 9999, mDNS 5353, TCP 22). Use Add by IP.\n\n**SSH is off**: enable it in DSM, Control Panel, Terminal and SNMP.\n\n**Login failed**: DSM may auto-block this computer after a few failures; check the account is an administrator.\n\n**Installer did not come up**: before step 3, DSM returns by itself. If the app says the default is not confirmed, it may not: use Manual recovery.\n\n**Boot flash write failed**: the tool restores the flash and verifies it; use the rescue shell within 15 minutes.\n\nLogs: `~/.local/share/synofurb/logs` (secrets removed). Settings, Logs opens the folder; About copies diagnostics.";
         T_REPORT_RESULT: Topic, "Report a result", "How a model moves from Untested to Verified.", "",
             "Reports move a model from Untested towards Verified. After an install, press Report result on the Done screen. It opens a pre-filled GitHub issue (compat report template) with the model, DSM version, synofurb version, result, boot method and a log excerpt without secrets. The serial number is left out. Nothing is sent without your click, and Settings, Privacy has an off switch. A maintainer checks the log and changes the status through a reviewed pull request.";
         T_RAID_LEVELS: Topic, "RAID levels", "What each level costs and survives.", "",
@@ -836,6 +844,24 @@ pub static SCREENS: &[ScreenCopy] = &[
             &FAIL_FLASH_CHANGED,
             &FAIL_RESCUE_IN,
             &FAIL_OPEN_RESCUE,
+            &FAIL_EXPORT,
+            &FAIL_RECOVERY,
+            &FAIL_NEXT,
+            &FAIL_LOG,
+        ],
+    },
+    ScreenCopy {
+        name: "failed-agent",
+        visible: &[
+            &FAIL_TITLE,
+            &FAIL_AGENT_TITLE,
+            &FAIL_AGENT_TEXT,
+            &FAIL_DISKS_UNTOUCHED,
+            &FAIL_FLASH_CHANGED,
+            &FAIL_DEFAULT_UNCONFIRMED,
+            &FAIL_CLOCK_AGENT,
+            &FAIL_CLOCK_AGENT_VALUE,
+            &REC_MANUAL,
             &FAIL_EXPORT,
             &FAIL_RECOVERY,
             &FAIL_NEXT,

@@ -27,12 +27,14 @@ impl App {
             Some(Err(e)) => e.clone(),
             _ => self.install.installer_failed.clone().unwrap_or_else(|| "The installer stopped.".into()),
         };
+        // The engine's agent-timeout text promises that DSM boots again; that is not known, so it is never shown.
+        let err = crate::ui::facts::scrub_agent_promise(&err);
         let uf_flash = self.unit_facts().flash;
         let dom = self.facts.as_ref().is_some_and(|f| self.sys.boot.resolve(f) == BootChoice::Dom);
         let subtitle = if self.install.step_total > 0 {
             format!("Step {} of {} \u{00b7} {}", self.install.step_n, self.install.step_total, self.install.step_name)
         } else {
-            if self.agent_unknown { "Waiting for the boot agent".to_string() } else { "before the installer started".to_string() }
+            if self.agent_unknown { "Phase 4 of 7".to_string() } else { "before the installer started".to_string() }
         };
         let (disks_item, disks_tone, disks_icon) = if touched {
             (&copy::FAIL_DISKS_CHANGED, Tone::Err, role::DANGER)
@@ -57,6 +59,20 @@ impl App {
                     .child(kit::tag(&p, flash_tone, Some(role::PACKAGE), flash_item.short))
                     .child(crate::ui::disclosure::info_tip("t-flash", flash_item, &app)),
             )
+            .children(self.agent_unknown.then(|| {
+                h_flex()
+                    .gap(px(2.0))
+                    .child(kit::tag(&p, Tone::Warn, Some(role::TIP), copy::FAIL_DEFAULT_UNCONFIRMED.short))
+                    .child(crate::ui::disclosure::info_tip("t-default", &copy::FAIL_DEFAULT_UNCONFIRMED, &app))
+            }))
+            .children(self.agent_unknown.then(|| {
+                h_flex()
+                    .gap(px(6.0))
+                    .items_center()
+                    .child(kit::muted(cx, copy::FAIL_CLOCK_AGENT.short))
+                    .child(kit::mono(cx, copy::FAIL_CLOCK_AGENT_VALUE.short))
+                    .child(crate::ui::disclosure::info_tip("t-clock-agent", &copy::FAIL_CLOCK_AGENT, &app))
+            }))
             .children((!self.agent_unknown).then(|| {
                 h_flex()
                     .gap(px(6.0))
@@ -75,7 +91,14 @@ impl App {
             Job::Done(Err(e)) => Alert::error("rec-err", e.clone()).small().icon(icons::icon(role::ERR)).into_any_element(),
             _ => gpui_kit::div().into_any_element(),
         };
-        let tail: Vec<String> = self.install.log.tail_info(14).into_iter().map(crate::ui::logview::format_line).collect();
+        let tail: Vec<String> = self
+            .install
+            .log
+            .tail_info(14)
+            .into_iter()
+            .map(crate::ui::logview::format_line)
+            .map(|l| crate::ui::facts::scrub_agent_promise(&l))
+            .collect();
         let log = v_flex()
             .gap(px(2.0))
             .p(px(8.0))
@@ -88,7 +111,11 @@ impl App {
             .w_full()
             .gap(px(14.0))
             .child(tags)
-            .child(Alert::error("fail-banner", err).icon(icons::icon(role::ERR)))
+            .child(if self.agent_unknown {
+                Alert::error("fail-banner", copy::FAIL_AGENT_TEXT.short).title(copy::FAIL_AGENT_TITLE.short).icon(icons::icon(role::ERR))
+            } else {
+                Alert::error("fail-banner", err).icon(icons::icon(role::ERR))
+            })
             .child(
                 h_flex().gap(px(8.0)).child(
                     Button::new("next")

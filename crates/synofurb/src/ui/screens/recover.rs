@@ -249,8 +249,31 @@ impl App {
     }
 
     pub fn open_manual_recovery(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        let backup = facts::latest_backup(&self.cfg_dir.join("dom-backups"));
+        let cmds = facts::manual_recovery_commands(backup.as_ref().map(|p| p.display().to_string()).as_deref());
         let app = cx.entity();
-        crate::ui::disclosure::dialog(window, cx, &copy::DLG_MANUAL, &app);
+        window.open_dialog(cx, move |d, _, cx| {
+            let app = app.clone();
+            d.title(copy::DLG_MANUAL.short)
+                .w(px(crate::ui::theme::layout::DIALOG_W))
+                .child(
+                    v_flex()
+                        .gap(px(8.0))
+                        .child(paragraphs(copy::DLG_MANUAL.body, cx))
+                        .child(kit::command_row(cx, "mr-1", cmds[0].clone()))
+                        .child(kit::command_row(cx, "mr-2", cmds[1].clone())),
+                )
+                .footer(
+                    DialogFooter::new()
+                        .child(Button::new("mr-help").ghost().icon(icons::icon(role::HELP)).label(copy::BTN_OPEN_HELP.short).on_click(
+                            move |_, window, cx| {
+                                window.close_dialog(cx);
+                                app.update(cx, |a, cx| a.open_help_topic(Some("recovery"), window, cx));
+                            },
+                        ))
+                        .child(Button::new("mr-close").primary().label(copy::BTN_CLOSE.short).on_click(|_, window, cx| window.close_dialog(cx))),
+                )
+        });
     }
 }
 

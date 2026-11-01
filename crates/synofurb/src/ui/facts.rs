@@ -143,12 +143,7 @@ pub struct RecRow {
     pub desc: &'static str,
     /// `Some(reason)` when the row is unavailable.
     pub off: Option<&'static str>,
-    /// Typed confirmation phrase (destructive rows), `None` otherwise.
-    pub phrase: Option<&'static str>,
 }
-
-pub const RESTORE_PHRASE: &str = "RESTORE FLASH";
-pub const REMOVE_PHRASE: &str = "REMOVE ENTRIES";
 
 /// The Recovery rows as a function of the facts: a row that cannot work says why.
 pub fn recovery_rows(f: &UnitFacts) -> Vec<RecRow> {
@@ -159,34 +154,31 @@ pub fn recovery_rows(f: &UnitFacts) -> Vec<RecRow> {
             label: "Boot DSM",
             button: "Boot",
             desc: if f.disks {
-                "Reboots into the DSM loader; it may show Synology's install page."
+                "Makes DSM the default. The loader may show Synology's install page. Reboot afterwards."
             } else {
-                "Makes the unit boot DSM next time."
+                "Makes DSM the default boot entry. Reboot the unit afterwards."
             },
             off: dsm_default.then_some("DSM is already the default."),
-            phrase: None,
         },
         RecRow {
             kind: RecKind::Agent,
             label: "Open agent",
-            button: "Start",
-            desc: "Boots the SSH agent; returns to DSM by itself.",
+            button: "Show command",
+            desc: "Shows the command that boots the SSH agent once.",
             off: (!f.flash).then_some("No agent on the flash. Set it up under Boot manager."),
-            phrase: None,
         },
         RecRow {
             kind: RecKind::RestoreFlash,
             label: "Restore flash",
-            button: "Restore",
-            desc: "Writes the saved image back to the boot flash.",
+            button: "Show command",
+            desc: "Shows the command that writes the saved image back to the boot flash.",
             off: (!f.flash).then_some("Nothing of ours is on the flash."),
-            phrase: Some(RESTORE_PHRASE),
         },
         RecRow {
             kind: RecKind::RemoveEntries,
             label: "Remove entries",
-            button: "Remove",
-            desc: "Leaves only Synology's own files on the flash.",
+            button: "Show command",
+            desc: "Shows the command that leaves only Synology's own files on the flash.",
             off: if !f.flash {
                 Some("Nothing of ours is on the flash.")
             } else if f.default_not_dsm && f.debian {
@@ -194,7 +186,6 @@ pub fn recovery_rows(f: &UnitFacts) -> Vec<RecRow> {
             } else {
                 None
             },
-            phrase: Some(REMOVE_PHRASE),
         },
         RecRow {
             kind: RecKind::ReinstallDsm,
@@ -202,7 +193,6 @@ pub fn recovery_rows(f: &UnitFacts) -> Vec<RecRow> {
             button: "Open guide",
             desc: "Use Synology's page; no data promise.",
             off: None,
-            phrase: None,
         },
     ]
 }
@@ -234,6 +224,50 @@ pub fn recovery_manual_primary(f: &UnitFacts) -> bool {
 /// confirmed to be DSM, so the UI offers the manual recovery instead of promising that DSM returns.
 pub fn is_agent_timeout(error: &str) -> bool {
     error.contains("boot agent did not appear") || error.contains("boot agent did not answer")
+}
+
+/// The engine's agent-timeout text ends with "The NAS defaults to DSM: ... it will boot DSM normally." That is true only
+/// if the agent ran; when it never answered the unit may keep booting the agent (`boot/dom/README.md`, "Fail-safe
+/// design"). The UI never shows that promise: this replaces the sentence by what is known. Other text is unchanged.
+pub fn scrub_agent_promise(text: &str) -> String {
+    if !is_agent_timeout(text) {
+        return text.to_string();
+    }
+    let head = match text.find("The NAS defaults to DSM") {
+        Some(i) => text[..i].trim_end(),
+        None => text.trim_end(),
+    };
+    let head = head.trim_end_matches('.');
+    format!("{head}. Nothing was reset after the wait.")
+}
+
+/// The two commands of the manual recovery (`boot/dom/README.md`, "Manual recovery"): 1. on DSM after choosing
+/// `SYNOLOGY_2` in the boot menu, 2. on another Linux computer with the boot flash attached. `/dev/sdX` is the one
+/// thing only the user can fill in (the text says so); the image path is the newest saved backup when there is one.
+pub fn manual_recovery_commands(backup: Option<&str>) -> [String; 2] {
+    let image = backup.map(shell_quote).unwrap_or_else(|| "<saved boot-flash image>".to_string());
+    ["sudo synofurb-dom default dsm --yes".to_string(), format!("sudo SYNOFURB_DOM=/dev/sdX synofurb-dom restore --yes {image}")]
+}
+
+fn shell_quote(s: &str) -> String {
+    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+=:,@%".contains(c)) {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+/// The newest `synofurb-dom-backup-*.img` in `dir` (the names carry a sortable time stamp), if any.
+pub fn latest_backup(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("synofurb-dom-backup-") && n.ends_with(".img"))
+        })
+        .collect();
+    found.sort();
+    found.pop()
 }
 
 // ------------------------------------------------------------------------------------------------ quick setup
@@ -383,7 +417,7 @@ mod tests {
         assert!(flashed[0].off.is_none() && flashed[1].off.is_none() && flashed[2].off.is_none() && flashed[3].off.is_none());
         let debian = recovery_rows(&UnitFacts { flash: true, debian: true, default_not_dsm: true, disks: true, ..f() });
         assert!(debian[3].off.unwrap().contains("Boot DSM first"), "Debian starts through the entries");
-        assert!(debian[2].phrase == Some(RESTORE_PHRASE) && debian[3].phrase == Some(REMOVE_PHRASE));
+        assert!(debian[1..4].iter().all(|r| r.button == "Show command"), "rows that only show a command say so");
         assert!(debian[0].desc.contains("loader"));
     }
 
@@ -434,5 +468,36 @@ mod tests {
     fn destroyed_disk_line_names_size_and_serial_tail() {
         assert_eq!(destroyed_disk_line("sda", "WDC WD40EFRX", "WD-WCC7K0000", "3.64 TiB"), "sda \u{00b7} WDC WD40EFRX \u{00b7} \u{2026}K0000 \u{00b7} 3.64 TiB");
         assert_eq!(destroyed_disk_line("nvme0n1", " ", "", "1.00 TiB"), "nvme0n1 \u{00b7} 1.00 TiB");
+    }
+
+    #[test]
+    fn the_engine_promise_about_dsm_is_never_shown() {
+        let raw = "the boot agent did not appear within 10 minutes. The NAS defaults to DSM: power-cycle it if it is stuck and it will boot DSM normally.";
+        let t = scrub_agent_promise(raw);
+        assert_eq!(t, "the boot agent did not appear within 10 minutes. Nothing was reset after the wait.");
+        assert!(!t.contains("normally") && !t.contains("defaults to DSM"));
+        assert_eq!(scrub_agent_promise("grub-install failed"), "grub-install failed");
+    }
+
+    #[test]
+    fn manual_recovery_commands_follow_the_readme() {
+        let c = manual_recovery_commands(Some("/home/u/.local/share/synofurb/dom-backups/synofurb-dom-backup-ds918-20260101.img"));
+        assert_eq!(c[0], "sudo synofurb-dom default dsm --yes");
+        assert!(c[1].starts_with("sudo SYNOFURB_DOM=/dev/sdX synofurb-dom restore --yes /home/u/"));
+        let q = manual_recovery_commands(Some("/tmp/my dir/x.img"));
+        assert!(q[1].ends_with("'/tmp/my dir/x.img'"));
+        assert!(manual_recovery_commands(None)[1].contains("<saved boot-flash image>"));
+    }
+
+    #[test]
+    fn latest_backup_is_the_newest_stamp() {
+        let dir = std::env::temp_dir().join(format!("fv-latest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["synofurb-dom-backup-a-20260101.img", "synofurb-dom-backup-a-20260301.img", "other.img"] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        assert_eq!(latest_backup(&dir).unwrap().file_name().unwrap(), "synofurb-dom-backup-a-20260301.img");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(latest_backup(&dir).is_none());
     }
 }

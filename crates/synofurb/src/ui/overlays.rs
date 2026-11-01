@@ -76,7 +76,9 @@ impl App {
 
     /// "What happens next" with the variant that matches what happened.
     pub fn open_next_dialog(&mut self, window: &mut Window, cx: &mut Context<App>) {
-        let item: &'static Item = if !self.install.past_no_return {
+        let item: &'static Item = if self.agent_unknown {
+            &copy::DLG_NEXT_AGENT
+        } else if !self.install.past_no_return {
             &copy::DLG_NEXT_PRE
         } else if self.form.req.mode == StorageMode::KeepVolumes {
             &copy::DLG_NEXT_KEEP

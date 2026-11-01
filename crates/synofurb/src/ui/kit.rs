@@ -187,6 +187,22 @@ pub fn identity_line(cx: &GpuiApp, p: &Palette, model: &str, host: &str, serial:
         .into_any_element()
 }
 
+// ------------------------------------------------------------------------------------------------ commands
+
+/// A command to run: wrapped monospace text and a stock `Clipboard` copy button. Never a success message.
+pub fn command_row(cx: &GpuiApp, id: impl Into<ElementId>, command: impl Into<SharedString>) -> AnyElement {
+    let command: SharedString = command.into();
+    h_flex()
+        .gap(px(4.0))
+        .items_start()
+        .p(px(8.0))
+        .rounded(cx.theme().radius)
+        .bg(cx.theme().muted)
+        .child(mono_sm(cx, command.clone()).flex_1().min_w_0())
+        .child(gpui_kit::component::clipboard::Clipboard::new(id).value(command).tooltip("Copy"))
+        .into_any_element()
+}
+
 // ------------------------------------------------------------------------------------------------ disabled with a reason
 
 /// The disabled-reason pattern (DEV-UI-2): a REAL disabled `Button` (not a Tab stop, no click) followed by a sibling
