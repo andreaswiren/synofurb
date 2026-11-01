@@ -75,7 +75,7 @@ pub fn boot_manager_install_target(
 }
 
 /// Ask before something that writes to the boot flash: `--yes`, or a question on a terminal; otherwise refuse.
-fn confirm_action(out: &Out, prompt: &mut dyn Prompter, question: &str) -> CliResult<()> {
+pub(super) fn confirm_action(out: &Out, prompt: &mut dyn Prompter, question: &str) -> CliResult<()> {
     if out.yes {
         return Ok(());
     }

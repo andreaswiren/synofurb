@@ -224,6 +224,115 @@ assert last['event'] in ('result','failure'), last
     fi
 fi
 
+# ------------------------------------------------------------------------------------------------ manage: a fake appliance behind a real sshd
+# A second sshd whose ForceCommand runs every command through a wrapper that sends calls to /opt/synofurb-mgmt/synofurb_mgmt.py to the
+# repository's script with `--root <sandbox> --dry-run` and moves /opt/synofurb-mgmt into the sandbox. So `manage health|version|update`
+# really talk SSH, upload a tarball, stream the real updater's NDJSON and read the real health JSON, without touching this machine.
+# (dry-run: systemctl is not called, so a real update ends in the health wait failing and the rollback path; the happy path is covered
+# by the unit tests with a scripted unit.)
+REPO_SCRIPT="${SYNOFURB_MGMT_SCRIPT:-$REPO/apps/mgmt-plane/synofurb_mgmt.py}"   # override to test another copy
+if [ -z "$sshd_bin" ] || ! command -v ssh-keygen >/dev/null 2>&1; then
+    skip "manage against a fake appliance" "sshd / ssh-keygen not installed"
+elif [ "$(id -u)" != 0 ]; then
+    skip "manage against a fake appliance" "need root"
+elif [ "$HAVE_PY" = 0 ] || [ ! -f "$REPO_SCRIPT" ]; then
+    skip "manage against a fake appliance" "python3 or $REPO_SCRIPT missing"
+else
+    F="$WORK/fakenas"
+    FIX="$F/root"
+    mkdir -p "$F" "$FIX/opt/synofurb-mgmt" /run/sshd
+    printf '# old copy\n' >"$FIX/opt/synofurb-mgmt/synofurb_mgmt.py"
+    printf '0.3.0\n' >"$FIX/opt/synofurb-mgmt/VERSION"
+    cat >"$F/wrapper.sh" <<WRAP
+#!/bin/sh
+cmd=\$(printf '%s' "\$SSH_ORIGINAL_COMMAND" | sed -e 's#python3 /opt/synofurb-mgmt/synofurb_mgmt.py#python3 -I $REPO_SCRIPT --root $FIX --dry-run --health-timeout 1#g' -e 's#/opt/synofurb-mgmt#$FIX/opt/synofurb-mgmt#g')
+exec /bin/sh -c "\$cmd"
+WRAP
+    chmod 755 "$F/wrapper.sh"
+    ssh-keygen -q -t ed25519 -N '' -f "$F/hostkey" && ssh-keygen -q -t ed25519 -N '' -f "$F/id" && cp "$F/id.pub" "$F/authorized_keys"
+    MPORT=$((20000 + RANDOM % 20000))
+    cat >"$F/sshd_config" <<CFG
+Port $MPORT
+ListenAddress 127.0.0.1
+HostKey $F/hostkey
+PidFile $F/sshd.pid
+AuthorizedKeysFile $F/authorized_keys
+PasswordAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin yes
+UsePAM no
+StrictModes no
+LogLevel ERROR
+ForceCommand $F/wrapper.sh
+CFG
+    if "$sshd_bin" -f "$F/sshd_config" 2>"$F/sshd.err" && sleep 1 && SSHD_PID="$(cat "$F/sshd.pid" 2>/dev/null)" && [ -n "$SSHD_PID" ]; then
+        M="--host 127.0.0.1 --port $MPORT --user root --key $F/id"
+        # shellcheck disable=SC2086
+        cli manage health $M --json
+        # no systemd services run here, so the unit's own verdict is warn (8) or crit (9); the document is printed either way
+        if [ "$RC" = 8 ] || [ "$RC" = 9 ]; then ok "manage health: exit $RC for a unit with problems"; else bad "manage health: exit $RC, expected 8 or 9"; fi
+        json_ok "manage health --json: document shape" "v['schema']==1 and v['health']['schema']==1 and v['overall'] in ('warn','crit') and v['summary']['problems']>=1 and v['web_ui'].endswith(':8443')"
+        # shellcheck disable=SC2086
+        cli manage health $M
+        expect "manage health: readable report" "$RC" "management plane" "Problems:" "Web UI: https://127.0.0.1:8443"
+        # shellcheck disable=SC2086
+        cli manage version $M --json
+        json_ok "manage version --json: installed vs bundled" "v['installed']['version']=='0.3.0' and v['bundled']['version'] and v['update_available'] is True and v['relation']=='nas_older'"
+        # shellcheck disable=SC2086
+        cli manage update $M --dry-run
+        expect "manage update --dry-run changes nothing" 0 "Dry run, nothing was changed" "Update the management plane from 0.3.0"
+        [ "$(cat "$FIX/opt/synofurb-mgmt/VERSION")" = "0.3.0" ] && ok "manage update --dry-run left the install alone" || bad "manage update --dry-run changed the install"
+        # no terminal and no --yes: refused (3) before anything is changed
+        # shellcheck disable=SC2086
+        cli manage update $M
+        expect "manage update without --yes is refused" 3 "--yes"
+        # a real update through ssh: the upload, staging and the real updater's verification, swap and (dry-run) failure and rollback
+        # shellcheck disable=SC2086
+        cli --log-format json manage update $M --yes
+        if [ "$RC" = 1 ] && printf '%s' "$OUTO" | python3 -I -c "
+import json,sys
+ev=[json.loads(l) for l in sys.stdin.read().splitlines() if l.strip()]
+assert ev[0]['event']=='start' and ev[0]['command']=='manage update', ev[0]
+assert ev[-1]['event']=='failure' and ev[-1]['exit_code']==1 and 'Update failed' in ev[-1]['message'], ev[-1]
+steps=[e['n'] for e in ev if e['event']=='step']
+assert steps[:3]==[1,2,3], steps
+logs=' '.join(e['msg'] for e in ev if e['event']=='log')
+assert 'NAS verify: ok' in logs and 'NAS swap: ok' in logs and 'NAS health: fail' in logs, logs
+res=[e for e in ev if e['event']=='result']
+assert res and res[0]['ok'] is False and res[0]['data']['outcome']=='failed', res
+"; then ok "manage update over ssh: staged, verified by the real updater, failure reported with exit 1"; else bad "manage update over ssh (exit $RC)"; fi
+        ls /tmp/.synofurb-mgmt-stage-* >/dev/null 2>&1 && bad "manage update left a staging folder in /tmp" || ok "manage update cleaned its staging folder"
+        # a --from-bundle folder that is not there is rejected before anything is contacted
+        # shellcheck disable=SC2086
+        cli manage update $M --yes --from-bundle "$F/older"
+        expect "manage update --from-bundle with a missing folder is a usage error" 2 "--from-bundle"
+        # shellcheck disable=SC2086
+        cli manage rollback $M --yes
+        # the update above left a previous copy, so the unit tries; its (dry-run) service does not answer, which is reported as a failure
+        expect "manage rollback reports what the unit said" 1 "Rollback failed" "NAS rollback"
+        kill "$SSHD_PID" 2>/dev/null; SSHD_PID=""
+    else
+        skip "manage against a fake appliance" "sshd would not start here: $(head -c 200 "$F/sshd.err" 2>/dev/null)"
+    fi
+fi
+
+# the commands that need no unit at all
+cli manage open --host 192.168.1.20
+expect "manage open prints the address" 0 "https://192.168.1.20:8443"
+cli --log-format json manage open --host nas.lan
+if [ "$HAVE_PY" = 1 ]; then
+    if printf '%s' "$OUTO" | python3 -I -c "
+import json,sys
+ev=[json.loads(l) for l in sys.stdin.read().splitlines() if l.strip()]
+assert ev[0]['event']=='start' and ev[-1]['event']=='result' and ev[-1]['data']['url']=='https://nas.lan:8443', ev
+"; then ok "manage open: NDJSON events"; else bad "manage open: NDJSON events"; fi
+fi
+cli manage health --host 127.0.0.1 --port 1
+expect "manage health without a password and without a terminal is a usage error" 2 "SYNOFURB_PASSWORD"
+cli_env SYNOFURB_PASSWORD=hunter2-not-printed -- manage health --host 127.0.0.1 --port 1
+expect "manage health on a closed port is an error (1) that never prints the password" 1 "error:"
+case "$OUT" in *hunter2-not-printed*) bad "the password was printed" ;; *) ok "the password was not printed" ;; esac
+
 echo
 printf 'passed: %s  failed: %s  skipped: %s\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" = 0 ]

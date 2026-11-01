@@ -3743,7 +3743,7 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_ui(self) -> None:
         nonce = base64.b64encode(secrets.token_bytes(16)).decode()
         html = INDEX_HTML.replace("__NONCE__", nonce).replace("__VERSION__", VERSION)
-        csp = ("default-src 'self'; script-src 'nonce-%s'; style-src 'nonce-%s'; img-src 'self' data:; "
+        csp = ("default-src 'self'; script-src 'nonce-%s'; style-src 'nonce-%s'; img-src 'self' data:; font-src data:; "
                "connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" % (nonce, nonce))
         self._send(200, html.encode(), "text/html; charset=utf-8", csp)
 
@@ -4555,7 +4555,101 @@ def theme_css() -> str:
     return css
 
 
-_ICON_SPRITE = '''<symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></symbol><symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></symbol><symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z"></path><path d="m9 12 2 2 4-4"></path></symbol><symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"></path></symbol><symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-dasharray="3 3"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"></path></symbol><symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"></path><path d="M12 9v4M12 17h.01"></path></symbol><symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="m4.9 4.9 14.2 14.2"></path></symbol><symbol id="i-octagon-x" viewBox="0 0 24 24"><path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9z"></path><path d="m15 9-6 6M9 9l6 6"></path></symbol><symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></symbol><symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="8" rx="2"></rect><rect x="2" y="13" width="20" height="8" rx="2"></rect><path d="M6 7h.01M6 17h.01"></path></symbol><symbol id="i-disk" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="12" cy="12" r="4"></circle><path d="M12 12h.01M17 7h.01"></path></symbol><symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"></path></symbol><symbol id="i-mem" viewBox="0 0 24 24"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9"></path><path d="M2 15h20M2 7a1 1 0 0 1 1-1h18a1 1 0 0 1 1 1v8H2z"></path></symbol><symbol id="i-network" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"></rect><rect x="2" y="16" width="6" height="6" rx="1"></rect><rect x="9" y="2" width="6" height="6" rx="1"></rect><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"></path></symbol><symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"></path></symbol><symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"></path><path d="M3.3 19a10 10 0 1 1 17.4 0"></path></symbol><symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z"></path><path d="m2 12 10 5 10-5M2 17l10 5 10-5"></path></symbol><symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"></path></symbol><symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></symbol><symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M9.9 4.2A10 10 0 0 1 12 4c6.4 0 10 8 10 8a17 17 0 0 1-2.2 3.2M6.6 6.6A17 17 0 0 0 2 12s3.6 8 10 8a9.7 9.7 0 0 0 5.4-1.6M14.1 14.1a3 3 0 1 1-4.2-4.2M2 2l20 20"></path></symbol><symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></symbol><symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path></symbol><symbol id="i-chev-d" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></symbol><symbol id="i-arrow-r" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"></path></symbol><symbol id="i-arrow-l" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"></path></symbol><symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z"></path></symbol><symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"></path></symbol><symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"></path></symbol><symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></symbol><symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"></path></symbol><symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></symbol><symbol id="i-thermo" viewBox="0 0 24 24"><path d="M14 4v10.5a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0z"></path></symbol><symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></symbol><symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"></path></symbol><symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></symbol><symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"></path></symbol><symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-15-6.7L3 13"></path></symbol><symbol id="i-lifebuoy" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4"></circle><path d="m4.9 4.9 4.3 4.3M14.8 14.8l4.3 4.3M14.8 9.2l4.3-4.3M4.9 19.1l4.3-4.3"></path></symbol><symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 22V4M4 4h13l-2 4 2 4H4"></path></symbol><symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"></path></symbol><symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"></path></symbol><symbol id="i-package" viewBox="0 0 24 24"><path d="m7.5 4.3 9 5.2M21 8v8a2 2 0 0 1-1 1.7l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.7l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"></path><path d="M3.3 7 12 12l8.7-5M12 22V12"></path></symbol><symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></symbol><symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M9 21V9"></path></symbol><symbol id="i-logo" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="8" fill="currentColor"></rect><rect x="7" y="8" width="18" height="4" rx="1.6" fill="var(--on-accent)"></rect><rect x="7" y="14" width="18" height="4" rx="1.6" fill="var(--on-accent)" opacity=".7"></rect><rect x="7" y="20" width="18" height="4" rx="1.6" fill="var(--on-accent)" opacity=".45"></rect><circle cx="22" cy="10" r="1.2" fill="currentColor"></circle></symbol><symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></symbol><symbol id="i-hard-drive" viewBox="0 0 24 24"><path d="M22 12H2"></path><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path><path d="M6 16h.01M10 16h.01"></path></symbol><symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"></path></symbol>'''
+# BEGIN GENERATED ASSETS (tools/build-assets.py)
+# Do not edit by hand. Lucide icons: ISC licence; Inter and JetBrains Mono: SIL OFL 1.1 (texts in _LICENSES, shown on the About page).
+
+_FONT_FACES = (
+    ('Inter', 400, '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'),
+    ('Inter', 600, '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'),
+    ('Inter', 700, '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'),
+    ('JetBrains Mono', 400, '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'),
+)
+_LUCIDE = {
+    'check': '<path d="M20 6 9 17l-5-5" />',
+    'x': '<path d="M18 6 6 18" /> <path d="m6 6 12 12" />',
+    'shield-check': '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> <path d="m9 12 2 2 4-4" />',
+    'users': '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /> <path d="M16 3.128a4 4 0 0 1 0 7.744" /> <path d="M22 21v-2a4 4 0 0 0-3-3.87" /> <circle cx="9" cy="7" r="4" />',
+    'circle-question-mark': '<circle cx="12" cy="12" r="10" /> <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /> <path d="M12 17h.01" />',
+    'circle-dashed': '<path d="M10.1 2.182a10 10 0 0 1 3.8 0" /> <path d="M13.9 21.818a10 10 0 0 1-3.8 0" /> <path d="M17.609 3.721a10 10 0 0 1 2.69 2.7" /> <path d="M2.182 13.9a10 10 0 0 1 0-3.8" /> <path d="M20.279 17.609a10 10 0 0 1-2.7 2.69" /> <path d="M21.818 10.1a10 10 0 0 1 0 3.8" /> <path d="M3.721 6.391a10 10 0 0 1 2.7-2.69" /> <path d="M6.391 20.279a10 10 0 0 1-2.69-2.7" />',
+    'triangle-alert': '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /> <path d="M12 9v4" /> <path d="M12 17h.01" />',
+    'ban': '<circle cx="12" cy="12" r="10" /> <path d="M4.929 4.929 19.07 19.071" />',
+    'octagon-x': '<path d="m15 9-6 6" /> <path d="M2.586 16.726A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2h6.624a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586z" /> <path d="m9 9 6 6" />',
+    'info': '<circle cx="12" cy="12" r="10" /> <path d="M12 16v-4" /> <path d="M12 8h.01" />',
+    'server': '<rect width="20" height="8" x="2" y="2" rx="2" ry="2" /> <rect width="20" height="8" x="2" y="14" rx="2" ry="2" /> <line x1="6" x2="6.01" y1="6" y2="6" /> <line x1="6" x2="6.01" y1="18" y2="18" />',
+    'hard-drive': '<path d="M10 16h.01" /> <path d="M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /> <path d="M21.946 12.013H2.054" /> <path d="M6 16h.01" />',
+    'cpu': '<path d="M12 20v2" /> <path d="M12 2v2" /> <path d="M17 20v2" /> <path d="M17 2v2" /> <path d="M2 12h2" /> <path d="M2 17h2" /> <path d="M2 7h2" /> <path d="M20 12h2" /> <path d="M20 17h2" /> <path d="M20 7h2" /> <path d="M7 20v2" /> <path d="M7 2v2" /> <rect x="4" y="4" width="16" height="16" rx="2" /> <rect x="8" y="8" width="8" height="8" rx="1" />',
+    'memory-stick': '<path d="M12 12v-2" /> <path d="M12 18v-2" /> <path d="M16 12v-2" /> <path d="M16 18v-2" /> <path d="M2 11h1.5" /> <path d="M20 18v-2" /> <path d="M20.5 11H22" /> <path d="M4 18v-2" /> <path d="M8 12v-2" /> <path d="M8 18v-2" /> <rect x="2" y="6" width="20" height="10" rx="2" />',
+    'network': '<rect x="16" y="16" width="6" height="6" rx="1" /> <rect x="2" y="16" width="6" height="6" rx="1" /> <rect x="9" y="2" width="6" height="6" rx="1" /> <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" /> <path d="M12 12V8" />',
+    'power': '<path d="M12 2v10" /> <path d="M18.4 6.6a9 9 0 1 1-12.77.04" />',
+    'gauge': '<path d="m12 14 4-4" /> <path d="M3.34 19a10 10 0 1 1 17.32 0" />',
+    'layers': '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /> <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /> <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" />',
+    'refresh-cw': '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /> <path d="M21 3v5h-5" /> <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /> <path d="M8 16H3v5" />',
+    'eye': '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /> <circle cx="12" cy="12" r="3" />',
+    'eye-off': '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" />',
+    'copy': '<rect width="14" height="14" x="8" y="8" rx="2" ry="2" /> <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />',
+    'download': '<path d="M12 15V3" /> <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /> <path d="m7 10 5 5 5-5" />',
+    'chevron-down': '<path d="m6 9 6 6 6-6" />',
+    'arrow-right': '<path d="M5 12h14" /> <path d="m12 5 7 7-7 7" />',
+    'arrow-left': '<path d="m12 19-7-7 7-7" /> <path d="M19 12H5" />',
+    'plug': '<path d="M12 22v-5" /> <path d="M15 8V2" /> <path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z" /> <path d="M9 8V2" />',
+    'terminal': '<path d="M12 19h8" /> <path d="m4 17 6-6-6-6" />',
+    'trash': '<path d="M10 11v6" /> <path d="M14 11v6" /> <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /> <path d="M3 6h18" /> <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />',
+    'lock': '<rect width="18" height="11" x="3" y="11" rx="2" ry="2" /> <path d="M7 11V7a5 5 0 0 1 10 0v4" />',
+    'key-round': '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" /> <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />',
+    'clock': '<circle cx="12" cy="12" r="10" /> <path d="M12 6v6l4 2" />',
+    'thermometer': '<path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z" />',
+    'activity': '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />',
+    'plus': '<path d="M5 12h14" /> <path d="M12 5v14" />',
+    'sun': '<circle cx="12" cy="12" r="4" /> <path d="M12 2v2" /> <path d="M12 20v2" /> <path d="m4.93 4.93 1.41 1.41" /> <path d="m17.66 17.66 1.41 1.41" /> <path d="M2 12h2" /> <path d="M20 12h2" /> <path d="m6.34 17.66-1.41 1.41" /> <path d="m19.07 4.93-1.41 1.41" />',
+    'moon': '<path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />',
+    'database': '<ellipse cx="12" cy="5" rx="9" ry="3" /> <path d="M3 5V19A9 3 0 0 0 21 19V5" /> <path d="M3 12A9 3 0 0 0 21 12" />',
+    'undo-2': '<path d="M9 14 4 9l5-5" /> <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" />',
+    'life-buoy': '<circle cx="12" cy="12" r="10" /> <path d="m4.93 4.93 4.24 4.24" /> <path d="m14.83 9.17 4.24-4.24" /> <path d="m14.83 14.83 4.24 4.24" /> <path d="m9.17 14.83-4.24 4.24" /> <circle cx="12" cy="12" r="4" />',
+    'flag': '<path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528" />',
+    'menu': '<path d="M4 5h16" /> <path d="M4 12h16" /> <path d="M4 19h16" />',
+    'wrench': '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z" />',
+    'package': '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z" /> <path d="M12 22V12" /> <polyline points="3.29 7 12 12 20.71 7" /> <path d="m7.5 4.27 9 5.15" />',
+    'settings': '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /> <circle cx="12" cy="12" r="3" />',
+    'panel-top': '<rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" />',
+    'search': '<path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" />',
+    'external-link': '<path d="M15 3h6v6" /> <path d="M10 14 21 3" /> <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />',
+    'book-open': '<path d="M12 5v16" /> <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" />',
+    'file-text': '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M10 9H8" /> <path d="M16 13H8" /> <path d="M16 17H8" />',
+    'recycle': '<path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5" /> <path d="M11 19h8.203a1.83 1.83 0 0 0 1.556-.89 1.784 1.784 0 0 0 0-1.775l-1.226-2.12" /> <path d="m14 16-3 3 3 3" /> <path d="M8.293 13.596 7.196 9.5 3.1 10.598" /> <path d="m9.344 5.811 1.093-1.892A1.83 1.83 0 0 1 11.985 3a1.784 1.784 0 0 1 1.546.888l3.943 6.843" /> <path d="m13.378 9.633 4.096 1.098 1.097-4.096" />',
+    'circle-check': '<circle cx="12" cy="12" r="10" /> <path d="m16 9-5.5 5.5L8 12" />',
+    'circle-x': '<circle cx="12" cy="12" r="10" /> <path d="m15 9-6 6" /> <path d="m9 9 6 6" />',
+    'scroll-text': '<path d="M15 12h-5" /> <path d="M15 8h-5" /> <path d="M19 17V5a2 2 0 0 0-2-2H4" /> <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3" />',
+    'clipboard-copy': '<rect width="8" height="4" x="8" y="2" rx="1" ry="1" /> <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /> <path d="M16 4h2a2 2 0 0 1 2 2v4" /> <path d="M21 14H11" /> <path d="m15 10-4 4 4 4" />',
+    'bell': '<path d="M10.268 21a2 2 0 0 0 3.464 0" /> <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />',
+}
+_BRAND = {
+    'mark': ('0 0 100 100', '<path d="M68.43 48.92L78.91 67.07Q82.91 74.00 74.91 74.00L65.63 74.00" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="52.63,74.00 66.63,63.64 66.63,84.36" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><path d="M46.05 74.00L25.09 74.00Q17.09 74.00 21.09 67.07L25.73 59.04" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="32.23,47.78 34.20,65.08 16.26,54.72" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><path d="M35.52 42.08L46.00 23.93Q50.00 17.00 54.00 23.93L58.64 31.96" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="65.14,43.22 49.17,36.28 67.11,25.92" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><rect x="38.50" y="48.25" width="23" height="15.5" rx="4.34" fill="#0A0A0A"/><rect x="42.18" y="54.45" width="10.58" height="3.10" rx="1.55" fill="#FFFFFF"/><circle cx="56.90" cy="56.00" r="2.32" fill="#04853A"/>'),
+    'mark_dark': ('0 0 100 100', '<path d="M68.43 48.92L78.91 67.07Q82.91 74.00 74.91 74.00L65.63 74.00" fill="none" stroke="#A37BFE" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="52.63,74.00 66.63,63.64 66.63,84.36" fill="#A37BFE" stroke="#A37BFE" stroke-width="1.6" stroke-linejoin="round"/><path d="M46.05 74.00L25.09 74.00Q17.09 74.00 21.09 67.07L25.73 59.04" fill="none" stroke="#A37BFE" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="32.23,47.78 34.20,65.08 16.26,54.72" fill="#A37BFE" stroke="#A37BFE" stroke-width="1.6" stroke-linejoin="round"/><path d="M35.52 42.08L46.00 23.93Q50.00 17.00 54.00 23.93L58.64 31.96" fill="none" stroke="#A37BFE" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="65.14,43.22 49.17,36.28 67.11,25.92" fill="#A37BFE" stroke="#A37BFE" stroke-width="1.6" stroke-linejoin="round"/><rect x="38.50" y="48.25" width="23" height="15.5" rx="4.34" fill="#FFFFFF"/><rect x="42.18" y="54.45" width="10.58" height="3.10" rx="1.55" fill="#17122B"/><circle cx="56.90" cy="56.00" r="2.32" fill="#37BB62"/>'),
+    'logo': ('0 0 390 108', '<g><path d="M68.43 48.92L78.91 67.07Q82.91 74.00 74.91 74.00L65.63 74.00" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="52.63,74.00 66.63,63.64 66.63,84.36" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><path d="M46.05 74.00L25.09 74.00Q17.09 74.00 21.09 67.07L25.73 59.04" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="32.23,47.78 34.20,65.08 16.26,54.72" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><path d="M35.52 42.08L46.00 23.93Q50.00 17.00 54.00 23.93L58.64 31.96" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="65.14,43.22 49.17,36.28 67.11,25.92" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><rect x="38.50" y="48.25" width="23" height="15.5" rx="4.34" fill="#0A0A0A"/><rect x="42.18" y="54.45" width="10.58" height="3.10" rx="1.55" fill="#FFFFFF"/><circle cx="56.90" cy="56.00" r="2.32" fill="#04853A"/></g><path d="M134.9833984375 74.6962890625C143.5205078125 74.6962890625 149.5146484375 70.2763671875 149.5146484375 63.8583984375C149.5146484375 59.10546875 146.45703125 56.078125 140.0390625 54.7158203125L134.287109375 53.5048828125C130.8359375 52.748046875 129.4736328125 51.5068359375 129.4736328125 49.5390625C129.4736328125 47.23828125 132.0166015625 45.603515625 135.3466796875 45.603515625C138.9794921875 45.603515625 140.9169921875 47.48046875 141.7041015625 49.841796875L148.7275390625 48.44921875C147.365234375 43.2119140625 142.9150390625 39.73046875 135.255859375 39.73046875C127.142578125 39.73046875 121.6025390625 43.7568359375 121.6025390625 50.0234375C121.6025390625 54.98828125 124.720703125 58.1064453125 131.1083984375 59.4990234375L136.890625 60.740234375C139.978515625 61.40625 141.4619140625 62.6474609375 141.4619140625 64.615234375C141.4619140625 66.916015625 139.009765625 68.671875 135.134765625 68.671875C131.2900390625 68.671875 128.9287109375 67.0673828125 128.0205078125 63.70703125L120.6640625 65.099609375C121.8447265625 71.2451171875 127.203125 74.6962890625 134.9833984375 74.6962890625Z" fill="#0A0A0A"/><path d="M155.15834375 86.0791015625C156.2179140625 86.5029296875 158.1856875 86.896484375 160.425921875 86.896484375C166.54115625 86.896484375 170.0226015625 83.7783203125 172.0811953125 78.359375L186.6124453125 40.154296875H178.28725L171.8995546875 58.560546875C170.90053125 61.466796875 170.1436953125 64.4033203125 169.386859375 67.3701171875C168.72084375 64.4033203125 168.054828125 61.4970703125 167.086078125 58.560546875L160.910296875 40.154296875H152.49428125L165.269671875 74.12109375L164.785296875 76.2705078125C163.9679140625 80.1455078125 161.4854921875 81.1142578125 157.9435 80.17578125L157.0050234375 79.93359375Z" fill="#0A0A0A"/><path d="M199.0979375 54.1708984375C199.0979375 49.2666015625 202.12528125 46.4208984375 206.3332890625 46.4208984375C210.4504765625 46.4208984375 212.9328984375 49.1455078125 212.9328984375 53.6865234375V74.0H220.8039921875V52.4755859375C220.8039921875 44.33203125 216.2024296875 39.73046875 209.2395390625 39.73046875C204.2746953125 39.73046875 200.7629765625 42.15234375 198.7649296875 46.9052734375L198.674109375 40.154296875H191.22684375V74.0H199.0979375Z" fill="#0A0A0A"/><path d="M243.098078125 74.6962890625C252.96721875 74.6962890625 259.29436718750003 67.6728515625 259.29436718750003 57.2587890625C259.29436718750003 46.7236328125 252.96721875 39.73046875 243.098078125 39.73046875C233.2289375 39.73046875 226.9320625 46.7236328125 226.9320625 57.2587890625C226.9320625 67.6728515625 233.2289375 74.6962890625 243.098078125 74.6962890625ZM243.098078125 68.30859375C237.6185859375 68.30859375 234.9545234375 63.404296875 234.9545234375 57.228515625C234.9545234375 50.9921875 237.6185859375 46.1181640625 243.098078125 46.1181640625C248.60784375 46.1181640625 251.3021796875 50.9921875 251.3021796875 57.228515625C251.3021796875 63.404296875 248.60784375 68.30859375 243.098078125 68.30859375Z" fill="#0A0A0A"/><path d="M283.22321875 40.154296875H275.897046875V37.5205078125C275.897046875 34.8564453125 277.0474375 33.3427734375 280.014234375 33.3427734375C281.3159921875 33.3427734375 282.3452890625 33.615234375 283.0113046875 33.8271484375L284.615796875 27.7119140625C283.5865 27.3486328125 281.346265625 26.7734375 278.561109375 26.7734375C272.748609375 26.7734375 268.0562265625 30.1640625 268.0562265625 36.9150390625V40.154296875H261.850171875V46.330078125H268.0562265625V74.0H275.897046875V46.330078125H283.22321875Z" fill="#7139CB"/><path d="M300.3708203125 74.423828125C305.2751171875 74.423828125 308.817109375 72.0625 310.8454296875 67.21875L310.9059765625 74.0H318.383515625V40.154296875H310.4821484375V59.9833984375C310.4821484375 64.8876953125 307.4548046875 67.7333984375 303.2770703125 67.7333984375C299.1598828125 67.7333984375 296.6471875 65.0087890625 296.6471875 60.4677734375V40.154296875H288.77609375V61.6787109375C288.77609375 69.822265625 293.4079296875 74.423828125 300.3708203125 74.423828125Z" fill="#7139CB"/><path d="M325.99498437499994 74.0H333.86607812499994V54.080078125C333.86607812499994 49.78125 337.10533593749994 46.75390625 341.49498437499994 46.75390625C342.88756249999994 46.75390625 344.55260156249994 46.9658203125 345.21861718749994 47.1474609375V39.912109375C344.46178124999994 39.791015625 343.22057031249994 39.7001953125 342.34264062499994 39.7001953125C338.46764062499994 39.7001953125 335.19810937499994 41.91015625 333.98717187499994 45.8154296875H333.62389062499994V40.154296875H325.99498437499994Z" fill="#7139CB"/><path d="M367.7246171874999 74.60546875C375.7470781249999 74.60546875 381.7109453124999 68.248046875 381.7109453124999 57.1376953125C381.7109453124999 45.8759765625 375.5654374999999 39.73046875 367.7548906249999 39.73046875C361.7304765624999 39.73046875 359.2480546874999 43.36328125 358.0673906249999 45.7548828125H357.7343828124999V28.892578125H349.8632890624999V74.0H357.5527421874999V68.6416015625H358.0673906249999C359.2783281249999 71.09375 361.9121171874999 74.60546875 367.7246171874999 74.60546875ZM365.6054765624999 68.126953125C360.4589921874999 68.126953125 357.5830156249999 63.70703125 357.5830156249999 57.107421875C357.5830156249999 50.5078125 360.3984453124999 46.208984375 365.6054765624999 46.208984375C370.9336015624999 46.208984375 373.6279374999999 50.810546875 373.6279374999999 57.107421875C373.6279374999999 63.46484375 370.8730546874999 68.126953125 365.6054765624999 68.126953125Z" fill="#7139CB"/>'),
+    'logo_dark': ('0 0 390 108', '<g><path d="M68.43 48.92L78.91 67.07Q82.91 74.00 74.91 74.00L65.63 74.00" fill="none" stroke="#A37BFE" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="52.63,74.00 66.63,63.64 66.63,84.36" fill="#A37BFE" stroke="#A37BFE" stroke-width="1.6" stroke-linejoin="round"/><path d="M46.05 74.00L25.09 74.00Q17.09 74.00 21.09 67.07L25.73 59.04" fill="none" stroke="#A37BFE" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="32.23,47.78 34.20,65.08 16.26,54.72" fill="#A37BFE" stroke="#A37BFE" stroke-width="1.6" stroke-linejoin="round"/><path d="M35.52 42.08L46.00 23.93Q50.00 17.00 54.00 23.93L58.64 31.96" fill="none" stroke="#A37BFE" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="65.14,43.22 49.17,36.28 67.11,25.92" fill="#A37BFE" stroke="#A37BFE" stroke-width="1.6" stroke-linejoin="round"/><rect x="38.50" y="48.25" width="23" height="15.5" rx="4.34" fill="#FFFFFF"/><rect x="42.18" y="54.45" width="10.58" height="3.10" rx="1.55" fill="#17122B"/><circle cx="56.90" cy="56.00" r="2.32" fill="#37BB62"/></g><path d="M134.9833984375 74.6962890625C143.5205078125 74.6962890625 149.5146484375 70.2763671875 149.5146484375 63.8583984375C149.5146484375 59.10546875 146.45703125 56.078125 140.0390625 54.7158203125L134.287109375 53.5048828125C130.8359375 52.748046875 129.4736328125 51.5068359375 129.4736328125 49.5390625C129.4736328125 47.23828125 132.0166015625 45.603515625 135.3466796875 45.603515625C138.9794921875 45.603515625 140.9169921875 47.48046875 141.7041015625 49.841796875L148.7275390625 48.44921875C147.365234375 43.2119140625 142.9150390625 39.73046875 135.255859375 39.73046875C127.142578125 39.73046875 121.6025390625 43.7568359375 121.6025390625 50.0234375C121.6025390625 54.98828125 124.720703125 58.1064453125 131.1083984375 59.4990234375L136.890625 60.740234375C139.978515625 61.40625 141.4619140625 62.6474609375 141.4619140625 64.615234375C141.4619140625 66.916015625 139.009765625 68.671875 135.134765625 68.671875C131.2900390625 68.671875 128.9287109375 67.0673828125 128.0205078125 63.70703125L120.6640625 65.099609375C121.8447265625 71.2451171875 127.203125 74.6962890625 134.9833984375 74.6962890625Z" fill="#F4F1FF"/><path d="M155.15834375 86.0791015625C156.2179140625 86.5029296875 158.1856875 86.896484375 160.425921875 86.896484375C166.54115625 86.896484375 170.0226015625 83.7783203125 172.0811953125 78.359375L186.6124453125 40.154296875H178.28725L171.8995546875 58.560546875C170.90053125 61.466796875 170.1436953125 64.4033203125 169.386859375 67.3701171875C168.72084375 64.4033203125 168.054828125 61.4970703125 167.086078125 58.560546875L160.910296875 40.154296875H152.49428125L165.269671875 74.12109375L164.785296875 76.2705078125C163.9679140625 80.1455078125 161.4854921875 81.1142578125 157.9435 80.17578125L157.0050234375 79.93359375Z" fill="#F4F1FF"/><path d="M199.0979375 54.1708984375C199.0979375 49.2666015625 202.12528125 46.4208984375 206.3332890625 46.4208984375C210.4504765625 46.4208984375 212.9328984375 49.1455078125 212.9328984375 53.6865234375V74.0H220.8039921875V52.4755859375C220.8039921875 44.33203125 216.2024296875 39.73046875 209.2395390625 39.73046875C204.2746953125 39.73046875 200.7629765625 42.15234375 198.7649296875 46.9052734375L198.674109375 40.154296875H191.22684375V74.0H199.0979375Z" fill="#F4F1FF"/><path d="M243.098078125 74.6962890625C252.96721875 74.6962890625 259.29436718750003 67.6728515625 259.29436718750003 57.2587890625C259.29436718750003 46.7236328125 252.96721875 39.73046875 243.098078125 39.73046875C233.2289375 39.73046875 226.9320625 46.7236328125 226.9320625 57.2587890625C226.9320625 67.6728515625 233.2289375 74.6962890625 243.098078125 74.6962890625ZM243.098078125 68.30859375C237.6185859375 68.30859375 234.9545234375 63.404296875 234.9545234375 57.228515625C234.9545234375 50.9921875 237.6185859375 46.1181640625 243.098078125 46.1181640625C248.60784375 46.1181640625 251.3021796875 50.9921875 251.3021796875 57.228515625C251.3021796875 63.404296875 248.60784375 68.30859375 243.098078125 68.30859375Z" fill="#F4F1FF"/><path d="M283.22321875 40.154296875H275.897046875V37.5205078125C275.897046875 34.8564453125 277.0474375 33.3427734375 280.014234375 33.3427734375C281.3159921875 33.3427734375 282.3452890625 33.615234375 283.0113046875 33.8271484375L284.615796875 27.7119140625C283.5865 27.3486328125 281.346265625 26.7734375 278.561109375 26.7734375C272.748609375 26.7734375 268.0562265625 30.1640625 268.0562265625 36.9150390625V40.154296875H261.850171875V46.330078125H268.0562265625V74.0H275.897046875V46.330078125H283.22321875Z" fill="#A37BFE"/><path d="M300.3708203125 74.423828125C305.2751171875 74.423828125 308.817109375 72.0625 310.8454296875 67.21875L310.9059765625 74.0H318.383515625V40.154296875H310.4821484375V59.9833984375C310.4821484375 64.8876953125 307.4548046875 67.7333984375 303.2770703125 67.7333984375C299.1598828125 67.7333984375 296.6471875 65.0087890625 296.6471875 60.4677734375V40.154296875H288.77609375V61.6787109375C288.77609375 69.822265625 293.4079296875 74.423828125 300.3708203125 74.423828125Z" fill="#A37BFE"/><path d="M325.99498437499994 74.0H333.86607812499994V54.080078125C333.86607812499994 49.78125 337.10533593749994 46.75390625 341.49498437499994 46.75390625C342.88756249999994 46.75390625 344.55260156249994 46.9658203125 345.21861718749994 47.1474609375V39.912109375C344.46178124999994 39.791015625 343.22057031249994 39.7001953125 342.34264062499994 39.7001953125C338.46764062499994 39.7001953125 335.19810937499994 41.91015625 333.98717187499994 45.8154296875H333.62389062499994V40.154296875H325.99498437499994Z" fill="#A37BFE"/><path d="M367.7246171874999 74.60546875C375.7470781249999 74.60546875 381.7109453124999 68.248046875 381.7109453124999 57.1376953125C381.7109453124999 45.8759765625 375.5654374999999 39.73046875 367.7548906249999 39.73046875C361.7304765624999 39.73046875 359.2480546874999 43.36328125 358.0673906249999 45.7548828125H357.7343828124999V28.892578125H349.8632890624999V74.0H357.5527421874999V68.6416015625H358.0673906249999C359.2783281249999 71.09375 361.9121171874999 74.60546875 367.7246171874999 74.60546875ZM365.6054765624999 68.126953125C360.4589921874999 68.126953125 357.5830156249999 63.70703125 357.5830156249999 57.107421875C357.5830156249999 50.5078125 360.3984453124999 46.208984375 365.6054765624999 46.208984375C370.9336015624999 46.208984375 373.6279374999999 50.810546875 373.6279374999999 57.107421875C373.6279374999999 63.46484375 370.8730546874999 68.126953125 365.6054765624999 68.126953125Z" fill="#A37BFE"/>'),
+}
+_FAVICON_B64 = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0ic3lub2Z1cmIgYXBwIGljb24iPjx0aXRsZT5zeW5vZnVyYiBhcHAgaWNvbjwvdGl0bGU+PHJlY3QgeD0iMC4wIiB5PSIwLjAiIHdpZHRoPSIxMDI0LjAiIGhlaWdodD0iMTAyNC4wIiByeD0iMjI5LjEiIGZpbGw9IiM1RTI0QkMiLz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg1MS4yIDQxLjApIHNjYWxlKDkuMjE2MCkiPjxwYXRoIGQ9Ik02OS40MCA0OC42MEw4MC42NCA2OC4wN1E4NC42NCA3NS4wMCA3Ni42NCA3NS4wMEw2OC43NyA3NS4wMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjEzLjUiIHN0cm9rZS1saW5lY2FwPSJidXR0IiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PHBvbHlnb24gcG9pbnRzPSI1Mi43Nyw3NS4wMCA2OS43Nyw2Mi40MiA2OS43Nyw4Ny41OCIgZmlsbD0iI0ZGRkZGRiIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjEuNiIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjxwYXRoIGQ9Ik00NS44NCA3NS4wMEwyMy4zNiA3NS4wMFExNS4zNiA3NS4wMCAxOS4zNiA2OC4wN0wyMy4yOSA2MS4yNiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjEzLjUiIHN0cm9rZS1saW5lY2FwPSJidXR0IiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PHBvbHlnb24gcG9pbnRzPSIzMS4yOSw0Ny40MCAzMy42OSw2OC40MSAxMS45MCw1NS44MyIgZmlsbD0iI0ZGRkZGRiIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjEuNiIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjxwYXRoIGQ9Ik0zNC43NiA0MS40MEw0Ni4wMCAyMS45M1E1MC4wMCAxNS4wMCA1NC4wMCAyMS45M0w1Ny45MyAyOC43NCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjEzLjUiIHN0cm9rZS1saW5lY2FwPSJidXR0IiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PHBvbHlnb24gcG9pbnRzPSI2NS45Myw0Mi42MCA0Ni41NCwzNC4xNyA2OC4zMywyMS41OSIgZmlsbD0iI0ZGRkZGRiIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjEuNiIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjxyZWN0IHg9IjQwIiB5PSI0OS41IiB3aWR0aD0iMjAiIGhlaWdodD0iMTMiIHJ4PSI0IiBmaWxsPSIjRkZGRkZGIi8+PGNpcmNsZSBjeD0iNTUiIGN5PSI1NiIgcj0iMi40IiBmaWxsPSIjN0RGMEE4Ii8+PC9nPjwvc3ZnPgo='
+_LICENSES = {
+    'Inter': 'Copyright 2016-2023 The Inter Project Authors (https://github.com/rsms/inter)\nInter is licensed under the SIL Open Font License, Version 1.1.\n\nPREAMBLE\nThe goals of the Open Font License (OFL) are to stimulate worldwide\ndevelopment of collaborative font projects, to support the font\ncreation efforts of academic and linguistic communities, and to\nprovide a free and open framework in which fonts may be shared and\nimproved in partnership with others.\n\nThe OFL allows the licensed fonts to be used, studied, modified and\nredistributed freely as long as they are not sold by themselves. The\nfonts, including any derivative works, can be bundled, embedded,\nredistributed and/or sold with any software provided that any\nreserved names are not used by derivative works. The fonts and\nderivatives, however, cannot be released under any other type of\nlicense. The requirement for fonts to remain under this license\ndoes not apply to any document created using the fonts or their\nderivatives.\n\nDEFINITIONS\nFont Software refers to the set of files released by the\nCopyright Holder(s) under this license and clearly marked as such.\nThis may include source files, build scripts and documentation.\n\nReserved Font Name refers to any names specified as such after\nthe copyright statement(s).\n\nOriginal Version refers to the collection of Font Software\ncomponents as distributed by the Copyright Holder(s).\n\nModified Version refers to any derivative made by adding to,\ndeleting, or substituting in part or in whole any of the components\nof the Original Version, by changing formats or by porting the Font\nSoftware to a new environment.\n\nAuthor refers to any designer, engineer, programmer, technical\nwriter or other person who contributed to the Font Software.\n\nPERMISSION & CONDITIONS\nPermission is hereby granted, free of charge, to any person\nobtaining a copy of the Font Software, to use, study, copy, merge,\nembed, modify, redistribute, and sell modified and unmodified copies\nof the Font Software, subject to the following conditions:\n\n1) Neither the Font Software nor any of its individual components,\n   in Original or Modified Versions, may be sold by itself.\n\n2) Original or Modified Versions of the Font Software may be bundled,\n   redistributed and/or sold with any software, provided that each\n   copy contains the above copyright notice and this license. These\n   can be included either as stand-alone text files, human-readable\n   headers or in the appropriate machine-readable metadata fields\n   within text or binary files as long as those fields can be easily\n   viewed by the user.\n\n3) No Modified Version of the Font Software may use the Reserved Font\n   Name(s) unless explicit written permission is granted by the\n   corresponding Copyright Holder. This restriction only applies to\n   the primary font name as presented to the users.\n\n4) The name(s) of the Copyright Holder(s) or the Author(s) of the\n   Font Software shall not be used to promote, endorse or advertise\n   any Modified Version, except to acknowledge the contribution(s)\n   of the Copyright Holder(s) and the Author(s) or with their\n   explicit written permission.\n\n5) The Font Software, modified or unmodified, in part or in whole,\n   must be distributed entirely under this license, and must not be\n   distributed under any other license. The requirement for fonts to\n   remain under this license does not apply to any document created\n   using the Font Software.\n\nTERMINATION\nThis license becomes null and void if any of the above conditions\nare not met.\n\nDISCLAIMER\nTHE FONT SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT\nOF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL\nTHE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR\nCONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR\nOTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE THE FONT\nSOFTWARE OR FROM OTHER DEALINGS IN THE FONT SOFTWARE.',
+    'JetBrains Mono': 'Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)\nJetBrains Mono is licensed under the SIL Open Font License, Version 1.1 (as stated in the font files, name IDs 13 and 14).\n\nPREAMBLE\nThe goals of the Open Font License (OFL) are to stimulate worldwide\ndevelopment of collaborative font projects, to support the font\ncreation efforts of academic and linguistic communities, and to\nprovide a free and open framework in which fonts may be shared and\nimproved in partnership with others.\n\nThe OFL allows the licensed fonts to be used, studied, modified and\nredistributed freely as long as they are not sold by themselves. The\nfonts, including any derivative works, can be bundled, embedded,\nredistributed and/or sold with any software provided that any\nreserved names are not used by derivative works. The fonts and\nderivatives, however, cannot be released under any other type of\nlicense. The requirement for fonts to remain under this license\ndoes not apply to any document created using the fonts or their\nderivatives.\n\nDEFINITIONS\nFont Software refers to the set of files released by the\nCopyright Holder(s) under this license and clearly marked as such.\nThis may include source files, build scripts and documentation.\n\nReserved Font Name refers to any names specified as such after\nthe copyright statement(s).\n\nOriginal Version refers to the collection of Font Software\ncomponents as distributed by the Copyright Holder(s).\n\nModified Version refers to any derivative made by adding to,\ndeleting, or substituting in part or in whole any of the components\nof the Original Version, by changing formats or by porting the Font\nSoftware to a new environment.\n\nAuthor refers to any designer, engineer, programmer, technical\nwriter or other person who contributed to the Font Software.\n\nPERMISSION & CONDITIONS\nPermission is hereby granted, free of charge, to any person\nobtaining a copy of the Font Software, to use, study, copy, merge,\nembed, modify, redistribute, and sell modified and unmodified copies\nof the Font Software, subject to the following conditions:\n\n1) Neither the Font Software nor any of its individual components,\n   in Original or Modified Versions, may be sold by itself.\n\n2) Original or Modified Versions of the Font Software may be bundled,\n   redistributed and/or sold with any software, provided that each\n   copy contains the above copyright notice and this license. These\n   can be included either as stand-alone text files, human-readable\n   headers or in the appropriate machine-readable metadata fields\n   within text or binary files as long as those fields can be easily\n   viewed by the user.\n\n3) No Modified Version of the Font Software may use the Reserved Font\n   Name(s) unless explicit written permission is granted by the\n   corresponding Copyright Holder. This restriction only applies to\n   the primary font name as presented to the users.\n\n4) The name(s) of the Copyright Holder(s) or the Author(s) of the\n   Font Software shall not be used to promote, endorse or advertise\n   any Modified Version, except to acknowledge the contribution(s)\n   of the Copyright Holder(s) and the Author(s) or with their\n   explicit written permission.\n\n5) The Font Software, modified or unmodified, in part or in whole,\n   must be distributed entirely under this license, and must not be\n   distributed under any other license. The requirement for fonts to\n   remain under this license does not apply to any document created\n   using the Font Software.\n\nTERMINATION\nThis license becomes null and void if any of the above conditions\nare not met.\n\nDISCLAIMER\nTHE FONT SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT\nOF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL\nTHE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR\nCONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR\nOTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE THE FONT\nSOFTWARE OR FROM OTHER DEALINGS IN THE FONT SOFTWARE.',
+    'Lucide': 'ISC License\n\nCopyright (c) 2026 Lucide Icons and Contributors\n\nPermission to use, copy, modify, and/or distribute this software for any\npurpose with or without fee is hereby granted, provided that the above\ncopyright notice and this permission notice appear in all copies.\n\nTHE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES\nWITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF\nMERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR\nANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES\nWHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN\nACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF\nOR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.',
+}
+# END GENERATED ASSETS
+
+
+def _build_sprite() -> str:
+    sym = lambda i, vb, inner: '<symbol id="i-%s" viewBox="%s">%s</symbol>' % (i, vb, inner)
+    parts = [sym(n, "0 0 24 24", body) for n, body in _LUCIDE.items()]
+    parts += [sym("brand-" + k, vb, inner) for k, (vb, inner) in _BRAND.items()]
+    return "".join(parts)
+
+
+_ICON_SPRITE = _build_sprite()
+
+
+def _font_css() -> str:
+    return "".join("@font-face{font-family:\"%s\";font-style:normal;font-weight:%s;font-display:swap;src:url(data:font/woff2;base64,%s) format('woff2')}" % (fam, w, b64)
+                   for fam, w, b64 in _FONT_FACES)
 
 # ---- copy module: every visible string of the RAID and Help pages (short / tip / help, with word budgets enforced by tests) ----
 # kind: title (<=4 words), label (<=4), button (<=3), tip (<=12, only shown in tooltips), prose (counted against the 60-word page budget), safety (<=12, may stay visible)
@@ -4599,6 +4693,81 @@ COPY: dict[str, dict] = {
     "shr.add": _c("Add disk", "button"), "shr.replace": _c("Replace disk", "button"), "shr.slice": _c("Slice"), "shr.slices": _c("Slices"), "shr.unused": _c("Unused"),
     "help.title": _c("Help", "title"), "help.search": _c("Search help"), "help.none": _c("No topic found.", "prose"),
 }
+# ---- copy for the web pages (shell, login, dashboard, storage, mounts, network, users, boot, system, about); same budgets as above ----
+COPY.update({
+    # shell
+    "shell.brand": _c("synofurb", "title"), "shell.role": _c("Administrator"), "shell.accent": _c("Accent colour", "label", "Pick the accent colour."),
+    "shell.theme": _c("Theme", "label", "Switch between light and dark."), "shell.logout": _c("Sign out", "button", "End this session."), "shell.menu": _c("Menu", "button"),
+    "shell.nav": _c("Main"),
+    "nav.dashboard": _c("Dashboard"), "nav.storage": _c("Storage"), "nav.raid": _c("RAID"), "nav.mounts": _c("Mounts"), "nav.network": _c("Network"), "nav.users": _c("Users"),
+    "nav.boot": _c("Boot"), "nav.system": _c("System"), "nav.help": _c("Help"), "nav.about": _c("About"),
+    "page.error": _c("Could not load this page.", "prose"), "table.empty": _c("Nothing to show.", "prose"), "btn.confirm": _c("Confirm", "button"),
+    "help.about": _c("Help on", "tip"), "help.safe_apply": _c("Safe apply"),
+    # login
+    "login.title": _c("Sign in", "title"), "login.user": _c("Username", "label", "The account created during installation."), "login.password": _c("Password"),
+    "login.go": _c("Sign in", "button"), "login.show": _c("Show password", "button"),
+    "login.cert": _c("Certificate", "button", "Compare this fingerprint with the one your browser shows before you trust the page."),
+    # common columns, actions, states
+    "col.device": _c("Device"), "col.model": _c("Model"), "col.size": _c("Size"), "col.type": _c("Type"), "col.role": _c("Role"), "col.array": _c("Array"), "col.level": _c("Level"),
+    "col.state": _c("State"), "col.interface": _c("Interface"), "col.address": _c("Address"), "col.volume": _c("Volume"), "col.mount": _c("Mount"), "col.used": _c("Used"),
+    "col.name": _c("Name"), "col.groups": _c("Groups"), "col.keys": _c("Keys"), "col.mode": _c("Mode"), "col.health": _c("Health"), "col.temp": _c("Temp"), "col.fs": _c("Filesystem"),
+    "act.delete": _c("Delete", "button"), "act.discard": _c("Discard", "button"), "act.edit": _c("Edit", "button"), "act.extend": _c("Extend", "button"),
+    "act.lock": _c("Lock", "button"), "act.unlock": _c("Unlock", "button"), "act.mount": _c("Mount", "button"), "act.unmount": _c("Unmount", "button"),
+    "act.restart": _c("Restart", "button"), "act.smart": _c("Check SMART", "button", "Reads each disk's health report; takes a few seconds."), "act.open_raid": _c("Open RAID", "button"),
+    "state.active": _c("Active"), "state.down": _c("Down"), "state.invalid": _c("Invalid"), "state.linkup": _c("Up"), "state.locked": _c("Locked"), "state.nocable": _c("No cable"),
+    "state.nopw": _c("No password"), "state.unmounted": _c("Not mounted"),
+    "smart.ok": _c("OK"), "smart.failing": _c("Failing"), "smart.unknown": _c("Unknown"),
+    "mc.installed": _c("Loaded"), "mc.missing": _c("Missing"), "mc.na": _c("Not needed"),
+    "role.system": _c("System"), "role.array": _c("Array"), "role.boot": _c("Boot"), "role.unused": _c("Unused"),
+    # dashboard
+    "dash.health": _c("Health", "label", "Arrays and disks: any degraded array turns this red."), "dash.healthy": _c("Healthy"),
+    "dash.storage": _c("Storage", "label", "Space used on the main data volume."), "dash.memory": _c("Memory", "label", "RAM in use, without caches that can be dropped."),
+    "dash.load": _c("Load", "label", "Load average for 1, 5 and 15 minutes, then the hottest disk."), "dash.cpu": _c("CPU", "label", "Processor vendor and model."),
+    "dash.kernel": _c("Kernel", "label", "The running Linux kernel."), "dash.kernel7": _c("Kernel 7+", "label", "Kernel 7 or newer, as the boot plan requires."),
+    "dash.microcode": _c("Microcode", "label", "CPU microcode updates; Intel and AMD only."), "dash.mc_missing": _c("Microcode missing", "label", "Install the microcode package, then reboot."),
+    "dash.network": _c("Network", "label", "Interfaces that are up."), "dash.up": _c("up"), "dash.attention": _c("Attention needed", "title"),
+    "dash.disks": _c("Disks"), "dash.arrays": _c("Arrays"),
+    # storage
+    "st.create": _c("Create volume", "button", "Build a volume from free disks, in four steps."), "st.raid_link": _c("RAID", "button", "Arrays and Hybrid RAID have their own page."),
+    "st.volumes": _c("Volumes"), "st.vg": _c("Group", "label", "Free space left in this volume group."), "st.free": _c("free"), "st.add_gib": _c("Add GiB"),
+    "st.extend": _c("Extend", "tip", "Add space to this volume; the filesystem grows with it."), "st.nofree": _c("No free space", "tip", "The volume group has no free space left."),
+    "st.delete": _c("Deletes the volume and everything on it.", "prose"), "st.rmvg": _c("Remove empty group"), "st.empty": _c("No volumes yet.", "prose"),
+    "st.mountpoint": _c("Mount point"), "st.size_gib": _c("Size in GiB"), "st.plan": _c("Plan", "title"), "st.nowrite": _c("Preview only", "label", "Nothing is written until you confirm."),
+    "dlg.extend": _c("Extend {name}", "title"), "dlg.delete": _c("Delete {name}", "title"), "dlg.create": _c("Create {name}", "title"), "dlg.unmount": _c("Unmount {name}", "title"),
+    "wiz.devices": _c("Disks"), "wiz.layout": _c("Layout"), "wiz.volume": _c("Volume"),
+    "lv.none": _c("No RAID", "label", "Disks are joined end to end; a failure loses what is on that disk."),
+    # mounts
+    "mnt.mounted": _c("Mounted", "label", "Filesystems that are mounted right now."), "mnt.imported": _c("Imported", "label", "Disks from another system, ready to mount."),
+    "mnt.fstab": _c("Boot table"), "mnt.scan": _c("Scan disks", "button", "Look for new RAID arrays and volumes."), "mnt.none": _c("No imported volumes.", "prose"),
+    "mnt.other": _c("other"), "mnt.ro": _c("Read-only", "label", "Safe default: nothing on the disk can change."), "mnt.boot": _c("At boot"), "mnt.rmfstab": _c("Remove boot entry"),
+    # network
+    "net.hostname": _c("Hostname", "label", "The name of this unit on the network."), "net.ipv4": _c("IPv4"), "net.ipv6": _c("IPv6"), "net.address": _c("Address"),
+    "net.gateway": _c("Gateway"), "net.gateway6": _c("IPv6 gateway"), "net.dns": _c("DNS servers", "label", "Separate with commas; empty keeps what DHCP gives."), "net.search": _c("Search domains"),
+    "net.mac": _c("MAC"), "net.dhcp": _c("DHCP"), "net.static": _c("Static"), "net.apply": _c("Apply", "button"), "net.apply_go": _c("Apply with rollback", "button"),
+    "net.apply_q": _c("Apply network settings?", "title", "The old settings return in 90 seconds unless you press Keep."), "net.applied": _c("Applied."),
+    "net.keep": _c("Keep", "button"), "net.kept": _c("Kept."), "net.rollback": _c("Roll back", "button"), "net.rolled": _c("Rolled back."),
+    "net.cannot": _c("Cannot reach?", "button", "Do nothing: the old settings return by themselves within 90 seconds."), "net.confirm_in": _c("Confirm in"),
+    "net.pending": _c("Pending", "label", "Press Keep once this page works at the new address."),
+    # users
+    "usr.new": _c("New user", "button", "Create a local account."), "usr.name": _c("Username"), "usr.password": _c("Password"), "usr.admin": _c("Administrator"),
+    "usr.sshkey": _c("SSH key"), "usr.rmhome": _c("Delete home folder"), "usr.delete": _c("The account is removed at once.", "prose"), "usr.sudo": _c("sudo", "label", "May run commands as root."),
+    # boot
+    "boot.entries": _c("Boot entries"), "boot.default": _c("Default"), "boot.failsafe": _c("Fail-safe"), "boot.missing": _c("Missing"),
+    "boot.none": _c("This unit does not boot from flash.", "prose"), "boot.part1": _c("Partition 1"), "boot.part2": _c("Partition 2"), "boot.flash": _c("Flash"),
+    "boot.backup": _c("Backup", "label", "A copy of the flash boot files, used to restore them."), "boot.exists": _c("Saved"), "boot.nobackup": _c("None yet"),
+    "boot.set_default": _c("Set as default", "button"), "boot.reboot_go": _c("Reboot into it", "button"), "boot.reboot_q": _c("Reboot into {name}?", "title"),
+    "boot.default_q": _c("Make {name} the default?", "title"), "boot.return_dsm": _c("Return to DSM", "button", "Boots DSM once; the flash stays untouched."),
+    # system
+    "sys.ssh": _c("SSH"), "sys.enabled": _c("Enabled"), "sys.hostkeys": _c("Host keys"), "sys.consoles": _c("Serial consoles"),
+    "sys.services": _c("Services", "label", "Restart one if it misbehaves."), "sys.power": _c("Power"),
+    "sys.reboot": _c("Reboot", "button", "Restarts the unit; connections drop for a minute or two."), "sys.shutdown": _c("Shut down", "button", "Powers off; start it again with the button on the unit."),
+    "sys.reboot_q": _c("Reboot this unit?", "title"), "sys.shutdown_q": _c("Shut down this unit?", "title"),
+    # about
+    "about.version": _c("Version"), "about.copy": _c("Copy diagnostics", "button", "Version, host and service state; no secrets."), "about.copied": _c("Copied."),
+    "about.docs": _c("Documentation", "button"), "about.source": _c("Source code", "button"), "about.issue": _c("Report issue", "button"), "about.credits": _c("Credits"),
+    "about.licence": _c("Licence", "button"), "about.synodeb": _c("synodeb", "button", "Boot-flash technique documented by synodeb (GPL-2.0); no code used."),
+    "help.back": _c("Back", "button"), "help.docs": _c("Open docs", "button"),
+})
 # keys that are visible on the default RAID screen (no dialog open): the prose among them must stay within the page budget
 COPY_SCREENS = {"raid": ["raid.title", "raid.create", "raid.arrays", "raid.hybrid", "raid.empty", "raid.members", "raid.size", "raid.usedby", "raid.monthly", "raid.actions",
                          "state.clean", "state.degraded", "ms.active", "act.add_spare", "act.replace", "act.check", "shr.add", "shr.slice"],
@@ -4616,6 +4785,18 @@ HELP_TOPICS: list[dict] = [
      "body": "Adding a disk to RAID 5 or 6 reshapes the array. It runs for hours and the array stays usable. When it ends, extend the volume: resize the physical volume, extend the logical volume, then grow the filesystem.\n\nSupported conversions: RAID 1 to 5, RAID 5 to 6, RAID 6 to 5, RAID 0 to 5. Other changes mean creating a new array and copying the data.\n\nNever power off during a reshape."},
     {"id": "foreign", "title": "Imported arrays", "keywords": "foreign dsm synology imported assemble read-only",
      "body": "Arrays made by DSM or another system are shown as Imported. You can assemble them, check them and mount their volumes read-only.\n\nChanges can make DSM unable to use them. They need the extra confirmation 'I understand this is not mine' and the array name typed in full."},
+    {"id": "sign-in", "title": "Sign in", "keywords": "login password session account lockout",
+     "body": "Sign in with the account created during installation. After several wrong passwords the sign-in pauses for a short time, per address and per account.\n\nA session ends when you sign out or after 30 minutes without activity.\n\nIf you lost the password, log in on the serial console as an administrator and run passwd for the account."},
+    {"id": "certificate", "title": "Certificate", "keywords": "tls https fingerprint self-signed warning browser",
+     "body": "The unit makes its own certificate, so the browser warns that it does not know the issuer. That is expected on a private network.\n\nThe Certificate button on the sign-in page shows the SHA-256 fingerprint. Compare it with the fingerprint in the browser warning once; if they match, it is safe to continue."},
+    {"id": "storage", "title": "Storage", "keywords": "volume lvm extend delete xfs ext4 create wizard",
+     "body": "A volume is a logical volume on LVM, formatted and mounted under /mnt. Create one from free disks in four steps: disks, layout, volume, review.\n\nThe review shows every command before it runs. Extend adds space and grows the filesystem. Delete needs the volume name typed."},
+    {"id": "imports", "title": "Imports and mounts", "keywords": "mount import ntfs read-only fstab scan dsm",
+     "body": "Mounted lists what is mounted now. Imported lists disks and volumes made elsewhere, such as DSM volumes or NTFS disks.\n\nImports mount read-only by default, so nothing on them can change. Untick Read-only only when you need to write. Mounts live under /mnt; At boot adds a boot-table entry."},
+    {"id": "recovery", "title": "Recovery", "keywords": "recover lockout serial console rollback fail-safe dsm restore",
+     "body": "Network changes roll back by themselves if you do not press Keep. On units with a boot flash, Return to DSM always works because DSM stays untouched.\n\nIf the web page is unreachable, use the serial console: log in, then check systemctl status synofurb-mgmt and journalctl -u synofurb-mgmt."},
+    {"id": "report", "title": "Report a problem", "keywords": "bug issue diagnostics support copy version",
+     "body": "Open About and press Copy diagnostics. It copies the version, host name, operating system, kernel and service state. It contains no passwords, keys or certificates.\n\nPaste it into the issue together with what you did and what you expected."},
     {"id": "safe-apply", "title": "Safe network apply", "keywords": "network rollback confirm address",
      "body": "Network changes are applied for 90 seconds. If you can still reach this page at the new address, press Keep. Otherwise the previous settings return by themselves, so a wrong address never locks you out."},
     {"id": "boot", "title": "Boot manager", "keywords": "boot dsm debian fail-safe",
@@ -4629,7 +4810,9 @@ _UI_TEMPLATE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>NAS management</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,__FAVICON__">
 <style nonce="__NONCE__">
+/*__FONTS__*/
 /*__TOKENS__*/
 :root{--font-ui:Inter,"Segoe UI Variable Text","Segoe UI",-apple-system,BlinkMacSystemFont,"SF Pro Text",Roboto,"Helvetica Neue",Arial,sans-serif;--font-mono:"JetBrains Mono","Cascadia Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
 --e1:0 1px 2px rgb(0 0 0/.05);--e2:0 4px 12px -2px rgb(0 0 0/.14);--e3:0 24px 48px -12px rgb(0 0 0/.5);--top-h:52px}
@@ -4891,9 +5074,10 @@ details>summary{cursor:pointer}
 .sw input{border-radius:999px;width:36px}
 .f{margin-bottom:14px}.f .lab{display:block;font-size:13px;font-weight:600;margin-bottom:4px}
 .helpcols{grid-template-columns:260px minmax(0,1fr)}
-.toc{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:2px}
-.tocb{width:100%;text-align:left;border:0;background:none;border-radius:8px;min-height:36px;padding:0 12px;font:400 13px var(--font-ui);color:var(--fg)}
-.tocb:hover{background:var(--surface-2)}.tocb[aria-current=true]{background:var(--accent-bg);color:var(--accent-fg);font-weight:600}
+.toc{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.tocb{width:100%;text-align:left;border:1px solid var(--border);background:var(--surface);border-radius:8px;min-height:44px;padding:0 14px;font:600 13px var(--font-ui);color:var(--fg)}
+.tocb:hover{background:var(--surface-2)}.tocb:active{background:var(--surface-3)}
+.helpsearch{max-width:420px;margin:0 0 16px}
 .helpbody p,.card .cb p{max-width:68ch}
 input[type=search]{width:100%}
 .btn[aria-disabled=true]{background:var(--surface-2);color:var(--fg-2);border:1px dashed var(--border-strong);cursor:not-allowed}
@@ -4902,6 +5086,22 @@ input[type=search]{width:100%}
 *::-webkit-scrollbar{width:12px;height:12px}*::-webkit-scrollbar-track{background:transparent}
 *::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:999px;border:3px solid transparent;background-clip:content-box}
 *::-webkit-scrollbar-thumb:hover{background:var(--fg-2);background-clip:content-box;border:3px solid transparent}
+/* brand logo (light/dark variants follow the theme), popovers, tabs, About */
+.logo{display:inline-flex;align-items:center}.logo svg{display:block}.logo .lg-d{display:none}
+:root[data-theme=dark] .logo .lg-l{display:none}:root[data-theme=dark] .logo .lg-d{display:block}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .logo .lg-l{display:none}:root:not([data-theme=light]) .logo .lg-d{display:block}}
+.logo.mark svg{width:32px;height:32px}.logo.wordmark svg{height:44px;width:auto}
+.brand .logo{flex:none}.brand2 .logo{margin-bottom:6px}.about .logo.wordmark svg{height:56px}
+.popwrap{display:inline-block}
+.popover{position:fixed;inset:auto;margin:0;max-width:min(300px,calc(100vw - 24px));background:var(--surface);color:var(--fg);border:1px solid var(--border-strong);border-radius:8px;box-shadow:var(--e2);padding:12px 14px;font-size:13px;line-height:19px}
+.popover p{margin:0 0 8px}.popover p:last-child{margin:0}
+.lrow{justify-content:space-between;margin-top:14px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin:0 0 16px}
+.tab{display:inline-flex;gap:8px;align-items:center;min-height:40px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:none;color:var(--fg-2);font:600 13px/19px var(--font-ui)}
+.tab:hover{color:var(--fg)}.tab[aria-selected=true]{color:var(--accent-fg);border-bottom-color:var(--accent)}
+.about{display:flex;flex-direction:column;gap:16px;align-items:flex-start}
+pre.lic{max-height:60vh;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:18px}
+textarea.mono{width:100%}
 @media (max-width:1000px){.helpcols{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}.spin{animation:none}}
 @media (forced-colors:active){.btn,.badge,.card,.tile,.opt{border:1px solid ButtonText}.opt.sel{outline:2px solid Highlight}}
@@ -4919,7 +5119,7 @@ try{var d=document.documentElement,t=localStorage.getItem('fv-theme'),a=localSto
 <script nonce="__NONCE__">
 'use strict';
 const NS = 'http://www.w3.org/2000/svg';
-const S = {csrf: null, user: null, host: '', version: '__VERSION__', page: 'dashboard', pend: null, tick: null, poll: null, st: null};
+const S = {csrf: null, user: null, host: '', version: '__VERSION__', page: 'dashboard', pend: null, tick: null, poll: null, st: null, used: null, alerts: null, mtab: null};
 const $ = (s, r = document) => r.querySelector(s);
 function h(tag, attrs, ...kids) {
   const e = document.createElement(tag);
@@ -4980,7 +5180,7 @@ async function api(method, path, body) {
 function busy(b, on) {
   if (!b) return;
   b.classList.toggle('is-loading', on);
-  if (on) { b.setAttribute('aria-busy', 'true'); const g = ic('refresh', 'spin'); g.dataset.busy = '1'; b.prepend(g); }
+  if (on) { b.setAttribute('aria-busy', 'true'); const g = ic('refresh-cw', 'spin'); g.dataset.busy = '1'; b.prepend(g); }
   else { b.removeAttribute('aria-busy'); const g = b.querySelector('[data-busy]'); if (g) g.remove(); }
 }
 async function act(btn, fn) {
@@ -4989,11 +5189,11 @@ async function act(btn, fn) {
   try { await fn(); } catch (e) { toast(e.message, true); } finally { busy(btn, false); }
 }
 /* ---------- building blocks ---------- */
-const KIND_ICON = {ok: 'check', warn: 'alert', err: 'ban', info: 'info', neutral: 'help', accent: 'flag'};
+const KIND_ICON = {ok: 'check', warn: 'triangle-alert', err: 'ban', info: 'info', neutral: 'circle-question-mark', accent: 'flag'};
 const badge = (kind, text, icon) => h('span', {class: 'badge ' + kind}, ic(icon || KIND_ICON[kind] || 'info', 'sm'), text);
 const chip = (a, b) => h('span', {class: 'chip'}, h('b', {}, a), b ? h('span', {class: 'mono'}, b) : null);
 function banner(kind, title, text, ...acts) {
-  const el = h('div', {class: 'banner ' + kind}, ic(KIND_ICON[kind] === 'help' ? 'info' : KIND_ICON[kind], 'lg'),
+  const el = h('div', {class: 'banner ' + kind}, ic(kind === 'neutral' ? 'info' : KIND_ICON[kind], 'lg'),
     h('div', {class: 'bt'}, h('b', {}, title), text ? h('p', {}, text) : null),
     acts.length ? h('div', {class: 'acts'}, acts) : null);
   if (kind === 'warn' || kind === 'err') el.setAttribute('role', 'alert');
@@ -5013,7 +5213,7 @@ function tile(label, icon, value, unit, sub, edge) {
     h('div', {class: 'val'}, value, unit ? h('small', {}, unit) : null), h('div', {class: 'sub'}, sub || ' '));
 }
 function table(head, rows, empty, o = {}) {
-  if (!rows.length) return h('div', {class: 'empty'}, ic('info'), empty || 'Nothing to show');
+  if (!rows.length) return h('div', {class: 'empty'}, ic('info'), empty || T('table.empty'));
   return h('div', {class: 'tw'}, h('table', {class: 'st'},
     h('thead', {}, h('tr', {}, head.map((x, i) => h('th', {class: (o.right || []).includes(i) ? 'r' : ''}, x)))),
     h('tbody', {}, rows.map(r => {
@@ -5067,7 +5267,7 @@ function formDialog(title, fields, okLabel, onSubmit, o = {}) {
       busy(ok, true); setErr('');
       try { await onSubmit(v); close(); } catch (e) { setErr(e.message); busy(ok, false); }
     });
-    return [h('button', {type: 'button', class: 'btn', onclick: close}, 'Cancel'), ok];
+    return [h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
   });
 }
 /* typed-name confirm: the action button stays disabled until the text matches exactly */
@@ -5075,18 +5275,18 @@ function confirmAction(o) {
   let inp = null, ok = null;
   return dialog(o.title, {danger: o.danger !== false, sub: o.sub, icon: o.icon}, () => h('div', {},
     o.body ? (typeof o.body === 'string' ? h('p', {}, o.body) : o.body) : null,
-    o.expected ? field('Type "' + o.expected + '" to confirm', inp = h('input', {class: 'mono', autocomplete: 'off', spellcheck: 'false', 'aria-describedby': 'cnt',
-      oninput: () => { ok.disabled = inp.value !== o.expected; $('#cnt').textContent = inp.value.length + ' / ' + o.expected.length + (inp.value === o.expected ? ' - matches' : ''); }}),
+    o.expected ? field(T('raid.type', {name: o.expected}), inp = h('input', {class: 'mono', autocomplete: 'off', spellcheck: 'false', 'aria-describedby': 'cnt',
+      oninput: () => { ok.disabled = inp.value !== o.expected; $('#cnt').textContent = inp.value.length + ' / ' + o.expected.length ; }}),
       null) : null,
     o.expected ? h('small', {class: 'help', id: 'cnt', role: 'status'}, '0 / ' + o.expected.length) : null,
     (o.extra || []).map(x => x)), (close, setErr) => {
-      ok = h('button', {type: 'button', class: 'btn ' + (o.danger === false ? 'primary' : 'danger'), disabled: !!o.expected}, o.icon ? ic(o.icon === 'octagon-x' ? 'trash' : o.icon) : (o.danger === false ? null : ic('trash')), o.label || 'Confirm');
+      ok = h('button', {type: 'button', class: 'btn ' + (o.danger === false ? 'primary' : 'danger'), disabled: !!o.expected}, o.icon ? ic(o.icon === 'octagon-x' ? 'trash' : o.icon) : (o.danger === false ? null : ic('trash')), o.label || T('btn.confirm'));
       ok.addEventListener('click', async () => {
         if (ok.classList.contains('is-loading')) return;
         busy(ok, true); setErr('');
         try { await o.onConfirm(inp ? inp.value : ''); close(); } catch (e) { setErr(e.message); busy(ok, false); }
       });
-      return [h('button', {type: 'button', class: 'btn', onclick: close}, 'Cancel'), ok];
+      return [h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
     });
 }
 /* ---------- theme ---------- */
@@ -5106,57 +5306,76 @@ function setAccent(a) {
 }
 const accentSel = () => {
   let cur = 'purple'; try { cur = localStorage.getItem('fv-accent') || 'purple'; } catch (e) { /* ignore */ }
-  const sel = h('select', {'aria-label': 'Accent colour', title: 'Accent colour', onchange: () => setAccent(sel.value)},
+  const sel = h('select', {'aria-label': T('shell.accent'), onchange: () => setAccent(sel.value)},
     ['purple', 'blue', 'green', 'amber', 'rose'].map(a => h('option', {value: a, selected: a === cur}, a[0].toUpperCase() + a.slice(1))));
-  return sel;
+  return tip(sel, TIP('shell.accent'));
 };
-const themeBtn = () => h('button', {type: 'button', class: 'btn ghost icon-btn', title: 'Toggle light / dark theme', 'aria-label': 'Toggle light or dark theme', onclick: toggleTheme}, ic('sun', 'lg'));
+const themeBtn = () => tip(h('button', {type: 'button', class: 'btn ghost icon-btn', 'aria-label': T('shell.theme'), onclick: toggleTheme}, ic('sun', 'lg')), TIP('shell.theme'));
+/* ---------- logo (brand SVGs, light and dark variants switched by the theme) ---------- */
+function brandSvg(key, cls) {
+  const vb = ($('#i-brand-' + key) || {getAttribute: () => '0 0 100 100'}).getAttribute('viewBox') || '0 0 100 100', parts = vb.split(/\s+/).map(Number);
+  const s = document.createElementNS(NS, 'svg');
+  s.setAttribute('viewBox', vb); s.setAttribute('class', cls); s.setAttribute('aria-hidden', 'true'); s.style.aspectRatio = parts[2] + ' / ' + parts[3];
+  const u = document.createElementNS(NS, 'use'); u.setAttribute('href', '#i-brand-' + key); s.append(u);
+  return s;
+}
+const logo = (kind, label) => h('span', {class: 'logo ' + kind, role: 'img', 'aria-label': label || 'synofurb'}, brandSvg(kind === 'mark' ? 'mark' : 'logo', 'lg-l'), brandSvg(kind === 'mark' ? 'mark_dark' : 'logo_dark', 'lg-d'));
+/* popover (native popover attribute: Esc and click-outside close it) */
+let popN = 0;
+function popover(trigger, content, icon) {
+  const id = 'pop' + (++popN);
+  const p = h('div', {id, popover: 'auto', class: 'popover', role: 'dialog'}, content);
+  const b = h('button', {type: 'button', class: 'btn ghost sm', popovertarget: id}, icon ? ic(icon, 'sm') : null, trigger);
+  p.addEventListener('toggle', ev => {
+    if (ev.newState !== 'open') return;
+    const r = b.getBoundingClientRect(), w = p.offsetWidth;
+    p.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px'; p.style.top = (r.bottom + 6) + 'px';
+  });
+  return h('span', {class: 'popwrap'}, b, p);
+}
 /* ---------- login ---------- */
+/*PAGE:login*/
 async function showLogin() {
   S.user = null; S.csrf = null; clearPending();
   const err = h('div', {class: 'err', role: 'alert', hidden: true});
   const u = h('input', {name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', required: true});
   const p = h('input', {name: 'password', type: 'password', autocomplete: 'current-password', required: true});
-  const eye = h('button', {type: 'button', class: 'btn icon-btn', 'aria-label': 'Show password', onclick: () => { const s = p.type === 'password'; p.type = s ? 'text' : 'password'; eye.replaceChildren(ic(s ? 'eye-off' : 'eye')); }}, ic('eye'));
-  const go = h('button', {class: 'btn primary lg', type: 'submit'}, 'Sign in', ic('arrow-r'));
-  const title = h('h1', {}, 'NAS management');
-  const sub = h('p', {class: 'muted'}, 'Sign in to manage this NAS');
-  const fp = h('span', {class: 'mono'}, 'checking...');
+  const eye = tip(h('button', {type: 'button', class: 'btn icon-btn', 'aria-label': T('login.show'), onclick: () => { const s = p.type === 'password'; p.type = s ? 'text' : 'password'; eye.replaceChildren(ic(s ? 'eye-off' : 'eye')); }}, ic('eye')), TIP('login.show'));
+  const go = h('button', {class: 'btn primary lg', type: 'submit'}, T('login.go'), ic('arrow-right'));
+  const host = h('p', {class: 'muted mono'}, '');
+  const fp = h('p', {class: 'mono'}, '...');
   const form = h('form', {onsubmit: async ev => {
     ev.preventDefault(); if (go.classList.contains('is-loading')) return; busy(go, true); err.hidden = true;
     try { const r = await api('POST', '/api/login', {username: u.value, password: p.value}); S.csrf = r.csrf; S.user = r.user; p.value = ''; await start(); }
     catch (e) { err.hidden = false; err.replaceChildren(ic('octagon-x'), e.message); busy(go, false); }
-  }}, h('div', {class: 'brand2'}, ic('logo'), title, sub),
-    field('Username', u), field('Password', h('div', {class: 'pw'}, p, eye)), err, go,
-    h('p', {class: 'help'}, 'Members of the "sudo" group only. The root account cannot sign in here.'));
-  $('#root').replaceChildren(h('main', {class: 'lw', id: 'main'}, h('div', {}, h('div', {class: 'lc'}, form,
-    h('div', {class: 'lf'}, ic('lock'), h('div', {}, 'Self-signed certificate. Compare the SHA-256 fingerprint with the installer summary: ', fp))),
-    h('div', {class: 'ver'}, 'synofurb-mgmt ' + S.version))));
+  }}, h('div', {class: 'brand2'}, logo('wordmark'), h('h1', {}, T('login.title')), host),
+    field(T('login.user'), tip(u, TIP('login.user'))), field(T('login.password'), h('div', {class: 'pw'}, p, eye)), err, go,
+    h('div', {class: 'row lrow'}, popover(T('login.cert'), [h('p', {}, TIP('login.cert')), fp], 'lock'), btn(T('nav.help'), {kind: 'ghost', size: 'sm', icon: 'life-buoy', onclick: () => helpDialog('sign-in')})));
+  $('#root').replaceChildren(h('main', {class: 'lw', id: 'main'}, h('div', {}, h('div', {class: 'lc'}, form), h('div', {class: 'ver'}, 'synofurb-mgmt ' + S.version))));
   u.focus();
   try {
     const f = await (await fetch('/api/tls-fingerprint')).json();
-    fp.textContent = f.sha256 || 'not available (plain HTTP)';
-    if (f.hostname) title.textContent = f.hostname;
-  } catch (e) { fp.textContent = 'not available'; }
+    fp.textContent = f.sha256 || '-';
+    if (f.hostname) host.textContent = f.hostname;
+  } catch (e) { fp.textContent = '-'; }
 }
+/*ENDPAGE*/
 /* ---------- shell ---------- */
-const NAV = [
-  ['dashboard', 'Dashboard', 'gauge'], ['storage', 'Storage', 'database'], ['raid', 'RAID', 'layers'], ['imported', 'Imported volumes', 'package'],
-  ['network', 'Network', 'network'], ['users', 'Users', 'users'], ['boot', 'Boot manager', 'board'], ['system', 'System', 'settings'], ['help', 'Help', 'lifebuoy'],
-];
+const NAV = [['dashboard', 'gauge'], ['storage', 'database'], ['raid', 'layers'], ['mounts', 'package'], ['network', 'network'], ['users', 'users'], ['boot', 'panel-top'], ['system', 'settings'], ['help', 'life-buoy'], ['about', 'info']];
 const TABBAR = ['dashboard', 'storage', 'raid', 'network', 'boot'];
+/*PAGE:shell*/
+/*copy: nav.dashboard nav.storage nav.raid nav.mounts nav.network nav.users nav.boot nav.system nav.help nav.about*/
 function buildShell() {
-  const nav = h('nav', {class: 'nav', 'aria-label': 'Main'});
-  const side = h('aside', {class: 'side', id: 'side'}, h('div', {class: 'brand'}, ic('logo'), h('div', {}, h('b', {}, 'synofurb'), h('small', {id: 'sh'}, S.host))),
-    h('div', {class: 'grp'}, 'Manage'), nav,
-    h('div', {class: 'me'}, h('div', {class: 'avatar'}, S.user.slice(0, 2).toUpperCase()), h('div', {}, h('b', {}, S.user), h('small', {}, 'Administrator')),
-      h('button', {type: 'button', class: 'btn ghost icon-btn', title: 'Log out', 'aria-label': 'Log out', onclick: async () => { try { await api('POST', '/api/logout'); } catch (e) { /* ignore */ } showLogin(); }}, ic('power'))),
+  const nav = h('nav', {class: 'nav', 'aria-label': T('shell.nav')});
+  const side = h('aside', {class: 'side', id: 'side'}, h('div', {class: 'brand'}, logo('mark'), h('div', {}, h('b', {}, T('shell.brand')), h('small', {id: 'sh'}, S.host))), nav,
+    h('div', {class: 'me'}, h('div', {class: 'avatar'}, S.user.slice(0, 2).toUpperCase()), h('div', {}, h('b', {}, S.user), h('small', {}, T('shell.role'))),
+      tip(h('button', {type: 'button', class: 'btn ghost icon-btn', 'aria-label': T('shell.logout'), onclick: async () => { try { await api('POST', '/api/logout'); } catch (e) { /* ignore */ } showLogin(); }}, ic('power')), TIP('shell.logout'))),
     h('div', {class: 'ver'}, 'synofurb-mgmt ' + S.version));
   const scrim = h('div', {class: 'scrim', hidden: true, onclick: () => closeNav()});
   const top = h('header', {class: 'top'},
-    h('button', {type: 'button', class: 'btn ghost icon-btn burger', 'aria-label': 'Open menu', onclick: () => { side.classList.add('open'); scrim.hidden = false; }}, ic('menu', 'lg')),
+    h('button', {type: 'button', class: 'btn ghost icon-btn burger', 'aria-label': T('shell.menu'), onclick: () => { side.classList.add('open'); scrim.hidden = false; }}, ic('menu', 'lg')),
     h('div', {class: 'crumb', id: 'crumb'}), accentSel(), themeBtn());
-  const tabbar = h('nav', {class: 'tabbar', 'aria-label': 'Quick navigation'});
+  const tabbar = h('nav', {class: 'tabbar', 'aria-label': T('shell.nav')});
   const mc = h('div', {class: 'mc'}, top, h('div', {id: 'pend'}), h('main', {class: 'page', id: 'main', tabindex: '-1'}));
   $('#root').replaceChildren(h('div', {class: 'shell'}, side, mc), scrim, tabbar);
   S.nav = {nav, tabbar, side, scrim};
@@ -5164,37 +5383,38 @@ function buildShell() {
 }
 function closeNav() { S.nav.side.classList.remove('open'); S.nav.scrim.hidden = true; }
 function renderNav() {
-  const mk = ([id, label, icon], cls) => h('button', {type: 'button', 'aria-current': id === S.page ? 'page' : null, onclick: () => { closeNav(); show(id); }}, ic(icon), h('span', {}, label));
+  const mk = ([id, icon]) => h('button', {type: 'button', 'aria-current': id === S.page ? 'page' : null, onclick: () => { closeNav(); show(id); }}, ic(icon), h('span', {}, T('nav.' + id)));
   S.nav.nav.replaceChildren(...NAV.map(n => {
     const b = mk(n);
-    if (n[0] === 'raid' && S.alerts && S.alerts.raid) b.append(badge('warn', String(S.alerts.raid), 'alert'));
+    if (n[0] === 'raid' && S.alerts && S.alerts.raid) b.append(badge('warn', String(S.alerts.raid), 'triangle-alert'));
     return b;
   }));
   S.nav.tabbar.replaceChildren(...NAV.filter(n => TABBAR.includes(n[0])).map(n => { const b = mk(n); b.firstChild.className.baseVal += ' lg'; return b; }));
-  const cur = NAV.find(n => n[0] === S.page);
-  $('#crumb').replaceChildren(S.host + ' / ', h('b', {}, cur ? cur[1] : ''));
+  $('#crumb').replaceChildren(S.host + ' / ', h('b', {}, T('nav.' + S.page)));
 }
 async function start() {
   const me = await api('GET', '/api/me');
   S.csrf = me.csrf; S.user = me.user; S.host = me.hostname; S.version = me.version;
-  document.title = me.hostname + ' - NAS management';
+  document.title = me.hostname + ' - synofurb';
   buildShell();
   setPending(me.net_pending);
   show(S.page);
 }
 async function show(page) {
-  S.page = page;
+  S.page = page; S.used = new Set();
   renderNav();
   const main = $('#main');
-  main.replaceChildren(h('div', {class: 'sk'}, 'Loading...'));
-  try { main.replaceChildren(await PAGES[page]()); }
-  catch (e) { main.replaceChildren(banner('err', 'Could not load this page', e.message)); }
+  main.replaceChildren(h('div', {class: 'sk', 'aria-busy': 'true'}, ic('refresh-cw', 'spin')));
+  try { main.replaceChildren(await PAGES[page]()); main.focus({preventScroll: true}); }
+  catch (e) { main.replaceChildren(banner('err', T('page.error'), e.message)); }
 }
+/*ENDPAGE*/
 /* ---------- rollback countdown banner (network safe-apply) ---------- */
 function clearPending() {
   clearInterval(S.tick); clearInterval(S.poll); S.tick = S.poll = null; S.pend = null;
   const el = $('#pend'); if (el) el.replaceChildren();
 }
+/*PAGE:pending*/
 function setPending(p) {
   clearPending();
   if (!p || !$('#pend')) return;
@@ -5206,119 +5426,96 @@ function setPending(p) {
   const tr = document.createElementNS(NS, 'circle');
   for (const [k, v] of [['class', 'tr'], ['cx', 24], ['cy', 24], ['r', 18]]) tr.setAttribute(k, v);
   const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 48 48'); svg.setAttribute('aria-hidden', 'true'); svg.append(tr, fg);
-  const num = h('b', {});
-  const title = h('b', {class: 'tt'});
-  const keep = btn('Keep these settings', {kind: 'primary', icon: 'check', onclick: () => act(keep, async () => { await api('POST', '/api/network/confirm'); toast('Network change confirmed'); clearPending(); if (S.page === 'network') show('network'); })});
-  const rb = btn('Roll back now', {onclick: () => act(rb, async () => { await api('POST', '/api/network/rollback'); toast('Rolled back'); clearPending(); show(S.page); })});
+  const num = h('b', {}), title = h('b', {class: 'tt', role: 'timer'});
+  const keep = btn(T('net.keep'), {kind: 'primary', icon: 'check', onclick: () => act(keep, async () => { await api('POST', '/api/network/confirm'); toast(T('net.kept')); clearPending(); if (S.page === 'network') show('network'); })});
+  const rb = btn(T('net.rollback'), {onclick: () => act(rb, async () => { await api('POST', '/api/network/rollback'); toast(T('net.rolled')); clearPending(); show(S.page); })});
   const el = h('div', {class: 'rb', role: 'alert'}, h('div', {class: 'row0'}, h('div', {class: 'ring'}, svg, num),
-    h('div', {class: 'bt'}, title, h('p', {}, 'Changed ' + p.ifname + '. If you can read this page at the new address, press Keep. Otherwise the previous settings return automatically; no action needed.'))),
-    h('div', {class: 'acts'}, rb, keep));
+    h('div', {class: 'bt'}, tip(title, TIP('net.pending')), popover(T('net.cannot'), TIP('net.cannot'), 'circle-question-mark'))), h('div', {class: 'acts'}, rb, keep));
   $('#pend').replaceChildren(el);
   const upd = () => {
     const left = Math.max(0, Math.round((end - Date.now()) / 1000));
-    num.textContent = left; title.textContent = 'Confirm network change - rolling back in ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+    num.textContent = left; title.textContent = T('net.confirm_in') + ' ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
     fg.setAttribute('stroke-dashoffset', C * (1 - left / total));
-    if (left === 10 || left === 5) $('#live').textContent = 'Network change rolls back in ' + left + ' seconds';
+    if (left === 10 || left === 5) $('#live').textContent = T('net.confirm_in') + ' ' + left + ' s';
   };
   upd(); S.tick = setInterval(upd, 1000);
-  S.poll = setInterval(async () => { try { const m = await api('GET', '/api/me'); if (!m.net_pending) { clearPending(); toast('Network change is no longer pending'); } } catch (e) { /* link may be down */ } }, 5000);
+  S.poll = setInterval(async () => { try { const m = await api('GET', '/api/me'); if (!m.net_pending) { clearPending(); toast(T('net.rolled')); } } catch (e) { /* link may be down */ } }, 5000);
 }
+/*ENDPAGE*/
 const PAGES = {};
+const COLS = {device: 'col.device', model: 'col.model', size: 'col.size', type: 'col.type', role: 'col.role', array: 'col.array', level: 'col.level', state: 'col.state', iface: 'col.interface', address: 'col.address',
+  volume: 'col.volume', mount: 'col.mount', used: 'col.used', name: 'col.name', groups: 'col.groups', keys: 'col.keys', mode: 'col.mode', health: 'col.health', temp: 'col.temp', fs: 'col.fs'};
+const th = (...ks) => ks.map(k => (k ? T(COLS[k]) : ''));
+const btnIcon = (icon, label, onclick, kind) => tip(h('button', {type: 'button', class: 'btn ' + (kind || 'ghost') + ' icon-btn sm', 'aria-label': label, onclick}, ic(icon)), label);
 /* ---------- Dashboard ---------- */
+/*PAGE:dashboard*/
+/*copy: state.degraded state.clean mc.installed mc.missing mc.na role.system role.array role.boot role.unused smart.ok smart.failing smart.unknown state.linkup state.down*/
 PAGES.dashboard = async () => {
   const s = await api('GET', '/api/status');
   S.st = s;
-  const mem = s.memory || {}, md = s.md.arrays, ki = s.kernel_info || {}, cpu = s.cpu || {}, mc = s.microcode || {}, un = s.unit || {};
+  const mem = s.memory || {}, md = s.md.arrays, ki = s.kernel_info || {}, cpu = s.cpu || {}, mc = s.microcode || {};
   const degraded = md.filter(a => a.degraded), syncing = md.filter(a => a.sync);
   const dataMount = s.mounts.find(m => m.target === '/srv/data') || s.mounts.find(m => m.target === '/');
   const hot = s.temps.length ? Math.max(...s.temps.map(t => t.celsius)) : null;
-  const notices = degraded.length + syncing.length + (S.pend ? 1 : 0);
   S.alerts = {raid: degraded.length + syncing.length};
   renderNav();
-  const parts = [pageHead('Dashboard', s.hostname + ' - up ' + fmtDur(s.uptime) + ' - ' + (s.os || 'Linux') + ' - kernel ' + s.kernel,
-    btn('Reboot...', {icon: 'power', onclick: () => PAGES_ACTIONS.power('reboot')}))];
+  const tl = (el, k) => tip(el, TIP(k));
+  const parts = [h('div', {class: 'ph'}, h('div', {}, h('h1', {}, T('nav.dashboard')), h('p', {class: 'mono'}, [s.hostname, s.os, s.kernel, fmtDur(s.uptime)].filter(Boolean).join(' - '))))];
   const tiles = [
-    tile('Health', 'shield-check', degraded.length ? 'Degraded' : 'Healthy', '', degraded.length ? degraded.map(a => a.name).join(', ') + ' needs attention' : (notices ? 'No critical alerts - ' + notices + ' notice' + (notices > 1 ? 's' : '') : 'No alerts'), degraded.length ? 'err' : notices ? 'warn' : 'ok'),
-    dataMount && dataMount.size ? tile('Storage', 'database', pct(dataMount.used, dataMount.size), '% used', fmtBytes(dataMount.used) + ' of ' + fmtBytes(dataMount.size) + ' on ' + dataMount.target, pct(dataMount.used, dataMount.size) >= 90 ? 'warn' : '') : tile('Storage', 'database', '-', '', 'no data volume mounted'),
-    tile('Memory', 'mem', mem.total ? ((mem.total - (mem.available || 0)) / 1073741824).toFixed(1) : '-', 'GiB', 'of ' + fmtBytes(mem.total) + (mem.swap_total ? ' - swap ' + fmtBytes(mem.swap_total - (mem.swap_free || 0)) : '')),
-    tile('Load', 'activity', s.load ? s.load[0].toFixed(2) : '-', '', (cpu.threads || '?') + ' threads - ' + (s.load ? s.load.map(x => x.toFixed(2)).join(' ') : '') + (hot != null ? ' - ' + hot.toFixed(0) + ' °C' : '')),
-    tile('CPU', 'cpu', cpu.vendor || (s.arch.startsWith('a') ? 'ARM' : '-'), '', (cpu.model || s.arch)),
-    tile('Kernel', 'terminal', ki.release || s.kernel, '', ki.ge7 ? 'Linux 7 or newer' : (s.arch || ''), ''),
-    tile('Microcode', 'wrench', mc.applicable ? (mc.installed ? 'Installed' : 'Missing') : 'n/a', '', mc.applicable ? (mc.package + (mc.version ? ' ' + mc.version : '') + (mc.loaded_revision ? ' - rev ' + mc.loaded_revision : '')) : 'x86 CPUs only', mc.applicable && !mc.installed ? 'warn' : ''),
-    tile('Network', 'network', s.interfaces.filter(i => i.ifname !== 'lo' && i.state === 'UP').length, 'up', s.interfaces.filter(i => i.ifname !== 'lo').map(i => i.ifname).join(', ') || 'no interfaces'),
+    tl(tile(T('dash.health'), 'shield-check', degraded.length ? T('state.degraded') : T('dash.healthy'), '', degraded.map(a => a.name).concat(syncing.map(a => a.name)).join(' ') || ' ', degraded.length ? 'err' : syncing.length ? 'warn' : 'ok'), 'dash.health'),
+    tl(dataMount && dataMount.size ? tile(T('nav.storage'), 'database', pct(dataMount.used, dataMount.size), '%', fmtBytes(dataMount.used) + ' / ' + fmtBytes(dataMount.size), pct(dataMount.used, dataMount.size) >= 90 ? 'warn' : '') : tile(T('nav.storage'), 'database', '-', '', ''), 'dash.storage'),
+    tl(tile(T('dash.memory'), 'memory-stick', mem.total ? ((mem.total - (mem.available || 0)) / 1073741824).toFixed(1) : '-', 'GiB', fmtBytes(mem.total)), 'dash.memory'),
+    tl(tile(T('dash.load'), 'activity', s.load ? s.load[0].toFixed(2) : '-', '', (s.load ? s.load.map(x => x.toFixed(2)).join(' ') : '') + (hot != null ? ' - ' + hot.toFixed(0) + ' °C' : '')), 'dash.load'),
+    tl(tile(T('dash.cpu'), 'cpu', cpu.vendor || (s.arch.startsWith('a') ? 'ARM' : '-'), '', cpu.model || s.arch), 'dash.cpu'),
+    tl(tile(T('dash.kernel'), 'terminal', ki.release || s.kernel, '', ki.ge7 ? '7+' : (s.arch || '')), ki.ge7 ? 'dash.kernel7' : 'dash.kernel'),
+    tl(tile(T('dash.microcode'), 'wrench', mc.applicable ? (mc.installed ? T('mc.installed') : T('mc.missing')) : T('mc.na'), '', mc.applicable ? (mc.package + (mc.version ? ' ' + mc.version : '')) : '', mc.applicable && !mc.installed ? 'warn' : ''), mc.applicable && !mc.installed ? 'dash.mc_missing' : 'dash.microcode'),
+    tl(tile(T('nav.network'), 'network', s.interfaces.filter(i => i.ifname !== 'lo' && i.state === 'UP').length, T('dash.up'), s.interfaces.filter(i => i.ifname !== 'lo').map(i => i.ifname).join(' ')), 'dash.network'),
   ];
   parts.push(h('div', {class: 'tiles'}, tiles));
-  if (degraded.length) parts.push(banner('err', 'RAID array degraded: ' + degraded.map(a => a.name).join(', '), 'A member is missing or failed. Data is still readable on redundant levels, but replace the disk soon.', btn('Open RAID', {size: 'sm', onclick: () => show('raid')})));
-  syncing.forEach(a => parts.push(banner('warn', a.name + ' is ' + a.sync.action + (a.sync.percent != null ? ' (' + a.sync.percent + '%)' : ''), 'Volumes stay usable; performance is reduced' + (a.sync.finish_min ? ' for about ' + Math.round(a.sync.finish_min) + ' min.' : '.'))));
-  if (ki.ge7) parts.push(banner('info', 'Kernel ' + ki.release, 'Linux 7 or newer is running. If a driver for your hardware misbehaves, the boot manager can start the previous kernel or DSM.', btn('Boot manager', {size: 'sm', onclick: () => show('boot')})));
-  if (mc.applicable && !mc.installed) parts.push(banner('warn', 'CPU microcode package is not installed', 'Install ' + mc.package + ' (apt install ' + mc.package + ') to receive CPU security and stability fixes.'));
-  // disks: one row per physical disk with its role; the full device tree is folded away.
-  // The tree comes from each device's children list (a RAID member shows up under every disk of the array).
+  if (degraded.length) parts.push(banner('err', T('dash.attention'), degraded.map(a => a.name).join(' '), btn(T('act.open_raid'), {size: 'sm', onclick: () => show('raid')})));
+  // disks: physical disks with their role; a RAID member shows up under every disk of the array, so follow `children`
   const byK = {}; s.disks.forEach(d => { byK[d.kname] = d; });
   const kidsOf = d => (d.children || []).map(k => byK[k]).filter(Boolean);
   const below = d => { const o = [], st = [...kidsOf(d)], seen = new Set(); while (st.length) { const x = st.pop(); if (seen.has(x.kname)) continue; seen.add(x.kname); o.push(x); st.push(...kidsOf(x)); } return o; };
   const role = d => {
     const sub = below(d), mps = d.mountpoints.concat(...sub.map(x => x.mountpoints)), out = [];
-    if (d.kname.startsWith('synoboot') || d.model === 'DOM') return badge('info', 'Boot flash', 'board');
-    if (mps.some(m => ['/', '/boot', '/boot/efi', '[SWAP]'].includes(m))) out.push(badge('info', 'System', 'server'));
+    if (d.kname.startsWith('synoboot') || d.model === 'DOM') return badge('info', T('role.boot'), 'panel-top');
+    if (mps.some(m => ['/', '/boot', '/boot/efi', '[SWAP]'].includes(m))) out.push(badge('info', T('role.system'), 'server'));
     const mdn = [...new Set(sub.filter(x => /^raid|^md/.test(x.type)).map(x => x.name))];
-    if (mdn.length) out.push(badge('ok', 'Array ' + mdn.sort().join(', '), 'layers'));
+    if (mdn.length) out.push(badge('ok', T('role.array') + ' ' + mdn.sort().join(' '), 'layers'));
     if (out.length) return h('div', {class: 'row'}, out);
-    if (sub.some(x => x.fstype || x.mountpoints.length) || d.fstype) return badge('neutral', (sub.find(x => x.fstype) || d).fstype || 'In use', 'database');
-    return badge('neutral', 'Unused', 'plus');
+    if (sub.some(x => x.fstype || x.mountpoints.length) || d.fstype) return badge('neutral', (sub.find(x => x.fstype) || d).fstype || '-', 'database');
+    return badge('neutral', T('role.unused'), 'plus');
   };
   const drows = s.disks.filter(d => d.type === 'disk' && !/^(loop|zram|ram|sr|nbd)/.test(d.kname)).map(d => [h('b', {class: 'mono'}, '/dev/' + d.kname), [d.model, d.serial].filter(Boolean).join(' - ') || '-', fmtBytes(d.size),
     [d.tran ? chip(d.tran) : null, chip(d.rota ? 'HDD' : 'SSD')], role(d)]);
-  const trows = [], tseen = new Set(), isChild = new Set(); s.disks.forEach(d => (d.children || []).forEach(k => isChild.add(k)));
-  const walk = (d, depth) => {
-    if (tseen.has(d.kname)) return; tseen.add(d.kname);
-    trows.push([h('span', {class: 'mono ind' + Math.min(depth, 3)}, d.name), d.type, fmtBytes(d.size), d.fstype || '', d.label || '', h('span', {class: 'mono'}, d.mountpoints.join(', '))]);
-    kidsOf(d).forEach(c => walk(c, depth + 1));
-  };
-  s.disks.filter(d => !isChild.has(d.kname)).forEach(d => walk(d, 0));
   const smart = h('div', {});
-  const sb = btn('Check SMART health', {icon: 'shield-check', onclick: () => act(sb, async () => {
+  const sb = btn(T('act.smart'), {icon: 'shield-check', onclick: () => act(sb, async () => {
     const r = await api('GET', '/api/smart');
-    smart.replaceChildren(!r.available ? h('div', {class: 'empty'}, ic('info'), 'smartctl is not installed (apt install smartmontools)') :
-      table(['Disk', 'Model', 'Health', 'Temp', 'Power-on', 'Note'], r.disks.map(d => ({cls: d.passed === false ? 'bad' : d.passed == null ? 'attn' : '', cells: [h('span', {class: 'mono'}, d.device), d.model || '',
-        d.passed === true ? badge('ok', 'SMART OK') : d.passed === false ? badge('err', 'Failing', 'octagon-x') : badge('neutral', 'Unknown'), d.temp != null ? d.temp + ' \u00b0C' : '', d.hours != null ? d.hours + ' h' : '', d.note || '']}))));
+    smart.replaceChildren(!r.available ? h('div', {class: 'empty'}, ic('info'), 'smartctl') :
+      table(th('device', 'model', 'health', 'temp'), r.disks.map(d => ({cls: d.passed === false ? 'bad' : d.passed == null ? 'attn' : '', cells: [h('span', {class: 'mono'}, d.device), d.model || '',
+        d.passed === true ? badge('ok', T('smart.ok')) : d.passed === false ? badge('err', T('smart.failing'), 'octagon-x') : badge('neutral', T('smart.unknown'), 'circle-dashed'), d.temp != null ? d.temp + ' °C' : '']}))));
   })});
-  parts.push(cardFlush('Disks', 'disk', sb, table(['Device', 'Model', 'Size', 'Type', 'Role'], drows, 'No disks found', {right: [2]}), smart,
-    h('details', {class: 'cb'}, h('summary', {class: 'muted'}, 'All block devices (' + trows.length + ')'), table(['Device', 'Type', 'Size', 'FS', 'Label', 'Mounted'], trows, '', {right: [2]}))));
-  if (md.length) parts.push(cardFlush('RAID (mdadm)', 'layers', degraded.length ? badge('err', 'Degraded') : badge('ok', 'Clean'),
-    table(['Array', 'Level', 'State', 'Size', 'Members', 'Health', 'Sync'], md.map(a => ({cls: a.degraded ? 'bad' : a.sync ? 'attn' : '', cells: [h('b', {class: 'mono'}, a.name), a.level ? chip(a.level.toUpperCase()) : '', a.state, fmtBytes(a.size),
-      h('span', {class: 'mono'}, a.members.map(m => m.name + (m.failed ? '(F)' : m.spare ? '(S)' : '')).join(' ')), a.degraded ? badge('err', 'Degraded ' + (a.health || '')) : badge('ok', a.health || 'OK'), a.sync ? a.sync.action + ' ' + (a.sync.percent != null ? a.sync.percent + '%' : a.sync.state) : '']})))));
-  if (s.lvm.vgs.length) parts.push(cardFlush('LVM', 'database', null, table(['VG', 'Size', 'Free', 'PVs', 'LVs'], s.lvm.vgs.map(v => [h('span', {class: 'mono'}, v.vg_name), fmtBytes(v.vg_size), fmtBytes(v.vg_free), v.pv_count, v.lv_count]), '', {right: [1, 2]}),
-    table(['LV', 'VG', 'Size', 'Attr'], s.lvm.lvs.map(v => [h('span', {class: 'mono'}, v.lv_name), v.vg_name, fmtBytes(v.lv_size), h('span', {class: 'mono'}, v.lv_attr)]), '', {right: [2]})));
-  parts.push(cardFlush('Network interfaces', 'network', null, table(['Interface', 'State', 'MAC', 'Addresses'], s.interfaces.filter(i => i.ifname !== 'lo').map(i => [h('span', {class: 'mono'}, i.ifname),
-    i.state === 'UP' ? badge('ok', 'Link up') : badge('neutral', i.state || 'down', 'x'), h('span', {class: 'mono'}, i.mac || ''), h('span', {class: 'mono'}, i.addrs.filter(a => a.scope !== 'link').map(a => a.addr + '/' + a.prefix).join('  '))]), 'No interfaces')));
-  const cons = s.console.cmdline_consoles;
-  parts.push(h('div', {class: 'cols'},
-    card('Unit', 'server', un.source ? badge('info', 'from ' + un.source) : badge('neutral', 'not available'), un.model || un.dsm_version ? h('dl', {class: 'kv'},
-      h('dt', {}, 'Model'), h('dd', {}, un.model || '-'), un.hw_version && un.hw_version !== un.model ? [h('dt', {}, 'Hardware'), h('dd', {}, un.hw_version)] : null,
-      un.dsm_version ? [h('dt', {}, 'Previous DSM'), h('dd', {}, un.dsm_version)] : null, un.cpu_before ? [h('dt', {}, 'CPU'), h('dd', {}, un.cpu_before)] : null) :
-      h('p', {class: 'muted'}, 'No model information found (/proc/sys/kernel/syno_hw_version or /var/lib/synofurb/dsm-inspect.txt).')),
-    card('Serial console', 'terminal', cons.length ? badge('ok', 'console= set') : badge('neutral', 'no console= argument'),
-      cons.length ? h('dl', {class: 'kv'}, cons.map(c => [h('dt', {}, c.serial ? 'Serial' : 'Console'), h('dd', {class: 'mono'}, c.device + (c.options ? ' @ ' + c.options : ''))])) :
-        h('p', {class: 'muted'}, 'The kernel command line has no console= argument, so boot messages are not sent to a serial port.'))));
+  parts.push(cardFlush(T('dash.disks'), 'hard-drive', sb, table(th('device', 'model', 'size', 'type', 'role'), drows, '', {right: [2]}), smart));
+  if (md.length) parts.push(cardFlush(T('dash.arrays'), 'layers', null, table(th('array', 'level', 'state', 'size'), md.map(a => ({cls: a.degraded ? 'bad' : a.sync ? 'attn' : '', cells: [h('b', {class: 'mono'}, a.name), a.level ? chip(a.level.toUpperCase()) : '',
+    a.degraded ? badge('err', T('state.degraded'), 'triangle-alert') : a.sync ? badge('warn', a.sync.action + (a.sync.percent != null ? ' ' + a.sync.percent + ' %' : ''), 'refresh-cw') : badge('ok', T('state.clean')), fmtBytes(a.size)]})), '', {right: [3]})));
+  parts.push(cardFlush(T('nav.network'), 'network', null, table(th('iface', 'state', 'address'), s.interfaces.filter(i => i.ifname !== 'lo').map(i => [h('span', {class: 'mono'}, i.ifname),
+    i.state === 'UP' ? badge('ok', T('state.linkup')) : badge('neutral', T('state.down'), 'x'), h('span', {class: 'mono'}, i.addrs.filter(a => a.scope !== 'link').map(a => a.addr + '/' + a.prefix).join('  '))]))));
   return h('div', {}, parts);
 };
+/*ENDPAGE*/
 /* ---------- Storage ---------- */
-const RAID_INFO = {
-  none: ['No RAID (span)', 'One device, or several devices joined end to end. No redundancy.', 1],
-  raid0: ['RAID 0 (stripe)', 'Fastest; losing any device loses everything.', 2],
-  raid1: ['RAID 1 (mirror)', 'Same data on every device; survives all but one failure.', 2],
-  raid5: ['RAID 5', 'One device of parity; survives one failure.', 3],
-  raid6: ['RAID 6', 'Two devices of parity; survives two failures.', 4],
-  raid10: ['RAID 10', 'Mirrored stripes; needs an even number of devices.', 4],
-};
+const RAID_INFO = {none: 'lv.none', raid0: 'lv.raid0', raid1: 'lv.raid1', raid5: 'lv.raid5', raid6: 'lv.raid6', raid10: 'lv.raid10', shr1: 'lv.shr1', shr2: 'lv.shr2'};
 function usableBytes(level, sizes) {
   if (!sizes.length) return 0;
+  if (level === 'shr1' || level === 'shr2') { const d = {}; sizes.forEach((s, i) => { d['d' + i] = Math.max(0, s - 2 * MIBN); }); const r = shrSlices(d, level); return r ? r.usable : 0; }
   const m = Math.min(...sizes), n = sizes.length;
   return {none: sizes.reduce((a, b) => a + b, 0), raid0: m * n, raid1: m, raid5: m * (n - 1), raid6: m * (n - 2), raid10: Math.floor(m * n / 2)}[level];
 }
 function countOk(level, n) {
   if (level === 'none') return n >= 1;
+  if (level === 'shr1') return n >= 2;
+  if (level === 'shr2') return n >= 4;
   const min = {raid0: 2, raid1: 2, raid5: 3, raid6: 4, raid10: 4}[level];
   return n >= min && (level !== 'raid10' || n % 2 === 0);
 }
@@ -5327,302 +5524,261 @@ function logView(results) {
     h('div', {class: r.rc === 0 ? '' : 'e'}, h('span', {class: 'lv'}, r.rc === 0 ? '● OK' : '✖ ERR'), h('span', {}, r.desc + '  ($ ' + r.cmd + ')')),
     (r.out || r.err) ? h('span', {class: 'm'}, (r.out + (r.err ? '\n' + r.err : '')).trim()) : null]));
 }
+/*PAGE:storage*/
 PAGES.storage = async () => {
   const [v, m] = await Promise.all([api('GET', '/api/volumes'), api('GET', '/api/mounts')]);
   const reload = () => show('storage');
   const mount = {}; m.mounts.forEach(x => { mount[x.target] = x; });
-  const syncing = v.md.filter(a => a.sync), degraded = v.md.filter(a => a.degraded);
-  S.alerts = {raid: degraded.length + syncing.length}; renderNav();
-  const parts = [pageHead('Storage', v.md.length + ' RAID array' + (v.md.length === 1 ? '' : 's') + ' - ' + v.vgs.length + ' volume group' + (v.vgs.length === 1 ? '' : 's') + ' - ' + v.lvs.length + ' volume' + (v.lvs.length === 1 ? '' : 's'),
-    btn('Create volume', {kind: 'primary', icon: 'plus', onclick: () => { wizardHost.hidden = false; wizardHost.scrollIntoView({behavior: 'smooth'}); wizardHost.focus(); }}))];
-  degraded.forEach(a => parts.push(banner('err', a.name + ' is degraded (' + a.health + ')', 'A member is missing or failed. Replace the disk and re-add it with mdadm.')));
-  syncing.forEach(a => parts.push(banner('warn', a.name + ' is ' + a.sync.action + (a.sync.percent != null ? ' (' + a.sync.percent + '%)' : ''), 'Volumes are usable; performance is reduced until it finishes' + (a.sync.finish_min ? ' in about ' + Math.round(a.sync.finish_min) + ' min.' : '.'))));
+  const wizardHost = h('div', {id: 'wiz', tabindex: '-1', hidden: true});
+  const openWiz = () => { if (!wizardHost.childNodes.length) wizard(wizardHost, v, reload); wizardHost.hidden = false; wizardHost.scrollIntoView({behavior: 'smooth'}); wizardHost.focus(); };
+  const parts = [h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.storage')), infoBtn('storage', T('nav.storage'))), h('div', {class: 'row'},
+    tip(btn(T('nav.raid'), {kind: 'ghost', icon: 'layers', onclick: () => show('raid')}), TIP('st.raid_link')), tip(btn(T('st.create'), {kind: 'primary', icon: 'plus', onclick: openWiz}), TIP('st.create'))))];
   const rows = v.lvs.map(l => {
     const free = (v.vgs.find(g => g.vg_name === l.vg_name) || {}).vg_free || 0, mp = l.mountpoints[0], mt = mp && mount[mp];
-    const ext = btn('Extend', {size: 'sm', disabled: free <= 0, title: free <= 0 ? 'No free space in ' + l.vg_name : '', onclick: () => formDialog('Extend ' + l.vg_name + '/' + l.lv_name, [
-      {name: 'add_gib', label: 'GiB to add', type: 'number', hint: 'Leave empty to use all ' + fmtBytes(free) + ' free in ' + l.vg_name + '. The filesystem is grown afterwards.'}], 'Extend',
-      async x => { await api('POST', '/api/volumes/extend', {vg: l.vg_name, lv: l.lv_name, add_gib: x.add_gib === '' ? null : Number(x.add_gib)}); toast('Volume extended'); reload(); }, {icon: 'plus', sub: 'Online, no data is touched'})});
-    const del = btn('Delete', {size: 'sm', kind: 'danger', icon: 'trash', onclick: () => confirmAction({title: 'Delete volume ' + l.lv_name, sub: 'This destroys all data on the volume.', expected: l.lv_name, label: 'Delete volume',
-      body: 'It is unmounted, its fstab entry is removed and the logical volume is deleted.',
-      extra: [h('label', {class: 'chk'}, h('input', {type: 'checkbox', id: 'rmvg'}), h('span', {}, 'Also remove the volume group ' + l.vg_name + ' and its physical volumes'))],
-      onConfirm: async () => { await api('POST', '/api/volumes/delete', {vg: l.vg_name, lv: l.lv_name, confirm: l.lv_name, remove_vg: $('#rmvg').checked}); toast('Volume deleted'); reload(); }})});
-    return [h('b', {}, l.lv_name), h('span', {class: 'mono'}, l.vg_name), h('span', {class: 'mono'}, mp || '-'), l.fstype || '-', fmtBytes(l.lv_size),
-      mt && mt.size ? usage(mt.used, mt.size) : '', mp ? badge('ok', 'Mounted') : badge('neutral', 'Not mounted', 'x'), h('div', {class: 'row'}, ext, del)];
+    const ext = tip(btn(T('act.extend'), {size: 'sm', kind: 'ghost', disabled: free <= 0, onclick: () => formDialog(T('dlg.extend', {name: l.lv_name}), [
+      {name: 'add_gib', label: T('st.add_gib'), type: 'number'}], T('act.extend'),
+      async x => { await api('POST', '/api/volumes/extend', {vg: l.vg_name, lv: l.lv_name, add_gib: x.add_gib === '' ? null : Number(x.add_gib)}); toast(T('raid.done')); reload(); }, {icon: 'plus', sub: fmtBytes(free) + ' ' + T('st.free')})}), free <= 0 ? TIP('st.nofree') : TIP('st.extend'));
+    const del = btn(T('act.delete'), {size: 'sm', kind: 'ghost', icon: 'trash', onclick: () => confirmAction({title: T('dlg.delete', {name: l.lv_name}), expected: l.lv_name, label: T('act.delete'), body: TIP('st.delete'),
+      extra: [h('label', {class: 'chk'}, h('input', {type: 'checkbox', id: 'rmvg'}), h('span', {}, T('st.rmvg')))],
+      onConfirm: async () => { await api('POST', '/api/volumes/delete', {vg: l.vg_name, lv: l.lv_name, confirm: l.lv_name, remove_vg: $('#rmvg').checked}); toast(T('raid.done')); reload(); }})});
+    return [h('b', {}, l.lv_name), h('span', {class: 'mono'}, mp || '-'), fmtBytes(l.lv_size), mt && mt.size ? usage(mt.used, mt.size) : (mp ? '' : badge('neutral', T('state.unmounted'), 'x')), h('div', {class: 'row'}, ext, del)];
   });
-  parts.push(cardFlush('Volumes', 'database', null, table(['Name', 'Pool', 'Mount', 'FS', 'Size', 'Used', 'State', ''], rows, 'No logical volumes yet'),
-    v.vgs.length ? h('div', {class: 'cb muted'}, v.vgs.map(g => g.vg_name + ': ' + fmtBytes(g.vg_size) + ' total, ' + fmtBytes(g.vg_free) + ' unallocated').join(' - ')) : null));
-  const wizardHost = h('div', {id: 'wiz', tabindex: '-1', hidden: !!v.lvs.length}); parts.push(wizardHost);
-  wizard(wizardHost, v, reload);
+  parts.push(cardFlush(T('st.volumes'), 'database', h('div', {class: 'row'}, v.vgs.map(g => tip(chip(g.vg_name, fmtBytes(g.vg_free) + ' ' + T('st.free')), TIP('st.vg')))),
+    table(th('volume', 'mount', 'size', 'used', ''), rows, T('st.empty'), {right: [2]})));
+  parts.push(wizardHost);
   return h('div', {}, parts);
 };
+/*copy: wiz.devices wiz.layout wiz.volume wiz.review raid.name raid.fs st.mountpoint st.size_gib btn.back btn.cancel btn.next st.plan raid.commands raid.createrun lv.none lv.raid0 lv.raid1 lv.raid5 lv.raid6 lv.raid10 lv.shr1 lv.shr2 raid.usable*/
 function wizard(host, v, reload) {
-  const W = {step: 1, devs: new Set(), level: 'none', name: '', fs: 'xfs', mp: '', size: null, plan: null, planErr: '', timer: null};
-  const preview = h('div', {});
-  const stage = h('div', {});
-  const cand = v.candidates;
-  const sizes = () => cand.filter(c => W.devs.has(c.path)).map(c => c.size);
-  const usable = () => usableBytes(W.level, sizes());
+  const W = {step: 1, devs: new Set(), level: 'none', name: '', fs: 'xfs', mp: '', size: '', plan: null, perr: '', t: null};
+  const preview = h('div', {}), stage = h('div', {class: 'cb'});
+  const cand = v.candidates, sizes = () => cand.filter(c => W.devs.has(c.path)).map(c => c.size), usable = () => usableBytes(W.level, sizes());
   const nameOk = () => /^[a-z][a-z0-9_]{0,23}$/.test(W.name) && !['sys', 'data', 'root', 'swap', 'boot', 'efi'].includes(W.name);
   const body = () => ({name: W.name, level: W.level, fs: W.fs, mountpoint: W.mp || null, size_gib: W.size ? Number(W.size) : null, devices: [...W.devs]});
-  async function refreshPlan() {
-    clearTimeout(W.timer);
-    W.timer = setTimeout(async () => {
-      if (!W.devs.size || !countOk(W.level, W.devs.size) || !nameOk()) { W.plan = null; W.planErr = ''; drawPreview(); return; }
-      try { W.plan = await api('POST', '/api/volumes/plan', body()); W.planErr = ''; } catch (e) { W.plan = null; W.planErr = e.message; }
+  function refreshPlan() {
+    clearTimeout(W.t);
+    W.t = setTimeout(async () => {
+      if (!W.devs.size || !countOk(W.level, W.devs.size) || !nameOk()) { W.plan = null; W.perr = ''; drawPreview(); return; }
+      try { W.plan = await api('POST', '/api/volumes/plan', body()); W.perr = ''; } catch (e) { W.plan = null; W.perr = e.message; }
       drawPreview(); if (W.step === 4) draw();
     }, 300);
   }
   function drawPreview() {
     const p = W.plan;
-    preview.replaceChildren(h('section', {class: 'card'}, h('div', {class: 'ch'}, h('h2', {}, ic('eye', 'lg'), 'Plan preview'), badge('ok', 'Nothing written yet', 'shield-check')),
-      h('div', {class: 'cb plan'}, p ? [
-        h('ul', {}, [
-          h('li', {}, ic('plus'), h('span', {}, h('b', {}, 'Create '), (W.level === 'none' ? 'logical volume ' : W.level.toUpperCase() + ' array and logical volume ') + p.name + ' (about ' + fmtBytes(p.usable_bytes) + ' usable) in ' + p.vg)),
-          h('li', {}, ic('plus'), h('span', {}, h('b', {}, 'Format '), 'as ' + p.fs + ', label ' + p.name)),
-          h('li', {}, ic('plus'), h('span', {}, h('b', {}, 'Mount '), 'at ' + p.mountpoint + ' and add it to /etc/fstab (nofail)')),
-          h('li', {}, ic('info'), h('span', {}, h('b', {}, 'Unchanged: '), 'all other volumes and disks'))]),
-        p.warnings.map(w => banner('warn', w, '')),
-        h('div', {class: 'cap'}, 'Commands that will run (as root)'),
-        h('pre', {class: 'code'}, p.steps.map((s, i) => (i + 1) + '  ' + s.cmd).join('\n'))] :
-        [W.planErr ? banner('err', 'This plan is not valid', W.planErr) : h('p', {class: 'muted'}, 'Pick devices, a layout and a name to see the exact steps and commands here. Nothing is executed until you confirm on the last step.')])));
+    preview.replaceChildren(h('section', {class: 'card'}, h('div', {class: 'ch'}, h('h2', {}, ic('eye', 'lg'), T('st.plan')), tip(badge('ok', T('st.nowrite'), 'shield-check'), TIP('st.nowrite'))),
+      h('div', {class: 'cb plan'}, p ? [p.warnings.map(w => banner('warn', w, '')), h('div', {class: 'cap'}, T('raid.commands')), h('pre', {class: 'code'}, p.steps.map((s, i) => (i + 1) + '  ' + s.cmd).join('\n'))] : (W.perr ? banner('err', W.perr, '') : null))));
   }
-  function nav(canNext, nextLabel, onNext) {
-    return h('div', {class: 'row'}, W.step > 1 ? btn('Back', {icon: 'arrow-l', onclick: () => { W.step--; draw(); }}) : null,
-      btn('Cancel', {onclick: () => { host.hidden = !!v.lvs.length; W.step = 1; W.devs.clear(); draw(); drawPreview(); }}),
-      btn(nextLabel || 'Next', {kind: 'primary', disabled: !canNext, onclick: onNext || (() => { W.step++; draw(); })}));
+  const cancel = () => { host.hidden = true; host.replaceChildren(); wizard(host, v, reload); };
+  function nav(canNext, onNext, label) {
+    return h('div', {class: 'row'}, W.step > 1 ? btn(T('btn.back'), {icon: 'arrow-left', onclick: () => { W.step--; draw(); }}) : null, btn(T('btn.cancel'), {onclick: cancel}),
+      btn(label || T('btn.next'), {kind: 'primary', disabled: !canNext, onclick: onNext || (() => { W.step++; draw(); })}));
   }
   function draw() {
-    const labels = ['Devices', 'Layout', 'Volume', 'Review'];
+    const labels = [T('wiz.devices'), T('wiz.layout'), T('wiz.volume'), T('wiz.review')];
     const steps = h('div', {class: 'steps', role: 'list'}, labels.map((l, i) => h('div', {role: 'listitem', class: i + 1 === W.step ? 'cur' : i + 1 < W.step ? 'done' : '', 'aria-current': i + 1 === W.step ? 'step' : null}, h('i', {}, i + 1 < W.step ? '✓' : String(i + 1)), h('span', {}, l))));
     let c;
     if (W.step === 1) {
-      c = [h('p', {class: 'muted'}, 'Select the disks or partitions to use. They will be erased.'),
-        cand.length ? cand.map(d => {
-          const cb = h('input', {type: 'checkbox', checked: W.devs.has(d.path), onchange: () => { cb.checked ? W.devs.add(d.path) : W.devs.delete(d.path); draw(); refreshPlan(); }});
-          return h('label', {class: 'opt' + (W.devs.has(d.path) ? ' sel' : '')}, cb, h('div', {}, h('b', {}, h('span', {class: 'mono'}, d.path), chip(fmtBytes(d.size)), d.tran ? chip(d.tran) : null), h('small', {}, [d.model, d.serial, d.type === 'part' ? 'partition of ' + d.pkname : 'whole disk'].filter(Boolean).join(' - '))));
-        }) : banner('info', 'No free disks or partitions', 'Every device is mounted, formatted, part of an array or holds the system.'),
-        v.excluded.length ? h('details', {}, h('summary', {class: 'muted'}, v.excluded.length + ' devices are not available'), table(['Device', 'Size', 'Why not'], v.excluded.map(d => [h('span', {class: 'mono'}, d.path), fmtBytes(d.size), d.reason]))) : null,
-        nav(W.devs.size > 0)];
+      c = [cand.length ? cand.map(d => { const cb = h('input', {type: 'checkbox', checked: W.devs.has(d.path), onchange: () => { cb.checked ? W.devs.add(d.path) : W.devs.delete(d.path); draw(); refreshPlan(); }});
+        return h('label', {class: 'opt' + (W.devs.has(d.path) ? ' sel' : '')}, cb, h('div', {}, h('b', {}, h('span', {class: 'mono'}, d.path), chip(fmtBytes(d.size)), d.tran ? chip(d.tran) : null), h('small', {}, [d.model, d.serial].filter(Boolean).join(' - ')))); }) :
+        h('div', {class: 'empty'}, ic('info'), T('raid.nofree')), nav(W.devs.size > 0)];
     } else if (W.step === 2) {
-      c = [h('p', {class: 'muted'}, W.devs.size + ' device' + (W.devs.size === 1 ? '' : 's') + ' selected.'),
-        Object.entries(RAID_INFO).map(([k, [t, d, min]]) => {
-          const ok = countOk(k, W.devs.size);
-          const r = h('input', {type: 'radio', name: 'lvl', checked: W.level === k, disabled: !ok, onchange: () => { W.level = k; draw(); refreshPlan(); }});
-          return h('label', {class: 'opt' + (W.level === k ? ' sel' : '') + (ok ? '' : ' off')}, r, h('div', {}, h('b', {}, t, ok ? chip('about ' + fmtBytes(usableBytes(k, sizes())) + ' usable') : badge('neutral', 'needs ' + (k === 'raid10' ? 'an even number, at least 4' : min) + ' devices', 'x')), h('small', {}, d)));
-        }), nav(countOk(W.level, W.devs.size))];
+      c = [h('div', {class: 'lvls', role: 'radiogroup', 'aria-label': T('wiz.layout')}, Object.keys(RAID_INFO).map(k => {
+        const ok = countOk(k, W.devs.size), r = h('input', {type: 'radio', name: 'lvl', checked: W.level === k, disabled: !ok, onchange: () => { W.level = k; draw(); refreshPlan(); }});
+        return tip(h('label', {class: 'opt lvl' + (W.level === k ? ' sel' : '') + (ok ? '' : ' off')}, r, h('div', {}, h('b', {}, T(RAID_INFO[k]), ok ? chip(T('raid.usable') + ' ' + fmtBytes(usableBytes(k, sizes()))) : null))), TIP(RAID_INFO[k]));
+      })), nav(countOk(W.level, W.devs.size))];
     } else if (W.step === 3) {
       const maxGib = Math.max(1, Math.floor(usable() / 1073741824));
-      const nm = h('input', {class: 'mono', value: W.name, placeholder: 'media', autocomplete: 'off', oninput: () => { W.name = nm.value.trim(); upNext(); refreshPlan(); }});
+      const nm = h('input', {class: 'mono', value: W.name, placeholder: 'media', autocomplete: 'off', oninput: () => { W.name = nm.value.trim(); nx.disabled = !nameOk(); refreshPlan(); }});
       const fs = h('select', {onchange: () => { W.fs = fs.value; refreshPlan(); }}, v.filesystems.map(x => h('option', {value: x, selected: x === W.fs}, x)));
-      const mp = h('input', {class: 'mono', value: W.mp, placeholder: '/srv/' + (W.name || '<name>'), autocomplete: 'off', oninput: () => { W.mp = mp.value.trim(); refreshPlan(); }});
-      const num = h('input', {type: 'number', min: 1, max: maxGib, value: W.size || '', placeholder: 'all', oninput: () => { W.size = num.value; rng.value = num.value || maxGib; refreshPlan(); }});
-      const rng = h('input', {type: 'range', min: 1, max: maxGib, value: W.size || maxGib, 'aria-label': 'Size in GiB', oninput: () => { W.size = Number(rng.value) >= maxGib ? '' : rng.value; num.value = W.size; refreshPlan(); }});
-      const nx = btn('Next: Review', {kind: 'primary', disabled: !nameOk(), onclick: () => { W.step = 4; draw(); }});
-      const upNext = () => { nx.disabled = !nameOk(); };
-      c = [h('div', {class: 'grid2'}, field('Name', nm, 'a-z, 0-9 and underscore; creates volume group vg_' + (W.name || '<name>')), field('Filesystem', fs, 'xfs is the default')),
-        field('Mountpoint', mp, 'Below /srv or /mnt'),
-        field('Size in GiB (empty = all, ' + maxGib + ' GiB max)', num), rng,
-        h('div', {class: 'row'}, btn('Back', {icon: 'arrow-l', onclick: () => { W.step = 2; draw(); }}), btn('Cancel', {onclick: () => { host.hidden = !!v.lvs.length; W.step = 1; W.devs.clear(); draw(); drawPreview(); }}), nx)];
+      const mp = h('input', {class: 'mono', value: W.mp, placeholder: '/srv/' + (W.name || '...'), autocomplete: 'off', oninput: () => { W.mp = mp.value.trim(); refreshPlan(); }});
+      const num = h('input', {type: 'number', min: 1, max: maxGib, value: W.size || '', placeholder: String(maxGib), oninput: () => { W.size = num.value; rng.value = num.value || maxGib; refreshPlan(); }});
+      const rng = h('input', {type: 'range', min: 1, max: maxGib, value: W.size || maxGib, 'aria-label': T('st.size_gib'), oninput: () => { W.size = Number(rng.value) >= maxGib ? '' : rng.value; num.value = W.size; refreshPlan(); }});
+      const nx = btn(T('btn.next'), {kind: 'primary', disabled: !nameOk(), onclick: () => { W.step = 4; draw(); }});
+      c = [h('div', {class: 'grid2'}, field(T('raid.name'), nm), field(T('raid.fs'), tip(fs, TIP('raid.fs')))), field(T('st.mountpoint'), mp), field(T('st.size_gib'), num), rng,
+        h('div', {class: 'row'}, btn(T('btn.back'), {icon: 'arrow-left', onclick: () => { W.step = 2; draw(); }}), btn(T('btn.cancel'), {onclick: cancel}), nx)];
     } else {
-      const go = btn('Erase ' + W.devs.size + ' device' + (W.devs.size === 1 ? '' : 's') + ' and create ' + W.name, {kind: 'danger', icon: 'trash', disabled: !W.plan, onclick: () => confirmAction({
-        title: 'Create volume ' + W.name, sub: 'All data on ' + [...W.devs].join(', ') + ' will be destroyed.', expected: W.name, label: 'Erase and create',
-        body: h('div', {}, W.plan.warnings.map(w => banner('warn', w, '')), h('p', {class: 'muted'}, 'This runs ' + W.plan.steps.length + ' steps as root. It stops at the first failure and does not undo earlier steps.')),
-        onConfirm: async () => {
-          const res = await api('POST', '/api/volumes/create', Object.assign(body(), {confirm: W.name}));
-          toast('Volume created at ' + res.mountpoint); reload();
-        }})});
-      c = [W.plan ? [banner('err', 'Data on the selected devices will be destroyed', W.plan.warnings.slice(1).join(' ')),
-        h('dl', {class: 'kv'}, h('dt', {}, 'Name'), h('dd', {}, W.plan.name), h('dt', {}, 'Layout'), h('dd', {}, RAID_INFO[W.level][0]), h('dt', {}, 'Devices'), h('dd', {class: 'mono'}, [...W.devs].join(', ')),
-          h('dt', {}, 'Filesystem'), h('dd', {}, W.plan.fs), h('dt', {}, 'Mountpoint'), h('dd', {class: 'mono'}, W.plan.mountpoint), h('dt', {}, 'Usable'), h('dd', {}, 'about ' + fmtBytes(W.plan.usable_bytes)))] :
-        banner('err', 'This plan is not valid', W.planErr || 'Check the previous steps.'),
-        h('div', {class: 'row'}, btn('Back to plan', {kind: 'primary', icon: 'arrow-l', onclick: () => { W.step = 3; draw(); }}), btn('Cancel', {onclick: () => { host.hidden = !!v.lvs.length; W.step = 1; W.devs.clear(); draw(); drawPreview(); }}), go)];
+      const go = btn(T('raid.createrun'), {kind: 'danger', icon: 'trash', disabled: !W.plan, onclick: () => confirmAction({title: T('dlg.create', {name: W.name}), expected: W.name, label: T('raid.createrun'),
+        body: h('div', {}, (W.plan ? W.plan.warnings : []).map(w => banner('warn', w, ''))),
+        onConfirm: async () => { const res = await api('POST', '/api/volumes/create', Object.assign(body(), {confirm: W.name})); toast(res.mountpoint); reload(); }})});
+      c = [W.plan ? [banner('err', W.plan.warnings[0] || '', ''), h('dl', {class: 'kv'}, h('dt', {}, T('raid.name')), h('dd', {}, W.plan.name), h('dt', {}, T('col.device')), h('dd', {class: 'mono'}, [...W.devs].join(' ')),
+        h('dt', {}, T('raid.fs')), h('dd', {}, W.plan.fs), h('dt', {}, T('st.mountpoint')), h('dd', {class: 'mono'}, W.plan.mountpoint), h('dt', {}, T('raid.usable')), h('dd', {}, fmtBytes(W.plan.usable_bytes)))] : banner('err', W.perr || '-', ''),
+        h('div', {class: 'row'}, btn(T('btn.back'), {kind: 'primary', icon: 'arrow-left', onclick: () => { W.step = 3; draw(); }}), btn(T('btn.cancel'), {onclick: cancel}), go)];
     }
-    stage.replaceChildren(h('section', {class: 'card'}, h('div', {class: 'ch'}, h('h2', {}, ic('plus', 'lg'), 'Create volume')), h('div', {class: 'cb'}, steps, c)));
+    stage.replaceChildren(steps, ...[c].flat(Infinity).filter(Boolean));
   }
-  host.replaceChildren(h('div', {class: 'cols'}, stage, preview));
+  host.replaceChildren(h('div', {class: 'cols'}, h('section', {class: 'card'}, h('div', {class: 'ch'}, h('h2', {}, ic('plus', 'lg'), T('st.create'))), stage), preview));
   draw(); drawPreview();
 }
-/* ---------- Imported volumes ---------- */
-PAGES.imported = async () => {
-  const r = await api('GET', '/api/mounts');
-  const reload = () => show('imported');
-  const parts = [pageHead('Imported volumes', 'Volumes from another system (for example a migrated Synology RAID) and removable disks.',
-    (() => { const b = btn('Scan RAID and LVM', {icon: 'refresh', onclick: () => act(b, async () => {
-      const res = await api('POST', '/api/mounts/activate'); toast('Scan finished: ' + res.devices.length + ' mountable volume' + (res.devices.length === 1 ? '' : 's')); reload();
-    })}); return b; })())];
-  parts.push(banner('info', 'Read-only by default', 'Imported volumes are mounted read-only so nothing on them can change. Untick "Read-only" only when you are sure; imported Synology volumes may contain features this kernel cannot fully write.'));
-  const rows = r.devices.map(d => {
-    const mp = h('input', {class: 'mono', value: d.suggested, 'aria-label': 'Mountpoint for ' + d.path});
-    const ro = h('input', {type: 'checkbox', checked: d.ro_default, 'aria-label': 'Read-only'});
-    const warn = h('span', {class: 'help', hidden: ro.checked}, 'Writable mount of an imported volume');
-    ro.addEventListener('change', () => { warn.hidden = ro.checked; });
-    const pe = h('input', {type: 'checkbox', 'aria-label': 'Mount at boot'});
-    const go = btn('Mount', {kind: 'primary', size: 'sm', onclick: () => act(go, async () => {
-      await api('POST', '/api/mounts/mount', {device: d.path, mountpoint: mp.value.trim(), ro: ro.checked, persist: pe.checked}); toast('Mounted ' + d.path); reload(); })});
-    return [h('b', {class: 'mono'}, d.path), d.fstype, d.label || '', fmtBytes(d.size),
-      [d.foreign ? badge('warn', 'Imported', 'package') : badge('neutral', 'Local'), d.tran ? chip(d.tran) : null], mp,
-      h('label', {class: 'chk'}, ro, h('span', {}, 'Read-only')), h('label', {class: 'chk'}, pe, h('span', {}, 'At boot')), h('div', {}, go, warn)];
-  });
-  parts.push(cardFlush('Volumes ready to mount', 'package', badge(r.devices.length ? 'info' : 'neutral', r.devices.length + ' found'),
-    table(['Device', 'FS', 'Label', 'Size', 'Origin', 'Mountpoint', 'Mode', 'Persist', ''], rows, 'No unmounted filesystems found. Insert a disk or scan for RAID/LVM volumes.')));
-  if (r.other.length) parts.push(cardFlush('Other signatures', 'help', null, table(['Device', 'Signature', 'Size', 'What to do'], r.other.map(o => [h('span', {class: 'mono'}, o.path), o.fstype, fmtBytes(o.size), o.note]))));
-  const mrows = r.mounts.map(m => [h('span', {class: 'mono'}, m.target), h('span', {class: 'mono'}, m.source), m.fstype, h('span', {class: 'mono'}, m.options || ''), m.size ? usage(m.used, m.size) : '',
-    /^\/(srv|mnt)\//.test(m.target) ? btn('Unmount', {size: 'sm', onclick: () => confirmAction({title: 'Unmount ' + m.target, sub: 'Services using it will lose access.', expected: m.target, label: 'Unmount',
-      extra: [h('label', {class: 'chk'}, h('input', {type: 'checkbox', id: 'rmfs'}), h('span', {}, 'Also remove the managed fstab entry'))],
-      onConfirm: async () => { await api('POST', '/api/mounts/unmount', {mountpoint: m.target, confirm: m.target, remove_fstab: $('#rmfs').checked}); toast('Unmounted'); reload(); }})}) : '']);
-  parts.push(cardFlush('Mounted filesystems', 'disk', null, table(['Mountpoint', 'Source', 'FS', 'Options', 'Used', ''], mrows)));
-  parts.push(cardFlush('fstab', 'board', null, table(['Spec', 'Mountpoint', 'Type', 'Options', 'Managed'], r.fstab.map(e => [h('span', {class: 'mono'}, e.spec), h('span', {class: 'mono'}, e.mountpoint), e.fstype, h('span', {class: 'mono'}, e.options), e.managed ? badge('accent', 'synofurb', 'check') : '']), 'No fstab entries')));
-  return h('div', {}, parts);
+/*ENDPAGE*/
+/* ---------- Mounts (mounted filesystems and imported volumes) ---------- */
+/*PAGE:mounts*/
+PAGES.mounts = async () => {
+  const r = await api('GET', '/api/mounts'), reload = () => show('mounts');
+  let tab = S.mtab || 'mounted';
+  const area = h('div', {});
+  const tabs = h('div', {class: 'tabs', role: 'tablist'});
+  const drawTabs = () => tabs.replaceChildren(...['mounted', 'imported'].map(k => tip(h('button', {type: 'button', role: 'tab', 'aria-selected': String(tab === k), class: 'tab', onclick: () => { tab = S.mtab = k; draw(); }}, T('mnt.' + k), k === 'imported' && r.devices.length ? h('span', {class: 'badge neutral'}, String(r.devices.length)) : null), TIP('mnt.' + k))));
+  function draw() {
+    drawTabs();
+    if (tab === 'mounted') {
+      const rows = r.mounts.map(m => [h('span', {class: 'mono'}, m.target), h('span', {class: 'mono'}, m.source), m.fstype, m.size ? usage(m.used, m.size) : '', /^\/(srv|mnt)\//.test(m.target) ? btn(T('act.unmount'), {size: 'sm', kind: 'ghost', onclick: () => confirmAction({title: T('dlg.unmount', {name: m.target}), expected: m.target, label: T('act.unmount'),
+        extra: [h('label', {class: 'chk'}, h('input', {type: 'checkbox', id: 'rmfs'}), h('span', {}, T('mnt.rmfstab')))],
+        onConfirm: async () => { await api('POST', '/api/mounts/unmount', {mountpoint: m.target, confirm: m.target, remove_fstab: $('#rmfs').checked}); toast(T('raid.done')); reload(); }})}) : '']);
+      area.replaceChildren(cardFlush(T('nav.mounts'), 'package', null, table(th('mount', 'device', 'type', 'used', ''), rows)),
+        h('details', {class: 'card'}, h('summary', {class: 'cb'}, T('mnt.fstab')), table(['', '', '', ''], r.fstab.map(e => [h('span', {class: 'mono'}, e.spec), h('span', {class: 'mono'}, e.mountpoint), e.fstype, e.managed ? badge('accent', 'synofurb', 'check') : '']))));
+    } else {
+      const scan = btn(T('mnt.scan'), {icon: 'refresh-cw', onclick: () => act(scan, async () => { await api('POST', '/api/mounts/activate'); toast(T('raid.done')); reload(); })});
+      const rows = r.devices.map(d => {
+        const mp = h('input', {class: 'mono', value: d.suggested, 'aria-label': T('col.mount')}), ro = h('input', {type: 'checkbox', checked: d.ro_default, 'aria-label': T('mnt.ro')}), pe = h('input', {type: 'checkbox', 'aria-label': T('mnt.boot')});
+        const go = btn(T('act.mount'), {kind: 'primary', size: 'sm', onclick: () => act(go, async () => { await api('POST', '/api/mounts/mount', {device: d.path, mountpoint: mp.value.trim(), ro: ro.checked, persist: pe.checked}); toast(T('raid.done')); reload(); })});
+        return [h('b', {class: 'mono'}, d.path), d.fstype, fmtBytes(d.size), mp, h('div', {class: 'row'}, tip(h('label', {class: 'chk'}, ro, h('span', {}, T('mnt.ro'))), TIP('mnt.ro')), h('label', {class: 'chk'}, pe, h('span', {}, T('mnt.boot')))), go];
+      });
+      area.replaceChildren(cardFlush(T('mnt.imported'), 'package', h('div', {class: 'row'}, r.other.length ? tip(chip(String(r.other.length), T('mnt.other')), r.other.map(o => o.path + ' ' + o.fstype).join(', ')) : null, scan),
+        table(th('device', 'type', 'size', 'mount', 'mode', ''), rows, T('mnt.none'), {right: [2]})));
+    }
+  }
+  draw();
+  return h('div', {}, h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.mounts')), infoBtn('imports', T('nav.mounts')))), tabs, area);
 };
+/*ENDPAGE*/
 /* ---------- Network ---------- */
+/*PAGE:network*/
 PAGES.network = async () => {
-  const r = await api('GET', '/api/network');
-  const reload = () => show('network');
+  const r = await api('GET', '/api/network'), reload = () => show('network');
   setPending(r.pending);
   const editHost = h('div', {});
-  const parts = [pageHead('Network', 'Hostname ' + r.hostname + ' - safe apply with automatic rollback after ' + r.rollback_seconds + ' s',
-    btn('Change hostname', {icon: 'wrench', onclick: () => formDialog('Change hostname', [{name: 'hostname', label: 'Hostname', value: r.hostname, mono: true}], 'Change', async v => { await api('POST', '/api/hostname', v); toast('Hostname changed'); reload(); }, {sub: 'Letters, digits and hyphens'}) }))];
+  const parts = [h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.network')), infoBtn('safe-apply', T('help.safe_apply'))),
+    h('div', {class: 'row'}, tip(btn(r.hostname, {icon: 'server', onclick: () => formDialog(T('net.hostname'), [{name: 'hostname', label: T('net.hostname'), value: r.hostname, mono: true}], T('btn.save'), async v => { await api('POST', '/api/hostname', v); toast(T('raid.done')); reload(); }, {icon: 'server'})}), TIP('net.hostname'))))];
   function edit(i) {
-    const c = i.config || {};
-    const F = {mode: c.mode || 'dhcp'};
+    const c = i.config || {}, F = {mode: c.mode || 'dhcp'};
     const inp = (v, ph) => h('input', {class: 'mono', value: v || '', placeholder: ph || '', autocomplete: 'off'});
-    const f4 = inp(c.ipv4, '192.168.1.140/24'), g4 = inp(c.gw4, '192.168.1.1'), f6 = inp(c.ipv6, '2001:db8::10/64'), g6 = inp(c.gw6, 'fe80::1'), dns = inp((c.dns || []).join(', '), '192.168.1.1, 9.9.9.9'), sr = inp((c.search || []).join(', '), 'lan');
-    const sect = h('div', {});
-    const seg = h('div', {class: 'seg', role: 'group', 'aria-label': 'Addressing mode'});
+    const f4 = inp(c.ipv4, '192.168.1.140/24'), g4 = inp(c.gw4, '192.168.1.1'), f6 = inp(c.ipv6, '2001:db8::10/64'), g6 = inp(c.gw6, 'fe80::1'), dns = inp((c.dns || []).join(', '), '192.168.1.1'), sr = inp((c.search || []).join(', '), 'lan');
+    const sect = h('div', {}), seg = h('div', {class: 'seg', role: 'group', 'aria-label': T('net.ipv4')});
     const drawMode = () => {
-      seg.replaceChildren(...[['dhcp', 'DHCP'], ['static', 'Static']].map(([k, t]) => h('button', {type: 'button', 'aria-pressed': String(F.mode === k), onclick: () => { F.mode = k; drawMode(); }}, t)));
-      sect.replaceChildren(...(F.mode === 'dhcp' ? [banner('info', 'DHCP with IPv6 autoconfiguration', 'IPv4 and IPv6 addresses come from the router (DHCPv4, DHCPv6 and SLAAC). The DHCP client id is the MAC address.')] :
-        [h('div', {class: 'grid2'}, field('IPv4 address/prefix', f4), field('IPv4 gateway', g4), field('IPv6 address/prefix (optional)', f6, 'Leave empty to keep SLAAC'), field('IPv6 gateway (optional)', g6)),
-          h('div', {class: 'grid2'}, field('DNS servers', dns, 'Comma separated'), field('Search domains', sr))]));
+      seg.replaceChildren(...[['dhcp', T('net.dhcp')], ['static', T('net.static')]].map(([k, t]) => h('button', {type: 'button', 'aria-pressed': String(F.mode === k), onclick: () => { F.mode = k; drawMode(); }}, t)));
+      sect.replaceChildren(...(F.mode === 'dhcp' ? [] : [h('div', {class: 'grid2'}, field(T('net.address'), f4), field(T('net.gateway'), g4), field(T('net.ipv6'), f6), field(T('net.gateway6'), g6)),
+        h('div', {class: 'grid2'}, field(T('net.dns'), tip(dns, TIP('net.dns'))), field(T('net.search'), sr))]));
     };
     drawMode();
-    const apply = btn('Apply with rollback', {kind: 'primary', icon: 'undo', onclick: () => act(apply, async () => {
-      const res = await api('POST', '/api/network/apply', {ifname: i.ifname, mode: F.mode, ipv4: f4.value.trim(), gateway4: g4.value.trim(), ipv6: f6.value.trim(), gateway6: g6.value.trim(), dns: dns.value, search: sr.value});
-      toast(res.message); setPending(res.pending); editHost.replaceChildren();
-    })});
-    editHost.replaceChildren(card('Edit ' + i.ifname, 'settings', null, seg, sect,
-      banner('info', 'Safe apply is on', 'Changes are applied for ' + r.rollback_seconds + ' s and rolled back unless you confirm from the new address.'),
-      h('div', {class: 'row'}, btn('Discard', {onclick: () => editHost.replaceChildren()}), apply)));
+    const apply = btn(T('net.apply'), {kind: 'primary', icon: 'undo-2', onclick: () => confirmAction({title: T('net.apply_q'), danger: false, label: T('net.apply_go'), icon: 'undo-2', body: h('p', {}, TIP('net.apply_q')),
+      onConfirm: async () => { const res = await api('POST', '/api/network/apply', {ifname: i.ifname, mode: F.mode, ipv4: f4.value.trim(), gateway4: g4.value.trim(), ipv6: f6.value.trim(), gateway6: g6.value.trim(), dns: dns.value, search: sr.value}); toast(T('net.applied')); setPending(res.pending); editHost.replaceChildren(); }})});
+    editHost.replaceChildren(card(i.ifname, 'settings', null, h('div', {class: 'f'}, h('span', {class: 'lab'}, T('net.ipv4')), seg), sect, h('div', {class: 'row'}, btn(T('act.discard'), {onclick: () => editHost.replaceChildren()}), apply)));
     editHost.scrollIntoView({behavior: 'smooth'});
   }
-  const ifs = r.interfaces.map(i => card(i.ifname, 'network', i.state === 'UP' ? badge('ok', 'Link up') : badge('neutral', i.state === 'DOWN' || !i.state ? 'No link' : i.state, 'x'),
-    h('dl', {class: 'kv'}, h('dt', {}, 'Config'), h('dd', {}, i.managed ? (i.config.mode === 'static' ? 'Static (managed here)' : 'DHCP (managed here)') : 'Not managed here'),
-      h('dt', {}, 'Addresses'), h('dd', {class: 'mono'}, i.addrs.filter(a => a.scope !== 'link').map(a => a.addr + '/' + a.prefix).join(', ') || 'none'),
-      h('dt', {}, 'MAC'), h('dd', {class: 'mono'}, i.mac || '-'), h('dt', {}, 'MTU'), h('dd', {}, i.mtu)),
-    i.shadowed_by.length ? banner('warn', 'Other config files take precedence', i.shadowed_by.join(', ') + ' would override this page; they are set aside when you apply.') : null,
-    h('div', {class: 'row'}, btn('Edit', {kind: 'primary', size: 'sm', icon: 'settings', onclick: () => edit(i)}))));
-  parts.push(h('div', {class: 'cols'}, h('div', {class: 'stack'}, ifs.length ? ifs : banner('info', 'No network interfaces found', '')), editHost));
+  const ifs = r.interfaces.map(i => card(i.ifname, 'network', i.state === 'UP' ? badge('ok', T('state.linkup')) : badge('neutral', T('state.nocable'), 'x'),
+    h('dl', {class: 'kv'}, h('dt', {}, T('net.ipv4')), h('dd', {class: 'mono'}, (i.managed ? (i.config.mode === 'static' ? T('net.static') : T('net.dhcp')) + ' ' : '') + (i.addrs.filter(a => a.scope !== 'link').map(a => a.addr + '/' + a.prefix).join(' ') || '-')), h('dt', {}, T('net.mac')), h('dd', {class: 'mono'}, i.mac || '-')),
+    i.shadowed_by.length ? tip(badge('warn', i.shadowed_by.length + ' ×', 'triangle-alert'), i.shadowed_by.join(', ')) : null,
+    h('div', {class: 'row'}, btn(T('act.edit'), {kind: 'primary', size: 'sm', icon: 'settings', onclick: () => edit(i)}))));
+  parts.push(h('div', {class: 'cols'}, h('div', {class: 'stack'}, ifs), editHost));
   return h('div', {}, parts);
 };
+/*ENDPAGE*/
 /* ---------- Users ---------- */
+/*PAGE:users*/
 PAGES.users = async () => {
-  const r = await api('GET', '/api/users');
-  const reload = () => show('users');
-  const parts = [pageHead('Users', 'Local accounts. Members of the sudo group can sign in to this page.',
-    btn('Add user', {kind: 'primary', icon: 'plus', onclick: () => formDialog('Add user', [
-      {name: 'username', label: 'User name', mono: true}, {name: 'password', label: 'Password', type: 'password', hint: 'At least 8 characters'},
-      {name: 'groups', label: 'Extra groups', placeholder: 'users, adm', hint: 'Known: ' + r.groups.join(', ')},
-      {name: 'sudo', label: 'Administrator (group sudo; may sign in here and use sudo)', type: 'checkbox', value: true},
-      {name: 'ssh_key', label: 'SSH public key (optional)', mono: true}], 'Create user', async v => { await api('POST', '/api/users/create', v); toast('User created'); reload(); }, {icon: 'users'}) }))];
+  const r = await api('GET', '/api/users'), reload = () => show('users');
+  const parts = [h('div', {class: 'ph'}, h('h1', {}, T('nav.users')),
+    tip(btn(T('usr.new'), {kind: 'primary', icon: 'plus', onclick: () => formDialog(T('usr.new'), [
+      {name: 'username', label: T('usr.name'), mono: true}, {name: 'password', label: T('usr.password'), type: 'password'}, {name: 'groups', label: T('col.groups'), placeholder: 'users, adm'},
+      {name: 'sudo', label: T('usr.admin'), type: 'checkbox', value: true}, {name: 'ssh_key', label: T('usr.sshkey'), mono: true}], T('btn.save'), async v => { await api('POST', '/api/users/create', v); toast(T('raid.done')); reload(); }, {icon: 'users'})}), TIP('usr.new')))];
   const rows = r.users.map(u => {
     const acts = [];
     if (!u.root) {
-      acts.push(btn('Password', {size: 'sm', icon: 'key', onclick: () => formDialog('Set password for ' + u.name, [{name: 'password', label: 'New password', type: 'password'}], 'Set password', async v => { await api('POST', '/api/users/password', {username: u.name, password: v.password}); toast('Password changed'); }, {icon: 'key'})}));
-      acts.push(btn('SSH key', {size: 'sm', onclick: () => formDialog('Add SSH key for ' + u.name, [{name: 'ssh_key', label: 'Public key', mono: true}], 'Add key', async v => { await api('POST', '/api/users/ssh-key', {username: u.name, ssh_key: v.ssh_key}); toast('Key added'); reload(); }, {icon: 'key'})}));
-      const lk = btn(u.locked ? 'Unlock' : 'Lock', {size: 'sm', icon: 'lock', onclick: () => act(lk, async () => { await api('POST', u.locked ? '/api/users/unlock' : '/api/users/lock', {username: u.name}); reload(); })});
-      acts.push(lk);
-      acts.push(btn('Delete', {size: 'sm', kind: 'danger', icon: 'trash', onclick: () => confirmAction({title: 'Delete user ' + u.name, expected: u.name, label: 'Delete user', sub: 'The account is removed immediately.',
-        extra: [h('label', {class: 'chk'}, h('input', {type: 'checkbox', id: 'rmhome'}), h('span', {}, 'Also delete the home directory'))],
-        onConfirm: async () => { await api('POST', '/api/users/delete', {username: u.name, confirm: u.name, remove_home: $('#rmhome').checked}); toast('User deleted'); reload(); }})}));
+      acts.push(btnIcon('key-round', T('usr.password'), () => formDialog(T('usr.password'), [{name: 'password', label: T('usr.password'), type: 'password'}], T('btn.save'), async v => { await api('POST', '/api/users/password', {username: u.name, password: v.password}); toast(T('raid.done')); }, {icon: 'key-round'})));
+      acts.push(btnIcon('file-text', T('usr.sshkey'), () => formDialog(T('usr.sshkey'), [{name: 'ssh_key', label: T('usr.sshkey'), mono: true}], T('btn.save'), async v => { await api('POST', '/api/users/ssh-key', {username: u.name, ssh_key: v.ssh_key}); toast(T('raid.done')); reload(); }, {icon: 'file-text'})));
+      acts.push(btnIcon('lock', u.locked ? T('act.unlock') : T('act.lock'), ev => act(ev.currentTarget, async () => { await api('POST', u.locked ? '/api/users/unlock' : '/api/users/lock', {username: u.name}); reload(); })));
+      acts.push(btnIcon('trash', T('act.delete'), () => confirmAction({title: T('dlg.delete', {name: u.name}), expected: u.name, label: T('act.delete'), body: TIP('usr.delete'),
+        extra: [h('label', {class: 'chk'}, h('input', {type: 'checkbox', id: 'rmhome'}), h('span', {}, T('usr.rmhome')))],
+        onConfirm: async () => { await api('POST', '/api/users/delete', {username: u.name, confirm: u.name, remove_home: $('#rmhome').checked}); toast(T('raid.done')); reload(); }}), 'ghost'));
     }
-    return [h('b', {}, u.name + (u.name === r.current ? ' (you)' : '')), u.uid, u.groups.join(', '), h('span', {class: 'mono'}, u.shell),
-      h('div', {class: 'row'}, u.root ? badge('warn', 'root', 'lock') : null, u.locked ? badge('err', 'Locked', 'lock') : !u.has_password ? badge('warn', 'No password') : badge('ok', 'Active'), u.sudo ? badge('accent', 'sudo', 'key') : null, u.web_login ? badge('info', 'Web sign-in', 'check') : null),
-      u.ssh_keys, h('div', {class: 'row'}, acts)];
+    return [h('b', {}, u.name + (u.name === r.current ? ' *' : '')), u.groups.join(' '), u.ssh_keys,
+      h('div', {class: 'row'}, u.root ? badge('warn', 'root', 'lock') : null, u.locked ? badge('err', T('state.locked'), 'lock') : !u.has_password ? badge('warn', T('state.nopw')) : badge('ok', T('state.active')), u.sudo ? tip(badge('accent', 'sudo', 'key-round'), TIP('usr.sudo')) : null), h('div', {class: 'row'}, acts)];
   });
-  parts.push(cardFlush('Local users', 'users', badge('neutral', r.users.length + ' accounts'), table(['Name', 'UID', 'Groups', 'Shell', 'State', 'Keys', ''], rows, 'No users', {right: [1, 5]})));
+  parts.push(cardFlush(T('nav.users'), 'users', null, table(th('name', 'groups', 'keys', 'state', ''), rows, '', {right: [2]})));
   return h('div', {}, parts);
 };
-/* ---------- Boot manager ---------- */
+/*ENDPAGE*/
+/* ---------- Boot ---------- */
+/*PAGE:boot*/
 PAGES.boot = async () => {
-  const b = await api('GET', '/api/boot');
-  const parts = [];
+  const b = await api('GET', '/api/boot'), parts = [];
   if (!b.available) {
-    parts.push(pageHead('Boot manager', 'Choose what this NAS starts next time it reboots.'));
-    parts.push(banner('info', 'Not a boot-flash unit', 'This NAS does not boot through an internal boot flash, so there is nothing to switch here. (The synofurb-dom tool is not installed.)'));
+    parts.push(h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.boot')), infoBtn('boot', T('nav.boot')))));
+    parts.push(h('div', {class: 'empty'}, ic('info'), T('boot.none')));
     return h('div', {}, parts);
   }
-  if (b.error) { parts.push(pageHead('Boot manager', '')); parts.push(banner('err', 'Could not read the boot flash', b.error)); return h('div', {}, parts); }
+  if (b.error) { parts.push(h('div', {class: 'ph'}, h('h1', {}, T('nav.boot')))); parts.push(banner('err', T('page.error'), b.error)); return h('div', {}, parts); }
   let sel = (b.entries.find(e => e.default) || {}).id || 'debian';
-  const dsm = b.entries.find(e => e.id === 'dsm');
-  const area = h('div', {});
+  const dsm = b.entries.find(e => e.id === 'dsm'), area = h('div', {});
   const doSet = (id, reboot) => {
     const e = b.entries.find(x => x.id === id);
-    const run = async () => {
-      const res = await api('POST', reboot ? '/api/boot/reboot-to' : '/api/boot/default', {entry: id, confirm: id});
-      toast(res.message || ('Default boot entry is now ' + e.label)); if (!reboot) show('boot'); else setTimeout(() => show('boot'), 8000);
-    };
-    if (!e.needs_confirm) { return confirmAction({title: (reboot ? 'Reboot into ' : 'Set default to ') + e.label, danger: false, label: reboot ? 'Reboot now' : 'Set as default', icon: reboot ? 'power' : 'check',
-      sub: reboot ? 'The NAS restarts in 5 seconds. Expect about 90 s of downtime.' : 'Takes effect on the next reboot.', onConfirm: run}); }
-    return confirmAction({title: (reboot ? 'Reboot into ' : 'Set default to ') + e.label, expected: id, danger: id === 'agent', label: reboot ? 'Set default and reboot' : 'Set as default', icon: reboot ? 'power' : 'check',
-      sub: id === 'dsm' ? 'The NAS will start the original Synology firmware.' : 'Type the entry name to confirm.',
-      body: id === 'dsm' ? 'Debian stays installed and its data is untouched; DSM may need to be set up again if its system partition was reclaimed.' : (id === 'agent' ? 'The boot agent is a RAM-only rescue system. A reinstall from there erases disks only after you confirm on your PC.' : ''), onConfirm: run});
+    const run = async () => { const res = await api('POST', reboot ? '/api/boot/reboot-to' : '/api/boot/default', {entry: id, confirm: id}); toast(res.message || e.label); if (!reboot) show('boot'); else setTimeout(() => show('boot'), 8000); };
+    return confirmAction({title: reboot ? T('boot.reboot_q', {name: e.label}) : T('boot.default_q', {name: e.label}), danger: id === 'agent', expected: e.needs_confirm ? id : null, label: reboot ? T('boot.reboot_go') : T('boot.set_default'), icon: reboot ? 'power' : 'check', body: h('p', {}, e.desc), onConfirm: run});
   };
   function draw() {
     const cur = b.entries.find(e => e.id === sel);
-    area.replaceChildren(card('Boot entries', 'board', b.default_valid ? null : badge('err', 'Default is invalid', 'octagon-x'),
+    area.replaceChildren(card(T('boot.entries'), 'panel-top', b.default_valid ? null : badge('err', T('state.invalid'), 'octagon-x'),
       b.entries.map(e => {
         const rd = h('input', {type: 'radio', name: 'be', checked: sel === e.id, disabled: !e.present, onchange: () => { sel = e.id; draw(); }});
-        return h('label', {class: 'opt' + (sel === e.id ? ' sel' : '') + (e.present ? '' : ' off')}, rd, h('div', {}, h('b', {}, e.label, e.default ? badge('accent', 'Default', 'flag') : null,
-          e.failsafe ? badge('ok', 'Fail-safe', 'shield-check') : null, !e.present ? badge('neutral', 'Not installed', 'x') : null, e.risk === 'caution' && e.present ? badge('warn', 'Can reinstall') : null),
-          h('small', {}, e.desc + (e.name ? '  [' + e.name + ']' : ''))));
+        return tip(h('label', {class: 'opt' + (sel === e.id ? ' sel' : '') + (e.present ? '' : ' off')}, rd, h('div', {}, h('b', {}, e.label, e.default ? badge('accent', T('boot.default'), 'flag') : null, e.failsafe ? badge('ok', T('boot.failsafe'), 'shield-check') : null, !e.present ? badge('neutral', T('boot.missing'), 'x') : null))), e.desc);
       }),
-      h('div', {class: 'row'}, btn('Set as default', {disabled: !cur.present || cur.default, icon: 'check', onclick: () => doSet(sel, false)}),
-        btn('Reboot into ' + cur.label, {kind: 'primary', disabled: !cur.present, icon: 'power', onclick: () => doSet(sel, true)}))));
+      h('div', {class: 'row'}, btn(T('boot.set_default'), {disabled: !cur.present || cur.default, icon: 'check', onclick: () => doSet(sel, false)}), btn(T('boot.reboot_go'), {kind: 'primary', disabled: !cur.present, icon: 'power', onclick: () => doSet(sel, true)}))));
   }
-  const rt = dsm && dsm.present ? btn('Return to DSM', {kind: 'primary', icon: 'undo', size: 'lg', disabled: false, onclick: () => doSet('dsm', true)}) : null;
-  parts.push(pageHead('Boot manager', 'Choose what this NAS starts next time it reboots.', rt));
-  parts.push(banner('info', 'DSM is your fail-safe', 'The original Synology firmware stays on the boot flash and is never modified by synofurb. If Debian does not come up, power-cycle the NAS and select DSM from the boot menu, or run "synofurb recover" from your PC.'));
-  if (!b.default_valid) parts.push(banner('err', 'The boot flash default points at no entry', 'Pick an entry below and set it as default to repair this.'));
-  if (b.other_entries.length) parts.push(banner('info', 'Other entries on the flash', b.other_entries.join(', ') + ' (not managed on this page)'));
+  const rt = dsm && dsm.present ? tip(btn(T('boot.return_dsm'), {kind: 'primary', icon: 'undo-2', size: 'lg', onclick: () => doSet('dsm', true)}), TIP('boot.return_dsm')) : null;
+  parts.push(h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.boot')), infoBtn('boot', T('nav.boot'))), rt));
+  if (!b.default_valid) parts.push(banner('err', T('state.invalid'), ''));
   parts.push(area); draw();
   const f = b.flash || {}, p1 = f.p1 || {}, p2 = f.p2 || {};
-  const free = (p) => p.bytes ? usage((p.bytes - (p.free_bytes || 0)), p.bytes) : h('span', {class: 'muted'}, 'unknown');
-  parts.push(h('div', {class: 'cols'},
-    card('Boot flash', 'disk', badge('info', f.device || 'unknown device', 'disk'), h('dl', {class: 'kv'}, h('dt', {}, 'Boot partition'), h('dd', {}, free(p1), p1.free_bytes != null ? h('span', {class: 'help'}, fmtBytes(p1.free_bytes) + ' free') : null),
-      h('dt', {}, 'Data partition'), h('dd', {}, free(p2), p2.free_bytes != null ? h('span', {class: 'help'}, fmtBytes(p2.free_bytes) + ' free') : null), h('dt', {}, 'Total'), h('dd', {}, fmtBytes(f.bytes)))),
-    card('DOM backup', 'download', b.backup.exists ? badge('ok', 'Backup exists') : badge('warn', 'No backup yet'), h('p', {}, b.backup.exists ? 'A full image of the boot flash was taken before the first change.' : 'The automatic backup is created before the first write to the boot flash. Keep a copy off the NAS.'),
-      b.backup.path ? h('p', {class: 'mono'}, b.backup.path) : null, b.tool_version ? h('p', {class: 'help'}, 'synofurb-dom ' + b.tool_version) : null)));
+  const free = p => p.bytes ? tip(usage(p.bytes - (p.free_bytes || 0), p.bytes), fmtBytes(p.free_bytes) + ' ' + T('st.free')) : '-';
+  parts.push(h('div', {class: 'cols'}, card(T('boot.flash'), 'hard-drive', chip(f.device || '-'), h('dl', {class: 'kv'}, h('dt', {}, T('boot.part1')), h('dd', {}, free(p1)), h('dt', {}, T('boot.part2')), h('dd', {}, free(p2)))),
+    card(T('boot.backup'), 'download', b.backup.exists ? badge('ok', T('boot.exists'), 'check') : badge('warn', T('boot.nobackup'), 'triangle-alert'), tip(h('p', {class: 'mono'}, b.backup.path || '-'), TIP('boot.backup')))));
   return h('div', {}, parts);
 };
+/*ENDPAGE*/
 /* ---------- System ---------- */
 const PAGES_ACTIONS = {
   power(action) {
-    confirmAction({title: (action === 'reboot' ? 'Reboot' : 'Power off') + ' this NAS', sub: action === 'reboot' ? 'Services stop in order; SMB and NFS clients disconnect.' : 'You will have to press the power button to start it again.',
-      expected: S.host, label: action === 'reboot' ? 'Reboot' : 'Power off', icon: 'power',
-      onConfirm: async v => { await api('POST', '/api/system/power', {action, confirm: v}); toast(action + ' scheduled'); }});
+    confirmAction({title: T(action === 'reboot' ? 'sys.reboot_q' : 'sys.shutdown_q'), body: h('p', {}, TIP(action === 'reboot' ? 'sys.reboot' : 'sys.shutdown')), expected: S.host, label: T(action === 'reboot' ? 'sys.reboot' : 'sys.shutdown'), icon: 'power',
+      onConfirm: async v => { await api('POST', '/api/system/power', {action, confirm: v}); toast(T('raid.done')); }});
   }
 };
+/*PAGE:system*/
 PAGES.system = async () => {
-  const [r, s] = await Promise.all([api('GET', '/api/services'), S.st ? Promise.resolve(S.st) : api('GET', '/api/status')]);
-  const parts = [pageHead('System', 'Services, host keys and power.')];
+  const r = await api('GET', '/api/services');
+  const rs = r.restartable.map(u => { const b = btn(T('act.restart') + ' ' + u, {size: 'sm', onclick: () => act(b, async () => { await api('POST', '/api/services/restart', {unit: u}); toast(T('raid.done')); })}); return b; });
+  const parts = [h('div', {class: 'ph'}, h('h1', {}, T('nav.system')))];
   parts.push(h('div', {class: 'cols'},
-    card('SSH', 'key', r.sshd.active === 'active' ? badge('ok', 'Running') : badge('neutral', r.sshd.active, 'x'), h('dl', {class: 'kv'}, h('dt', {}, 'Enabled'), h('dd', {}, r.sshd.enabled), h('dt', {}, 'Active'), h('dd', {}, r.sshd.active)),
-      h('div', {class: 'cap'}, 'Host key fingerprints'), r.host_keys.length ? r.host_keys.map(k => h('p', {}, h('b', {}, k.type + ' ' + k.bits), h('br'), h('span', {class: 'mono'}, k.fingerprint))) : h('p', {class: 'muted'}, 'No host keys found')),
-    card('Serial consoles', 'terminal', null, r.serial_getty.length ? table(['Unit', 'Active', 'Sub'], r.serial_getty.map(g => [h('span', {class: 'mono'}, g.unit), g.active === 'active' ? badge('ok', 'active') : badge('neutral', g.active, 'x'), g.sub])) : h('p', {class: 'muted'}, 'No serial-getty units are active.'),
-      s.console.cmdline_consoles.length ? h('p', {class: 'help'}, 'Kernel console: ' + s.console.cmdline_consoles.map(c => c.device + (c.options ? ',' + c.options : '')).join(' ')) : null)));
-  const rs = r.restartable.map(u => { const b = btn('Restart ' + u, {size: 'sm', onclick: () => act(b, async () => { await api('POST', '/api/services/restart', {unit: u}); toast(u + ' restarted'); })}); return b; });
-  parts.push(h('div', {class: 'cols'},
-    card('Restart a service', 'refresh', null, h('p', {class: 'muted'}, 'Only services that are safe to restart while the NAS is in use.'), h('div', {class: 'row'}, rs)),
-    card('Power', 'power', null, h('p', {class: 'muted'}, 'Both actions ask you to type the hostname.'), h('div', {class: 'row'}, btn('Reboot', {icon: 'refresh', onclick: () => PAGES_ACTIONS.power('reboot')}), btn('Power off', {kind: 'danger', icon: 'power', onclick: () => PAGES_ACTIONS.power('poweroff')})))));
-  const un = s.unit || {};
-  parts.push(card('About', 'info', badge('info', 'v' + r.version), h('dl', {class: 'kv'}, h('dt', {}, 'Management plane'), h('dd', {}, 'synofurb-mgmt ' + r.version), h('dt', {}, 'Unit model'), h('dd', {}, un.model || 'unknown'),
-    h('dt', {}, 'Kernel'), h('dd', {}, s.kernel + (s.kernel_info && s.kernel_info.ge7 ? '  (Linux 7+)' : '')), h('dt', {}, 'OS'), h('dd', {}, s.os || '-'), h('dt', {}, 'Architecture'), h('dd', {}, s.arch))));
+    card(T('sys.ssh'), 'key-round', r.sshd.active === 'active' ? badge('ok', T('state.active')) : badge('neutral', r.sshd.active, 'x'), h('dl', {class: 'kv'}, h('dt', {}, T('sys.enabled')), h('dd', {}, r.sshd.enabled), h('dt', {}, T('sys.hostkeys')), h('dd', {}, r.host_keys.map(k => h('div', {class: 'mono'}, k.type + ' ' + k.fingerprint))))),
+    card(T('sys.consoles'), 'terminal', null, r.serial_getty.length ? table(th('device', 'state'), r.serial_getty.map(g => [h('span', {class: 'mono'}, g.unit), g.active === 'active' ? badge('ok', T('state.active')) : badge('neutral', g.active, 'x')])) : h('p', {class: 'muted'}, '-'))));
+  parts.push(h('div', {class: 'cols'}, card(T('sys.services'), 'refresh-cw', null, tip(h('div', {class: 'row'}, rs), TIP('sys.services'))),
+    card(T('sys.power'), 'power', null, h('div', {class: 'row'}, btn(T('sys.reboot'), {icon: 'refresh-cw', onclick: () => PAGES_ACTIONS.power('reboot')}), btn(T('sys.shutdown'), {kind: 'danger', icon: 'power', onclick: () => PAGES_ACTIONS.power('poweroff')})))));
   return h('div', {}, parts);
 };
+/*ENDPAGE*/
+/* ---------- About ---------- */
+const LIC = /*__LIC__*/null;
+const LINKS = {docs: 'https://github.com/andreaswiren/synofurb/tree/main/docs', src: 'https://github.com/andreaswiren/synofurb', issue: 'https://github.com/andreaswiren/synofurb/issues/new'};
+/*PAGE:about*/
+PAGES.about = async () => {
+  const [me, st, sv] = await Promise.all([api('GET', '/api/me'), api('GET', '/api/status'), api('GET', '/api/services')]);
+  const diag = () => JSON.stringify({version: me.version, host: me.hostname, os: st.os, kernel: st.kernel, arch: st.arch, unit: (st.unit || {}).model || null, ssh: sv.sshd.active, theme: effTheme(), page: 'about'}, null, 1);
+  const copy = btn(T('about.copy'), {kind: 'primary', icon: 'clipboard-copy', onclick: async () => {
+    try { await navigator.clipboard.writeText(diag()); toast(T('about.copied')); }
+    catch (e) { const ta = h('textarea', {class: 'mono', rows: 8, readonly: true}, diag()); dialog(T('about.copy'), {icon: 'clipboard-copy'}, () => ta, close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))]); ta.select(); }
+  }});
+  const lic = (id, name) => btn(T('about.licence'), {size: 'sm', kind: 'ghost', icon: 'scroll-text', onclick: () => dialog(name, {icon: 'scroll-text'}, () => h('pre', {class: 'code lic'}, LIC[id]), close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))])});
+  const link = (k, key, icon) => h('a', {class: 'btn', href: LINKS[k], target: '_blank', rel: 'noopener noreferrer'}, ic(icon), T(key));
+  const credits = [['Debian', 'DFSG', null], ['Lucide', 'ISC', 'Lucide'], ['Inter', 'OFL 1.1', 'Inter'], ['JetBrains Mono', 'OFL 1.1', 'JetBrains Mono'], ['Montserrat', 'OFL 1.1', null]];
+  return h('div', {}, h('div', {class: 'ph'}, h('h1', {}, T('nav.about'))),
+    h('section', {class: 'card'}, h('div', {class: 'cb about'}, logo('wordmark'), h('div', {class: 'row'}, chip(T('about.version'), me.version), chip(me.hostname)), h('div', {class: 'row'}, tip(copy, TIP('about.copy')), link('docs', 'about.docs', 'book-open'), link('src', 'about.source', 'external-link'), link('issue', 'about.issue', 'external-link')))),
+    h('details', {class: 'card'}, h('summary', {class: 'cb'}, T('about.credits')), h('div', {class: 'cb flush'}, table(['', '', ''], credits.map(([n, l, k]) => [n, l, k ? lic(k, n) : '']),
+      '', {})), h('div', {class: 'cb'}, popover(T('about.synodeb'), TIP('about.synodeb'), 'info'))));
+};
+/*ENDPAGE*/
 /* ---------- copy, tooltips, menus, help (short / tip / help; word budgets are enforced by the tests) ---------- */
 const COPY = /*__COPY__*/null;
 const HELP = /*__HELP__*/null;
-const T = (k, vars) => { const e = COPY[k]; let s = e ? e.short : k; if (vars) for (const [a, b] of Object.entries(vars)) s = s.replace('{' + a + '}', b); return s; };
+const T = (k, vars) => { if (S.used) S.used.add(k); const e = COPY[k]; let s = e ? e.short : k; if (vars) for (const [a, b] of Object.entries(vars)) s = s.replace('{' + a + '}', b); return s; };
 const TIP = k => (COPY[k] && COPY[k].tip) || null;
 let tipEl = null;
 function tip(el, text) {
@@ -5645,11 +5801,11 @@ function tip(el, text) {
 function helpDialog(id) {
   const t = HELP.find(x => x.id === id) || HELP[0];
   return dialog(t.title, {icon: 'info'}, () => h('div', {class: 'helpbody'}, t.body.split('\n\n').map(p => h('p', {}, p))), close => [
-    h('button', {type: 'button', class: 'btn', onclick: () => { close(); show('help'); }}, 'Help centre'), h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))]);
+    h('button', {type: 'button', class: 'btn', onclick: () => { close(); show('help'); }}, T('nav.help')), h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))]);
 }
-const infoBtn = (id, label) => tip(h('button', {type: 'button', class: 'btn ghost icon-btn sm', 'aria-label': 'Help: ' + (label || id), onclick: () => helpDialog(id)}, ic('info')), 'Help: ' + (label || id));
+const infoBtn = (id, label) => tip(h('button', {type: 'button', class: 'btn ghost icon-btn sm', 'aria-label': T('help.about') + ' ' + (label || id), onclick: () => helpDialog(id)}, ic('info')), T('help.about') + ' ' + (label || id));
 function menu(label, items, o = {}) {
-  const b = h('button', {type: 'button', class: 'btn ' + (o.kind || ''), 'aria-haspopup': 'menu', 'aria-expanded': 'false'}, label, ic('chev-d', 'sm'));
+  const b = h('button', {type: 'button', class: 'btn ' + (o.kind || ''), 'aria-haspopup': 'menu', 'aria-expanded': 'false'}, label, ic('chevron-down', 'sm'));
   const list = h('div', {class: 'menu', role: 'menu', hidden: true});
   const mis = items.filter(Boolean).map(it => {
     const mi = h('button', {type: 'button', role: 'menuitem', tabindex: '-1', class: 'mi' + (it.danger ? ' danger' : ''), 'aria-disabled': it.off ? 'true' : null,
@@ -5780,14 +5936,14 @@ const LEVEL_NAME = {raid0: 'RAID 0', raid1: 'RAID 1', raid4: 'RAID 4', raid5: 'R
 function arrayState(a) {
   if (a.sync) {
     const k = {recovery: 'rebuilding', recover: 'rebuilding', resync: 'resyncing', reshape: 'reshaping', check: 'checking', repair: 'repairing'}[a.sync.action] || 'resyncing';
-    return [k === 'checking' || k === 'repairing' ? 'info' : 'warn', k, a.sync.action === 'check' ? 'search' : 'refresh'];
+    return [k === 'checking' || k === 'repairing' ? 'info' : 'warn', k, a.sync.action === 'check' ? 'search' : 'refresh-cw'];
   }
   if (a.inactive) return ['neutral', 'inactive', 'x'];
   if (a.degraded) return ['err', 'degraded', 'alert'];
   return ['ok', 'clean', 'check'];
 }
 function memberChip(mb) {
-  const st = mb.state, icon = {active: 'hard-drive', spare: 'plus', faulty: 'octagon-x', rebuilding: 'refresh', removed: 'x', replacement: 'refresh'}[st] || 'hard-drive';
+  const st = mb.state, icon = {active: 'hard-drive', spare: 'plus', faulty: 'octagon-x', rebuilding: 'refresh-cw', removed: 'x', replacement: 'refresh-cw'}[st] || 'hard-drive';
   const c = h('span', {class: 'mchip ' + st}, ic(icon, 'sm'), h('span', {class: 'mono'}, mb.name || ('slot ' + mb.slot)), st === 'active' ? null : h('b', {}, T('ms.' + st)));
   const info = [mb.model, mb.serial, mb.size ? fmtBytes(mb.size) : null, T('ms.' + st)].filter(Boolean).join(' - ');
   return tip(c, info);
@@ -5806,9 +5962,9 @@ function arrayCard(a, R) {
   const memOpts = a.members.filter(m => m.device).map(m => ({v: m.device, t: m.device + (m.state !== 'active' ? ' (' + T('ms.' + m.state) + ')' : '')}));
   const items = [
     Object.assign({label: T('act.add_spare'), icon: 'plus', onclick: flow('add-spare', T('act.add_spare') + ' ' + a.name, 'plus', [sel(T('raid.disk'), 'device', free)], v => ({device: v.device}))}, dis(!free.length, T('raid.nofree'))),
-    Object.assign({label: T('act.replace'), icon: 'refresh', onclick: flow('replace', T('act.replace') + ' ' + a.name, 'refresh', [sel(T('raid.old'), 'old', memOpts), sel(T('raid.new'), 'new', free)], v => ({old: v.old, new: v.new}))},
+    Object.assign({label: T('act.replace'), icon: 'refresh-cw', onclick: flow('replace', T('act.replace') + ' ' + a.name, 'refresh-cw', [sel(T('raid.old'), 'old', memOpts), sel(T('raid.new'), 'new', free)], v => ({old: v.old, new: v.new}))},
       dis(a.level === 'raid0' || !free.length, a.level === 'raid0' ? T('raid.noredundancy') : T('raid.nofree'))),
-    Object.assign({label: T('act.grow'), icon: 'arrow-r', onclick: flow('grow', T('act.grow') + ' ' + a.name, 'arrow-r', [{type: 'checks', name: 'add', label: T('raid.disks'), options: free}, {type: 'checkbox', name: 'size_max', label: T('raid.allspace')}], v => ({add: v.add, size_max: v.size_max}))},
+    Object.assign({label: T('act.grow'), icon: 'arrow-right', onclick: flow('grow', T('act.grow') + ' ' + a.name, 'arrow-right', [{type: 'checks', name: 'add', label: T('raid.disks'), options: free}, {type: 'checkbox', name: 'size_max', label: T('raid.allspace')}], v => ({add: v.add, size_max: v.size_max}))},
       dis(!supported, T('raid.cantgrow'))),
     Object.assign({label: T('act.level'), icon: 'layers', onclick: flow('change-level', T('act.level') + ' ' + a.name, 'layers', [sel(T('raid.target'), 'target', {raid1: ['raid5'], raid5: ['raid6'], raid6: ['raid5'], raid0: ['raid5']}[a.level] || []), {type: 'checks', name: 'add', label: T('raid.disks'), options: free}], v => ({target: v.target, add: v.add}))},
       dis(!canLevel, T('raid.cantlevel'))),
@@ -5842,7 +5998,7 @@ function shrVolumeCard(vol, R) {
   const diskOpts = disks.map(d => ({v: '/dev/' + d, t: '/dev/' + d}));
   const wholeDisks = R.candidates.filter(c => c.type === 'disk').map(c => ({v: c.path, t: c.path + '  ' + fmtBytes(c.size)}));
   const addB = h('button', {type: 'button', class: 'btn sm', onclick: () => raidFlow({title: T('shr.add') + ' ' + vol, op: 'shr-add-disk', icon: 'plus', fields: [{type: 'select', name: 'device', label: T('raid.disk'), options: wholeDisks.length ? wholeDisks : [{v: '', t: '-'}]}], build: v => ({volume: vol, device: v.device})})}, ic('plus'), T('shr.add'));
-  const repB = h('button', {type: 'button', class: 'btn sm', onclick: () => raidFlow({title: T('shr.replace') + ' ' + vol, op: 'shr-replace-disk', icon: 'refresh', fields: [{type: 'select', name: 'old', label: T('raid.old'), options: diskOpts}, {type: 'select', name: 'device', label: T('raid.new'), options: wholeDisks.length ? wholeDisks : [{v: '', t: '-'}]}], build: v => ({volume: vol, old: v.old, device: v.device})})}, ic('refresh'), T('shr.replace'));
+  const repB = h('button', {type: 'button', class: 'btn sm', onclick: () => raidFlow({title: T('shr.replace') + ' ' + vol, op: 'shr-replace-disk', icon: 'refresh-cw', fields: [{type: 'select', name: 'old', label: T('raid.old'), options: diskOpts}, {type: 'select', name: 'device', label: T('raid.new'), options: wholeDisks.length ? wholeDisks : [{v: '', t: '-'}]}], build: v => ({volume: vol, old: v.old, device: v.device})})}, ic('refresh-cw'), T('shr.replace'));
   if (busy) { addB.setAttribute('aria-disabled', 'true'); repB.setAttribute('aria-disabled', 'true'); tip(addB, T('raid.busy')); tip(repB, T('raid.busy')); }
   const mode = arrs.some(a => a.level === 'raid6') ? 'Hybrid 2' : 'Hybrid 1';
   return h('section', {class: 'card'}, h('div', {class: 'ch'}, h('h2', {}, ic('database', 'lg'), vol, chip(mode)), h('div', {class: 'row'}, addB, repB)),
@@ -5875,7 +6031,7 @@ function raidWizard(host, R) {
   async function plan() { try { W.plan = await api('POST', '/api/raid/plan', body()); W.perr = ''; } catch (e) { W.plan = null; W.perr = e.message; } draw(); }
   function stepsBar() { return h('div', {class: 'steps', role: 'list'}, [T('wiz.disks'), T('wiz.level'), T('wiz.review')].map((l, i) => h('div', {role: 'listitem', class: i + 1 === W.step ? 'cur' : i + 1 < W.step ? 'done' : '', 'aria-current': i + 1 === W.step ? 'step' : null}, h('i', {}, i + 1 < W.step ? '✓' : String(i + 1)), h('span', {}, l)))); }
   function nav(canNext, onNext, label) {
-    return h('div', {class: 'row'}, W.step > 1 ? btn(T('btn.back'), {icon: 'arrow-l', onclick: () => { W.step--; draw(); }}) : null, btn(T('btn.cancel'), {onclick: () => { host.hidden = !!R.arrays.length; W.step = 1; W.devs.clear(); draw(); }}),
+    return h('div', {class: 'row'}, W.step > 1 ? btn(T('btn.back'), {icon: 'arrow-left', onclick: () => { W.step--; draw(); }}) : null, btn(T('btn.cancel'), {onclick: () => { host.hidden = !!R.arrays.length; W.step = 1; W.devs.clear(); draw(); }}),
       btn(label || T('btn.next'), {kind: 'primary', disabled: !canNext, onclick: onNext || (() => { W.step++; if (W.step === 3) plan(); else draw(); })}));
   }
   function draw() {
@@ -5907,7 +6063,7 @@ function raidWizard(host, R) {
         stage.replaceChildren(banner(r.ok === false ? 'err' : 'ok', r.ok === false ? T('raid.failed') : T('raid.done'), ''), logView(r.results || []), btn(T('btn.close'), {kind: 'primary', onclick: () => show('raid')}));
       }));
       c = [h('div', {class: 'grid2'}, field(T('raid.name'), nm), isShr() || W.vol ? field(T('raid.fs'), fs) : h('div')), vol,
-        W.plan ? pv.node : (W.perr ? banner('err', W.perr, '') : null), h('div', {class: 'row'}, btn(T('btn.back'), {icon: 'arrow-l', onclick: () => { W.step--; draw(); }}), btn(T('btn.cancel'), {onclick: () => { host.hidden = !!R.arrays.length; W.step = 1; W.devs.clear(); draw(); }}), go)];
+        W.plan ? pv.node : (W.perr ? banner('err', W.perr, '') : null), h('div', {class: 'row'}, btn(T('btn.back'), {icon: 'arrow-left', onclick: () => { W.step--; draw(); }}), btn(T('btn.cancel'), {onclick: () => { host.hidden = !!R.arrays.length; W.step = 1; W.devs.clear(); draw(); }}), go)];
       setTimeout(upd);
     }
     stage.replaceChildren(stepsBar(), ...[c].flat(Infinity).filter(Boolean));
@@ -5921,26 +6077,31 @@ function raidWizard(host, R) {
   draw();
 }
 /* ---------- Help centre ---------- */
+/*PAGE:help*/
 PAGES.help = async () => {
-  let cur = HELP[0].id, q = '';
-  const list = h('ul', {class: 'toc', role: 'list'}), doc = h('article', {class: 'card'}), root = h('div', {});
+  let cur = null, q = '';
+  const root = h('div', {}), area = h('div', {});
   const search = h('input', {type: 'search', placeholder: T('help.search'), 'aria-label': T('help.search'), autocomplete: 'off', oninput: () => { q = search.value.toLowerCase(); draw(); }});
   function draw() {
+    if (cur) {
+      const t = HELP.find(x => x.id === cur);
+      area.replaceChildren(h('article', {class: 'card'}, h('div', {class: 'cb'}, btn(T('help.back'), {kind: 'ghost', icon: 'arrow-left', onclick: () => { cur = null; draw(); }}), h('h2', {}, t.title), t.body.split('\n\n').map(p => h('p', {}, p)))));
+      return;
+    }
     const hits = HELP.filter(t => !q || (t.title + ' ' + t.body + ' ' + (t.keywords || '')).toLowerCase().includes(q));
-    list.replaceChildren(...hits.map(t => h('li', {}, h('button', {type: 'button', class: 'tocb', 'aria-current': t.id === cur ? 'true' : null, onclick: () => { cur = t.id; draw(); }}, t.title))));
-    const t = HELP.find(x => x.id === cur) || hits[0];
-    doc.replaceChildren(t ? h('div', {class: 'cb'}, h('h2', {}, t.title), t.body.split('\n\n').map(p => h('p', {}, p))) : h('div', {class: 'empty'}, ic('info'), T('help.none')));
+    area.replaceChildren(hits.length ? h('ul', {class: 'toc', role: 'list'}, hits.map(t => h('li', {}, h('button', {type: 'button', class: 'tocb', onclick: () => { cur = t.id; draw(); }}, t.title)))) : h('div', {class: 'empty'}, ic('info'), T('help.none')));
   }
   draw();
-  root.append(h('div', {class: 'ph'}, h('h1', {}, T('help.title'))), h('div', {class: 'cols helpcols'}, h('div', {}, search, list), doc));
+  root.append(h('div', {class: 'ph'}, h('h1', {}, T('help.title')), h('a', {class: 'btn', href: LINKS.docs, target: '_blank', rel: 'noopener noreferrer'}, ic('external-link'), T('help.docs'))), h('div', {class: 'helpsearch'}, search), area);
   return root;
 };
+/*ENDPAGE*/
 /* ---------- boot ---------- */
 showLogin().then(async () => { try { await start(); } catch (e) { /* not signed in */ } });
 </script></body></html>
 """
 
-INDEX_HTML = _UI_TEMPLATE.replace("/*__COPY__*/null", json.dumps(COPY, separators=(",", ":")).replace("</", "<\\/")).replace("/*__HELP__*/null", json.dumps(HELP_TOPICS, separators=(",", ":")).replace("</", "<\\/")).replace("/*__TOKENS__*/", theme_css()).replace("<!--__SPRITE__-->", _ICON_SPRITE)
+INDEX_HTML = _UI_TEMPLATE.replace("/*__COPY__*/null", json.dumps(COPY, separators=(",", ":")).replace("</", "<\\/")).replace("/*__HELP__*/null", json.dumps(HELP_TOPICS, separators=(",", ":")).replace("</", "<\\/")).replace("/*__TOKENS__*/", theme_css()).replace("<!--__SPRITE__-->", _ICON_SPRITE).replace("/*__FONTS__*/", _font_css()).replace("__FAVICON__", _FAVICON_B64).replace("/*__LIC__*/null", json.dumps(_LICENSES).replace("</", "<\\/"))
 
 
 if __name__ == "__main__":

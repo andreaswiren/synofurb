@@ -13,6 +13,7 @@ pub const AFTER_HELP: &str = "\
 EXIT CODES
   0 ok   1 error   2 usage   3 refused by the safety gate   4 plan has errors   5 unsupported hardware
   6 install failed AFTER the point of no return (disks changed)   7 install failed/cancelled BEFORE it (disks untouched)
+  8 `manage health`: the unit reports WARN   9 `manage health`: the unit reports CRIT
 
 EXAMPLES
   synofurb-cli scan                                   find units on the LAN
@@ -21,6 +22,8 @@ EXAMPLES
   synofurb-cli plan --host 192.168.1.20 --mode keep   what would be kept and what destroyed
   synofurb-cli wizard                                 guided, step by step, in the terminal
   synofurb-cli install --host 192.168.1.20 --dry-run  render everything, touch nothing
+  synofurb-cli manage health --host 192.168.1.20      health of an installed unit (exit 8 warn, 9 crit)
+  synofurb-cli manage update --host 192.168.1.20      update the web UI on the unit (rolls back by itself on failure)
   synofurb-cli completions bash > /etc/bash_completion.d/synofurb-cli
 
 Docs: docs/CLI.md in the repository. Reinstalling repartitions the disks: make a verified backup first.";
@@ -114,6 +117,11 @@ pub enum Cmd {
     BackupDom(BackupDomArgs),
     /// Back up the partition tables (first and last MiB) of the unit's disks to this computer
     DiskBackup(DiskBackupArgs),
+    /// Day two: health and updates of the web management UI on a converted unit (health, version, update, rollback, open)
+    Manage {
+        #[command(subcommand)]
+        action: ManageCmd,
+    },
     /// Look at the log files of earlier runs
     Logs {
         #[command(subcommand)]
@@ -608,6 +616,60 @@ pub enum BootManagerCmd {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum ManageCmd {
+    /// Health of the unit as its management plane reports it: arrays, disks, volumes, services, pending updates. Exit 0 ok, 8 warn, 9 crit
+    #[command(
+        after_help = "EXAMPLES\n  synofurb-cli manage health --host 192.168.1.20\n  synofurb-cli manage health --host nas.lan --user nasadmin --key ~/.ssh/id_ed25519 --json\n  SYNOFURB_PASSWORD=... synofurb-cli --log-format json manage health --host 192.168.1.20\n\nExit codes: 0 ok, 8 warn, 9 crit, 1 the unit could not be asked (not installed, too old, unreachable)."
+    )]
+    Health {
+        #[command(flatten)]
+        conn: Conn,
+        /// one JSON document: the unit's report plus the derived summary
+        #[arg(long)]
+        json: bool,
+    },
+    /// Version of the management plane on the unit compared with the one shipped in this program (read-only)
+    #[command(
+        after_help = "EXAMPLES\n  synofurb-cli manage version --host 192.168.1.20\n  synofurb-cli manage version --host 192.168.1.20 --json"
+    )]
+    Version {
+        #[command(flatten)]
+        conn: Conn,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update the management plane on the unit: upload, verify, swap, restart the web UI, check. The unit rolls back by itself on failure
+    #[command(
+        after_help = "Restarts the web UI for a few seconds. Disks, arrays, shares and the boot flash are not touched.\n\nEXAMPLES\n  synofurb-cli manage update --host 192.168.1.20\n  synofurb-cli manage update --host 192.168.1.20 --dry-run          # only say what would happen\n  synofurb-cli manage update --host 192.168.1.20 --yes              # no question\n  synofurb-cli manage update --host 10.0.0.5 --from-bundle /srv/bundle/mgmt   # an offline copy\n  synofurb-cli manage update --host 192.168.1.20 --force            # reinstall, or go back to an older version"
+    )]
+    Update {
+        #[command(flatten)]
+        conn: Conn,
+        /// take the management plane from this folder instead of the copy built into this program: the files themselves, or an
+        /// offline bundle / release folder that has them in `mgmt/` (a MANIFEST.sha256 in it is checked)
+        #[arg(long, value_name = "DIR")]
+        from_bundle: Option<PathBuf>,
+        /// reinstall identical files, or install an older version than the unit has
+        #[arg(long)]
+        force: bool,
+        /// connect and say what would happen, change nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Go back to the management plane version the unit had before its last update
+    Rollback {
+        #[command(flatten)]
+        conn: Conn,
+    },
+    /// Print the address of the unit's web UI (https://<address>:8443); no connection is made
+    Open {
+        /// IP address or name of the NAS
+        #[arg(long, value_name = "ADDRESS")]
+        host: String,
+    },
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct BackupDomArgs {
     #[command(flatten)]
@@ -782,6 +844,7 @@ mod tests {
             "recover",
             "backup-dom",
             "disk-backup",
+            "manage",
             "logs",
             "bundle",
             "fetch-installer",
@@ -1063,6 +1126,44 @@ mod tests {
         let Cmd::Compat(c) = ok(&["compat", "DS923+", "--json", "--refresh"]).cmd else { panic!() };
         assert_eq!((c.model.as_deref(), c.json, c.refresh), (Some("DS923+"), true, true));
         assert!(err(&["compat", "--status", "verified"]).contains("--list"));
+    }
+
+    #[test]
+    fn manage_commands() {
+        let Cmd::Manage { action: ManageCmd::Health { conn, json } } =
+            ok(&["manage", "health", "--host", "10.0.0.2", "--user", "root", "--port", "2222", "--key", "k", "--json"]).cmd
+        else {
+            panic!()
+        };
+        assert_eq!((conn.host.as_str(), conn.ssh.port, conn.ssh.user.as_str(), json), ("10.0.0.2", 2222, "root", true));
+        assert!(err(&["manage", "health"]).contains("--host"));
+        assert!(matches!(
+            ok(&["manage", "version", "--host", "h", "--json"]).cmd,
+            Cmd::Manage { action: ManageCmd::Version { json: true, .. } }
+        ));
+        let Cmd::Manage { action: ManageCmd::Update { from_bundle, force, dry_run, .. } } =
+            ok(&["manage", "update", "--host", "h", "--from-bundle", "/b", "--force", "--dry-run"]).cmd
+        else {
+            panic!()
+        };
+        assert_eq!((from_bundle.as_deref(), force, dry_run), (Some(std::path::Path::new("/b")), true, true));
+        let Cmd::Manage { action: ManageCmd::Update { from_bundle, force, dry_run, .. } } = ok(&["manage", "update", "--host", "h"]).cmd
+        else {
+            panic!()
+        };
+        assert_eq!((from_bundle, force, dry_run), (None, false, false), "an update never forces or skips the question by default");
+        // --yes is the global flag, accepted after the subcommand
+        let c = ok(&["manage", "update", "--host", "h", "--yes", "--log-format", "json"]);
+        assert!(c.global.yes && c.global.log_format == Some(LogFormat::Json));
+        assert!(matches!(ok(&["manage", "rollback", "--host", "h"]).cmd, Cmd::Manage { action: ManageCmd::Rollback { .. } }));
+        let Cmd::Manage { action: ManageCmd::Open { host } } = ok(&["manage", "open", "--host", "nas.lan"]).cmd else { panic!() };
+        assert_eq!(host, "nas.lan");
+        assert!(err(&["manage", "open"]).contains("--host"));
+        assert!(err(&["manage"]).contains("Usage") || err(&["manage"]).contains("subcommand"));
+        // passwords never travel on argv here either
+        for flag in ["--password", "--ssh-password", "--sudo-password"] {
+            assert!(err(&["manage", "health", "--host", "h", flag, "x"]).contains("unexpected argument"), "{flag}");
+        }
     }
 
     #[test]

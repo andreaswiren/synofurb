@@ -1091,7 +1091,7 @@ class CopyBudgetTests(unittest.TestCase):
 
     def test_ui_has_raid_and_help_pages_and_accessible_widgets(self):
         html = m.INDEX_HTML
-        for needle in ("PAGES.raid", "PAGES.help", "['raid', 'RAID', 'layers']", "role: 'tooltip'", "role: 'menu'", "'aria-haspopup': 'menu'", "role: 'menuitem'", "ArrowDown",
+        for needle in ("PAGES.raid", "PAGES.help", "['raid', 'layers']", "role: 'tooltip'", "role: 'menu'", "'aria-haspopup': 'menu'", "role: 'menuitem'", "ArrowDown",
                        "scrollbar-width:thin", "::-webkit-scrollbar-thumb", "function shrSlices", "Open RAID"):
             self.assertIn(needle, html)
         self.assertNotIn("show('storage')", html.split("PAGES.dashboard", 1)[1].split("/* ---------- Storage", 1)[0])    # the dashboard badge links to RAID now

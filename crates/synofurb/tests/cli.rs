@@ -92,6 +92,7 @@ fn help_lists_every_command_and_exits_zero() {
         "recover",
         "backup-dom",
         "disk-backup",
+        "manage",
         "logs",
         "bundle",
         "fetch-installer",
@@ -760,4 +761,123 @@ fn colour_is_off_when_not_a_terminal_and_no_color_is_respected() {
     }
     let r = s.run(&["plan", "--facts", "demo", "--mode", "keep", "--keep", "md99"]);
     assert!(!r.stderr.contains('\x1b'), "errors are plain without a terminal");
+}
+
+// ---------------------------------------------------------------------------------------------- manage (no unit needed)
+//
+// The parts of `manage` that talk to a unit are covered by the engine's tests (scripted unit, and the repository's real
+// synofurb_mgmt.py) and by tests/cli/smoke.sh (a real sshd in front of that script). Here: everything that is decided before or
+// without a connection.
+
+fn write_mgmt_dir(dir: &std::path::Path, version: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("synofurb_mgmt.py"), "#!/usr/bin/env python3\nprint('x')\n").unwrap();
+    std::fs::write(dir.join("VERSION"), format!("{version}\n")).unwrap();
+    std::fs::write(dir.join("README.md"), "# x\n").unwrap();
+}
+
+#[test]
+fn manage_open_prints_the_web_ui_address() {
+    let s = Sandbox::new("manage-open");
+    let r = s.run(&["manage", "open", "--host", "192.168.1.20"]);
+    assert_eq!((r.code, r.stdout.trim()), (0, "https://192.168.1.20:8443"), "{}", r.stderr);
+    assert_eq!(s.run(&["manage", "open", "--host", "fe80::1"]).stdout.trim(), "https://[fe80::1]:8443");
+    // stdout carries data only: the self-signed-certificate hint is on stderr
+    assert!(r.stderr.contains("self-signed") && !r.stdout.contains("self-signed"));
+    assert_eq!(s.run(&["manage", "open", "--host", "a b"]).code, 2);
+    assert_eq!(s.run(&["manage", "open"]).code, 2);
+    let r = s.run(&["--log-format", "json", "manage", "open", "--host", "nas.lan"]);
+    let ev: Vec<Value> = r.stdout.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!((ev[0]["event"].as_str(), ev[0]["command"].as_str()), (Some("start"), Some("manage open")));
+    let last = ev.last().unwrap();
+    assert_eq!(
+        (last["event"].as_str(), last["ok"].as_bool(), last["data"]["url"].as_str()),
+        (Some("result"), Some(true), Some("https://nas.lan:8443"))
+    );
+}
+
+#[test]
+fn manage_needs_a_host_and_never_takes_a_password_on_the_command_line() {
+    let s = Sandbox::new("manage-usage");
+    for sub in ["health", "version", "update", "rollback"] {
+        let r = s.run(&["manage", sub]);
+        assert_eq!(r.code, 2, "{sub}: {}", r.stderr);
+        assert!(r.stderr.contains("--host"), "{sub}: {}", r.stderr);
+        let r = s.run(&["manage", sub, "--host", "h", "--password", "hunter2"]);
+        assert_eq!(r.code, 2, "{sub}");
+        assert!(r.stderr.contains("unexpected argument") && !r.stderr.contains("hunter2 "), "{sub}: {}", r.stderr);
+        // there is no terminal to ask for a password on
+        let r = s.run(&["manage", sub, "--host", "127.0.0.1", "--port", "1"]);
+        assert_eq!(r.code, 2, "{sub}: {}", r.stderr);
+        assert!(r.stderr.contains("SYNOFURB_PASSWORD"), "{sub}: {}", r.stderr);
+    }
+    assert_eq!(s.run(&["manage"]).code, 2);
+    assert_eq!(s.run(&["manage", "frobnicate"]).code, 2);
+}
+
+#[test]
+fn manage_commands_fail_cleanly_when_the_unit_is_unreachable() {
+    let s = Sandbox::new("manage-down");
+    for sub in ["health", "version", "update --yes", "rollback --yes"] {
+        let mut a = vec!["manage"];
+        a.extend(sub.split(' '));
+        a.extend(["--host", "127.0.0.1", "--port", "1"]);
+        let r = s.run_env(&a, &[("SYNOFURB_PASSWORD", "hunter2-secret")]);
+        assert_eq!(r.code, 1, "{sub}: {}{}", r.stdout, r.stderr);
+        assert!(r.stderr.contains("error:"), "{sub}: {}", r.stderr);
+        assert!(!r.stdout.contains("hunter2-secret") && !r.stderr.contains("hunter2-secret"), "{sub}: the password was printed");
+    }
+    // NDJSON: start (where the command has one) and a failure event with exit code 1
+    let r = s.run_env(&["--log-format", "json", "manage", "health", "--host", "127.0.0.1", "--port", "1"], &[("SYNOFURB_PASSWORD", "x")]);
+    let last: Value = serde_json::from_str(r.stdout.lines().last().unwrap()).unwrap();
+    assert_eq!((last["event"].as_str(), last["exit_code"].as_u64(), last["kind"].as_str()), (Some("failure"), Some(1), Some("error")));
+}
+
+#[test]
+fn manage_update_checks_its_bundle_before_connecting() {
+    let s = Sandbox::new("manage-bundle");
+    let env = [("SYNOFURB_PASSWORD", "x")];
+    // not there / not a management plane folder: a usage error, no connection attempt (port 1 would give exit 1)
+    for dir in [s.path("nope"), s.dir.clone()] {
+        let r = s.run_env(&["manage", "update", "--host", "127.0.0.1", "--port", "1", "--from-bundle", dir.to_str().unwrap()], &env);
+        assert_eq!(r.code, 2, "{}", r.stderr);
+        assert!(r.stderr.contains("--from-bundle"), "{}", r.stderr);
+    }
+    // a folder with a manifest that does not match its files
+    let bad = s.path("bad");
+    write_mgmt_dir(&bad, "9.9.9");
+    std::fs::write(
+        bad.join("MANIFEST.sha256"),
+        format!("{}  synofurb_mgmt.py\n{}  VERSION\n{}  README.md\n", "0".repeat(64), "0".repeat(64), "0".repeat(64)),
+    )
+    .unwrap();
+    let r = s.run_env(&["manage", "update", "--host", "127.0.0.1", "--port", "1", "--from-bundle", bad.to_str().unwrap()], &env);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("different checksum"), "{}", r.stderr);
+    // a good folder (also inside an offline bundle's mgmt/) gets past the check and fails on the connection instead
+    let good = s.path("good/mgmt");
+    write_mgmt_dir(&good, "9.9.9");
+    for dir in [good.clone(), good.parent().unwrap().to_path_buf()] {
+        let r = s.run_env(&["manage", "update", "--host", "127.0.0.1", "--port", "1", "--from-bundle", dir.to_str().unwrap()], &env);
+        assert_eq!(r.code, 1, "{}", r.stderr);
+    }
+}
+
+#[test]
+fn manage_is_documented_and_completed() {
+    let s = Sandbox::new("manage-help");
+    let h = s.run(&["manage", "--help"]);
+    assert_eq!(h.code, 0);
+    for c in ["health", "version", "update", "rollback", "open"] {
+        assert!(h.stdout.contains(c), "manage --help lacks {c}");
+    }
+    let u = s.run(&["manage", "update", "--help"]);
+    for f in ["--from-bundle", "--force", "--dry-run", "--yes", "EXAMPLES"] {
+        assert!(u.stdout.contains(f), "manage update --help lacks {f}");
+    }
+    assert!(s.run(&["--help"]).stdout.contains("8 `manage health`"), "the exit codes 8 and 9 are in the top-level help");
+    for shell in ["bash", "zsh", "fish", "powershell"] {
+        let c = s.run(&["completions", shell]).stdout;
+        assert!(c.contains("manage") && c.contains("rollback") && c.contains("from-bundle"), "{shell}");
+    }
 }

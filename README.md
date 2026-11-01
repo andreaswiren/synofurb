@@ -54,6 +54,7 @@ synofurb install --host IP ... --dry-run [--out DIR]          # render the stage
 synofurb install --host IP ... --have-backup --accept-data-loss --confirm "ERASE <MODEL>"   # DESTROYS DATA; all three are always required
 synofurb boot-manager install|enter|status --host IP          # remote-controllable boot environment
 synofurb recover --host IP                                    # make the unit boot DSM again
+synofurb manage health|version|update|rollback|open --host IP # day two: health and web-UI updates of a converted unit (docs/MANAGE.md)
 synofurb backup-dom|disk-backup --host IP                     # boot flash image / partition-table backup, nothing else
 synofurb logs list|show [N]|path   synofurb config show|paths   synofurb fetch-installer ARCH
 synofurb bundle create --arch amd64 --out DIR                 # offline bundle: amd64 ~440 MiB (+ ~470 MiB installer firmware shared by all architectures)
@@ -61,7 +62,7 @@ synofurb bundle verify|info DIR   synofurb install --host IP --source offline --
 synofurb self-update [--check]   synofurb completions bash|zsh|fish|powershell   synofurb version [--json]
 ```
 Machine-friendly: `--log-format json` (NDJSON events), `--json` documents, stable exit codes (0 ok, 2 usage, 3 refused by the safety gate, 4 plan errors,
-5 unsupported hardware, 6/7 install failed after/before the point of no return), no colour with `NO_COLOR`. Passwords never go on the command line.
+5 unsupported hardware, 6/7 install failed after/before the point of no return, 8/9 `manage health` warn/crit), no colour with `NO_COLOR`. Passwords never go on the command line.
 
 ## The resulting system
 
@@ -77,7 +78,7 @@ Machine-friendly: `--log-format json` (NDJSON events), `--json` documents, stabl
 | SSH | enabled; key login preferred (generated or yours), password login allowed |
 | Network | systemd-networkd: DHCPv4 + DHCPv6 + **SLAAC**, mDNS `<host>.local` |
 | Consoles | serial on the port DSM used (incl. AMD `uart8250,mmio32,...`) **and** on any USB serial adapter when plugged in; VGA/HDMI, USB keyboard and mouse |
-| Management plane | `https://<ip>:8443`: status, users, network (safe apply with auto-rollback), volumes, mounts, imported DSM volumes, boot manager. Its own project: [apps/mgmt-plane](apps/mgmt-plane/README.md) |
+| Management plane | `https://<ip>:8443`: status, users, network (safe apply with auto-rollback), volumes, mounts, imported DSM volumes, boot manager. Its own project: [apps/mgmt-plane](apps/mgmt-plane/README.md). The app and `synofurb-cli manage ...` check its health and update it over SSH, with rollback ([docs/MANAGE.md](docs/MANAGE.md)) |
 
 ## If it fails
 
@@ -102,7 +103,7 @@ and a refresh from this repository keep it current ([docs/COMPAT.md](docs/COMPAT
 
 | Path | What |
 |---|---|
-| `crates/synofurb-core` | engine: discovery, inspection, planner, installer script generator, boot-flash/agent orchestration, updater, compatibility lookup |
+| `crates/synofurb-core` | engine: discovery, inspection, planner, installer script generator, boot-flash/agent orchestration, updater, compatibility lookup, health and web-UI updates of converted units (`manage`) |
 | `crates/synofurb` | the desktop app (GPUI Kit UI in `src/ui`) and the CLI |
 | `apps/mgmt-plane` | the NAS web UI (Python 3, standard library only), versioned separately |
 | `boot/dom` | `synofurb-dom`: safe boot-menu manager for the internal boot flash (POSIX sh, with tests) |
@@ -127,6 +128,7 @@ Done for real in the development sandbox (no Synology available):
   `rustfmt`, `shellcheck`, `actionlint` clean.
 * The generated partition commands run with real `parted` on a loop device laid out like DSM (a preserved partition stayed identical).
 * The SSH layer against a real `sshd`; the inspection script on a real Linux host.
+* `manage` (health and web-UI updates of a converted unit): the engine with a scripted unit and with the repository's real `synofurb_mgmt.py` (`--root` sandbox), and the CLI over a real `sshd` ([docs/MANAGE.md](docs/MANAGE.md#what-is-verified)).
 * A real `debootstrap` of trixie and the real `chroot-setup.sh` (packages on amd64/arm64/armhf, users, SSH config, network, serial, initramfs content, password hash against glibc `crypt()`).
 * Live download of the Debian installer with the Release -> SHA256SUMS -> file hash chain.
 * `synofurb-dom` and the boot agent against **synthetic** boot-flash images and (agent) QEMU: see [boot/dom](boot/dom/README.md) and [boot/agent](boot/agent/README.md).
@@ -135,7 +137,7 @@ Done for real in the development sandbox (no Synology available):
 
 **Not verified:**
 
-* Any run on a real Synology; `kexec` on a DSM kernel; the Debian installer's behaviour with the generated preseed on real hardware.
+* Any run on a real Synology; `kexec` on a DSM kernel; the Debian installer's behaviour with the generated preseed on real hardware. `manage update` with a live `synofurb-mgmt.service` under real systemd (the sandbox has none; the failure and rollback path is what ran).
 * md RAID, LVM and `mkfs` steps and `grub-install` to real disks (the sandbox kernel has no md/dm). This includes the SHR-like data layout: its slice algorithm, partitioning (real `parted` on loop devices) and generated commands are tested, the `mdadm`/`pvcreate`/`vgcreate` calls are not ([docs/RAID.md](docs/RAID.md#implementation-and-verification)).
 * Windows and macOS builds, MSI/NSIS/DMG packaging, signing and notarisation, the release workflow on GitHub, the updater against a real release.
 * Screen-reader behaviour of the native app; real users (the test plan is in `design/mockups/ux/RECOMMENDATION.md`).

@@ -1,6 +1,5 @@
 use super::*;
 use crate::remote::mock::MockShell;
-use std::collections::VecDeque;
 
 // ---------------------------------------------------------------------------------------------- fixtures
 
@@ -52,7 +51,10 @@ fn a_healthy_report_parses_completely() {
     assert_eq!(h.os, "Debian GNU/Linux 13 (trixie)");
     assert_eq!(h.root_fs.used_pct, Some(23.0));
     assert_eq!((h.arrays.len(), h.arrays[0].name.as_str(), h.arrays[0].sync_pct, h.arrays[0].sync_action.as_str()), (1, "md2", None, ""));
-    assert_eq!((h.disks.len(), h.disks[0].smart, h.disks[0].temp_c, h.disks[0].size), (2, Smart::Passed, Some(34.0), Some(4_000_787_030_016)));
+    assert_eq!(
+        (h.disks.len(), h.disks[0].smart, h.disks[0].temp_c, h.disks[0].size),
+        (2, Smart::Passed, Some(34.0), Some(4_000_787_030_016))
+    );
     assert_eq!((h.volumes[0].mount.as_str(), h.volumes[0].used_pct, h.volumes[0].fstype.as_str()), ("/srv/data", Some(41.0), "ext4"));
     assert_eq!(h.services.len(), 2);
     assert_eq!((h.boot.default.as_str(), h.boot.flash_present), ("", Some(false)));
@@ -117,7 +119,15 @@ fn nulls_wrong_types_and_unknown_fields_are_tolerated() {
 
 #[test]
 fn verdict_words_and_future_schemas_are_handled() {
-    for (w, want) in [("ok", Overall::Ok), ("OK", Overall::Ok), ("warn", Overall::Warn), ("warning", Overall::Warn), ("crit", Overall::Crit), ("critical", Overall::Crit), ("banana", Overall::Unknown)] {
+    for (w, want) in [
+        ("ok", Overall::Ok),
+        ("OK", Overall::Ok),
+        ("warn", Overall::Warn),
+        ("warning", Overall::Warn),
+        ("crit", Overall::Crit),
+        ("critical", Overall::Crit),
+        ("banana", Overall::Unknown),
+    ] {
         assert_eq!(Overall::parse(w), want, "{w}");
     }
     assert!(Overall::Crit > Overall::Warn && Overall::Warn > Overall::Ok && Overall::Ok > Overall::Unknown);
@@ -143,12 +153,20 @@ fn health_results_are_classified() {
     // a non-zero exit with a valid document still counts (a future "exit 1 on warn")
     assert_eq!(interpret_health_result(&r(1, HEALTHY, "")).unwrap().version, "0.4.0");
     assert!(matches!(
-        interpret_health_result(&r(2, "", "python3: can't open file '/opt/synofurb-mgmt/synofurb_mgmt.py': [Errno 2] No such file or directory")),
+        interpret_health_result(&r(
+            2,
+            "",
+            "python3: can't open file '/opt/synofurb-mgmt/synofurb_mgmt.py': [Errno 2] No such file or directory"
+        )),
         Err(ManageError::NotInstalled)
     ));
     assert!(matches!(interpret_health_result(&r(127, "", "sh: 1: python3: not found")), Err(ManageError::Command { code: 127, .. })));
     assert!(matches!(
-        interpret_health_result(&r(2, "", "usage: synofurb_mgmt.py [-h] ...\nsynofurb_mgmt.py: error: unrecognized arguments: health --json")),
+        interpret_health_result(&r(
+            2,
+            "",
+            "usage: synofurb_mgmt.py [-h] ...\nsynofurb_mgmt.py: error: unrecognized arguments: health --json"
+        )),
         Err(ManageError::HealthUnsupported { .. })
     ));
     assert!(matches!(
@@ -179,11 +197,12 @@ fn fetch_health_with_the_mock_shell_runs_privileged_and_without_secrets() {
     m.push_ok(HEALTHY);
     fetch_health(&mut Privileged { sh: &mut m, is_root: true, sudo_password: None }).unwrap();
     assert_eq!(m.commands[0], format!("python3 {MGMT_SCRIPT} health --json"));
-    // not root and no password: a transport-class error, not a bogus "not installed"
+    // not root and no password: the unprivileged part of the report, never a failure about sudo
     let mut m = MockShell::default();
-    let e = fetch_health(&mut Privileged { sh: &mut m, is_root: false, sudo_password: None }).unwrap_err();
-    assert!(matches!(e, ManageError::Transport(_)), "{e}");
-    assert!(m.commands.is_empty());
+    m.push_ok(HEALTHY);
+    fetch_health(&mut Privileged { sh: &mut m, is_root: false, sudo_password: None }).unwrap();
+    assert_eq!(m.commands[0], format!("python3 {MGMT_SCRIPT} health --json"));
+    assert_eq!(m.stdins[0], None);
 }
 
 // ---------------------------------------------------------------------------------------------- summary
@@ -213,7 +232,10 @@ fn a_failed_smart_check_is_critical_and_a_hot_disk_follows_the_nas_thresholds() 
     // 62 C is a warning, 71 C on a disk whose SMART passed is critical
     let hot = health(r#"{"schema":1,"version":"1","overall":"ok","disks":[{"dev":"/dev/sda","smart":"passed","temp_c":62},{"dev":"/dev/sdb","smart":"passed","temp_c":71}]}"#).summary();
     assert_eq!(hot.overall, Overall::Crit);
-    assert_eq!(hot.bullets.iter().map(|b| (b.level, b.text.as_str())).collect::<Vec<_>>(), vec![(Overall::Crit, "sdb is hot (71 °C)."), (Overall::Warn, "sda is hot (62 °C).")]);
+    assert_eq!(
+        hot.bullets.iter().map(|b| (b.level, b.text.as_str())).collect::<Vec<_>>(),
+        vec![(Overall::Crit, "sdb is hot (71 °C)."), (Overall::Warn, "sda is hot (62 °C).")]
+    );
 }
 
 #[test]
@@ -221,7 +243,9 @@ fn services_that_are_down_are_counted_and_grouped() {
     let s = health(SERVICES_DOWN).summary();
     assert_eq!((s.overall, s.services_down, s.problems), (Overall::Warn, 4, 1));
     assert_eq!(s.bullets[0].text, "4 services are not running: ssh, smbd, nfs and 1 more.");
-    let one = health(r#"{"schema":1,"version":"1","overall":"warn","services":[{"name":"ssh","active":false},{"name":"x","active":true}]}"#).summary();
+    let one =
+        health(r#"{"schema":1,"version":"1","overall":"warn","services":[{"name":"ssh","active":false},{"name":"x","active":true}]}"#)
+            .summary();
     assert_eq!((one.services_down, one.bullets[0].text.as_str()), (1, "Service ssh is not running."));
 }
 
@@ -240,14 +264,18 @@ fn the_derived_verdict_can_raise_but_never_lower_the_nas_verdict() {
     assert_eq!(s.bullets.len(), 1);
     assert!(s.bullets[0].text.contains("crit"));
     // 85 % is a warning, 84 % nothing; the system disk is named
-    let s = health(r#"{"schema":1,"version":"1","overall":"ok","root_fs":{"used_pct":85},"volumes":[{"mount":"/mnt/a","used_pct":84}]}"#).summary();
+    let s = health(r#"{"schema":1,"version":"1","overall":"ok","root_fs":{"used_pct":85},"volumes":[{"mount":"/mnt/a","used_pct":84}]}"#)
+        .summary();
     assert_eq!((s.overall, s.bullets.len(), s.bullets[0].text.as_str()), (Overall::Warn, 1, "The system disk is 85% full."));
     // an unknown verdict word is surfaced, not trusted
     let s = health(r#"{"schema":1,"version":"1","overall":"purple"}"#).summary();
     assert_eq!((s.overall, s.reported), (Overall::Warn, Overall::Unknown));
     // security updates warn, ordinary ones only count
     let s = health(r#"{"schema":1,"version":"1","overall":"ok","updates":{"apt_pending":12,"security_pending":3}}"#).summary();
-    assert_eq!((s.overall, s.security_updates, s.pending_updates, s.bullets[0].text.as_str()), (Overall::Warn, 3, 12, "3 security updates are waiting."));
+    assert_eq!(
+        (s.overall, s.security_updates, s.pending_updates, s.bullets[0].text.as_str()),
+        (Overall::Warn, 3, 12, "3 security updates are waiting.")
+    );
     // a scheduled check is not a problem the numbers show; the NAS flagged it, so its sentence appears
     let s = health(r#"{"schema":1,"version":"1","overall":"warn","warnings":["md0 check 12.0%"],"arrays":[{"name":"md0","state":"resyncing","degraded":false,"sync_pct":12.0,"sync_action":"check"}]}"#).summary();
     assert_eq!((s.overall, s.rebuilding_arrays, s.bullets[0].text.as_str()), (Overall::Warn, 0, "md0 check 12.0%"));
@@ -351,7 +379,10 @@ fn the_embedded_management_plane_is_complete_and_consistent() {
     }
     // the script's built-in default is what a unit without a VERSION file reports; it must not drift from VERSION
     let script = std::str::from_utf8(&b.files.iter().find(|f| f.name == "synofurb_mgmt.py").unwrap().data).unwrap().to_string();
-    assert!(script.contains(&format!("DEFAULT_VERSION = \"{}\"", b.version)), "DEFAULT_VERSION in synofurb_mgmt.py differs from apps/mgmt-plane/VERSION");
+    assert!(
+        script.contains(&format!("DEFAULT_VERSION = \"{}\"", b.version)),
+        "DEFAULT_VERSION in synofurb_mgmt.py differs from apps/mgmt-plane/VERSION"
+    );
     assert!(b.files.iter().find(|f| f.name == "synofurb_mgmt.py").unwrap().executable);
     // the NAS-side contract: every name matches [A-Za-z0-9._-]{1,64}, only the files its updater accepts
     for f in &b.files {
@@ -416,7 +447,9 @@ impl Drop for TmpDir {
 }
 
 fn write_bundle(dir: &Path, version: &str, with_manifest: bool) {
-    for (n, c) in [("synofurb_mgmt.py", "#!/usr/bin/env python3\nprint('hi')\n"), ("README.md", "# readme\n"), ("synofurb-mgmt.service", "[Unit]\n")] {
+    for (n, c) in
+        [("synofurb_mgmt.py", "#!/usr/bin/env python3\nprint('hi')\n"), ("README.md", "# readme\n"), ("synofurb-mgmt.service", "[Unit]\n")]
+    {
         std::fs::write(dir.join(n), c).unwrap();
     }
     std::fs::write(dir.join("VERSION"), format!("{version}\n")).unwrap();
@@ -433,7 +466,10 @@ fn a_bundle_directory_is_loaded_checked_and_filtered() {
     write_bundle(&t.0, "0.9.1", true);
     let b = MgmtBundle::from_dir(&t.0).unwrap();
     assert_eq!(b.version, "0.9.1");
-    assert_eq!(b.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["synofurb_mgmt.py", "VERSION", "README.md", "synofurb-mgmt.service"]);
+    assert_eq!(
+        b.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+        vec!["synofurb_mgmt.py", "VERSION", "README.md", "synofurb-mgmt.service"]
+    );
     assert!(matches!(b.source, BundleSource::Dir(_)));
     // an offline bundle keeps the files in mgmt/
     let outer = TmpDir::new("outer");
@@ -536,11 +572,19 @@ fn events_map_onto_the_cli_vocabulary() {
     let pr = ManageEvent::Progress { what: "update files".into(), fraction: 0.12345 };
     assert!(matches!(pr.to_core(), Event::Progress { .. }));
     assert_eq!(pr.to_json()["fraction"], 0.123);
-    let nas = ManageEvent::Remote(RemoteStep { step: "swap".into(), status: StepStatus::Failed, raw_status: "fail".into(), message: "disk full".into() });
+    let nas = ManageEvent::Remote(RemoteStep {
+        step: "swap".into(),
+        status: StepStatus::Failed,
+        raw_status: "fail".into(),
+        message: "disk full".into(),
+    });
     assert_eq!(nas.to_json(), json!({"event":"nas_step","step":"swap","status":"failed","raw_status":"fail","message":"disk full"}));
     let Event::Log(l) = nas.to_core() else { panic!() };
     assert_eq!((l.level, l.source, l.msg.as_str()), (Level::Error, Source::App, "NAS swap: fail - disk full"));
-    assert_eq!(ManageEvent::Log { level: Level::Warn, msg: "x".into() }.to_json(), json!({"event":"log","level":"warn","source":"app","msg":"x"}));
+    assert_eq!(
+        ManageEvent::Log { level: Level::Warn, msg: "x".into() }.to_json(),
+        json!({"event":"log","level":"warn","source":"app","msg":"x"})
+    );
     // through a logger: steps arrive as events, lines as log lines with secrets redacted
     let (tx, rx) = channel();
     let lg = Logger::memory(Some(tx));
@@ -610,7 +654,12 @@ impl FakeNas {
         self.health_calls += 1;
         let ok = |s: String| ExecResult { code: 0, stdout: s, stderr: String::new() };
         if !self.has_health {
-            return ExecResult { code: 2, stdout: String::new(), stderr: "usage: synofurb_mgmt.py [-h] [--port PORT]\nsynofurb_mgmt.py: error: unrecognized arguments: health --json\n".into() };
+            return ExecResult {
+                code: 2,
+                stdout: String::new(),
+                stderr: "usage: synofurb_mgmt.py [-h] [--port PORT]\nsynofurb_mgmt.py: error: unrecognized arguments: health --json\n"
+                    .into(),
+            };
         }
         if !self.answering {
             return ExecResult { code: 1, stdout: String::new(), stderr: "Traceback (most recent call last):\n".into() };
@@ -628,10 +677,21 @@ impl FakeNas {
                 self.prev = self.version.take();
                 self.version = Some(p);
                 self.answering = true;
-                out.write_all(Self::lines(&[("rollback", "start", "restoring"), ("rollback", "ok", "previous version is running"), ("result", "ok", "rolled back")]).as_bytes()).unwrap();
+                out.write_all(
+                    Self::lines(&[
+                        ("rollback", "start", "restoring"),
+                        ("rollback", "ok", "previous version is running"),
+                        ("result", "ok", "rolled back"),
+                    ])
+                    .as_bytes(),
+                )
+                .unwrap();
                 return (0, String::new());
             }
-            out.write_all(Self::lines(&[("rollback", "start", "restoring"), ("rollback", "fail", "no previous version is kept")]).as_bytes()).unwrap();
+            out.write_all(
+                Self::lines(&[("rollback", "start", "restoring"), ("rollback", "fail", "no previous version is kept")]).as_bytes(),
+            )
+            .unwrap();
             return (2, String::new());
         }
         if cmd.contains("update --from") && self.mode == Mode::NoUpdateSubcommand {
@@ -642,7 +702,13 @@ impl FakeNas {
         match self.mode {
             Mode::Ok | Mode::NoUpdateSubcommand => {
                 let mut s = Self::lines(&head);
-                s.push_str(&Self::lines(&[("stage", "ok", "5 files staged"), ("swap", "ok", "previous kept"), ("restart", "ok", "restarted"), ("health", "ok", "version answers"), ("result", "ok", "updated")]));
+                s.push_str(&Self::lines(&[
+                    ("stage", "ok", "5 files staged"),
+                    ("swap", "ok", "previous kept"),
+                    ("restart", "ok", "restarted"),
+                    ("health", "ok", "version answers"),
+                    ("result", "ok", "updated"),
+                ]));
                 out.write_all(s.as_bytes()).unwrap();
                 self.prev = self.version.take();
                 self.version = Some(self.new_version.clone());
@@ -651,21 +717,44 @@ impl FakeNas {
             }
             Mode::RolledBack => {
                 let mut s = Self::lines(&head);
-                s.push_str(&Self::lines(&[("swap", "ok", "swapped"), ("health", "fail", "port 8443 is not listening"), ("rollback", "start", "restoring the previous version"), ("rollback", "ok", "previous version 0.2.0 is running again"), ("result", "fail", "update to 0.5.0 failed; rolled back")]));
+                s.push_str(&Self::lines(&[
+                    ("swap", "ok", "swapped"),
+                    ("health", "fail", "port 8443 is not listening"),
+                    ("rollback", "start", "restoring the previous version"),
+                    ("rollback", "ok", "previous version 0.2.0 is running again"),
+                    ("result", "fail", "update to 0.5.0 failed; rolled back"),
+                ]));
                 out.write_all(s.as_bytes()).unwrap();
                 (3, String::new())
             }
             Mode::RollbackFailed => {
-                out.write_all(Self::lines(&[("swap", "ok", "swapped"), ("health", "fail", "service is not active"), ("rollback", "fail", "previous version does not answer"), ("result", "fail", "rollback failed")]).as_bytes()).unwrap();
+                out.write_all(
+                    Self::lines(&[
+                        ("swap", "ok", "swapped"),
+                        ("health", "fail", "service is not active"),
+                        ("rollback", "fail", "previous version does not answer"),
+                        ("result", "fail", "rollback failed"),
+                    ])
+                    .as_bytes(),
+                )
+                .unwrap();
                 self.answering = false;
                 (4, "boom\n".into())
             }
             Mode::Refused => {
-                out.write_all(Self::lines(&[("verify", "start", "checking"), ("verify", "fail", "checksum mismatch for synofurb_mgmt.py")]).as_bytes()).unwrap();
+                out.write_all(
+                    Self::lines(&[("verify", "start", "checking"), ("verify", "fail", "checksum mismatch for synofurb_mgmt.py")])
+                        .as_bytes(),
+                )
+                .unwrap();
                 (2, String::new())
             }
             Mode::SucceedsButStillOld => {
-                out.write_all(Self::lines(&[("verify", "ok", "ok"), ("swap", "ok", "ok"), ("health", "ok", "answers"), ("result", "ok", "updated")]).as_bytes()).unwrap();
+                out.write_all(
+                    Self::lines(&[("verify", "ok", "ok"), ("swap", "ok", "ok"), ("health", "ok", "answers"), ("result", "ok", "updated")])
+                        .as_bytes(),
+                )
+                .unwrap();
                 self.prev = self.version.clone();
                 (0, String::new())
             }
@@ -743,7 +832,24 @@ fn assert_harmless(nas: &FakeNas) {
         }
     }
     let all = all.replace("/dev/null", "");
-    for bad in ["/dev/", "mkfs", "mdadm", "parted", "sgdisk", "wipefs", "fdisk", "synofurb-dom", "dd ", "cryptsetup", "lvm", "mount ", "reboot", "poweroff", "shutdown", "kexec"] {
+    for bad in [
+        "/dev/",
+        "mkfs",
+        "mdadm",
+        "parted",
+        "sgdisk",
+        "wipefs",
+        "fdisk",
+        "synofurb-dom",
+        "dd ",
+        "cryptsetup",
+        "lvm",
+        "mount ",
+        "reboot",
+        "poweroff",
+        "shutdown",
+        "kexec",
+    ] {
         assert!(!all.contains(bad), "a management command mentions {bad:?}:\n{all}");
     }
 }
@@ -754,6 +860,7 @@ fn a_successful_update_streams_progress_and_verifies() {
     let mut nas = FakeNas::new(Some("0.2.0"), "0.5.0", Mode::Ok);
     let (r, ev) = run_update(&mut nas, &b, &quick());
     assert_eq!(r.outcome, UpdateOutcome::Updated, "{:?}", r.failure);
+    assert_eq!(r.operation, Operation::Update);
     assert_eq!((r.from_version.as_deref(), r.to_version.as_deref(), r.method), (Some("0.2.0"), Some("0.5.0"), Some(UpdateMethod::Unit)));
     assert_eq!(r.rollback, RollbackState::NotApplicable);
     assert_eq!(r.health_after.as_ref().map(|h| h.version.as_str()), Some("0.5.0"));
@@ -779,7 +886,10 @@ fn a_successful_update_streams_progress_and_verifies() {
     assert!(stage_script_text.contains(&hex::encode(Sha256::digest(&tar.1))), "the staging script pins the archive hash");
     assert!(stage_script_text.contains("sha256sum -c MANIFEST.sha256"));
     let upd = nas.commands.iter().find(|c| c.contains("update --from")).unwrap();
-    assert!(upd.starts_with(&format!("python3 {MGMT_SCRIPT} update --from '/tmp/.synofurb-mgmt-stage-")) && upd.ends_with("--json"), "{upd}");
+    assert!(
+        upd.starts_with(&format!("python3 {MGMT_SCRIPT} update --from '/tmp/.synofurb-mgmt-stage-")) && upd.ends_with("--json"),
+        "{upd}"
+    );
     assert!(!upd.contains("--force"));
     // staging is removed again, also on success
     assert!(nas.commands.last().unwrap().starts_with("rm -rf '/tmp/.synofurb-mgmt-stage-"), "{:?}", nas.commands.last());
@@ -961,6 +1071,9 @@ fn an_unreachable_unit_is_an_error_not_a_report() {
     let r = push_update(&mut Privileged { sh: &mut m, is_root: false, sudo_password: None }, &b, &quick(), &mut |_| {});
     let e = r.unwrap_err();
     assert!(format!("{e:#}").contains("no sudo password"), "{e:#}");
+    assert!(m.commands.is_empty(), "nothing is run before the privilege check");
+    let e = push_rollback(&mut Privileged { sh: &mut m, is_root: false, sudo_password: None }, &quick(), &mut |_| {}).unwrap_err();
+    assert!(format!("{e:#}").contains("needs root"), "{e:#}");
 }
 
 #[test]
@@ -968,7 +1081,6 @@ fn the_mock_shell_drives_a_minimal_update_end_to_end() {
     // MockShell answers in order: version probe, health, (upload), stage script run, rm, updater, health, cleanup
     let b = bundle_v("0.5.0");
     let mut m = MockShell::default();
-    m.results = VecDeque::new();
     m.push_ok("present=1\nversion=0.2.0\nsha256=");
     m.push_ok(&json_with("0.2.0", "ok"));
     m.push_ok(""); // stage script
@@ -997,6 +1109,8 @@ fn rollback_goes_through_the_unit_and_is_verified() {
     let r = push_rollback(&mut Privileged { sh: &mut nas, is_root: true, sudo_password: None }, &quick(), &mut |_| {}).unwrap();
     assert_eq!(r.outcome, UpdateOutcome::Failed);
     assert_eq!(r.failure.as_deref(), Some("no previous version is kept (rollback)"));
+    assert!(r.headline().starts_with("Rollback failed: no previous version is kept"), "{}", r.headline());
+    assert_eq!(r.operation, Operation::Rollback);
     // an old unit cannot roll back remotely
     let mut nas = FakeNas::new(Some("0.2.0"), "0.5.0", Mode::Ok);
     nas.has_health = false;
@@ -1012,7 +1126,10 @@ fn status_reports_installed_health_and_what_an_update_would_do() {
     let b = bundle_v("0.5.0");
     let mut nas = FakeNas::new(Some("0.2.0"), "0.5.0", Mode::Ok);
     let st = status(&mut Privileged { sh: &mut nas, is_root: true, sudo_password: None }, &b).unwrap();
-    assert_eq!((st.installed.version.as_deref(), st.bundled_version.as_str(), st.relation), (Some("0.2.0"), "0.5.0", Some(VersionRelation::NasOlder)));
+    assert_eq!(
+        (st.installed.version.as_deref(), st.bundled_version.as_str(), st.relation),
+        (Some("0.2.0"), "0.5.0", Some(VersionRelation::NasOlder))
+    );
     assert_eq!(st.plan.decision, UpdateDecision::Upgrade);
     assert!(st.health.is_some() && st.summary.is_some() && st.health_error.is_none());
     // too old to report health: the version still comes from the files
@@ -1048,7 +1165,11 @@ fn installed_info_is_parsed_defensively() {
 // ---------------------------------------------------------------------------------------------- the shell scripts, run for real
 
 fn sh_available() -> bool {
-    std::process::Command::new("sh").arg("-c").arg("command -v sha256sum >/dev/null && command -v tar >/dev/null").status().is_ok_and(|s| s.success())
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg("command -v sha256sum >/dev/null && command -v tar >/dev/null")
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 fn run_sh(script: &str) -> (i32, String, String) {
@@ -1062,7 +1183,11 @@ fn the_generated_scripts_are_valid_posix_sh() {
         return;
     }
     let t = TmpDir::new("syntax");
-    for (name, text) in [("stage", stage_script("/tmp/x.tar.gz", "/tmp/stage", &"0".repeat(64))), ("bootstrap", bootstrap_script("", "/tmp/stage")), ("probe", READ_INSTALLED.to_string())] {
+    for (name, text) in [
+        ("stage", stage_script("/tmp/x.tar.gz", "/tmp/stage", &"0".repeat(64))),
+        ("bootstrap", bootstrap_script("", "/tmp/stage")),
+        ("probe", READ_INSTALLED.to_string()),
+    ] {
         let f = t.0.join(name);
         std::fs::write(&f, text).unwrap();
         let (code, _, err) = run_sh(&format!("sh -n '{}'", f.display()));
@@ -1146,7 +1271,10 @@ fn the_bootstrap_swap_replaces_the_files_keeps_a_rollback_copy_and_speaks_ndjson
     let prev = root.join("opt/synofurb-mgmt.prev");
     assert_eq!(std::fs::read_to_string(prev.join("synofurb_mgmt.py")).unwrap(), "old script\n");
     assert_eq!(std::fs::read_to_string(prev.join("unit.backup")).unwrap(), "old unit\n");
-    assert_eq!(std::fs::read_to_string(unit_dir.join("synofurb-mgmt.service")).unwrap().as_bytes(), b.files.iter().find(|f| f.name == "synofurb-mgmt.service").unwrap().data.as_slice());
+    assert_eq!(
+        std::fs::read_to_string(unit_dir.join("synofurb-mgmt.service")).unwrap().as_bytes(),
+        b.files.iter().find(|f| f.name == "synofurb-mgmt.service").unwrap().data.as_slice()
+    );
     assert!(!root.join("opt/synofurb-mgmt.new").exists() && !root.join("opt/synofurb-mgmt.old").exists());
     // nothing outside the sandbox root was written
     assert!(std::fs::read_dir(&t.0).unwrap().count() == 2);
@@ -1197,4 +1325,89 @@ fn web_urls_handle_names_and_ipv6() {
     assert_eq!(web_url(" nas.lan "), "https://nas.lan:8443");
     assert_eq!(web_url("fe80::1"), "https://[fe80::1]:8443");
     assert_eq!(web_url("[fe80::1]"), "https://[fe80::1]:8443");
+}
+
+// ---------------------------------------------------------------------------------------------- against the real script
+//
+// These run apps/mgmt-plane/synofurb_mgmt.py with `python3 --root <sandbox>` (skipped when python3 is missing). `update` runs with
+// --dry-run, so systemctl is not really called: the swap happens inside the sandbox, the health wait then fails (no service), which
+// exercises the failure path against the real NDJSON and exit codes.
+
+const REAL_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/mgmt-plane/synofurb_mgmt.py");
+
+fn python_available() -> bool {
+    std::process::Command::new("python3")
+        .arg("-c")
+        .arg("import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)")
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+fn run_real(root: &Path, args: &[&str]) -> ExecResult {
+    let o =
+        std::process::Command::new("python3").arg("-I").arg(REAL_SCRIPT).arg("--root").arg(root).args(args).output().expect("run python3");
+    ExecResult {
+        code: o.status.code().unwrap_or(255) as u32,
+        stdout: String::from_utf8_lossy(&o.stdout).into(),
+        stderr: String::from_utf8_lossy(&o.stderr).into(),
+    }
+}
+
+#[test]
+fn the_real_health_command_output_parses() {
+    if !python_available() {
+        return;
+    }
+    let t = TmpDir::new("real-health");
+    let r = run_real(&t.0, &["health", "--json"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let h = interpret_health_result(&r).unwrap_or_else(|e| panic!("{e}\n{}", r.stdout));
+    assert_eq!(h.schema, HEALTH_SCHEMA);
+    assert_eq!(h.version, bundled_mgmt_version(), "the script and apps/mgmt-plane/VERSION agree");
+    assert_ne!(h.overall, Overall::Unknown);
+    assert!(h.parse_notes.is_empty(), "the script's own output needed repairs: {:?}", h.parse_notes);
+    assert!(!h.kernel.is_empty() && h.uptime_s.is_some() && h.mem.total.is_some());
+    let s = h.summary();
+    assert!(s.overall >= h.overall.min(Overall::Warn));
+    assert!(s.bullets.iter().all(|b| b.text.chars().count() <= MAX_BULLET_CHARS));
+}
+
+#[test]
+fn the_real_updater_accepts_our_staged_files_and_its_ndjson_and_exit_codes_are_understood() {
+    if !python_available() || !sh_available() {
+        return;
+    }
+    let t = TmpDir::new("real-update");
+    let root = t.0.join("root");
+    let opt = root.join("opt/synofurb-mgmt");
+    std::fs::create_dir_all(&opt).unwrap();
+    std::fs::write(opt.join("synofurb_mgmt.py"), "# old\n").unwrap();
+    std::fs::write(opt.join("VERSION"), "0.1.0\n").unwrap();
+    // stage exactly like push_update does: unpack our tarball
+    let b = MgmtBundle::embedded();
+    let stage = t.0.join("stage");
+    std::fs::create_dir_all(&stage).unwrap();
+    tar::Archive::new(flate2::read::GzDecoder::new(&b.tarball().unwrap()[..])).unpack(&stage).unwrap();
+    let r = run_real(&root, &["--dry-run", "update", "--from", stage.to_str().unwrap(), "--json", "--health-timeout", "0.2"]);
+    let steps: Vec<RemoteStep> =
+        r.stdout.lines().filter_map(|l| if let Some(ManageEvent::Remote(s)) = parse_remote_line(l) { Some(s) } else { None }).collect();
+    let find = |step: &str, st: StepStatus| steps.iter().any(|s| s.step == step && s.status == st);
+    assert!(find("verify", StepStatus::Ok), "the real verifier rejected our files:\n{}", r.stdout);
+    assert!(find("stage", StepStatus::Ok) && find("swap", StepStatus::Ok), "{}", r.stdout);
+    assert!(find("health", StepStatus::Failed), "no systemd in the sandbox, so the health wait fails: {}", r.stdout);
+    assert!(steps.iter().any(RemoteStep::is_rollback));
+    assert_eq!(steps.len(), r.stdout.lines().count(), "every line parsed as a step");
+    // exit 3 = rolled back, 4 = rollback failed; either way our failure text names the health problem, not the closing line
+    assert!(matches!(r.code, 3 | 4), "exit {}", r.code);
+    assert_eq!(last_failure(&steps, &r.stderr, r.code), "service is not active (health)");
+    // the previous version was kept where `update --rollback` looks
+    assert!(root.join("opt/synofurb-mgmt.prev/synofurb_mgmt.py").is_file());
+
+    // a refused bundle (changed after the manifest was made) exits 2 and nothing is touched
+    std::fs::write(stage.join("VERSION"), "0.0.1\n").unwrap();
+    let r = run_real(&t.0.join("root2"), &["--dry-run", "update", "--from", stage.to_str().unwrap(), "--json"]);
+    assert_eq!(r.code, 2, "{}", r.stdout);
+    let steps = parse_lines(&r.stdout);
+    assert_eq!(last_failure(&steps, &r.stderr, r.code), "checksum mismatch for VERSION (verify)");
+    assert!(!t.0.join("root2/opt").exists(), "a refused update creates nothing");
 }

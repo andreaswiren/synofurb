@@ -1493,10 +1493,12 @@ class VersionAndUiTests(HttpTestCase):
         html = m.INDEX_HTML
         self.assertNotRegex(html, r"""\sstyle\s*=""")                        # inline style attributes would be blocked by the nonce CSP
         self.assertNotRegex(html, r"""<(?:script|link|img|iframe)[^>]+(?:src|href)=["']https?:""")
-        self.assertEqual(sorted(set(m.re.findall(r"https?://[^\s\"'<>)]+", html))), ["http://www.w3.org/2000/svg"])
+        urls = set(m.re.findall(r"https?://[^\s\"'<>)]+", html))
+        allowed = {"http://www.w3.org/2000/svg"} | set(m.re.findall(r"https?://[^\s\"'<>)]+", json.dumps(m._LICENSES)))
+        self.assertEqual({u for u in urls if u not in allowed and not u.startswith("https://github.com/andreaswiren/synofurb")}, set())   # only licence texts and outbound links
         self.assertEqual(html.count("<script nonce=\"__NONCE__\">"), 2)
         self.assertIn("<style nonce=\"__NONCE__\">", html)
-        for needle in ("Boot manager", "Imported volumes", "Return to DSM", "Plan preview", "Keep these settings", "prefers-reduced-motion", "forced-colors"):
+        for needle in ("Boot entries", "Mounts", "Return to DSM", "Preview only", "Keep", "prefers-reduced-motion", "forced-colors"):
             self.assertIn(needle, html)
         self.assertIn("max-width:700px", html)                                 # phone layout (tokens: layout.phone_breakpoint_px)
 

@@ -19,6 +19,10 @@ pub mod code {
     pub const FAILED_AFTER_PONR: u8 = 6;
     /// The install failed or was cancelled before the point of no return: the disks are untouched.
     pub const FAILED_BEFORE_PONR: u8 = 7;
+    /// `manage health`: the unit answered and its verdict is WARN (something needs attention).
+    pub const HEALTH_WARN: u8 = 8;
+    /// `manage health`: the unit answered and its verdict is CRIT (a degraded array, a failed disk, a full volume).
+    pub const HEALTH_CRIT: u8 = 9;
 }
 
 #[derive(Debug)]
@@ -33,6 +37,8 @@ pub enum CliError {
     Unsupported(String),
     /// The install job failed. `after_ponr` selects exit 6 or 7.
     InstallFailed { after_ponr: bool, message: String },
+    /// `manage health` found a problem (exit 8 for WARN, 9 for CRIT). The report was already printed.
+    Health { critical: bool, message: String },
     /// Everything else (exit 1).
     Other(anyhow::Error),
 }
@@ -46,6 +52,8 @@ impl CliError {
             CliError::Unsupported(_) => code::UNSUPPORTED,
             CliError::InstallFailed { after_ponr: true, .. } => code::FAILED_AFTER_PONR,
             CliError::InstallFailed { after_ponr: false, .. } => code::FAILED_BEFORE_PONR,
+            CliError::Health { critical: true, .. } => code::HEALTH_CRIT,
+            CliError::Health { critical: false, .. } => code::HEALTH_WARN,
             CliError::Other(_) => code::ERROR,
         }
     }
@@ -59,6 +67,8 @@ impl CliError {
             CliError::Unsupported(_) => "unsupported",
             CliError::InstallFailed { after_ponr: true, .. } => "failed_after_point_of_no_return",
             CliError::InstallFailed { after_ponr: false, .. } => "failed_before_point_of_no_return",
+            CliError::Health { critical: true, .. } => "health_crit",
+            CliError::Health { critical: false, .. } => "health_warn",
             CliError::Other(_) => "error",
         }
     }
@@ -75,7 +85,7 @@ impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CliError::Usage(m) | CliError::Refused(m) | CliError::PlanErrors(m) | CliError::Unsupported(m) => f.write_str(m),
-            CliError::InstallFailed { message, .. } => f.write_str(message),
+            CliError::InstallFailed { message, .. } | CliError::Health { message, .. } => f.write_str(message),
             CliError::Other(e) => write!(f, "{e:#}"),
         }
     }
@@ -114,5 +124,9 @@ mod tests {
         assert_eq!(CliError::InstallFailed { after_ponr: true, message: "x".into() }.code(), 6);
         assert_eq!(CliError::InstallFailed { after_ponr: false, message: "x".into() }.code(), 7);
         assert_eq!(CliError::Other(anyhow::anyhow!("x")).code(), 1);
+        assert_eq!(CliError::Health { critical: false, message: "x".into() }.code(), 8);
+        assert_eq!(CliError::Health { critical: true, message: "x".into() }.code(), 9);
+        assert_eq!(CliError::Health { critical: true, message: "x".into() }.kind(), "health_crit");
+        assert_eq!(CliError::Health { critical: false, message: "x".into() }.kind(), "health_warn");
     }
 }

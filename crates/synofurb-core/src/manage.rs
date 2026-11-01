@@ -39,12 +39,8 @@ pub const HEALTH_SCHEMA: u32 = 1;
 
 /// Files of the management plane that are shipped, in this order. Anything else in a directory is ignored.
 /// `(name, required, executable)`
-const MGMT_FILES: &[(&str, bool, bool)] = &[
-    ("synofurb_mgmt.py", true, true),
-    ("VERSION", true, false),
-    ("README.md", true, false),
-    ("synofurb-mgmt.service", false, false),
-];
+const MGMT_FILES: &[(&str, bool, bool)] =
+    &[("synofurb_mgmt.py", true, true), ("VERSION", true, false), ("README.md", true, false), ("synofurb-mgmt.service", false, false)];
 
 const EMBEDDED: &[(&str, &str)] = &[
     ("synofurb_mgmt.py", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/mgmt-plane/synofurb_mgmt.py"))),
@@ -473,37 +469,50 @@ pub fn parse_health(text: &str) -> Result<Health, ManageError> {
 
 /// Turn the result of `health --json` into a [`Health`] or a precise error. Pure, so it is tested without a NAS.
 pub fn interpret_health_result(r: &ExecResult) -> Result<Health, ManageError> {
-    match parse_health(&r.stdout) {
+    let parse_error = match parse_health(&r.stdout) {
         Ok(h) => return Ok(h),
-        Err(e) => {
-            let err = r.stderr.to_ascii_lowercase();
-            if r.code == 127 && err.contains("python3") {
-                return Err(ManageError::Command { code: r.code, stderr: r.stderr.trim().to_string() });
-            }
-            if r.code == 127 || err.contains("no such file") || err.contains("can't open file") {
-                return Err(ManageError::NotInstalled);
-            }
-            if looks_like_unknown_subcommand(r) {
-                return Err(ManageError::HealthUnsupported { installed_version: None });
-            }
-            if r.stdout.trim().is_empty() {
-                return Err(ManageError::Command { code: r.code, stderr: r.stderr.trim().to_string() });
-            }
-            Err(e)
-        }
+        Err(e) => e,
+    };
+    let err = r.stderr.to_ascii_lowercase();
+    if r.code == 127 && err.contains("python3") {
+        return Err(ManageError::Command { code: r.code, stderr: r.stderr.trim().to_string() });
     }
+    if r.code == 127 || err.contains("no such file") || err.contains("can't open file") {
+        return Err(ManageError::NotInstalled);
+    }
+    if looks_like_unknown_subcommand(r) {
+        return Err(ManageError::HealthUnsupported { installed_version: None });
+    }
+    if r.stdout.trim().is_empty() {
+        return Err(ManageError::Command { code: r.code, stderr: r.stderr.trim().to_string() });
+    }
+    Err(parse_error)
 }
 
 /// argparse (exit 2) complaining about a subcommand or flag it does not have: an older management plane.
 fn looks_like_unknown_subcommand(r: &ExecResult) -> bool {
     let e = r.stderr.to_ascii_lowercase();
-    r.code == 2 && (e.contains("invalid choice") || e.contains("unrecognized arguments") || e.contains("usage:") || e.contains("unknown option"))
+    r.code == 2
+        && (e.contains("invalid choice") || e.contains("unrecognized arguments") || e.contains("usage:") || e.contains("unknown option"))
 }
 
-/// Ask the appliance for its health (runs `health --json` as root).
+/// Ask the appliance for its health (`health --json`). Runs as root when it can (SMART needs it); a user without root and without a
+/// sudo password gets the part of the report that needs no privileges (the management plane documents that `health` works that way).
 pub fn fetch_health(p: &mut Privileged<'_>) -> Result<Health, ManageError> {
-    let r = p.run(&format!("python3 {MGMT_SCRIPT} health --json")).map_err(ManageError::Transport)?;
+    let cmd = format!("python3 {MGMT_SCRIPT} health --json");
+    let r = if p.is_root || p.sudo_password.is_some() { p.run(&cmd) } else { p.sh.exec(&cmd, None) }.map_err(ManageError::Transport)?;
     interpret_health_result(&r)
+}
+
+/// Changing the management plane needs root, either directly or through sudo.
+fn need_root(p: &Privileged<'_>) -> Result<()> {
+    if p.is_root || p.sudo_password.is_some() {
+        Ok(())
+    } else {
+        bail!(
+            "changing the management plane needs root: log in as root or give the sudo password (not root and no sudo password available)"
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------------------------- summary for the UI
@@ -994,7 +1003,11 @@ pub fn plan_update(installed: &InstalledInfo, bundle: &MgmtBundle, force: bool) 
         }
         (true, Some(VersionRelation::NasOlder)) => UpdateDecision::Upgrade,
         (true, Some(VersionRelation::NasNewer)) => {
-            if force { UpdateDecision::Downgrade } else { UpdateDecision::DowngradeNeedsForce }
+            if force {
+                UpdateDecision::Downgrade
+            } else {
+                UpdateDecision::DowngradeNeedsForce
+            }
         }
         (true, Some(VersionRelation::Same)) => match (same_files, force) {
             (Some(false), _) => UpdateDecision::SameVersionChanged,
@@ -1007,7 +1020,9 @@ pub fn plan_update(installed: &InstalledInfo, bundle: &MgmtBundle, force: bool) 
     let message = match decision {
         UpdateDecision::UpToDate => format!("The management plane is up to date ({to})."),
         UpdateDecision::Upgrade => format!("Update the management plane from {from} to {to}."),
-        UpdateDecision::SameVersionChanged => format!("Version {to} is installed, but its files differ from this program's copy; replace them."),
+        UpdateDecision::SameVersionChanged => {
+            format!("Version {to} is installed, but its files differ from this program's copy; replace them.")
+        }
         UpdateDecision::Reinstall => format!("Reinstall the management plane files of version {to}."),
         UpdateDecision::Downgrade => format!("Downgrade the management plane from {from} to {to}."),
         UpdateDecision::DowngradeNeedsForce => format!("The unit has {from}, which is newer than {to}; use --force to go back."),
@@ -1131,12 +1146,22 @@ pub fn parse_remote_line(line: &str) -> Option<ManageEvent> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ManageEvent {
     /// Stage `n` of `total` on this computer's side ("Uploading the files").
-    Step { n: u32, total: u32, name: String },
+    Step {
+        n: u32,
+        total: u32,
+        name: String,
+    },
     /// Upload progress, 0.0..=1.0.
-    Progress { what: String, fraction: f32 },
+    Progress {
+        what: String,
+        fraction: f32,
+    },
     /// A step line printed by the updater on the NAS.
     Remote(RemoteStep),
-    Log { level: Level, msg: String },
+    Log {
+        level: Level,
+        msg: String,
+    },
 }
 
 impl ManageEvent {
@@ -1177,7 +1202,9 @@ impl ManageEvent {
             ManageEvent::Progress { what, fraction } => {
                 json!({"event": "progress", "what": what, "fraction": (*fraction as f64 * 1000.0).round() / 1000.0})
             }
-            ManageEvent::Remote(r) => json!({"event": "nas_step", "step": r.step, "status": r.status.as_str(), "raw_status": r.raw_status, "message": r.message}),
+            ManageEvent::Remote(r) => {
+                json!({"event": "nas_step", "step": r.step, "status": r.status.as_str(), "raw_status": r.raw_status, "message": r.message})
+            }
             ManageEvent::Log { level, msg } => {
                 let l = match level {
                     Level::Debug => "debug",
@@ -1259,6 +1286,14 @@ pub enum RollbackState {
     Unverified,
 }
 
+/// What was asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Operation {
+    Update,
+    Rollback,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateMethod {
@@ -1270,6 +1305,7 @@ pub enum UpdateMethod {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateReport {
+    pub operation: Operation,
     pub outcome: UpdateOutcome,
     pub method: Option<UpdateMethod>,
     pub from_version: Option<String>,
@@ -1286,8 +1322,9 @@ pub struct UpdateReport {
 }
 
 impl UpdateReport {
-    fn new(outcome: UpdateOutcome) -> Self {
+    fn new(operation: Operation, outcome: UpdateOutcome) -> Self {
         UpdateReport {
+            operation,
             outcome,
             method: None,
             from_version: None,
@@ -1320,7 +1357,8 @@ impl UpdateReport {
                     RollbackState::Unverified => "The health check after the failure did not complete; check the unit.".to_string(),
                     RollbackState::NotApplicable => "Nothing was changed on the unit.".to_string(),
                 };
-                format!("Update failed: {why} {state}")
+                let what = if self.operation == Operation::Rollback { "Rollback" } else { "Update" };
+                format!("{what} failed: {why} {state}")
             }
         }
     }
@@ -1529,6 +1567,7 @@ pub fn push_update(
     opts: &UpdateOptions,
     emit: &mut dyn FnMut(ManageEvent),
 ) -> Result<UpdateReport> {
+    need_root(p)?;
     step(emit, 1, "Reading the installed management plane");
     let installed = read_installed(p.sh)?;
     let before = fetch_health(p);
@@ -1539,7 +1578,7 @@ pub fn push_update(
     // too old, broken - is repaired by the built-in swap.
     let health_supported = before.is_ok();
     let plan = plan_update(&installed, bundle, opts.force);
-    let mut report = UpdateReport::new(UpdateOutcome::Failed);
+    let mut report = UpdateReport::new(Operation::Update, UpdateOutcome::Failed);
     report.from_version = installed.version.clone().or_else(|| before.as_ref().ok().map(|h| h.version.clone()));
     report.to_version = Some(bundle.version.clone());
     report.plan = Some(plan.clone());
@@ -1574,7 +1613,10 @@ pub fn push_update(
         let size = tar.len() as u64;
         let mut cur = std::io::Cursor::new(&tar[..]);
         let mut sent = |n: u64| {
-            emit(ManageEvent::Progress { what: "update files".into(), fraction: if size == 0 { 1.0 } else { (n as f32 / size as f32).min(1.0) } })
+            emit(ManageEvent::Progress {
+                what: "update files".into(),
+                fraction: if size == 0 { 1.0 } else { (n as f32 / size as f32).min(1.0) },
+            })
         };
         if let Err(e) = p.sh.upload(&tar_path, &mut cur, size, 0o600, &mut sent) {
             cleanup(p, &stage, &tar_path);
@@ -1715,6 +1757,7 @@ fn finish_failed(p: &mut Privileged<'_>, opts: &UpdateOptions, report: &mut Upda
 
 /// Go back to the previous management plane (`update --rollback` on the unit), then verify.
 pub fn push_rollback(p: &mut Privileged<'_>, opts: &UpdateOptions, emit: &mut dyn FnMut(ManageEvent)) -> Result<UpdateReport> {
+    need_root(p)?;
     step(emit, 1, "Reading the installed management plane");
     let installed = read_installed(p.sh)?;
     if !installed.present {
@@ -1724,7 +1767,7 @@ pub fn push_rollback(p: &mut Privileged<'_>, opts: &UpdateOptions, emit: &mut dy
     if let Err(e @ (ManageError::HealthUnsupported { .. } | ManageError::NotInstalled)) = &before {
         bail!("this unit cannot roll back remotely: {e}");
     }
-    let mut report = UpdateReport::new(UpdateOutcome::Failed);
+    let mut report = UpdateReport::new(Operation::Rollback, UpdateOutcome::Failed);
     report.from_version = installed.version.clone();
     report.method = Some(UpdateMethod::Unit);
     step(emit, 2, "Rolling back");
@@ -1789,7 +1832,8 @@ pub fn status(p: &mut Privileged<'_>, bundle: &MgmtBundle) -> Result<ManageStatu
     } else {
         (None, Some(ManageError::NotInstalled.to_string()))
     };
-    let installed = InstalledInfo { version: installed.version.clone().or_else(|| health.as_ref().map(|h| h.version.clone())), ..installed };
+    let installed =
+        InstalledInfo { version: installed.version.clone().or_else(|| health.as_ref().map(|h| h.version.clone())), ..installed };
     let relation = installed.version.as_deref().filter(|_| installed.present).map(|v| compare(v, &bundle.version));
     Ok(ManageStatus {
         plan: plan_update(&installed, bundle, false),

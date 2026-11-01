@@ -2,7 +2,7 @@
 //!
 //! Layout: `args` (clap definitions), `exit` (stable exit codes), `out` (colour/verbosity/NDJSON/progress), `runner` (worker thread +
 //! Ctrl-C), `facts` (live/saved inspection, JSON documents), `spec` (install choices -> config/job), `gate` (the three-part safety gate),
-//! `dryrun`, `install` (inspect/plan/install), `scan`, `compat_cmd`, `boot`, `logs_cmd`, `bundle`, `misc`, `prompt` and `wizard`.
+//! `dryrun`, `install` (inspect/plan/install), `scan`, `compat_cmd`, `boot`, `manage_cmd` (health and updates of the web UI on a converted unit), `logs_cmd`, `bundle`, `misc`, `prompt` and `wizard`.
 //! Both programs (`synofurb` and `synofurb-cli`) call [`dispatch`].
 
 pub mod args;
@@ -15,6 +15,7 @@ pub mod facts;
 pub mod gate;
 pub mod install;
 pub mod logs_cmd;
+pub mod manage_cmd;
 pub mod misc;
 pub mod out;
 pub mod prompt;
@@ -67,6 +68,10 @@ pub fn dispatch(p: &Program, g: &Global, cmd: Cmd) -> ExitCode {
 
 pub fn report_error(out: &Out, e: &CliError) {
     runner::failure_event(out, e);
+    // a health verdict was already printed as the command's result; the exit code carries the rest
+    if matches!(e, CliError::Health { .. }) {
+        return;
+    }
     let msg = e.to_string();
     if out.quiet && out.json_events() {
         return;
@@ -91,6 +96,7 @@ pub fn run(out: &Out, p: &Program, cmd: Cmd) -> CliResult<()> {
         Cmd::BackupDom(a) => boot::backup_dom(out, a),
         Cmd::DiskBackup(a) => boot::disk_backup(out, a),
         Cmd::Logs { action } => logs_cmd::logs(out, action),
+        Cmd::Manage { action } => manage_cmd::manage(out, action),
         Cmd::Bundle { action } => bundle::bundle(out, action),
         Cmd::FetchInstaller(a) => boot::fetch_installer(out, a),
         Cmd::SelfUpdate(a) => crate::update_cmd::run(out, a.check, a.channel, a.json, p.gui).map_err(CliError::from),

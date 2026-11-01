@@ -32,6 +32,9 @@ synofurb-cli install --host 192.168.1.20 --mode keep --dry-run --out ./review   
 synofurb-cli install --host 192.168.1.20 --mode keep --have-backup --accept-data-loss --confirm "ERASE DS918+"
 # or all of it, guided:
 synofurb-cli wizard
+# afterwards, look after the web UI on the converted unit (docs/MANAGE.md):
+synofurb-cli manage health --host 192.168.1.20     # arrays, disks, volumes, services; exit 0 ok, 8 warn, 9 crit
+synofurb-cli manage update --host 192.168.1.20     # push the shipped web UI version; rolls back by itself on failure
 ```
 
 No NAS at hand? `--facts demo` uses a built-in 4-bay DS918+ for every read-only command and `wizard --demo` rehearses the whole flow:
@@ -96,6 +99,8 @@ Settings are not read from the environment beyond this list; there is no config 
 | 5 | unsupported hardware: Debian 13 cannot run on this platform (`inspect`, `plan`, `install`, `wizard`), or `compat MODEL` for a model listed as unsupported |
 | 6 | the install failed **after** the point of no return: the disks were changed. Read the log and [RECOVERY.md](RECOVERY.md) |
 | 7 | the install failed or was cancelled **before** the point of no return: the disks are untouched |
+| 8 | `manage health` only: the unit answered and its verdict is **warn** (something needs attention). The report is printed |
+| 9 | `manage health` only: the unit answered and its verdict is **crit** (a degraded array, a failed disk, a full volume). The report is printed |
 
 With `--log-format json` the failure is also the last event on stdout: `{"event":"failure","kind":"refused","exit_code":3,...}`. Usage errors found by the argument parser itself
 (unknown flag) print clap's message on stderr and exit 2.
@@ -222,6 +227,37 @@ synofurb-cli disk-backup          --host H [--disk sata1,sata2] [--out-dir DIR]
 unit can do this and what the on-unit tool says. `install` and `enter` change the boot flash, so they need `--yes` or a terminal to confirm.
 `recover` makes the unit boot DSM again (works from DSM, an installed Debian, or the agent) and prints what to do if DSM's system partition is gone ([RECOVERY.md](RECOVERY.md)).
 `backup-dom` only takes the boot flash image. `disk-backup` saves the first and last MiB of the disks (partition tables, **not** your files) with a README on how to put them back.
+
+### manage
+
+Day two, after the install: health and updates of the web management UI that runs on the converted unit ([MANAGE.md](MANAGE.md) has the contract with the unit, the verdict rules and the update flow).
+
+```sh
+synofurb-cli manage health   --host H [--json]
+synofurb-cli manage version  --host H [--json]
+synofurb-cli manage update   --host H [--from-bundle DIR] [--force] [--dry-run] [--yes]
+synofurb-cli manage rollback --host H [--yes]
+synofurb-cli manage open     --host H
+```
+
+All but `open` take the same login options as `inspect` (`--user`, `--port`, `--key`, `--ssh-password-file`, `$SYNOFURB_PASSWORD`, `$SYNOFURB_SUDO_PASSWORD`); the user does not have to be
+root. They read or change only `/opt/synofurb-mgmt`, its systemd unit and temporary files below `/tmp`: never disks, arrays or the boot flash.
+
+* `health` asks the unit (`synofurb_mgmt.py health --json`) and prints the verdict (`OK`/`WARN`/`CRIT`), a problem list of at most five one-sentence lines, then arrays, disks, volumes, services
+  and pending Debian updates. **Exit 0 ok, 8 warn, 9 crit** (1 when the unit cannot be asked: management plane missing, too old, unreachable). `--json` prints
+  `{"schema":1,"host","overall","summary":{overall,reported,headline,bullets[{level,text}],problems,degraded_arrays,rebuilding_arrays,failed_disks,services_down,volumes_nearly_full,security_updates,pending_updates},"health":{...the unit's report...},"web_ui"}`.
+* `version` compares the version on the unit with the one shipped in this program: `{"schema":1,"host","installed":{present,version,script_sha256},"bundled":{version},"relation":"same|nas_older|nas_newer|unknown","update_available","decision","message","health_error","overall"}`. Always exit 0.
+* `update` reads the unit first and prints the plan (`up to date`, `update 0.3.0 -> 0.4.0`, ...). If nothing is to be done it says so and exits 0 without asking. Otherwise it asks once (this is **not** a data-loss
+  gate, so `--yes`/`-y` skips it; without a terminal and without `--yes` it exits 3 and changes nothing), uploads the files, has the unit verify, swap and restart, checks the unit again and prints the
+  result. `--dry-run` connects, prints the plan and stops. `--force` reinstalls identical files or installs an older version (without it a newer unit is left alone, exit 3).
+  `--from-bundle DIR` uses a folder instead of the built-in copy: the files themselves, or an offline bundle with a `mgmt/` folder; a `MANIFEST.sha256` there is verified first (usage error, exit 2, on a mismatch).
+  A failed update exits **1** and the message says what state the unit is in (back on its old version, a different version, or "could not verify": see MANAGE.md). The web UI is unavailable for a few seconds.
+* `rollback` returns to the version before the last update (confirmation as for `update`).
+* `open` prints `https://H:8443` (IPv6 gets brackets) and connects to nothing. The certificate is self-signed.
+
+With `--log-format json` the progress is the usual `step`/`log` events (`step 1/5 Reading ... 5/5 Cleaning up`; the unit's own step lines arrive as `log` events `NAS swap: ok - ...`) and the last event is a `result`
+whose `data` is the full report (`outcome`, `method`, `from_version`, `to_version`, `rollback`, `remote_steps[]`, `failure`, `health_after`, `summary_after`). Ctrl-C before the update is applied cancels; afterwards
+the unit finishes by itself.
 
 ### logs, config, version, completions
 
@@ -386,6 +422,7 @@ while the project's signing key is still the placeholder. On Windows it stops af
 | Log viewer | `logs list|show|path` |
 | Settings: compatibility list refresh, updates | `compat --refresh`, `self-update`, `config show` |
 | Boot manager / Recovery screens | `boot-manager install|enter|status`, `recover` |
+| Manage (health of the converted unit, web UI version and update) | `manage health|version|update|rollback|open` |
 | (CLI only) | `--dry-run`, `--facts`, `bundle`, `backup-dom`, `disk-backup`, `completions`, JSON and NDJSON |
 
 ## Troubleshooting
@@ -394,6 +431,9 @@ while the project's signing key is still the placeholder. On Windows it stops af
 * `SSH authentication failed`: wrong user/password; the DSM user must be an administrator with SSH enabled (Control Panel -> Terminal). Encrypted private keys are not supported.
 * `refusing to continue: still missing ...` (exit 3): add the flags it lists, with the phrase printed by `plan`.
 * `the NAS did not contact this computer within 10 minutes`: a firewall on this computer, or the NAS cannot reach it; see the serial/VGA console and `-v`.
+* `manage health` says "too old to report health" or "not installed": the unit's management plane predates `health` (or was installed with `--no-mgmt`); `manage update` installs the current one.
+* `manage update` ends with "Update failed ... back on version X": the unit rolled back by itself; the failing step is in the message, the whole story in `logs show`.
+* Exit 8/9 from `manage health` is the unit's verdict, not a failure of the command; use `--json` and read `summary.bullets`.
 * Exit 5 on a model you believe works: `compat MODEL` shows why; the list can be refreshed with `compat --refresh`.
 * `logs show` has the whole story of any run, including secrets-redacted remote commands.
 
@@ -401,7 +441,8 @@ while the project's signing key is still the placeholder. On Windows it stops af
 
 Automated (no NAS needed): `cargo test -p synofurb --no-default-features` (argument parsing for every command, exit codes, JSON shapes on the repository fixtures, the gate, dry runs, the wizard with scripted answers and a
 fake backend, the runner) and `tests/cli/smoke.sh [path/to/synofurb-cli]`, which runs the binary under `env -i` with no display, drives the wizard through a real pty (`TERM=dumb`), and, when `sshd`, `ssh-keygen` and root are available,
-exercises `inspect`, `plan`, `install --dry-run` and the NDJSON stream against a real local `sshd`. The installer scripts' `--cli` paths are covered by `tests/install/run-tests.sh` against a fake release server.
+exercises `inspect`, `plan`, `install --dry-run` and the NDJSON stream against a real local `sshd`, and `manage health|version|update|rollback` against a second `sshd` whose commands are redirected to the repository's
+`synofurb_mgmt.py` in a sandbox root (details in [MANAGE.md](MANAGE.md#what-is-verified)). The engine's own tests (`cargo test -p synofurb-core manage`) also run that script, when `python3` is present. The installer scripts' `--cli` paths are covered by `tests/install/run-tests.sh` against a fake release server.
 
 **Manual checks that need a real unit** (nothing has been run on a real Synology yet; record results with the compatibility report template):
 
@@ -416,3 +457,5 @@ exercises `inspect`, `plan`, `install --dry-run` and the NDJSON stream against a
 9. `disk-backup`: the head/tail files restore a scratch disk's partition table.
 10. `--source offline --bundle` on a network with no route to the Internet.
 11. `self-update --check` and `self-update` against a published release (once the signing key is set up).
+12. `manage health` on a converted unit; degrade an array (`mdadm --fail`) and see exit 9 and the bullet; `manage update` from an older management plane with and without `--force`; stop the service by hand during an update
+    and see the rollback reported; `manage rollback` afterwards.
