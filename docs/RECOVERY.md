@@ -28,8 +28,32 @@ If the app asked the unit to reboot into the boot agent and the agent did not an
 What to do, in this order: wait (the watchdog may still fire); look at the unit's serial or VGA console; run `synofurb-cli recover wait --host <ip>`
 to watch for DSM; if nothing changes, recover by hand, which needs physical access: choose **`SYNOLOGY_2`** in the boot loader menu on a serial or VGA
 console for one boot and then run `synofurb-dom default dsm --yes` on DSM, **or** take the boot flash to another Linux computer and restore the
-saved image (`synofurb-dom restore --yes FILE` with `SYNOFURB_DOM=/dev/sdX`; see "Manual recovery" in [boot/dom](../boot/dom/README.md)).
+saved image (`sha256sum -c` then `dd`, or `synofurb-dom restore --yes FILE` with `SYNOFURB_DOM=/dev/sdX`: the exact steps are in "Manual recovery, step by step" just below and in [boot/dom](../boot/dom/README.md)).
 Once you can reach the agent or DSM over SSH, `synofurb-cli recover status --host <ip>` shows what the boot flash says and the actions below fix it.
+
+### Manual recovery, step by step (physical access)
+
+**Route 1: the boot menu.** Connect a serial or VGA console, power-cycle the NAS and, in the boot loader menu, choose `SYNOLOGY_2` for this boot. When DSM runs, log in over SSH or
+the DSM terminal as an administrator and run `sudo synofurb-dom default dsm --yes` (or `sudo synofurb-dom remove --yes` to take synofurb's entries out). The tool is on the unit in
+`/usr/local/bin/synofurb-dom` if the app installed the boot agent there; otherwise copy it from `boot/dom/synofurb-dom` in the repository. If you have no tool at all, route 2 does not need it.
+
+**Route 2: put the boot flash in another Linux computer** (it is a 128 MB USB flash module on the mainboard header; a USB adapter works). Use the image the app saved on *your* computer
+(`dom-backups/synofurb-dom-backup-<unit>-<time>.img`, with `...img.sha256` next to it; `recover status` lists them). Two ways, pick one:
+
+* **With `synofurb-dom`** (the script, `boot/dom/synofurb-dom` in the repository; needs root, `e2fsck`, `dd`): `sudo SYNOFURB_DOM=/dev/sdX synofurb-dom restore --yes FILE.img`. It validates the image, snapshots the current flash, writes, reads back and compares.
+* **Without it** (plain `sha256sum` and `dd`, nothing to install):
+
+  ```sh
+  cd /path/to/dom-backups
+  sha256sum -c synofurb-dom-backup-<unit>-<time>.img.sha256      # must say: OK
+  lsblk -o NAME,SIZE,MODEL,TRAN /dev/sdX                          # check twice: the DOM is the 128 MB device, NOT one of your disks
+  sudo dd if=synofurb-dom-backup-<unit>-<time>.img of=/dev/sdX bs=1M conv=fsync status=progress
+  sync
+  ```
+
+  `dd` overwrites `/dev/sdX` without asking. If `sha256sum -c` does not say `OK`, do not write that file. Afterwards put the flash module back; the unit boots as it did when the image was taken.
+
+Both routes need the physical unit. The first-write backup the tool keeps on the unit itself (`$SYNOFURB_STATE/synofurb-dom-first-backup.img`, default `/var/lib/synofurb`) is a second copy of the same kind. Your disks are not touched by any of this and nothing here promises anything about your data.
 
 ## What protects you, by phase
 

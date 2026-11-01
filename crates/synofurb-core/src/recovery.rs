@@ -7,6 +7,7 @@
 //! `confirmed = true`, return typed [`RecoveryError`]s, and describe only what they verified: [`boot_dsm`] with a reboot says
 //! "reboot requested" and nothing more; use [`wait_for_dsm`] / [`probe_unit`] to learn that DSM answers.
 
+use crate::domboot::{BackupSidecar, UnitIdentity};
 use crate::logs::Logger;
 use crate::remote::{ExecResult, Privileged, RemoteShell, SshSession};
 use crate::session::{SshTarget, config_keys_dir};
@@ -359,7 +360,7 @@ pub fn read_unit_boot_state(t: &SshTarget, log: &Logger) -> Result<UnitBootState
     with_privileged(t, log, read_boot_state)
 }
 
-/// Flash backups on this computer that belong to `unit` (the serial number or host name `backup_dom` used), newest first.
+/// A flash backup file on this computer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LocalBackup {
     pub path: PathBuf,
@@ -367,32 +368,136 @@ pub struct LocalBackup {
     /// Hash from the `.img.sha256` file next to it, if there is one.
     pub recorded_sha256: Option<String>,
     pub modified: Option<String>,
+    /// The unit the file name says (`synofurb-dom-backup-<key>-<date>-<time>.img`): the serial, or the address when no serial was known.
+    pub name_key: String,
+    /// Who the backup says it belongs to (`<image>.json`, written since the sidecar existed); `None` for older backups.
+    pub sidecar: Option<BackupSidecar>,
 }
 
-pub fn find_local_backups(dir: &Path, unit: &str) -> Vec<LocalBackup> {
-    let safe: String = unit.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
-    let prefix = format!("synofurb-dom-backup-{safe}-");
+/// Does a backup belong to the unit in question?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ownership {
+    /// Same serial number (the only thing that separates two units of one model).
+    Matches,
+    /// Another serial, another model, or a name that is another unit's.
+    OtherUnit,
+    /// Not decidable: the unit's serial is unknown (only DSM reveals it) or the backup names no serial. Never offered by
+    /// [`backups_for_unit`]; [`restore_flash`] goes ahead and says so.
+    Unknown,
+}
+
+fn parse_backup(path: &Path, md: &std::fs::Metadata) -> Option<LocalBackup> {
+    let name = path.file_name()?.to_string_lossy().to_string();
+    let body = name.strip_prefix("synofurb-dom-backup-")?.strip_suffix(".img")?;
+    // <key>-<YYYYMMDD>-<HHMMSS>
+    let mut parts = body.rsplitn(3, '-');
+    let (_time, _date, key) = (parts.next()?, parts.next()?, parts.next()?);
+    let recorded_sha256 = std::fs::read_to_string(path.with_extension("img.sha256"))
+        .ok()
+        .and_then(|t| t.split_whitespace().next().map(str::to_ascii_lowercase))
+        .filter(|h| h.len() == 64);
+    let sidecar =
+        std::fs::read_to_string(crate::domboot::sidecar_path(path)).ok().and_then(|t| serde_json::from_str::<BackupSidecar>(&t).ok());
+    let modified = md.modified().ok().map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    Some(LocalBackup { path: path.to_path_buf(), bytes: md.len(), recorded_sha256, modified, name_key: key.to_string(), sidecar })
+}
+
+/// Every flash backup in `dir`, newest first.
+pub fn list_local_backups(dir: &Path) -> Vec<LocalBackup> {
     let mut v: Vec<LocalBackup> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            if !name.starts_with(&prefix) || !name.ends_with(".img") {
-                return None;
-            }
             let md = e.metadata().ok().filter(|m| m.is_file())?;
-            let sum = std::fs::read_to_string(e.path().with_extension("img.sha256"))
-                .ok()
-                .and_then(|t| t.split_whitespace().next().map(str::to_ascii_lowercase))
-                .filter(|h| h.len() == 64);
-            let modified =
-                md.modified().ok().map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-            Some(LocalBackup { path: e.path(), bytes: md.len(), recorded_sha256: sum, modified })
+            parse_backup(&e.path(), &md)
         })
         .collect();
-    v.sort_by(|a, b| b.path.cmp(&a.path)); // the file name carries the timestamp
+    v.sort_by(|a, b| b.path.cmp(&a.path)); // the file name ends in the timestamp
     v
+}
+
+/// The backup record of one file (also for a path outside the backup directory).
+pub fn local_backup_of(path: &Path) -> Option<LocalBackup> {
+    let md = std::fs::metadata(path).ok().filter(|m| m.is_file())?;
+    parse_backup(path, &md)
+}
+
+/// The matching rule.
+/// * With a sidecar (`<image>.json`): both serials known -> equal is `Matches`, different is `OtherUnit`. If a serial is missing on
+///   either side: a different model is `OtherUnit`, anything else `Unknown`.
+/// * Without one (older backups) only the file name is left: when this unit's serial is known, a name equal to it is `Matches`, a name
+///   equal to this unit's address is `Unknown` (named before a serial was readable), any other name is `OtherUnit`. When this unit's
+///   serial is not known nothing can be compared: `Unknown`.
+pub fn backup_ownership(b: &LocalBackup, id: &UnitIdentity) -> Ownership {
+    let (serial, model) = (id.serial.trim(), id.model.trim());
+    if let Some(sc) = &b.sidecar {
+        let theirs = sc.unit.serial.trim();
+        if !serial.is_empty() && !theirs.is_empty() {
+            return if serial.eq_ignore_ascii_case(theirs) { Ownership::Matches } else { Ownership::OtherUnit };
+        }
+        let their_model = sc.unit.model.trim();
+        if !model.is_empty() && !their_model.is_empty() && !model.eq_ignore_ascii_case(their_model) {
+            return Ownership::OtherUnit;
+        }
+        return Ownership::Unknown;
+    }
+    if serial.is_empty() {
+        return Ownership::Unknown;
+    }
+    let (ours, host) = (crate::domboot::file_safe(serial), crate::domboot::file_safe(&id.host));
+    if b.name_key == ours {
+        Ownership::Matches
+    } else if !host.is_empty() && b.name_key == host {
+        Ownership::Unknown // named by an address: it may well be this unit, from before its serial was readable
+    } else {
+        Ownership::OtherUnit
+    }
+}
+
+/// Every backup in `dir` with the verdict for `id`, newest first.
+pub fn backups_classified(dir: &Path, id: &UnitIdentity) -> Vec<(LocalBackup, Ownership)> {
+    list_local_backups(dir).into_iter().map(|b| (backup_ownership(&b, id), b)).map(|(o, b)| (b, o)).collect::<Vec<_>>()
+}
+
+/// The flash backups that belong to **this one unit**, newest first: same serial number, nothing else. Two units of the same model have
+/// different serials and never see each other's images. Backups that cannot be attributed ([`Ownership::Unknown`]) are not in the list;
+/// use [`backups_classified`] to show them with a warning.
+pub fn backups_for_unit(dir: &Path, id: &UnitIdentity) -> Vec<LocalBackup> {
+    backups_classified(dir, id).into_iter().filter(|(_, o)| *o == Ownership::Matches).map(|(b, _)| b).collect()
+}
+
+/// Backups whose name (serial or address) is `unit`, newest first. Name only: use [`backups_for_unit`] when the serial is known.
+pub fn find_local_backups(dir: &Path, unit: &str) -> Vec<LocalBackup> {
+    let safe = crate::domboot::file_safe(unit);
+    list_local_backups(dir).into_iter().filter(|b| safe.is_empty() || b.name_key == safe).collect()
+}
+
+/// Refuse an image that belongs to another unit unless `allow_other_unit`. `Unknown` passes (and is returned so the caller can say so).
+pub fn check_backup_belongs(backup: &Path, id: &UnitIdentity, allow_other_unit: bool) -> Result<Ownership, RecoveryError> {
+    let Some(b) = local_backup_of(backup) else {
+        // a file that is not one of ours by name (a renamed copy): nothing to compare
+        return Ok(Ownership::Unknown);
+    };
+    let own = backup_ownership(&b, id);
+    if own == Ownership::OtherUnit && !allow_other_unit {
+        let theirs = match &b.sidecar {
+            Some(sc) => format!(
+                "serial {}, model {}",
+                if sc.unit.serial.is_empty() { "unknown" } else { &sc.unit.serial },
+                if sc.unit.model.is_empty() { "unknown" } else { &sc.unit.model }
+            ),
+            None => format!("named for '{}'", b.name_key),
+        };
+        let ours = format!(
+            "serial {}, model {}",
+            if id.serial.is_empty() { "unknown" } else { &id.serial },
+            if id.model.is_empty() { "unknown" } else { &id.model }
+        );
+        return Err(RecoveryError::OtherUnit { path: backup.display().to_string(), backup_unit: theirs, this_unit: ours });
+    }
+    Ok(own)
 }
 
 // ---------------------------------------------------------------------------------------------- actions
@@ -406,6 +511,12 @@ pub enum RecoveryError {
     /// The backup file cannot be used; nothing was sent to the unit.
     #[error("the backup file {path} cannot be used: {reason}")]
     BackupUnusable { path: String, reason: String },
+    /// The image was made from another unit (another serial or model). Writing it to this unit's boot flash could leave it unbootable.
+    /// Nothing was sent. `allow_other_unit` overrides, for the rare case where you know better.
+    #[error(
+        "the backup {path} belongs to another unit ({backup_unit}); this unit is {this_unit}. Restoring another unit's boot flash image can leave this one unable to boot, so nothing was sent. If you are sure, allow it explicitly (--allow-other-unit)"
+    )]
+    OtherUnit { path: String, backup_unit: String, this_unit: String },
     /// `synofurb-dom` is not on the unit.
     #[error(
         "synofurb-dom is not installed on the unit, so the boot flash cannot be changed from here. Use the manual recovery in docs/RECOVERY.md (the boot loader menu on a console, or the flash in another Linux computer)"
@@ -497,6 +608,8 @@ pub struct RestoreOutcome {
     pub checked_against_sidecar: bool,
     /// `synofurb-dom restore` read the flash back and compared it; this is its verdict (exit code 0).
     pub readback_verified: bool,
+    /// Whose image it was, as far as it could be told (`None` when the caller did not ask: [`restore_flash_on`]).
+    pub ownership: Option<Ownership>,
     pub state_after: UnitBootState,
 }
 
@@ -545,10 +658,47 @@ pub fn check_backup_file(path: &Path) -> Result<(String, u64, bool), RecoveryErr
 /// reachable over SSH (DSM, the installed Debian or the agent); a flash that left the unit is restored on another computer (docs/RECOVERY.md).
 /// Steps: check the file here, upload it to a private directory on the unit, compare hashes there, run the tool (which validates the
 /// image, snapshots the current flash, writes, reads back and compares), read the unit's state again. Needs `confirmed`.
-pub fn restore_flash(t: &SshTarget, backup: &Path, confirmed: bool, log: &Logger) -> Result<RestoreOutcome, RecoveryError> {
+///
+/// The unit's serial and model are read first (`inspect`, best effort) and an image **made from another unit** is refused before anything
+/// is sent, unless `allow_other_unit` ([`RecoveryError::OtherUnit`]; images that cannot be attributed are allowed and the outcome says so).
+pub fn restore_flash(
+    t: &SshTarget,
+    backup: &Path,
+    confirmed: bool,
+    allow_other_unit: bool,
+    log: &Logger,
+) -> Result<RestoreOutcome, RecoveryError> {
     need(confirmed, "restoring the boot flash")?;
     let checks = check_backup_file(backup)?;
-    with_privileged(t, log, |p| restore_flash_on(p, backup, checks, log)).map_err(RecoveryError::transport)?
+    let mut ssh = SshSession::connect(&t.host, t.port, &t.user, &t.auth, log).map_err(RecoveryError::transport)?;
+    let id = match crate::session::inspect_remote(&mut ssh, false, t.sudo_password.clone(), log) {
+        Ok((facts, _)) => UnitIdentity::from_facts(&facts, &t.host),
+        Err(_) => UnitIdentity { host: t.host.clone(), ..Default::default() },
+    };
+    let r =
+        with_privileged_on(&mut ssh, t.sudo_password.clone(), |p| restore_flash_for_unit_on(p, backup, checks, &id, allow_other_unit, log))
+            .map_err(RecoveryError::transport);
+    ssh.close();
+    r?
+}
+
+/// [`restore_flash_on`] after checking that the image belongs to the unit `id` (refused otherwise, see [`check_backup_belongs`]). The GUI
+/// calls this one: [`restore_flash_on`] alone does not know whose unit it is talking to.
+pub fn restore_flash_for_unit_on(
+    p: &mut Privileged<'_>,
+    backup: &Path,
+    checks: (String, u64, bool),
+    id: &UnitIdentity,
+    allow_other_unit: bool,
+    log: &Logger,
+) -> Result<RestoreOutcome, RecoveryError> {
+    let own = check_backup_belongs(backup, id, allow_other_unit)?;
+    if own == Ownership::Unknown {
+        log.warn("could not confirm that this image was made from this unit (no serial to compare); the image itself checked out");
+    }
+    let mut o = restore_flash_on(p, backup, checks, log)?;
+    o.ownership = Some(own);
+    Ok(o)
 }
 
 /// [`restore_flash`] on an open session (tests use a scripted one). The file has been checked.
@@ -600,6 +750,7 @@ pub fn restore_flash_on(
         sha256: sha,
         checked_against_sidecar: sidecar,
         readback_verified: true,
+        ownership: None,
         state_after,
     })
 }
@@ -966,7 +1117,7 @@ mod tests {
         // each returns before connecting (port 1 would be a Transport error)
         assert!(matches!(remove_our_entries(&t, false, &log).unwrap_err(), RecoveryError::NotConfirmed { .. }));
         assert!(matches!(boot_dsm(&t, true, false, &log).unwrap_err(), RecoveryError::NotConfirmed { .. }));
-        assert!(matches!(restore_flash(&t, Path::new("/nope.img"), false, &log).unwrap_err(), RecoveryError::NotConfirmed { .. }));
+        assert!(matches!(restore_flash(&t, Path::new("/nope.img"), false, false, &log).unwrap_err(), RecoveryError::NotConfirmed { .. }));
         let e = enter_agent(&t, &AtomicBool::new(false), false, &log).unwrap_err();
         assert!(matches!(e.downcast_ref::<RecoveryError>(), Some(RecoveryError::NotConfirmed { .. })));
         // setting the default without a reboot is not destructive and may run unconfirmed (here: fails at the connection)
@@ -1219,5 +1370,140 @@ mod tests {
         let c = AtomicBool::new(true);
         let w = wait_for_dsm("127.0.0.1", Duration::from_secs(60), &c, &opts(none, &[none]), Duration::from_millis(50), &mut |_, _| {});
         assert!(w.cancelled && !w.timed_out);
+    }
+
+    fn unit(serial: &str, model: &str, host: &str) -> UnitIdentity {
+        UnitIdentity { serial: serial.into(), model: model.into(), host: host.into() }
+    }
+
+    /// Make a real backup through `backup_dom_for` (scripted shell) so the sidecar is what the engine writes.
+    fn make_backup(dir: &Path, id: &UnitIdentity) -> PathBuf {
+        let data = vec![0x5Au8; 16 << 20];
+        let mut m = MockShell::default();
+        m.push_ok(&String::from_utf8_lossy(&data));
+        m.push_ok(&format!("{}  /dev/synoboot\n", crate::debian::sha256_hex(&data)));
+        // the mock hands back text, so the bytes are the UTF-8 form of the fill byte: the content does not matter here
+        let b = crate::domboot::backup_dom_for(&mut m, true, None, dir, id, 0, &Logger::memory(None)).unwrap();
+        std::thread::sleep(Duration::from_millis(1100)); // the file name carries the time to the second
+        b.path
+    }
+
+    #[test]
+    fn two_units_of_the_same_model_never_see_each_others_backups() {
+        let dir = std::env::temp_dir().join(format!("sf-rec-own-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = unit("1920PDN111111", "DS923+", "192.168.1.20");
+        let b = unit("1920PDN222222", "DS923+", "192.168.1.21");
+        let pa = make_backup(&dir, &a);
+        let pb = make_backup(&dir, &b);
+        let pa2 = make_backup(&dir, &a);
+        // the sidecar says who it is
+        let side: BackupSidecar = serde_json::from_str(&std::fs::read_to_string(crate::domboot::sidecar_path(&pa)).unwrap()).unwrap();
+        assert_eq!((side.schema, side.unit.clone()), (1, a.clone()));
+        assert_eq!(side.sha256.len(), 64);
+        // each unit lists only its own, newest first
+        let mine: Vec<PathBuf> = backups_for_unit(&dir, &a).into_iter().map(|x| x.path).collect();
+        assert_eq!(mine, vec![pa2.clone(), pa.clone()]);
+        assert_eq!(backups_for_unit(&dir, &b).into_iter().map(|x| x.path).collect::<Vec<_>>(), vec![pb.clone()]);
+        // a third unit of the same model has none (and there is no fallback to "the newest of any unit")
+        assert!(backups_for_unit(&dir, &unit("1920PDN333333", "DS923+", "192.168.1.22")).is_empty());
+        // classification shows the others as other units
+        let all = backups_classified(&dir, &b);
+        assert_eq!(all.iter().filter(|(_, o)| *o == Ownership::OtherUnit).count(), 2);
+        // restore: the check refuses the other unit's image before anything is sent
+        let e = check_backup_belongs(&pa, &b, false).unwrap_err();
+        assert!(
+            matches!(&e, RecoveryError::OtherUnit { backup_unit, this_unit, .. } if backup_unit.contains("1920PDN111111") && this_unit.contains("1920PDN222222")),
+            "{e}"
+        );
+        assert!(e.to_string().contains("--allow-other-unit"));
+        assert_eq!(check_backup_belongs(&pb, &b, false).unwrap(), Ownership::Matches);
+        assert_eq!(check_backup_belongs(&pa, &b, true).unwrap(), Ownership::OtherUnit, "explicitly allowed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restore_for_a_unit_refuses_another_units_image_without_running_a_command() {
+        let dir = std::env::temp_dir().join(format!("sf-rec-own2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // a real 16 MiB image with a sidecar for unit A
+        let a = unit("SN-A", "DS923+", "10.0.0.1");
+        let img = write_image(&dir, "synofurb-dom-backup-SN-A-20260101-000000.img", 3, true);
+        let sc = BackupSidecar {
+            schema: 1,
+            unit: a.clone(),
+            bytes: 16 << 20,
+            sha256: check_backup_file(&img).unwrap().0,
+            created: "2026-01-01T00:00:00Z".into(),
+            tool_version: "t".into(),
+        };
+        std::fs::write(crate::domboot::sidecar_path(&img), serde_json::to_string(&sc).unwrap()).unwrap();
+        let checks = check_backup_file(&img).unwrap();
+        let b = unit("SN-B", "DS923+", "10.0.0.2");
+        let mut m = MockShell::default();
+        let e = restore_flash_for_unit_on(&mut priv_with(&mut m), &img, checks.clone(), &b, false, &Logger::memory(None)).unwrap_err();
+        assert!(matches!(e, RecoveryError::OtherUnit { .. }), "{e}");
+        assert!(m.commands.is_empty() && m.uploads.is_empty(), "nothing reached the unit: {:?}", m.commands);
+        // a different model is another unit even when the serial is not readable
+        let mut m = MockShell::default();
+        let e = restore_flash_for_unit_on(
+            &mut priv_with(&mut m),
+            &img,
+            checks.clone(),
+            &unit("", "DS220+", "10.0.0.2"),
+            false,
+            &Logger::memory(None),
+        )
+        .unwrap_err();
+        assert!(matches!(e, RecoveryError::OtherUnit { .. }));
+        // the same unit, and an explicit override, go through (scripted tool answers)
+        for (id, allow, want) in [(a.clone(), false, Ownership::Matches), (b.clone(), true, Ownership::OtherUnit)] {
+            let mut m = MockShell::default();
+            m.push_ok("");
+            m.push_ok(&format!("{}  f\n", checks.0));
+            m.push_ok("restored\n");
+            m.push_ok("");
+            m.push_ok("dsm\n");
+            m.push_ok(&clean_json());
+            let o = restore_flash_for_unit_on(&mut priv_with(&mut m), &img, checks.clone(), &id, allow, &Logger::memory(None)).unwrap();
+            assert_eq!(o.ownership, Some(want));
+        }
+        // serial unknown on this side (the agent): not decidable, goes ahead and says Unknown
+        let mut m = MockShell::default();
+        m.push_ok("");
+        m.push_ok(&format!("{}  f\n", checks.0));
+        m.push_ok("restored\n");
+        m.push_ok("");
+        m.push_ok("dsm\n");
+        m.push_ok(&clean_json());
+        let o =
+            restore_flash_for_unit_on(&mut priv_with(&mut m), &img, checks, &unit("", "DS923+", "10.0.0.1"), false, &Logger::memory(None))
+                .unwrap();
+        assert_eq!(o.ownership, Some(Ownership::Unknown));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn older_backups_without_a_sidecar_are_matched_by_the_serial_in_their_name_only() {
+        let dir = std::env::temp_dir().join(format!("sf-rec-own3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_image(&dir, "synofurb-dom-backup-SN1-20260101-000000.img", 1, false);
+        write_image(&dir, "synofurb-dom-backup-SN2-20260102-000000.img", 2, false);
+        write_image(&dir, "synofurb-dom-backup-10005-20260103-000000.img", 3, false); // named by an address, dots dropped (no serial then)
+        let a = unit("SN1", "DS923+", "10.0.0.5");
+        let mine = backups_for_unit(&dir, &a);
+        assert_eq!(mine.len(), 1);
+        assert!(mine[0].path.ends_with("synofurb-dom-backup-SN1-20260101-000000.img"));
+        let by = |o| backups_classified(&dir, &a).into_iter().filter(|(_, x)| *x == o).count();
+        assert_eq!((by(Ownership::Matches), by(Ownership::OtherUnit), by(Ownership::Unknown)), (1, 1, 1));
+        // the address-named one cannot be attributed: it may be this unit from before its serial was readable
+        let unknown_serial = unit("", "DS923+", "10.0.0.5");
+        assert!(backups_for_unit(&dir, &unknown_serial).is_empty(), "no serial: nothing is claimed");
+        assert_eq!(backups_classified(&dir, &unknown_serial).iter().filter(|(_, o)| *o == Ownership::Unknown).count(), 3);
+        // a hyphen in the unit name does not make 'SN1' match 'SN1-2'
+        write_image(&dir, "synofurb-dom-backup-SN1-2-20260104-000000.img", 4, false);
+        assert_eq!(backups_for_unit(&dir, &a).len(), 1);
+        assert_eq!(find_local_backups(&dir, "SN1").len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

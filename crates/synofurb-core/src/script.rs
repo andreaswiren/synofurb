@@ -43,8 +43,15 @@ pub struct FailureHandling {
 }
 
 /// Failure behaviour of the script rendered for `plan` (the `60 s` and `15 min` of the app's texts exist only when this says so).
+/// The reboot needs `synofurb-dom` in the installer image; the app's `build_initrd` always puts it there ([`crate::debian::INSTALLER_DOM_TOOL`]).
 pub fn failure_handling(plan: &Plan) -> FailureHandling {
-    if plan.dom_boot {
+    failure_handling_with_tool(plan, crate::debian::installer_has_dom_tool())
+}
+
+/// [`failure_handling`] for an installer image that does or does not contain `synofurb-dom`: without it the script halts and does not
+/// reboot by itself, whatever the firmware.
+pub fn failure_handling_with_tool(plan: &Plan, installer_has_dom_tool: bool) -> FailureHandling {
+    if plan.dom_boot && installer_has_dom_tool {
         FailureHandling {
             reboots_by_itself: true,
             before_ponr_secs: Some(FAIL_REBOOT_BEFORE_PONR_SECS),
@@ -114,15 +121,22 @@ diag() {
 
 PONR=0
 DOM_BOOT=@@DOM@@
+# Where is synofurb-dom in THIS environment? The installer's PATH may not include /usr/local/sbin, where the app puts it, so look
+# at the absolute locations first and only then at PATH. (SYNOFURB_DOM_DIRS: tests.)
+SFDOM=
+for _d in ${SYNOFURB_DOM_DIRS:-/usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin}; do
+  if [ -x "$_d/synofurb-dom" ]; then SFDOM="$_d/synofurb-dom"; break; fi
+done
+[ -n "$SFDOM" ] || SFDOM=$(command -v synofurb-dom 2>/dev/null || true)
 fail() {
   emit "ERROR $*"
   emit "@@FAIL $*"
   diag
-  if [ "$DOM_BOOT" = 1 ] && command -v synofurb-dom >/dev/null 2>&1; then
+  if [ "$DOM_BOOT" = 1 ] && [ -n "$SFDOM" ]; then
     # FAIL-SAFE: this unit boots from its internal flash. Point the default back at DSM and reboot, so a
     # failed or abandoned install never leaves the NAS unreachable.
     emit "FALLBACK: switching the boot flash default back to DSM"
-    [ "$DRY" = 1 ] || synofurb-dom default dsm --yes >> "$LOG" 2>&1 || emit "WARN  could not reset the default boot entry; power-cycle the NAS and pick DSM"
+    [ "$DRY" = 1 ] || "$SFDOM" default dsm --yes >> "$LOG" 2>&1 || emit "WARN  could not reset the default boot entry; power-cycle the NAS and pick DSM"
     if [ "$PONR" = 0 ]; then
       emit "No disk was changed. The NAS reboots in @@FAIL_PRE@@ seconds and starts what its boot flash defaults to. Full log: $LOG"
       _w=@@FAIL_PRE@@
@@ -135,6 +149,8 @@ fail() {
     reboot -f 2>/dev/null || reboot
   fi
   emit "Installation HALTED. No further changes will be made and the NAS will NOT reboot by itself. Read the log on the console, then power-cycle the NAS. Full log: $LOG"
+  [ "$DOM_BOOT" = 1 ] && emit "WARN  synofurb-dom was not found in the installer, so the boot flash default was NOT reset"
+  [ "$DRY" = 1 ] && exit 1
   sleep 5
   while :; do sleep 3600; done
 }
@@ -303,6 +319,14 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     writeln!(w, "emit \"@@BEGIN run=$RUN_ID arch={} firmware={:?} mode={:?} dry=$DRY\"", plan.arch.debian(), plan.firmware, plan.mode)?;
     writeln!(w, "log \"installer kernel: $(uname -srm)  memory: $(sed -n 's/^MemTotal: *//p' /proc/meminfo)\"")?;
     writeln!(w, "log \"target NAS: {} ({}), DSM {}\"", p.facts.model, p.facts.serial, p.facts.dsm_version)?;
+    if plan.dom_boot {
+        // before anything is touched: without the tool the installer can neither fall back to DSM nor register Debian
+        writeln!(
+            w,
+            "[ -n \"$SFDOM\" ] || fail \"preflight: synofurb-dom is not in the installer image, so the boot flash cannot be managed; nothing was changed\""
+        )?;
+        writeln!(w, "log \"boot flash manager: $SFDOM\"")?;
+    }
 
     // -- 1. installer components --------------------------------------------
     writeln!(w, "\nstep 1 \"Loading installer components (RAID, LVM, XFS, debootstrap)\"")?;
@@ -620,7 +644,7 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     writeln!(w, "\nstep 12 \"Finishing: saving logs, unmounting, rebooting\"")?;
     if plan.dom_boot {
         writeln!(w, "log \"making Debian the default entry of the boot flash (DSM stays selectable)\"")?;
-        writeln!(w, "run synofurb-dom default debian --yes")?;
+        writeln!(w, "run \"$SFDOM\" default debian --yes")?;
     }
     writeln!(w, "run mkdir -p /target/var/log/synofurb")?;
     writeln!(w, "try cp \"$LOG\" /target/var/log/synofurb/install.log")?;
@@ -812,11 +836,11 @@ mod tests {
         let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
         let s = render_stage2(&params(&plan, &facts, &cfg)).unwrap();
         sh_syntax_ok(&s);
-        assert!(s.contains("DOM_BOOT=1") && s.contains("synofurb-dom default dsm --yes"));
+        assert!(s.contains("DOM_BOOT=1") && s.contains("default dsm --yes"));
         let ponr = s.find("PONR=1").unwrap();
         let fallback = s.find("FALLBACK").unwrap();
         assert!(fallback < ponr, "the fallback handler is defined before the point of no return");
-        let default_debian = s.find("run synofurb-dom default debian --yes").unwrap();
+        let default_debian = s.find("run \"$SFDOM\" default debian --yes").unwrap();
         assert!(
             s.find("run chroot /target").unwrap() < default_debian && default_debian < s.rfind("reboot -f").unwrap(),
             "default switches only after a successful configuration"
@@ -847,6 +871,154 @@ mod tests {
         assert_eq!((h.reboots_by_itself, h.before_ponr_secs, h.after_ponr_secs), (true, Some(60), Some(900)));
         let n = failure_handling(&plain_plan);
         assert_eq!((n.reboots_by_itself, n.before_ponr_secs, n.after_ponr_secs), (false, None, None));
+    }
+
+    // ---- the failure handler in a stand-in installer environment: the tool is NOT on PATH, `sleep` and `reboot` are stubs
+
+    struct Env {
+        dir: std::path::PathBuf,
+    }
+
+    impl Env {
+        fn new(tag: &str, with_tool: bool) -> Env {
+            let dir = std::env::temp_dir().join(format!("sf-failenv-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            for d in ["tool", "stubs"] {
+                std::fs::create_dir_all(dir.join(d)).unwrap();
+            }
+            let put = |path: std::path::PathBuf, body: &str| {
+                std::fs::write(&path, body).unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+                }
+            };
+            let calls = dir.join("calls");
+            // `reboot` never returns on a real unit and the script then sleeps for ever: the stub ends the script at that point
+            put(
+                dir.join("stubs/sleep"),
+                &format!("#!/bin/sh\necho \"sleep $*\" >> {}\n[ \"$1\" = 3600 ] && kill -9 $PPID\nexit 0\n", calls.display()),
+            );
+            put(dir.join("stubs/reboot"), &format!("#!/bin/sh\necho \"reboot $*\" >> {}\n", calls.display()));
+            if with_tool {
+                put(dir.join("tool/synofurb-dom"), &format!("#!/bin/sh\necho \"synofurb-dom $*\" >> {}\n", calls.display()));
+            }
+            Env { dir }
+        }
+
+        /// Run the generated installer's preamble (functions only) followed by `tail`.
+        fn run(&self, script: &str, tail: &str, dry: bool) -> (i32, String, String) {
+            let head = &script[..script.find("\nRUN_ID=").expect("end of the preamble")];
+            let f = self.dir.join("harness.sh");
+            std::fs::write(&f, format!("{head}\n{tail}\n")).unwrap();
+            let out = std::process::Command::new("sh")
+                .arg(&f)
+                .env_clear()
+                .env("PATH", format!("{}:/usr/bin:/bin", self.dir.join("stubs").display()))
+                .env("SYNOFURB_LOG", self.dir.join("log"))
+                .env("SYNOFURB_LOCK", self.dir.join("lock"))
+                .env("SYNOFURB_DRY", if dry { "1" } else { "0" })
+                .env("SYNOFURB_DOM_DIRS", self.dir.join("tool"))
+                .output()
+                .unwrap();
+            (
+                out.status.code().unwrap_or(-1),
+                std::fs::read_to_string(self.dir.join("log")).unwrap_or_default(),
+                std::fs::read_to_string(self.dir.join("calls")).unwrap_or_default(),
+            )
+        }
+    }
+
+    impl Drop for Env {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn live_dom_script() -> String {
+        let facts = dom_amd_facts();
+        let plan = build_plan(&facts, &PlanRequest::default());
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let mut p = params(&plan, &facts, &cfg);
+        p.dry_run = false;
+        render_stage2(&p).unwrap()
+    }
+
+    #[test]
+    fn the_failure_handler_finds_synofurb_dom_by_absolute_path_not_only_on_path() {
+        let script = live_dom_script();
+        // before the point of no return: default reset through the absolute path, 60 s, reboot
+        let env = Env::new("pre", true);
+        let (_, log, calls) = env.run(&script, "PONR=0\nfail \"boom\"", false);
+        let lines: Vec<&str> = calls.lines().take(3).collect();
+        assert_eq!(lines, ["synofurb-dom default dsm --yes", "sleep 60", "reboot -f"], "{calls}\n{log}");
+        assert!(log.contains("reboots in 60 seconds") && log.contains("FALLBACK"), "{log}");
+        // after it: 900 s
+        let env = Env::new("post", true);
+        let (_, log, calls) = env.run(&script, "PONR=1\nfail \"boom\"", false);
+        assert_eq!(
+            calls.lines().take(3).collect::<Vec<_>>(),
+            ["synofurb-dom default dsm --yes", "sleep 900", "reboot -f"],
+            "{calls}\n{log}"
+        );
+        assert!(log.contains("reboots in 15 minutes"), "{log}");
+        // the tool is nowhere: no reboot, no promise, and it says so (dry mode so the harness does not wait for ever)
+        let env = Env::new("none", false);
+        let (code, log, calls) = env.run(&script, "PONR=0\nfail \"boom\"", true);
+        assert_eq!(code, 1);
+        assert!(calls.is_empty(), "nothing is run: {calls}");
+        assert!(log.contains("will NOT reboot by itself") && log.contains("was not found in the installer"), "{log}");
+        assert!(!log.contains("reboots in"), "{log}");
+    }
+
+    #[test]
+    fn a_boot_flash_install_refuses_to_start_when_the_tool_is_missing_and_the_numbers_follow() {
+        let script = live_dom_script();
+        assert!(script.contains("preflight: synofurb-dom is not in the installer image"));
+        let pre = script.find("preflight: synofurb-dom").unwrap();
+        assert!(pre < script.find("PONR=1").unwrap(), "the check comes before the point of no return");
+        // dry run of the whole script: with the tool the preflight passes and the log names the tool; without it the run stops at once
+        let env = Env::new("pf-yes", true);
+        let (code, log, _) = env.run(&format!("{script}\n"), "", true);
+        let _ = code; // the harness cuts at RUN_ID, so only the preamble ran; the preflight line is checked below on the full text
+        assert!(log.is_empty() || !log.contains("preflight"));
+        let facts = dom_amd_facts();
+        let plan = build_plan(&facts, &PlanRequest::default());
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let dry = render_stage2(&params(&plan, &facts, &cfg)).unwrap();
+        for (tag, with_tool) in [("full-yes", true), ("full-no", false)] {
+            let env = Env::new(tag, with_tool);
+            let f = env.dir.join("full.sh");
+            std::fs::write(&f, &dry).unwrap();
+            let out = std::process::Command::new("sh")
+                .arg(&f)
+                .env_clear()
+                .env("PATH", format!("{}:/usr/bin:/bin", env.dir.join("stubs").display()))
+                .env("SYNOFURB_LOG", env.dir.join("log"))
+                .env("SYNOFURB_LOCK", env.dir.join("lock"))
+                .env("SYNOFURB_DRY", "1")
+                .env("SYNOFURB_DOM_DIRS", env.dir.join("tool"))
+                .output()
+                .unwrap();
+            let log = std::fs::read_to_string(env.dir.join("log")).unwrap_or_default();
+            if with_tool {
+                assert!(out.status.success() && log.contains("@@DONE") && log.contains("boot flash manager:"), "{log}");
+            } else {
+                assert_eq!(out.status.code(), Some(1), "{log}");
+                assert!(
+                    log.contains("@@FAIL preflight: synofurb-dom is not in the installer image") && !log.contains("@@STEP 3/"),
+                    "{log}"
+                );
+            }
+        }
+        // the app's text helper: the 60 s / 15 min exist only when the image has the tool
+        assert!(failure_handling(&plan).reboots_by_itself);
+        let no_tool = failure_handling_with_tool(&plan, false);
+        assert_eq!((no_tool.reboots_by_itself, no_tool.before_ponr_secs, no_tool.after_ponr_secs), (false, None, None));
+        // and the app really puts the tool into the image
+        assert_eq!(crate::debian::INSTALLER_DOM_TOOL, "usr/local/sbin/synofurb-dom");
+        assert!(crate::debian::installer_has_dom_tool());
     }
 
     #[test]

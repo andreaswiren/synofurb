@@ -68,7 +68,7 @@ pub fn recover(out: &Out, a: RecoverArgs) -> CliResult<()> {
             out.result_event("recover boot-dsm", true, json!({"default_is_dsm": o.default_is_dsm, "reboot_requested": o.reboot_requested, "state": o.state_after, "message": o.message}));
             Ok(())
         }
-        Some(RecoverCmd::Restore { conn, backup }) => {
+        Some(RecoverCmd::Restore { conn, backup, allow_other_unit }) => {
             confirm_action(
                 out,
                 &mut prompt,
@@ -80,7 +80,9 @@ pub fn recover(out: &Out, a: RecoverArgs) -> CliResult<()> {
             let t = conn_target(&conn, out, &mut prompt)?;
             out.event(json!({"event": "start", "command": "recover restore", "host": t.host}));
             let secrets = target_secrets(&t);
-            let rep = run_job(out, &secrets, move |lg, _| recovery::restore_flash(&t, &backup, true, lg).map_err(anyhow::Error::new));
+            let rep = run_job(out, &secrets, move |lg, _| {
+                recovery::restore_flash(&t, &backup, true, allow_other_unit, lg).map_err(anyhow::Error::new)
+            });
             if let Some(e) = rep.plain_failure() {
                 return Err(e);
             }
@@ -210,7 +212,17 @@ fn recover_status(out: &Out, conn: Conn, json: bool, prompt: &mut dyn Prompter) 
             lines.push("  Saved on this computer: no boot flash image found in the data directory.".into());
         } else {
             lines.push("  Saved on this computer (newest first):".into());
-            lines.extend(local.iter().take(5).map(|b| format!("    {}  ({} MiB)", b.path.display(), b.bytes / 1048576)));
+            lines.extend(local.iter().take(5).map(|b| {
+                let who = match &b.sidecar {
+                    Some(s) => format!(
+                        "serial {}, model {}",
+                        if s.unit.serial.is_empty() { "unknown" } else { &s.unit.serial },
+                        if s.unit.model.is_empty() { "unknown" } else { &s.unit.model }
+                    ),
+                    None => format!("named for '{}'", b.name_key),
+                };
+                format!("    {}  ({} MiB, {who})", b.path.display(), b.bytes / 1048576)
+            }));
         }
         out.data_lines(lines);
     }
@@ -464,15 +476,9 @@ pub fn backup_dom(out: &Out, a: BackupDomArgs) -> CliResult<()> {
                 .as_ref()
                 .filter(|d| d.is_editable() && facts.firmware == Firmware::Dom)
                 .context("this unit has no editable internal boot flash (DOM)")?;
-            let b = synofurb_core::domboot::backup_dom(
-                ssh,
-                facts.is_root,
-                t.sudo_password.clone(),
-                &dir,
-                &unit_name(facts, &t),
-                dom.sectors * SECTOR,
-                lg,
-            )?;
+            let id = synofurb_core::domboot::UnitIdentity::from_facts(facts, &t.host);
+            let b =
+                synofurb_core::domboot::backup_dom_for(ssh, facts.is_root, t.sudo_password.clone(), &dir, &id, dom.sectors * SECTOR, lg)?;
             Ok(b)
         })
     });

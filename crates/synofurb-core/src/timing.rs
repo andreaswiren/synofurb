@@ -21,6 +21,11 @@ pub const AGENT_WAIT_MIN: u32 = 10;
 pub const NEW_SYSTEM_WAIT_MIN: u32 = 20;
 /// Default for "wait for DSM" after a recovery reboot.
 pub const DSM_WAIT_MIN: u32 = 15;
+/// TCP connect plus SSH handshake, **not** counting the time a person spends answering the "Trust this NAS?" question.
+pub const CONNECT_TIMEOUT_SECS: u64 = 20;
+/// How long a person has to compare a first-time host key fingerprint and answer. No answer means refused; an answer that arrives later
+/// is ignored and pins nothing. The GUI dialog's countdown refers to this.
+pub const HOST_KEY_ANSWER_TIMEOUT_SECS: u64 = 180;
 /// Installer failure before the point of no return: the unit reboots after this many seconds (boot-flash units only).
 pub const FAIL_REBOOT_BEFORE_PONR_SECS: u32 = 60;
 /// Installer failure after the point of no return: the unit waits this long (time to read the log) before it reboots.
@@ -44,6 +49,7 @@ mod tests {
             "docs/BOOT.md, docs/RECOVERY.md and the GUI copy quote these"
         );
         assert_eq!((FAIL_REBOOT_BEFORE_PONR_SECS, FAIL_REBOOT_AFTER_PONR_SECS), (60, 900));
+        assert_eq!((CONNECT_TIMEOUT_SECS, HOST_KEY_ANSWER_TIMEOUT_SECS), (20, 180));
         const { assert!(AGENT_WAIT_MIN < INSTALL_WATCHDOG_MIN && INSTALL_WATCHDOG_MIN < BOOT_MANAGER_WATCHDOG_MIN) };
         assert_eq!(watchdog_minutes_possibly_left(30, 10), 20);
         assert_eq!(watchdog_minutes_possibly_left(5, 10), 0);

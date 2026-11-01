@@ -309,6 +309,9 @@ pub enum RecoverCmd {
         /// the image saved by `backup-dom` / the install (`synofurb-dom-backup-*.img`)
         #[arg(long, value_name = "FILE")]
         backup: PathBuf,
+        /// restore even if the image was made from another unit (another serial or model). Almost never what you want
+        #[arg(long)]
+        allow_other_unit: bool,
     },
     /// Remove every boot entry synofurb added and set the default to DSM. Needs --yes
     Remove {

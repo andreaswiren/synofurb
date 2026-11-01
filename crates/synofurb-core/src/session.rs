@@ -353,7 +353,8 @@ fn dom_install_flow(
     let is_root = fresh.is_root;
     let pw = job.target.sudo_password.clone();
     let unit = if fresh.serial.is_empty() { job.target.host.clone() } else { fresh.serial.clone() };
-    let backup = backup_dom(ssh, is_root, pw.clone(), backup_dir, &unit, dom.sectors * SECTOR, logger)?; // typed: SessionError::FlashBackupFailed
+    let id = UnitIdentity::from_facts(fresh, &job.target.host);
+    let backup = backup_dom_for(ssh, is_root, pw.clone(), backup_dir, &id, dom.sectors * SECTOR, logger)?; // typed: SessionError::FlashBackupFailed
     logger
         .warn(format!("KEEP THIS FILE: {} is the only way to rebuild the unit's boot flash if it is ever damaged", backup.path.display()));
     let files = match &job.offline_bundle {
@@ -465,7 +466,8 @@ pub fn boot_manager_install(
         .filter(|d| d.is_editable() && facts.firmware == Firmware::Dom)
         .context("this unit has no editable internal boot flash (DOM)")?;
     let unit = if facts.serial.is_empty() { target.host.clone() } else { facts.serial.clone() };
-    backup_dom(&mut ssh, facts.is_root, target.sudo_password.clone(), backup_dir, &unit, dom.sectors * SECTOR, logger)?;
+    let id = UnitIdentity::from_facts(&facts, &target.host);
+    backup_dom_for(&mut ssh, facts.is_root, target.sudo_password.clone(), backup_dir, &id, dom.sectors * SECTOR, logger)?;
     let files = AgentFiles::locate_or_fetch(
         facts.arch,
         agent_dir,

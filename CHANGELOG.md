@@ -39,6 +39,12 @@
   error naming both fingerprints, pins live in `known_hosts.json`. CLI: `--host-key`, `--known-hosts`, `--accept-new-host-key`, `--insecure-host-key`, `host-key list|forget`, and a first-contact question in the wizard.
 - **All time limits in one module** (`synofurb_core::timing`): install watchdog 30 min, boot manager 60, agent default 20, app wait 10, installer failure reboot 60 s / 15 min.
 
+### Fixed (engine, round 2)
+- **Host-key question vs connect timeout**: the 20 s connect timeout no longer runs while a person answers "trust this key?" (answer time 180 s, `timing::HOST_KEY_ANSWER_TIMEOUT_SECS`); no answer is refused (`HostKeyError::AnswerTimeout`), a late "Trust" cannot pin, and a first-time key is pinned only after the handshake completed on a live connection.
+- **Installer failure reboot** finds `synofurb-dom` by absolute path (`/usr/local/sbin`, ...) instead of relying on the installer's PATH, a boot-flash install refuses to start (before any change) when the tool is missing from the installer image, and `script::failure_handling` reports `reboots_by_itself = false` without the tool. Tested with the generated script in a stand-in environment.
+- **Flash backups belong to one unit**: `domboot::backup_dom_for` writes `<image>.json` (serial, model, address); `recovery::backups_for_unit(dir, &UnitIdentity)` lists only the backups of that unit (two units of one model never see each other's); `restore_flash` / `restore_flash_for_unit_on` refuse another unit's image (`RecoveryError::OtherUnit`) unless `allow_other_unit`.
+- RECOVERY.md and BOOT.md carry the plain `sha256sum -c` + `dd` route for restoring the flash from another computer.
+
 ### Changed
 - `bundle create` now builds for the **Newest** kernel by default (`--kernel newest|stable`; `--kernel-newest` still accepted), the same default as `install`, so a plain bundle fits a plain install. A kernel mismatch between bundle and install names both ways out (`--kernel <bundle's>` or `bundle create --kernel <install's>`). A bundle holds one kernel and has no offline fallback to the other.
 - Installer failure handling: on units with a boot flash a failed or cancelled install reboots into DSM (60 s before the point of no return, 15 min after).

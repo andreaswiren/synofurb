@@ -325,13 +325,22 @@ pub fn cpio_gz(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
     gz.finish().unwrap()
 }
 
+/// Where the installer image gets `synofurb-dom` (relative to its root). The generated installer script looks for it by absolute path in
+/// `/usr/local/sbin` and the other usual directories, **not** only on PATH.
+pub const INSTALLER_DOM_TOOL: &str = "usr/local/sbin/synofurb-dom";
+
+/// The installer images built by [`build_initrd`] always carry `synofurb-dom` (it is what lets the failure handler reboot to DSM).
+pub fn installer_has_dom_tool() -> bool {
+    INSTALLER_DOM_TOOL.starts_with("usr/local/sbin/") && !crate::payload::DOM_SCRIPT.is_empty()
+}
+
 /// Concatenate `initrd.gz` + preseed cpio (+ firmware cpio): the kernel unpacks all of them.
 pub fn build_initrd(files: &InstallerFiles, preseed: &str, out: &Path) -> Result<()> {
     let mut data = std::fs::read(&files.initrd)?;
     // The DOM manager rides along so the installer can fall back to DSM on failure and register Debian on success.
     data.extend(cpio_gz(&[
         ("preseed.cfg", preseed.as_bytes(), 0o100600),
-        ("usr/local/sbin/synofurb-dom", crate::payload::DOM_SCRIPT.as_bytes(), 0o100755),
+        (INSTALLER_DOM_TOOL, crate::payload::DOM_SCRIPT.as_bytes(), 0o100755),
     ]));
     if let Some(fw) = &files.firmware {
         data.extend(std::fs::read(fw)?);

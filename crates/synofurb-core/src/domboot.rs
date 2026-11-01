@@ -55,6 +55,9 @@ pub struct DomBackup {
 ///
 /// Any failure is a [`SessionError::FlashBackupFailed`] (find it with `SessionError::find`): the flash has not been written to at
 /// that point, which is different from every later failure.
+///
+/// `unit` names the file (`synofurb-dom-backup-<unit>-<stamp>.img`); the sidecar then knows only that name. Prefer [`backup_dom_for`],
+/// which records who the unit is.
 pub fn backup_dom(
     sh: &mut dyn RemoteShell,
     is_root: bool,
@@ -64,8 +67,69 @@ pub fn backup_dom(
     expected_bytes: u64,
     log: &Logger,
 ) -> Result<DomBackup> {
-    backup_dom_inner(sh, is_root, sudo_pw, dest_dir, unit, expected_bytes, log)
+    let id = UnitIdentity { serial: String::new(), model: String::new(), host: unit.to_string() };
+    backup_dom_for(sh, is_root, sudo_pw, dest_dir, &id, expected_bytes, log)
+}
+
+/// [`backup_dom`] for a known unit: besides the image and its `.sha256` it writes `<image>.json` (serial, model, address, size, hash,
+/// time) so a later restore can tell whose image it is, which the file name alone cannot do for units without a readable serial.
+pub fn backup_dom_for(
+    sh: &mut dyn RemoteShell,
+    is_root: bool,
+    sudo_pw: Option<String>,
+    dest_dir: &Path,
+    id: &UnitIdentity,
+    expected_bytes: u64,
+    log: &Logger,
+) -> Result<DomBackup> {
+    backup_dom_inner(sh, is_root, sudo_pw, dest_dir, id, expected_bytes, log)
         .map_err(|e| anyhow::Error::new(SessionError::FlashBackupFailed { reason: format!("{e:#}") }))
+}
+
+/// Who a boot flash backup belongs to. The serial is the only thing that tells two units of the same model apart; it is empty when the
+/// unit does not reveal one (only DSM does), and then the address and model are all there is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UnitIdentity {
+    #[serde(default)]
+    pub serial: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub host: String,
+}
+
+impl UnitIdentity {
+    pub fn from_facts(facts: &crate::model::DeviceFacts, host: &str) -> UnitIdentity {
+        UnitIdentity { serial: facts.serial.trim().to_string(), model: facts.model.trim().to_string(), host: host.trim().to_string() }
+    }
+
+    /// The part of the backup file name: the serial when known, else the address.
+    pub fn key(&self) -> String {
+        let raw = if self.serial.trim().is_empty() { &self.host } else { &self.serial };
+        file_safe(raw)
+    }
+}
+
+/// Characters of a unit name that are kept in a file name.
+pub fn file_safe(s: &str) -> String {
+    s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect()
+}
+
+/// `<image>.json`, written next to every backup made by [`backup_dom_for`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BackupSidecar {
+    pub schema: u32,
+    #[serde(flatten)]
+    pub unit: UnitIdentity,
+    pub bytes: u64,
+    pub sha256: String,
+    /// RFC 3339.
+    pub created: String,
+    pub tool_version: String,
+}
+
+pub fn sidecar_path(image: &Path) -> PathBuf {
+    image.with_extension("img.json")
 }
 
 fn backup_dom_inner(
@@ -73,13 +137,13 @@ fn backup_dom_inner(
     is_root: bool,
     sudo_pw: Option<String>,
     dest_dir: &Path,
-    unit: &str,
+    id: &UnitIdentity,
     expected_bytes: u64,
     log: &Logger,
 ) -> Result<DomBackup> {
     std::fs::create_dir_all(dest_dir)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let safe: String = unit.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    let safe = id.key();
     let path = dest_dir.join(format!("synofurb-dom-backup-{safe}-{stamp}.img"));
     log.info(format!("backing up the internal boot flash to {} ({} MiB)", path.display(), expected_bytes / 1048576));
     let file = std::fs::File::create(&path)?;
@@ -113,6 +177,15 @@ fn backup_dom_inner(
         None => log.warn("the NAS has no sha256 tool; the DOM backup was verified by size only"),
     }
     std::fs::write(path.with_extension("img.sha256"), format!("{local}  {}\n", path.file_name().unwrap().to_string_lossy()))?;
+    let side = BackupSidecar {
+        schema: 1,
+        unit: id.clone(),
+        bytes,
+        sha256: local.clone(),
+        created: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    std::fs::write(sidecar_path(&path), serde_json::to_string_pretty(&side)?)?;
     Ok(DomBackup { path, sha256: local, bytes })
 }
 

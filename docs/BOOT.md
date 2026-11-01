@@ -42,7 +42,7 @@ What `synofurb` writes there, and how safely ([boot/dom](../boot/dom/README.md))
   edited. Anything else is refused.
 * Entries added: `SYNOFURB_BOOT` (the agent), `DEBIAN`, `DEBIAN_OLD` (previous kernel). The DSM entry is never altered, and **is the
   default** except while the agent is armed (one boot) or after an install has switched to Debian; every failure path sets the default back to DSM, provided the agent or
-  the app got to run ([RECOVERY.md](RECOVERY.md) describes the exception and the manual recovery).
+  the app got to run ([RECOVERY.md](RECOVERY.md) describes the exception and the manual recovery, including the plain `sha256sum -c` + `dd` route that needs no synofurb tool on the other computer).
 * The flash is small (the ext2 partition is at least 64 MiB and DSM's own files take most of it), so the installed system's initramfs is
   built with an explicit module list and `xz` (`MODULES=list`), and a kernel update that does not fit is refused, leaving the previous
   entry in place. Kernel updates are registered by a hook; the previous kernel is kept as `DEBIAN_OLD`.
@@ -60,6 +60,8 @@ They are constants in `synofurb_core::timing` (the GUI and the CLI texts read th
 | Installer failure reboot, before the point of no return | 60 s | the failure (boot-flash units only) |
 | Installer failure reboot, after the point of no return | 15 min | the failure (boot-flash units only) |
 | The app's wait for the installed system (`NEW_SYSTEM_WAIT_MIN`) / for DSM after a recovery (`DSM_WAIT_MIN`) | 20 min / 15 min | the end of the install / the probe starting |
+| SSH connect: TCP + handshake (`CONNECT_TIMEOUT_SECS`) | 20 s | the connection starting; the time a person spends on the host-key question is **not** counted |
+| A person's answer to "trust this host key?" (`HOST_KEY_ANSWER_TIMEOUT_SECS`) | 180 s | the question being asked; no answer = refused, a late answer pins nothing |
 
 Because the watchdog and the app's wait start at different moments, an app timeout does not mean the watchdog has fired or will not: at least `watchdog - wait` minutes (20 in an install) can still be left.
 

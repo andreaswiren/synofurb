@@ -8,7 +8,7 @@
 //! * [`HostKeyPolicy::Pinned`]: the presented SHA-256 fingerprint must equal the one the user gave (`--host-key SHA256:...`).
 //! * [`HostKeyPolicy::Tofu`]: trust on first use against a [`KnownHosts`] file in the app data directory. A known unit must
 //!   present the pinned key (a changed key is a hard error that names both fingerprints). An unknown unit is shown to the
-//!   `confirm` callback together with its fingerprint; `Some(callback)` returning `true` pins it, `false` aborts; with no callback
+//!   `confirm` callback together with its fingerprint (waited for at most `answer_timeout`, 180 s by default; a late answer pins nothing); `Some(callback)` returning `true` pins it, `false` aborts; with no callback
 //!   the key is pinned and logged (the `ssh -o StrictHostKeyChecking=accept-new` behaviour).
 //! * [`HostKeyPolicy::KeyAuthOnly`]: no host-key check, used only for the boot agent, whose host key is made up at every boot and
 //!   which is reached with a per-unit client key (no password is ever sent to it).
@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// What the user is asked when a unit shows a host key for the first time.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +38,7 @@ pub enum HostKeyPolicy {
     /// The server key must have exactly this fingerprint.
     Pinned(String),
     /// Trust on first use, remembered in `store`; `confirm` decides for an unknown unit (none = accept and pin).
-    Tofu { store: KnownHosts, confirm: Option<HostKeyConfirm> },
+    Tofu { store: KnownHosts, confirm: Option<HostKeyConfirm>, answer_timeout: Duration },
     /// Do not check (boot agent: random host key per boot, authenticated by our client key; no password is sent).
     KeyAuthOnly,
     /// Do not check anything. Explicit CLI flag only.
@@ -48,7 +49,9 @@ impl std::fmt::Debug for HostKeyPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HostKeyPolicy::Pinned(p) => write!(f, "Pinned({p})"),
-            HostKeyPolicy::Tofu { store, confirm } => write!(f, "Tofu({}, confirm: {})", store.path.display(), confirm.is_some()),
+            HostKeyPolicy::Tofu { store, confirm, answer_timeout } => {
+                write!(f, "Tofu({}, confirm: {}, answer within {}s)", store.path.display(), confirm.is_some(), answer_timeout.as_secs())
+            }
             HostKeyPolicy::KeyAuthOnly => write!(f, "KeyAuthOnly"),
             HostKeyPolicy::Insecure => write!(f, "Insecure"),
         }
@@ -69,6 +72,12 @@ pub enum HostKeyError {
         "the SSH host key of {host}:{port} does not match the fingerprint you gave. Expected: {expected}. Presented: {presented}. The connection was closed before anything was sent"
     )]
     PinMismatch { host: String, port: u16, expected: String, presented: String },
+    /// Nobody answered the "trust this key?" question in time. The connection was closed and nothing was pinned; an answer that comes
+    /// later has no effect.
+    #[error(
+        "nobody answered the question about the SSH host key {fingerprint} of {host}:{port} within {seconds} seconds, so the connection was closed before any password was sent and nothing was pinned. Compare the fingerprint with the unit's, then connect again"
+    )]
+    AnswerTimeout { host: String, port: u16, fingerprint: String, seconds: u64 },
     /// A first-time key was shown and not trusted.
     #[error(
         "the SSH host key {fingerprint} of {host}:{port} was not trusted, so the connection was closed before any password was sent. Compare it with what the unit shows (`ssh-keygen -l -f /etc/ssh/ssh_host_ed25519_key.pub` on the unit) and use --host-key {fingerprint} to trust it"
@@ -205,16 +214,31 @@ impl HostKeyPolicy {
     /// The default for code that does not choose: trust on first use in the app data directory, no question asked (the key is pinned
     /// and logged), a changed key is an error. Interactive front ends pass a policy with a `confirm` callback instead.
     pub fn app_default() -> HostKeyPolicy {
-        HostKeyPolicy::Tofu { store: KnownHosts::app_default(), confirm: None }
+        HostKeyPolicy::accept_new(KnownHosts::app_default())
     }
 
     /// Ask-first variant of [`HostKeyPolicy::app_default`].
     pub fn tofu_with(store: KnownHosts, confirm: HostKeyConfirm) -> HostKeyPolicy {
-        HostKeyPolicy::Tofu { store, confirm: Some(confirm) }
+        HostKeyPolicy::Tofu { store, confirm: Some(confirm), answer_timeout: ANSWER_TIMEOUT }
     }
 
-    /// Decide about a key presented by `host:port`. Pure apart from the known-hosts file and the confirm callback.
-    pub fn check(&self, host: &str, port: u16, presented: &str) -> Result<HostKeyDecision, HostKeyError> {
+    /// Trust on first use without a question: a first key is accepted and pinned.
+    pub fn accept_new(store: KnownHosts) -> HostKeyPolicy {
+        HostKeyPolicy::Tofu { store, confirm: None, answer_timeout: ANSWER_TIMEOUT }
+    }
+
+    /// [`HostKeyPolicy::tofu_with`] with another answer time (tests use a short one).
+    pub fn tofu_with_timeout(store: KnownHosts, confirm: HostKeyConfirm, answer_timeout: Duration) -> HostKeyPolicy {
+        HostKeyPolicy::Tofu { store, confirm: Some(confirm), answer_timeout }
+    }
+
+    /// Decide about a key presented by `host:port` **without writing anything**. [`HostKeyDecision::AcceptedAndPinned`] means "accepted; the
+    /// caller must [`HostKeyPolicy::pin`] it once the connection is known to be alive" (the connection code pins after the handshake, so a
+    /// connection that died while the person was thinking pins nothing).
+    ///
+    /// The confirm callback runs on its own thread and is waited for at most `answer_timeout`: no answer is [`HostKeyError::AnswerTimeout`],
+    /// and an answer that arrives later is thrown away (it cannot pin, because only the caller of this function pins).
+    pub fn decide(&self, host: &str, port: u16, presented: &str) -> Result<HostKeyDecision, HostKeyError> {
         match self {
             HostKeyPolicy::Insecure | HostKeyPolicy::KeyAuthOnly => Ok(HostKeyDecision::Accept),
             HostKeyPolicy::Pinned(want) => {
@@ -229,7 +253,7 @@ impl HostKeyPolicy {
                     })
                 }
             }
-            HostKeyPolicy::Tofu { store, confirm } => match store.get(host, port)? {
+            HostKeyPolicy::Tofu { store, confirm, answer_timeout } => match store.get(host, port)? {
                 Some(k) if k.fingerprint == presented => Ok(HostKeyDecision::Accept),
                 Some(k) => Err(HostKeyError::Changed {
                     host: host.to_string(),
@@ -240,19 +264,57 @@ impl HostKeyPolicy {
                 }),
                 None => {
                     let trusted = match confirm {
-                        Some(c) => c(&HostKeyPrompt { host: host.to_string(), port, fingerprint: presented.to_string() }),
                         None => true,
+                        Some(c) => {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            let (c, prompt) =
+                                (c.clone(), HostKeyPrompt { host: host.to_string(), port, fingerprint: presented.to_string() });
+                            std::thread::spawn(move || {
+                                let _ = tx.send(c(&prompt));
+                            });
+                            match rx.recv_timeout(*answer_timeout) {
+                                Ok(t) => t,
+                                Err(_) => {
+                                    return Err(HostKeyError::AnswerTimeout {
+                                        host: host.to_string(),
+                                        port,
+                                        fingerprint: presented.to_string(),
+                                        seconds: answer_timeout.as_secs(),
+                                    });
+                                }
+                            }
+                        }
                     };
                     if !trusted {
                         return Err(HostKeyError::NotTrusted { host: host.to_string(), port, fingerprint: presented.to_string() });
                     }
-                    store.pin(host, port, presented)?;
                     Ok(HostKeyDecision::AcceptedAndPinned)
                 }
             },
         }
     }
+
+    /// Remember an accepted first-time key (a no-op for policies that keep no store).
+    pub fn pin(&self, host: &str, port: u16, fingerprint: &str) -> Result<(), HostKeyError> {
+        match self {
+            HostKeyPolicy::Tofu { store, .. } => store.pin(host, port, fingerprint),
+            _ => Ok(()),
+        }
+    }
+
+    /// [`HostKeyPolicy::decide`] and, for a newly accepted key, [`HostKeyPolicy::pin`] at once. For callers that have no connection to wait
+    /// for; [`crate::remote::SshSession`] uses `decide` and pins after the handshake.
+    pub fn check(&self, host: &str, port: u16, presented: &str) -> Result<HostKeyDecision, HostKeyError> {
+        let d = self.decide(host, port, presented)?;
+        if d == HostKeyDecision::AcceptedAndPinned {
+            self.pin(host, port, presented)?;
+        }
+        Ok(d)
+    }
 }
+
+/// [`crate::timing::HOST_KEY_ANSWER_TIMEOUT_SECS`] as a `Duration`.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(crate::timing::HOST_KEY_ANSWER_TIMEOUT_SECS);
 
 static DEFAULT_POLICY: Mutex<Option<HostKeyPolicy>> = Mutex::new(None);
 
@@ -325,7 +387,7 @@ mod tests {
     #[test]
     fn tofu_pins_on_first_use_and_refuses_a_changed_key_with_both_fingerprints() {
         let s = store("tofu");
-        let p = HostKeyPolicy::Tofu { store: s.clone(), confirm: None };
+        let p = HostKeyPolicy::accept_new(s.clone());
         assert_eq!(p.check("192.168.1.20", 22, FP1).unwrap(), HostKeyDecision::AcceptedAndPinned);
         assert_eq!(s.get("192.168.1.20", 22).unwrap().unwrap().fingerprint, FP1);
         assert_eq!(p.check("192.168.1.20", 22, FP1).unwrap(), HostKeyDecision::Accept);
@@ -369,7 +431,7 @@ mod tests {
     #[test]
     fn a_finished_install_replaces_the_pin_but_only_under_trust_on_first_use() {
         let s = store("repin");
-        set_default_policy(HostKeyPolicy::Tofu { store: s.clone(), confirm: None });
+        set_default_policy(HostKeyPolicy::accept_new(s.clone()));
         s.pin("10.0.0.9", 22, FP1).unwrap();
         assert!(repin_after_install("10.0.0.9", 22, FP2));
         assert_eq!(s.get("10.0.0.9", 22).unwrap().unwrap().fingerprint, FP2);
@@ -383,7 +445,7 @@ mod tests {
     fn a_damaged_store_is_an_error_not_a_free_pass() {
         let s = store("bad");
         std::fs::write(s.path(), "{ not json").unwrap();
-        let p = HostKeyPolicy::Tofu { store: s.clone(), confirm: None };
+        let p = HostKeyPolicy::accept_new(s.clone());
         assert!(matches!(p.check("h", 22, FP1).unwrap_err(), HostKeyError::Store { .. }));
         let _ = std::fs::remove_file(s.path());
     }

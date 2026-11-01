@@ -50,8 +50,37 @@ struct Handler {
     port: u16,
     /// Why the key was refused (russh itself only says "unknown server key").
     refused: Arc<Mutex<Option<HostKeyError>>>,
-    /// Set when this connection pinned a first-time key (for the log line).
-    pinned: Arc<Mutex<bool>>,
+    /// A first-time key that was accepted: written to the known-hosts file only after the handshake completed on a live connection.
+    pending_pin: Arc<Mutex<Option<String>>>,
+    /// Pauses the connect clock while a person answers "trust this key?".
+    clock: Arc<Mutex<ConnectClock>>,
+}
+
+/// The connect timeout budget: TCP connect + SSH handshake, **minus** the time spent waiting for a person's answer.
+#[derive(Debug)]
+struct ConnectClock {
+    started: std::time::Instant,
+    paused: Duration,
+    waiting_since: Option<std::time::Instant>,
+}
+
+impl ConnectClock {
+    fn new() -> ConnectClock {
+        ConnectClock { started: std::time::Instant::now(), paused: Duration::ZERO, waiting_since: None }
+    }
+    fn begin_wait(&mut self) {
+        self.waiting_since = Some(std::time::Instant::now());
+    }
+    fn end_wait(&mut self) {
+        if let Some(t) = self.waiting_since.take() {
+            self.paused += t.elapsed();
+        }
+    }
+    /// Time that counts against the budget.
+    fn used(&self) -> Duration {
+        let waiting = self.waiting_since.map(|t| t.elapsed()).unwrap_or_default();
+        self.started.elapsed().saturating_sub(self.paused + waiting)
+    }
 }
 
 impl Handler {
@@ -62,7 +91,8 @@ impl Handler {
             host: host.to_string(),
             port,
             refused: Arc::new(Mutex::new(None)),
-            pinned: Arc::new(Mutex::new(false)),
+            pending_pin: Arc::new(Mutex::new(None)),
+            clock: Arc::new(Mutex::new(ConnectClock::new())),
         }
     }
 }
@@ -75,10 +105,14 @@ impl client::Handler for Handler {
             PublicKeyOrCertificate::Certificate(_) => "certificate".to_string(),
         };
         *self.fingerprint.lock().unwrap() = Some(fp.clone());
-        match self.policy.check(&self.host, self.port, &fp) {
+        // a person may take minutes to compare the fingerprint: that time is not connect time
+        self.clock.lock().unwrap().begin_wait();
+        let decision = self.policy.decide(&self.host, self.port, &fp);
+        self.clock.lock().unwrap().end_wait();
+        match decision {
             Ok(HostKeyDecision::Accept) => Ok(true),
             Ok(HostKeyDecision::AcceptedAndPinned) => {
-                *self.pinned.lock().unwrap() = true;
+                *self.pending_pin.lock().unwrap() = Some(fp);
                 Ok(true)
             }
             Err(e) => {
@@ -130,9 +164,24 @@ impl SshSession {
     /// Connect, check the server's host key with `policy` **before** authenticating, then authenticate. A refused key is a
     /// [`HostKeyError`] inside the returned error (`err.downcast_ref::<HostKeyError>()`); nothing secret was sent in that case.
     pub fn connect_with(host: &str, port: u16, user: &str, auth: &Auth, log: &Logger, policy: &HostKeyPolicy) -> Result<SshSession> {
+        Self::connect_with_timeout(host, port, user, auth, log, policy, Duration::from_secs(crate::timing::CONNECT_TIMEOUT_SECS))
+    }
+
+    /// [`SshSession::connect_with`] with an explicit connect budget (TCP connect + SSH handshake). The time a person spends answering the
+    /// host-key question is **not** counted; that wait has its own limit in the policy (`answer_timeout`).
+    pub fn connect_with_timeout(
+        host: &str,
+        port: u16,
+        user: &str,
+        auth: &Auth,
+        log: &Logger,
+        policy: &HostKeyPolicy,
+        connect_timeout: Duration,
+    ) -> Result<SshSession> {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
         let handler = Handler::new(host, port, policy);
-        let (fingerprint, refused, pinned) = (handler.fingerprint.clone(), handler.refused.clone(), handler.pinned.clone());
+        let (fingerprint, refused, pinned) = (handler.fingerprint.clone(), handler.refused.clone(), handler.pending_pin.clone());
+        let clock = handler.clock.clone();
         if matches!(policy, HostKeyPolicy::Insecure) {
             log.warn(format!("HOST KEY NOT CHECKED for {host}:{port} (insecure mode): anyone on the network path could read the password"));
         }
@@ -143,10 +192,27 @@ impl SshSession {
                     keepalive_interval: Some(Duration::from_secs(20)),
                     ..Default::default()
                 });
-                let mut h = tokio::time::timeout(Duration::from_secs(20), client::connect(cfg, (host, port), handler))
-                    .await
-                    .map_err(|_| anyhow!("connection to {host}:{port} timed out"))?
-                    .with_context(|| format!("connecting to {host}:{port}"))?;
+                // a clock that stands still while the person answers the host-key question
+                let watchdog = async {
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        if clock.lock().unwrap().used() > connect_timeout {
+                            break;
+                        }
+                    }
+                };
+                let mut h = tokio::select! {
+                    r = client::connect(cfg, (host, port), handler) => r.with_context(|| format!("connecting to {host}:{port}"))?,
+                    _ = watchdog => bail!("connection to {host}:{port} timed out"),
+                };
+                // the handshake finished on a live connection: only now is a first-time key remembered (a refusal, an answer that came
+                // too late or a connection that died while the person was thinking pins nothing)
+                if let Some(fp) = pinned.lock().unwrap().take() {
+                    policy.pin(host, port, &fp)?;
+                    log.warn(format!(
+                        "first contact with {host}:{port}: pinned its SSH host key {fp} (later connections must present the same key)"
+                    ));
+                }
                 let ok = match auth {
                     Auth::Password(p) => h.authenticate_password(user, p.clone()).await?.success(),
                     Auth::Key(pem) => {
@@ -162,12 +228,6 @@ impl SshSession {
             })
             // russh reports a refused key as a generic disconnect, possibly only when authentication is attempted
             .map_err(|e| connect_error(&refused, e))?;
-        if *pinned.lock().unwrap() {
-            log.warn(format!(
-                "first contact with {host}:{port}: pinned its SSH host key {} (later connections must present the same key)",
-                fingerprint.lock().unwrap().clone().unwrap_or_default()
-            ));
-        }
         let s = SshSession { rt, handle, fingerprint, log: log.clone(), label: format!("{user}@{host}") };
         log.info(format!("SSH connected to {} (host key {})", s.label, s.host_key_fingerprint().unwrap_or_default()));
         Ok(s)
@@ -467,7 +527,7 @@ mod hostkey_tests {
         // a pin on record that differs: both fingerprints are named
         let s2 = store("changed");
         s2.pin("127.0.0.1", port, &other).unwrap();
-        let Err(e) = connect(port, &HostKeyPolicy::Tofu { store: s2.clone(), confirm: None }) else { panic!("must refuse") };
+        let Err(e) = connect(port, &HostKeyPolicy::accept_new(s2.clone())) else { panic!("must refuse") };
         let t = format!("{e:#}");
         assert!(
             matches!(e.downcast_ref::<HostKeyError>(), Some(HostKeyError::Changed { .. })) && t.contains(&other) && t.contains(&fp),
@@ -500,5 +560,105 @@ mod hostkey_tests {
         assert!(warned);
         let _ = std::fs::remove_file(s.path());
         let _ = std::fs::remove_file(s2.path());
+    }
+
+    fn connect_timeout(port: u16, policy: &HostKeyPolicy, budget: Duration) -> Result<SshSession> {
+        SshSession::connect_with_timeout(
+            "127.0.0.1",
+            port,
+            "admin",
+            &Auth::Password("hunter2".into()),
+            &Logger::memory(None),
+            policy,
+            budget,
+        )
+    }
+
+    #[test]
+    fn the_connect_clock_stands_still_while_a_person_answers_and_the_key_is_pinned() {
+        let (port, fp, attempts) = fake_sshd();
+        let s = store("slow-yes");
+        // the person needs 1.2 s; the connect budget is 0.4 s; the answer may take 5 s
+        let pol = HostKeyPolicy::tofu_with_timeout(
+            s.clone(),
+            Arc::new(|_| {
+                std::thread::sleep(Duration::from_millis(1200));
+                true
+            }),
+            Duration::from_secs(5),
+        );
+        let t = std::time::Instant::now();
+        let r = connect_timeout(port, &pol, Duration::from_millis(400));
+        assert!(r.is_ok(), "the question time is not connect time: {:?}", r.err());
+        assert!(t.elapsed() >= Duration::from_millis(1200));
+        assert_eq!(s.get("127.0.0.1", port).unwrap().unwrap().fingerprint, fp, "answered in time: pinned");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let _ = std::fs::remove_file(s.path());
+    }
+
+    #[test]
+    fn no_answer_refuses_and_a_late_trust_pins_nothing() {
+        let (port, fp, attempts) = fake_sshd();
+        // nobody answers within the answer time (the callback would say yes after 3 s)
+        let s = store("no-answer");
+        let pol = HostKeyPolicy::tofu_with_timeout(
+            s.clone(),
+            Arc::new(|_| {
+                std::thread::sleep(Duration::from_secs(3));
+                true
+            }),
+            Duration::from_millis(400),
+        );
+        let t = std::time::Instant::now();
+        let Err(e) = connect_timeout(port, &pol, Duration::from_millis(400)) else { panic!("must refuse") };
+        assert!(
+            matches!(e.downcast_ref::<HostKeyError>(), Some(HostKeyError::AnswerTimeout { fingerprint, .. }) if *fingerprint == fp),
+            "{e:#}"
+        );
+        assert!(t.elapsed() < Duration::from_secs(2), "refused when the answer time ran out, not after the late answer");
+        std::thread::sleep(Duration::from_millis(3000)); // the late "yes" has been given by now
+        assert!(s.get("127.0.0.1", port).unwrap().is_none(), "a late Trust must not write the pin");
+        assert_eq!(attempts.load(Ordering::SeqCst), 0, "no password was sent");
+        let _ = std::fs::remove_file(s.path());
+
+        // an answer that arrives just after the answer time
+        let s = store("late-yes");
+        let pol = HostKeyPolicy::tofu_with_timeout(
+            s.clone(),
+            Arc::new(|_| {
+                std::thread::sleep(Duration::from_millis(700));
+                true
+            }),
+            Duration::from_millis(300),
+        );
+        let Err(e) = connect_timeout(port, &pol, Duration::from_millis(400)) else { panic!("must refuse") };
+        assert!(matches!(e.downcast_ref::<HostKeyError>(), Some(HostKeyError::AnswerTimeout { .. })), "{e:#}");
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(s.get("127.0.0.1", port).unwrap().is_none());
+        // a refusal also pins nothing, and the next attempt asks again
+        let no = HostKeyPolicy::tofu_with_timeout(s.clone(), Arc::new(|_| false), Duration::from_secs(1));
+        assert!(matches!(
+            connect_timeout(port, &no, Duration::from_millis(400)).err().unwrap().downcast_ref::<HostKeyError>(),
+            Some(HostKeyError::NotTrusted { .. })
+        ));
+        assert!(s.get("127.0.0.1", port).unwrap().is_none());
+        assert_eq!(attempts.load(Ordering::SeqCst), 0);
+        let _ = std::fs::remove_file(s.path());
+    }
+
+    #[test]
+    fn the_connect_budget_still_applies_to_a_server_that_never_answers() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let hold = std::thread::spawn(move || {
+            let c = l.accept().map(|(s, _)| s);
+            std::thread::sleep(Duration::from_secs(2));
+            drop(c);
+        });
+        let t = std::time::Instant::now();
+        let Err(e) = connect_timeout(port, &HostKeyPolicy::Insecure, Duration::from_millis(300)) else { panic!("must time out") };
+        assert!(format!("{e:#}").contains("timed out"), "{e:#}");
+        assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
+        let _ = hold.join();
     }
 }

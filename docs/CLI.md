@@ -80,7 +80,7 @@ plainly that it is too late: the disks have been changed and the installer on th
 | `.../inventory.json` | units found by `scan` / added by `inventory add` |
 | `.../keys/` | SSH keys generated for new systems and for the boot agent (mode 0600) |
 | `.../known_hosts.json` | pinned SSH host keys of the units, `host:port` -> `SHA256:` fingerprint (`host-key list`) |
-| `.../dom-backups/`, `.../backups/` | boot flash images, partition-table backups |
+| `.../dom-backups/`, `.../backups/` | boot flash images (`synofurb-dom-backup-<serial or address>-<time>.img` + `.sha256` + `.json` with the unit's serial/model), partition-table backups |
 | `.../cache/` | downloaded Debian installer files, boot agent |
 | `.../compat-models.json` | the compatibility list refreshed with `compat --refresh` |
 | `~/.cache/synofurb/updates/` | downloaded updates |
@@ -120,6 +120,7 @@ Every command that logs in to a unit checks the unit's SSH host key **before** t
 | `--accept-new-host-key` | for scripts: pin a first-time key without asking. A **changed** key is still refused |
 | `--insecure-host-key` | check nothing. Prints a loud warning on every run; lab networks only |
 
+The first-contact question has 180 s to be answered (`timing::HOST_KEY_ANSWER_TIMEOUT_SECS`); the 20 s connect timeout does not run while you compare the fingerprint. No answer means refused, and an answer that arrives late pins nothing. A first-time key is written to the pin file only after the connection's handshake completed.
 A changed key is a hard error (exit 11) that names the pinned and the presented fingerprint. If you reinstalled or replaced the unit on purpose, `synofurb-cli host-key forget --host H [--port P]`
 removes the pin; `host-key list [--json]` shows them. A finished install gives the unit a new key (it is Debian now): the key the app saw while verifying the new system replaces the pin of that address (logged), unless you use `--host-key`.
 The boot agent has a new key at every boot; it is reached with a per-unit client key and no password is ever sent to it, so its key is not checked. `wizard` asks the same first-contact question before it asks for a password.
@@ -241,7 +242,7 @@ synofurb-cli recover status       --host H [--json]
 synofurb-cli recover wait         --host H [--timeout MINUTES] [--port 22] [--json]
 synofurb-cli recover boot-dsm     --host H [--reboot] [--yes]
 synofurb-cli recover remove       --host H --yes
-synofurb-cli recover restore      --host H --backup FILE.img --yes
+synofurb-cli recover restore      --host H --backup FILE.img [--allow-other-unit] --yes
 synofurb-cli backup-dom           --host H [--backup-dir DIR]
 synofurb-cli disk-backup          --host H [--disk sata1,sata2] [--out-dir DIR]
 ```
@@ -254,7 +255,7 @@ unit can do this and what the on-unit tool says. `install` and `enter` change th
 * `recover status` **reads** the unit: running system, whether the boot menu could be read, the default entry, synofurb's entries, agent files, the flash backup on the unit, plus the images saved on this computer. Unreadable is printed as `NOT READ` / `NOT KNOWN` (JSON: `state.read.result` = `tool_missing|refused|failed`, `state.default_entry.kind` = `unknown`, `pristine: null`), never as a DSM default. `--json`: `{"schema":1,"host","pristine":true|false|null,"state":{read,source,running,default_entry,entries,our_entries,agent_present,flash_backup,agent,notes},"local_backups":[...]}`.
 * `recover boot-dsm` sets the default to DSM and reads it back. With `--reboot` (which needs `--yes` or a terminal) it then asks the unit to reboot and reports **"reboot requested"** only; if the read-back did not show DSM no reboot is sent. Follow it with `recover wait`.
 * `recover wait` probes the unit every few seconds (no login) and exits 0 only when DSM answers (SSH banner and web port 5000/5001); otherwise exit 1 with what was seen last (loader-only, still the agent, other system, nothing). `--timeout` is in minutes (default 15). Ctrl-C stops it.
-* `recover remove` and `recover restore` change the boot flash and need `--yes` (or a terminal); both read the result back and say so only when it verified. `restore` checks the image first (size, its `.sha256` file), uploads it to a private directory on the unit, compares hashes there, then runs `synofurb-dom restore`; it works only while the unit answers over SSH (otherwise restore the flash from another computer: [RECOVERY.md](RECOVERY.md)).
+* `recover remove` and `recover restore` change the boot flash and need `--yes` (or a terminal); both read the result back and say so only when it verified. `restore` checks the image first (size, its `.sha256` file) and **refuses an image made from another unit** (the `<image>.json` written next to every backup records serial, model and address; another serial, or another model when no serial is readable, is exit 1 `belongs to another unit` before anything is sent; `--allow-other-unit` overrides; images that cannot be attributed, such as old ones or a unit whose serial is unreadable, go ahead with a warning). Then it uploads it to a private directory on the unit, compares hashes there, then runs `synofurb-dom restore`; it works only while the unit answers over SSH (otherwise restore the flash from another computer: [RECOVERY.md](RECOVERY.md)).
 `backup-dom` only takes the boot flash image. `disk-backup` saves the first and last MiB of the disks (partition tables, **not** your files) with a README on how to put them back.
 
 ### manage
