@@ -7,30 +7,38 @@ Sample values (DS918+, 192.168.1.40, SN 1930PDN123456, `sdc` with 8 reallocated 
 ## 0. Rules that apply to every screen
 
 1. **Budget.** At most 60 words of static prose per screen, shell included (titles, subtitles, labels, options, column headers, buttons, prose; data in braces is not counted). Title at most 4 words; subtitle at most 12; label at most 4; button a verb plus at most 2 words.
+1c. **What is data (not counted) and what is prose (counted).** Data: entity names, sizes, addresses, hashes, versions, times, percentages and "n of m" progress, log lines, engine step names inside a list. Prose: any sentence or clause, every subtitle, every error cause (the engine sentence goes into a Popover and the log; the screen shows a 2 to 4 word label). The prototype checker must count any data span of more than 3 words that contains a verb.
 1b. **What is counted.** Only what is visible in the default state of the screen. Closed menus, closed selects, dropdown items and popovers are not counted (their items are at most 4 words each). Open Sheets and Dialogs are counted as separate screens or bounded separately (section 4).
 2. **Where explanations go.** Tooltip (one sentence, hover and keyboard focus) for a label or a disabled control; Popover (short paragraph + action) from an info icon; Dialog for decisions and anything long; Help topic for reference. Progress and logs are collapsed Accordions except the current step. Every info icon links to a Help topic id.
 3. **The safety gate stays visible but terse**: identity, destroyed/changed/preserved as names and sizes, three confirmations, typed phrase.
 4. **Copy module.** All strings live in one module per surface: `Copy { id, short, tip, help: Option<TopicId> }`. `short` is what is drawn, `tip` is the Tooltip (one sentence, at most 24 words), `help` is a topic id (bodies at most 150 words, section 7) or a Dialog id (section 4). Tests: per-screen word budget (sum of `short` of the screen plus shell), title/subtitle/label/button limits, `tip` single sentence, every `help` id exists, every topic at most 150 words, no string outside the module.
 5. **Fonts**: Inter for the interface (Montserrat for the wordmark only), JetBrains Mono for code, logs, hashes, commands; bundled with their OFL licences. **Icons**: Lucide only. **Scrollbars**: themed (thin; theme tokens `scrollbar`, `scrollbar_thumb`, `scrollbar_thumb_hover`; light and dark).
+5b. **GPUI input rules (verified in gpui-component 0.8.1).** Tooltips are hover driven (no focus path in `tooltip.rs`): they only supplement. Anything needed to act or to stay safe is on a focusable trigger (an info `Button`, or a `Tag` wrapped as a focusable Popover trigger) that opens a `Popover`. A disabled `Button` is not focusable, so a control that must explain itself is styled disabled but stays enabled; activating it opens a Popover "Missing: ...". GPUI Buttons activate on `Enter` and `Space`; the safeguard for Erase is the full gate and its position last in the tab order, not the key. Fonts are bundled as TTF/OTF, not WOFF. Scrollbars come from `.overflow_y_scrollbar()` with the three theme tokens.
 6. **Accessibility baseline (stated in the UI)**: keyboard, contrast and scalable text are guaranteed; **screen readers are not guaranteed in the native app**. The documented CLI (`synofurb install ...`) is the equivalent path and is named in the first-launch Dialog, Help, and About. The web UI is semantic HTML and is screen-reader friendly. Status is never colour alone (Tag has icon + text).
 7. **Layout**: 960x640 minimum; no horizontal scrolling; the footer with the primary action is pinned outside the scroll area; visible focus on every control.
 
 ## 1. App shells
 
-### 1.1 Desktop shell (wizard screens D1 to D11, D13 to D15)
+### 1.1 Desktop shell
+
+Three variants: **wizard** (D2 to D11, D13, D16), **page** (Manage D15/D18 and Recovery D14: no Stepper), **app** (Settings D12 and About D17: wordmark only). Find (D1) is the wizard shell without the unit header.
 
 | # | Element | Visible text | Widget | Words |
 |---|---|---|---|---|
-| 2 | TitleBar: logo mark + wordmark | synofurb | `TitleBar` + SVG logo (custom asset) | 1 |
-| 3 | TitleBar actions | (icons only: circle-question-mark = Help, settings = Settings, menu = About / Check for updates) | `Button` icon + `Tooltip`, `DropdownMenu` | 0 |
-| 4 | Stepper | Find, Connect, Inspect, Goal, Plan, System, Confirm, Install, Done | `Stepper` + `StepperItem` (horizontal, click only completed steps) | 9 |
-| 5 | StatusBar left | Risk Tag, at most 2 words: Read-only, Plan only, Flash changed, Disks changed, Failed safely, Debian running | `StatusBar` + `Tag` (icon + text) | 2 |
-| 6 | StatusBar center | {DS918+ · 192.168.1.40} | `StatusBar`, `Label` (mono data) | 0 |
-| 0 | StatusBar right | Way back | `Button` (link) opening a `Popover` with the one-line fallback for the current state | 2 |
+| 1 | TitleBar: logo mark + wordmark | synofurb | `TitleBar` + SVG logo (custom asset); on macOS the traffic lights are native and left | 1 |
+| 2 | TitleBar actions | (icons only: circle-question-mark = Help, settings = Settings, menu = About / Check for updates) | `Button` icon + `Tooltip`, `DropdownMenu` | 0 |
+| 3 | Stepper (wizard only) | Find, Connect, Inspect, Goal, Plan, System, Confirm, Install, Done; below 1000 px only the current label is shown | `Stepper` + `StepperItem` (horizontal). **Not in the Tab order**: it is a landmark; `Alt+Left/Right` goes back through completed steps; completed items are mouse-clickable | 9 |
+| 4 | Unit header (all unit screens, persistent) | {tile · DS918+ · 192.168.1.40 · SN 1930PDN123456 · DSM 7.2.2 or Debian 13 · 4 disks · 14.55 TiB · CPU · RAM} + compat Tag (Untested / Community-reported / ...) + conditional Tag Twin | `Label` rows (mono for data) + `Tag`. It replaces every identity line on D2 to D15. After conversion it shows the unit's current OS (Debian 13 · 6.12.57), never the old DSM version | 1 |
+| 5 | StatusBar left | Risk Tag, at most 2 words (states below) | `StatusBar` + `Tag` (icon + text) | 2 |
+| 6 | StatusBar right | Way back | `Button` (link) opening a `Popover` with the one-line fallback for the current state | 2 |
 
-**Shell words: 14.** Risk Tag states (derived from facts, never from step number): *Read-only* (before Confirm, before any write); *Plan only* (plan prepared, not applied); *Flash changed* (confirmed; boot flash written, no disk yet); *Disks changed* (step 3 reached); *Failed safely* (failed with disks untouched; the boot flash may still hold our entries); *Debian running*. The Way back Popover (one sentence each): Read-only/Plan only "Nothing to undo."; Flash changed "Cancel or power-cycle: DSM boots."; Disks changed "Rescue shell 15 min, then the DSM loader; no data promise."; Failed safely "DSM boots again by itself."; Debian running "Recovery stays under Manage."
+**Shell words: wizard 15** (wordmark 1 + Stepper 9 + unit-header Tag 1 + risk Tag 2 + Way back 2), **page 6**, **app 1**, Find 14.
 
-Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the current screen; About (D17) and Settings (D12) are pages reached from the TitleBar and replace the content area (Stepper hidden).
+**Risk Tag is a pure function of the unit's facts**, never of the screen name: *Read-only* (nothing written, no flash entries); *Plan only* (plan prepared, not applied); *Flash changed* (our entries or the agent are on the boot flash, no disk written; also after a cancel, a stopped install and a boot-manager install); *Disks changed* (the first disk was written; also on Recovery after a failed install); *Failed safely* (failed, disks untouched, flash may hold our entries); *Debian running* (verified, default boot is Debian); *Needs attention* / *Critical* / *Unreachable* (Manage: the worst health component or no answer: these replace *Debian running*). The Tag and Way back are **hidden on Settings, About and Help** (they are not about a unit). Way back popover, one sentence per state: Read-only/Plan only "Nothing to undo."; Flash changed "Power-cycle or Cancel: DSM boots. Our entries stay until removed."; Disks changed "Rescue shell 15 min, then the DSM loader; no data promise."; Failed safely "DSM boots again by itself."; Debian running "Recovery stays under Manage."; Unreachable "Check power and network, then Retry."
+
+Manage (D15/D18) and Recovery (D14) hide the Stepper; Help (D16) is a Sheet over the current screen; Settings (D12) and About (D17) replace the content area.
+
+**Focus and navigation rules.** On every navigation focus moves to the page title (or the error summary / the first control of a dialog), not to `body`. Tab order starts in the content; the TitleBar buttons are reachable with `F6`. `F1` opens the Help topic of the focused control (its `help` id), falling back to the topic list. Wizard order: nine steps today; **open decision O1**: merge Plan and System into one tabbed *Setup* step (6 steps total: Find, Connect, Goal, Setup, Confirm, Install) and add an *Install with defaults* path from Goal to Confirm that shows the defaults in a collapsed *Options* Accordion.
 
 ### 1.2 Web shell (all pages except Login)
 
@@ -45,9 +53,9 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 
 ## 2. Widget catalogue (gpui-component 0.8.1, read from `src/`)
 
-**Exists and is used** (module: use): `sidebar` (Sidebar, SidebarMenu: not used on desktop, wizard navigation is the Stepper; Settings uses it), `stepper` (Stepper, StepperItem: wizard + install phases popover), `tab` (TabBar, Tab: Manage, Help), `table` (DataTable: inventory, disks), `tag` (Tag with Primary/Secondary/Danger/Success/Warning/Info variants: all statuses), `badge` (Badge: unread/update dot on the Settings icon), `alert` (Alert Default/Info/Success/Warning/Error: all inline problems), `tooltip` (Tooltip: every `tip`), `popover` (Popover: info icons, Way back), `hover_card` (HoverCard: names and sizes behind summary tags), `dialog` (Dialog, AlertDialog: confirmations, long text, host key), `sheet` (Sheet: Help centre), `accordion`/`collapsible` (Accordion, AccordionItem, Collapsible: steps, log, credits), `breadcrumb` (Breadcrumb: Manage sub-pages), `menu` (DropdownMenu, PopupMenu, ContextMenu: TitleBar menu, row actions), `kbd` (Kbd: shortcut list, tooltips), `button` (Button, ButtonGroup, DropdownButton, Toggle, ToggleGroup: segmented choices), `input` (Input incl. `mask_toggle` and search, NumberInput, OtpInput unused), `checkbox`, `radio`, `switch`, `slider`, `select`/`combobox`, `progress` (Progress, ProgressCircle), `spinner`, `skeleton`, `empty` (Empty: all empty states), `description_list` (DescriptionList: facts, logins), `group_box` (GroupBox: Goal cards, Destroyed/Changed/Preserved), `form` (Form, Field: all forms), `label`, `link`, `clipboard` (Clipboard: copy buttons), `notification` (toasts), `status_bar` (StatusBar), `title_bar` (TitleBar), `setting` (Settings, SettingPage, SettingGroup, SettingItem: Settings screen), `list` + `virtual_list` (List, VirtualList: topics, recovery rows, log lines), `text` (TextView::markdown: Help bodies, licence texts), `command` (Command palette: not used, search is an Input), `scroll` (Scrollbar via `.overflow_y_scrollbar()`; themed through the three scrollbar tokens), `separator`, `resizable` (not used), `tree`, `pagination`, `avatar`, `plot`/`chart` (not used).
+**Exists and is used** (module: use): `sidebar` (Sidebar, SidebarMenu: not used on desktop, wizard navigation is the Stepper; Settings uses it), `stepper` (Stepper, StepperItem: wizard + install phases popover), `tab` (TabBar, Tab: Manage, Help), `table` (DataTable: inventory, disks), `tag` (Tag with Primary/Secondary/Danger/Success/Warning/Info variants: all statuses), `badge` (Badge: unread/update dot on the Settings icon), `alert` (Alert Default/Info/Success/Warning/Error, `.banner()` for the update banner: all inline problems), `tooltip` (Tooltip: every `tip`), `popover` (Popover: info icons, Way back), `hover_card` (HoverCard: names and sizes behind summary tags), `dialog` (Dialog, AlertDialog: confirmations, long text, host key), `sheet` (Sheet: Help centre), `accordion`/`collapsible` (Accordion, AccordionItem, Collapsible: steps, log, credits), `breadcrumb` (Breadcrumb: Manage sub-pages), `menu` (DropdownMenu, PopupMenu, ContextMenu: TitleBar menu, row actions), `kbd` (Kbd: shortcut list, tooltips), `button` (Button, ButtonGroup, DropdownButton, Toggle, ToggleGroup: segmented choices), `input` (Input incl. `mask_toggle` and search, NumberInput, OtpInput unused), `checkbox`, `radio`, `switch`, `slider`, `select`/`combobox`, `progress` (Progress, ProgressCircle), `spinner`, `skeleton`, `empty` (Empty: all empty states), `description_list` (DescriptionList: facts, logins), `group_box` (GroupBox: Goal cards, Destroyed/Changed/Preserved), `form` (Form, Field: all forms), `label`, `link`, `clipboard` (Clipboard: copy buttons), `notification` (toasts), `status_bar` (StatusBar), `title_bar` (TitleBar), `setting` (Settings, SettingPage, SettingGroup, SettingItem: Settings screen), `list` + `virtual_list` (List, VirtualList: topics, recovery rows, log lines), `text` (TextView::markdown: Help bodies, licence texts), `command` (Command palette: not used, search is an Input), `scroll` (Scrollbar via `.overflow_y_scrollbar()`; themed through the three scrollbar tokens), `separator`, `resizable` (not used), `tree`, `pagination`, `avatar`, `plot`/`chart` (not used).
 
-**Icons**: `gpui-kit-assets` ships the full Lucide catalogue (1,830 SVGs) but embeds only 101 by default; the app registers its own `AssetSource` for the extra icons it uses (terminal, circle-question-mark, info, copy, triangle-alert, circle-check, circle-x, recycle, settings, search, book-open, download, wifi-off, hard-drive, life-buoy, external-link, refresh-cw, folder-open, key-round, clock, lock, server, shield, power) and does not embed `AllAssets`.
+**Icons**: `gpui-kit-assets` ships the full Lucide catalogue (1,830 SVGs) but embeds only 101 by default; the app registers its own `AssetSource` for the extra icons it uses (terminal, circle-question-mark, info, copy, triangle-alert, circle-check, circle-x, recycle, settings, search, book-open, download, wifi-off, hard-drive, life-buoy, external-link, refresh-cw, folder-open, key-round, clock, lock, server, shield, power) and does not embed `AllAssets`. **Fonts** are bundled as TTF/OTF (Inter, JetBrains Mono, Montserrat for the wordmark), not WOFF.
 
 **Missing widgets and exceptions (each must stay listed in code with a comment):**
 
@@ -60,7 +68,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | Log viewer | No log widget | `VirtualList` of `Label` rows (mono) + `Input` search + `ToggleGroup` levels |
 | Timeline (Manage, History) | No timeline widget | `List` rows with a Lucide icon and a time `Label` |
 | Card | No Card widget | `GroupBox` (nearest) |
-| Banner (top of window) | No banner widget | `Alert` placed in a full-width container |
+| Banner (top of window) | exists | `Alert::banner()` (no exception) |
 | Typed-phrase match indicator | None needed | `Input` + inline `Tag` |
 | Dialog/Sheet/Notification host | Needs `Root` | The window root must be `gpui_component::Root` |
 
@@ -103,6 +111,8 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | Apply with rollback? (web) | W6 Network | Apply / Cancel | 36 | After applying, open {https://192.168.1.45:8443}. The browser warns again; the certificate is the same: {SHA-256 5E:91:C4:0B:7A:D2:38:F6 ... 2D:83:3C:A1}. Passkeys do not work on an IP address. You have 90 seconds; you can also confirm over SSH {ssh andreas@192.168.1.45 sudo synofurb-net confirm}. Do nothing and it rolls back. |
 | Enable write? (web) | W5 Mounts | Enable write / Cancel | 24 | DSM btrfs volumes can use features Debian handles poorly. Read-only is the safe default. Write only if you have a copy of the files. |
 | Hybrid slices (desktop Plan) | D5 Plan (Slices link) | Close | 89 | Hybrid (SHR-style) cuts your disks' data space into slices at the sizes of the different disks. Each slice present on two or more disks becomes one array: RAID 1 for two members, RAID 5 for three or more (Hybrid 2-disk: RAID 6 for four or more). A slice on one disk has no partner and stays unused. The arrays are joined by LVM into one volume. This is built by synofurb with mdadm and LVM; DSM may not adopt it, and nothing here has run on a real Synology. |
+| Update management app | D15 Manage | Update / Cancel | 47 | Copies version {0.9.2} to the unit (now {0.9.1}). The web UI restarts for about 10 seconds; signed-in sessions sign in again. If the health check fails, the previous version is restored automatically. You can also roll back afterwards. A warning line appears if an array is degraded or rebuilding. |
+| Install boot agent? | D13 Boot manager | Install / Cancel | 53 | The whole boot flash is saved to this computer first and verified. Then entries and files are added to the flash; Synology's entry stays and stays the default. Your disks are not touched. The agent resets the default to DSM when it starts and reboots to DSM after 30 minutes without a login. |
 | Operation plan | D18 / W13 to W17 | Run / Cancel | 58 | Shows the ordered steps for this operation, re-derived on the server when you run it, and the exact commands (collapsed). Destructive steps ask you to type a phrase such as REPLACE sdc. It refuses to touch a device that is mounted, holds the system or swap, belongs to another array, or while the array is resyncing or reshaping. |
 
 ## 5. Desktop screens
@@ -157,7 +167,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 |---|---|---|---|
 | 1 | Connect | Label (title) | 1 |
 | 2 | Sign in over SSH. Nothing changes. | Label (subtitle) | 6 |
-| 3 | {DS918+ · 192.168.1.40 · SN 1930PDN123456} | Label + Tag (compat) identity line | data |
+| 3 | {DS918+ · 192.168.1.40 · SN 1930PDN123456} | Persistent unit header (shell, section 1.1); not repeated in the page | data |
 | 4 | Port | Field + NumberInput | 1 |
 | 5 | User | Field + Input | 1 |
 | 6 | Sign in with | Field + ToggleGroup | 3 |
@@ -171,7 +181,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 14 | SSH is off | Alert (error) when the port is closed | cond. |
 | 15 | Login failed | Alert (error) after a failed login | cond. |
 
-**Word budget:** screen 23 + shell 14 = **37** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 23 + shell 15 = **38** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -215,7 +225,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 16 | Choose goal | Button (primary) | 2 |
 | 17 | Back | Button (ghost) | 1 |
 
-**Word budget:** screen 24 + shell 14 = **38** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 24 + shell 15 = **39** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -252,7 +262,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 11 | Undo or repair. | Label (card line) | 3 |
 | 12 | Open recovery | Button | 2 |
 
-**Word budget:** screen 32 + shell 14 = **46** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 32 + shell 15 = **47** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -271,7 +281,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 
 ### D5 Plan
 
-**Purpose:** Shape the storage layout and see the consequence.
+**Purpose:** Shape the storage layout; see Now and After and the consequence.
 
 | # | Visible element (reading order) | Widget | Words |
 |---|---|---|---|
@@ -279,50 +289,50 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 2 | Nothing is written yet. | Label (subtitle) | 4 |
 | 3 | Mode | Field + ToggleGroup | 1 |
 | 4 | Wipe all | ToggleGroup option (only one visible) | 2 |
-| 5 | Advanced | Link (opens Dialog) | 1 |
+| 5 | Advanced | Link (opens the Keep Dialog) | 1 |
 | 6 | System size | Field + Slider + value label | 2 |
 | 7 | Mirror copies | Field + ToggleGroup 2 / 3 / 4 | 2 |
 | 8 | Data RAID | Field + Select (closed list: Auto, None, 0, 1, 5, 6, 10, Hybrid 1-disk, Hybrid 2-disk; items not counted) | 2 |
-| 9 | Usable | Tag (secondary) + data {10.82 TiB}; recomputed live from the chosen level | 1 |
+| 9 | Usable | Tag (secondary) + data {10.82 TiB}; recomputed live | 1 |
 | 10 | Survives | Tag (secondary) + data {1 disk} | 1 |
-| 11 | Slices | Link, shown only for Hybrid; opens Dialog with a DataTable (Slice, Disks, Level, Usable) | cond. |
-| 12 | Weaker slice | Alert (warning), only when a Hybrid 2-disk slice has fewer than 4 members | cond. |
-| 13 | Free space | Field + Slider | 2 |
-| 14 | {disk / RAID / LVM layout} | Custom diagram (exception, section 2), legend as Tooltip | data |
-| 15 | Destroyed | Tag (danger) + data size | 1 |
-| 16 | Changed | Tag (warning) + data | 1 |
-| 17 | Preserved | Tag (secondary) + data | 1 |
-| 18 | Disk warning | Alert (warning) + data line | 2 |
-| 19 | Next: System | Button (primary) | 2 |
-| 20 | Back | Button (ghost) | 1 |
-| 21 | Copy command | Button (icon: terminal, tooltip only) | cond. |
+| 11 | Slices | Link, Hybrid only; opens Dialog with a DataTable (Slice, Disks, Level, Usable) | cond. |
+| 12 | Hybrid: {+12.7 TiB} | Tag (info) shown beside Data RAID when disk sizes differ by more than 10 % and Auto is selected; click opens the Slices Popover | cond. |
+| 13 | Weaker slice | Alert (warning), only for a Hybrid 2-disk slice with fewer than 4 members | cond. |
+| 14 | Free space | Field + Slider | 2 |
+| 15 | Now | GroupBox title (read-only layout: disks, md0/md1/md2, volume1) + Tag {DSM} | 1 |
+| 16 | After | GroupBox title (planned layout) + info icon (Popover = text key) + Tag {Wipe} | 1 |
+| 17 | {disk bars + array chips} | Custom diagram (exception, section 2); every array chip carries its name so colour is never the only key | data |
+| 18 | Destroyed | Tag (danger) + data size | 1 |
+| 19 | Changed | Tag (warning) + data | 1 |
+| 20 | Preserved | Tag (secondary) + data | 1 |
+| 21 | Disk warning | Alert (warning) + data line; focusable | 2 |
+| 22 | Next: System | Button (primary) | 2 |
+| 23 | Back | Button (ghost) | 1 |
+| 24 | Copy command | Button (icon: terminal, tooltip only) | cond. |
 
-**Word budget:** screen 28 + shell 14 = **42** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 30 + shell 15 = **45** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
 | Element | Pattern | short (visible) | tip (one sentence) | help |
 |---|---|---|---|---|
-| Mode (i) | Tooltip | Mode | Wipe erases all four disks. | help: backups |
-| Advanced | Dialog | Keep existing volumes | Best effort; no guarantee. | Dialog (3 short paragraphs): caps the system near 9.5 GiB; what is gone (DSM, settings, users, packages); volumes are not mounted automatically and import read-only. Buttons Use Keep / Cancel |
-| System size (i) | Tooltip | System size | Mirrored on every copy; 32 GiB is recommended. | help: first-install |
-| Mirror copies (i) | Tooltip | Mirror copies | More copies survive more disk failures. | help: recovery |
-| Data RAID (i) | Popover | Data RAID | Auto picks the level from the disk count. | Small table: level, minimum disks, survives; Hybrid row; button "Open Help"; help: raid-levels |
-| Hybrid options | Tooltip on each option | Hybrid 1-disk / 2-disk | Mixes disk sizes; survives any one (or two) disks. | Needs 2 (1-disk) or 4 (2-disk) disks; help: hybrid-raid |
-| Usable / Survives | HoverCard | Capacity | Usable space and fault tolerance for this level and disk set. | Raw size, usable size, wasted space, tolerated failures; help: raid-levels |
-| Slices | Dialog | Hybrid slices | Each slice becomes one array. | DataTable of slices; unusable single-member slice is shown as "Unused"; text: Hybrid dialog, section 4; help: hybrid-raid |
-| Weaker slice | Tooltip | Weaker slice | This slice tolerates fewer failures than you chose. | help: hybrid-raid |
-| Free space (i) | Tooltip | Free space | Left unallocated for growth and snapshots. | - |
-| Summary tags | HoverCard | Destroyed / Changed / Preserved | Hover for names and sizes. | Names and sizes of disks, volumes and the boot flash |
-| Disk warning | Tooltip | Disk warning | A failing disk during the first sync is risky. | help: troubleshooting |
+| Mode (i) | Popover | Mode | Wipe erases all four disks. | help: backups |
+| Advanced | Dialog | Keep existing volumes | Best effort; no guarantee. | Keep dialog, section 4; blocking error "Size does not fit" with fix button "Set to 9 GiB" |
+| System size (i) | Popover | System size | Mirrored on every copy; 32 GiB is recommended. | help: first-install |
+| Mirror copies (i) | Popover | Mirror copies | More copies survive more disk failures. | help: recovery |
+| Data RAID (i) | Popover | Data RAID | Auto picks the level from the disk count. | Small table: level, minimum disks, survives; Hybrid row; "Open Help"; help: raid-levels |
+| Hybrid suggestion | Popover | Hybrid: {+12.7 TiB} | Mixed disk sizes waste space at equal-size levels. | Shows Slices and the capacity difference; help: hybrid-raid |
+| Usable / Survives | HoverCard | Capacity | Usable space and fault tolerance for this level and disk set. | Raw, usable, wasted, tolerated failures; help: raid-levels |
+| Slices | Dialog | Hybrid slices | Each slice becomes one array. | Hybrid dialog, section 4; help: hybrid-raid |
+| After (i) | Popover | Text key | Every segment is named; colours repeat the names. | Legend: boot, system, data, free, per-array names |
+| Disk warning | Popover (focusable trigger) | Disk warning | A failing disk during the first sync is risky. | help: troubleshooting |
 | Copy command | Tooltip | Copy command | Copies the equivalent synofurb command. | help: cli |
-| Blocking error | Alert (error) | Size does not fit | - | Inline fix Button "Set to 9 GiB" (secondary); Next stays disabled with Tooltip "Fix the error first" |
 
 **Primary:** Next: System. **Secondary:** Back, Copy command.
 
 **Keyboard:** `Left`/`Right` adjust a focused Slider; `Tab` through controls; `Ctrl+Shift+C` Copy command; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: n/a; *error*: Blocking (for example too few disks for the level): Alert error + inline fix, Next disabled; non-blocking: Alert warning; *loading*: Layout recomputes instantly; no loading state.
+**States:** *empty*: n/a; *error*: Blocking (too few disks for the level, Keep size does not fit): Alert error + inline fix, Next stays focusable and opens a Popover "Fix the error first"; non-blocking: Alert warning; *loading*: Layout recomputes instantly.
 
 ### D6 System
 
@@ -355,7 +365,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 23 | Bundle | Field + Select + Button "Download" when Offline | cond. |
 | 24 | Copy command | Button (icon: terminal) | cond. |
 
-**Word budget:** screen 31 + shell 14 = **45** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 31 + shell 15 = **46** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -380,84 +390,82 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 
 ### D7 Confirm
 
-**Purpose:** Final gate: identity, consequences, three confirmations, typed phrase.
+**Purpose:** Final gate: consequences, three confirmations, typed phrase. Identity is in the unit header and repeated on the checkbox.
 
 | # | Visible element (reading order) | Widget | Words |
 |---|---|---|---|
 | 1 | Confirm erase | Label (title) | 2 |
 | 2 | Last step before changes. | Label (subtitle) | 4 |
-| 3 | {DS918+ · 192.168.1.40 · SN 1930PDN123456} | Label (mono) + Tag (compat) identity line | data |
-| 4 | Destroyed | GroupBox title (danger border) | 1 |
-| 5 | {sda sdb sdc sdd · 14.5 TiB · volume1 · 10.9 TiB · DSM} | List (names + sizes only) | data |
-| 6 | Changed | GroupBox title (warning border) | 1 |
-| 7 | {Boot flash · backed up} | List | data |
-| 8 | Preserved | GroupBox title (success border) | 1 |
-| 9 | {Nothing on the disks} | List | data |
-| 10 | Disk warning | Tag (warning) | 2 |
-| 11 | Untested | Tag (info) | 1 |
-| 12 | About 25 min | Tag (secondary) | 3 |
-| 13 | Backup is tested | Checkbox | 3 |
-| 14 | I accept data loss | Checkbox | 4 |
-| 15 | This is the unit | Checkbox | 4 |
-| 16 | Type phrase | Field + Input (paste allowed); phrase shown as code chip {ERASE DS918+} | 2 |
-| 17 | Fallback: DSM stays default. | Label (one line) | 4 |
-| 18 | How recovery works | Link (opens Dialog) | 3 |
-| 19 | Erase and install | Button (danger); disabled until all four conditions hold | 3 |
-| 20 | Back | Button (ghost) | 1 |
-| 21 | Copy command | Button (icon: terminal) | cond. |
+| 3 | Disk warning | Tag (warning), focusable Popover trigger | 2 |
+| 4 | Untested | Tag (info), focusable Popover trigger (also in the unit header) | cond. |
+| 5 | About 25 min | Tag (secondary), Popover "Before you start" | 3 |
+| 6 | Destroyed | GroupBox (danger rule): ONE row per group, e.g. {sda sdb sdc sdd · 4 x WDC WD40EFRX · 14.55 TiB}, {volume1 · btrfs · 6.2 TiB used}, {DSM · settings · users} | 1 |
+| 7 | Changed | GroupBox (warning rule): {Boot flash · backed up first · 128 MiB} | 1 |
+| 8 | Preserved | GroupBox (success rule): {Nothing on the disks} | 1 |
+| 9 | ERASE {DS918+} | Gate card header (danger) | data |
+| 10 | Backup is tested | Checkbox | 3 |
+| 11 | I accept data loss | Checkbox | 4 |
+| 12 | This is | Checkbox label followed by data {192.168.1.40 · …123456} | 2 |
+| 13 | Type phrase | Field + Input (paste allowed; leading/trailing whitespace trimmed; case-sensitive) + inline Tag Matches / No match | 2 |
+| 14 | Cancel is free until step 3; DSM may be gone after. | Label (the one-line recovery summary) | 11 |
+| 15 | How recovery works | Link (opens Dialog) | 3 |
+| 16 | Erase and install | Button (danger); styled disabled but FOCUSABLE; activating it while incomplete opens a Popover "Missing: ..." | 3 |
+| 17 | Back | Button (ghost) | 1 |
+| 18 | Same model nearby | Alert (warning), only when a same-model unit exists: {192.168.1.58 · SN …557710} | cond. |
+| 19 | Copy command | Button (icon: terminal) | cond. |
 
-**Word budget:** screen 39 + shell 14 = **53** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 43 + shell 15 = **58** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
 | Element | Pattern | short (visible) | tip (one sentence) | help |
 |---|---|---|---|---|
-| Disk warning tag | Tooltip | Disk warning | {sdc: 8 reallocated sectors}; consider replacing it first. | help: troubleshooting |
-| Untested tag | Tooltip | Untested | No one has reported this model; your install is the test. | help: compat-status |
-| About 25 min tag | Popover | Before you start | Keep this computer awake and the NAS online. | Checklist: stay awake and on the network; NAS needs Internet unless Source is Offline; unplug USB and eSATA disks; the first RAID sync takes about 9 hours; help: first-install |
-| Changed list | HoverCard | Boot flash | Entries and files are added; the whole flash is backed up first. | Backup file name (mono) + help: backups |
-| Preserved list | Tooltip | Preserved | Wipe mode preserves nothing on the disks. | help: backups |
-| Twin warning | Alert (warning, conditional) | Same model nearby | {Another DS918+ at 192.168.1.58, serial ...557710.} | Shown only if a same-model unit exists |
-| Erase disabled | Tooltip | Erase and install | Missing: {the unticked items or the phrase}. | - |
-| Phrase match | Tag inline (success/danger) | Matches / No match | - | - |
-| How recovery works | Dialog | How recovery works | DSM is the default; failures return to it. | See dialog text, section 4 |
+| Disk warning tag | Popover (Tag is the focusable trigger) | Disk warning | {sdc: 8 reallocated sectors}; consider replacing it first. | help: troubleshooting |
+| Untested tag | Popover | Untested | No one has reported this model; your install is the test. | help: compat-status |
+| About 25 min tag | Popover | Before you start | Keep this computer awake and the NAS online. | Checklist: stay awake and online; NAS needs Internet unless Source is Offline; unplug USB and eSATA disks; first RAID sync about 9 hours; help: first-install |
+| Changed row | HoverCard | Boot flash | Entries and files are added; the whole flash is backed up first. | Backup file name (mono); help: backups |
+| Preserved row | Tooltip | Preserved | Wipe mode preserves nothing on the disks. | help: backups |
+| Same model nearby | Alert | Same model nearby | Check the serial next to the checkbox. | Appears in the demo data by default so the case is always exercised |
+| Erase (incomplete) | Popover on activation | Missing | Lists which confirmations or the phrase are missing. | - |
+| Phrase match | Tag inline | Matches / No match | - | No echo of the expected text |
+| How recovery works | Dialog | How recovery works | Free to cancel before step 3; failures return to DSM. | Dialog text, section 4 |
 | Copy command | Tooltip | Copy command | Includes the confirmation flags only after you confirm here. | help: cli |
 
 **Primary:** Erase and install (danger). **Secondary:** Back, Copy command.
 
-**Keyboard:** Tab order: Checkboxes (`Space`), phrase Input, Erase button. `Enter` never triggers Erase; `Space` on the focused button does. `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
+**Keyboard:** Tab order after navigation (focus starts on the title; Stepper is not a tab stop): Disk warning, Untested, About 25 min, Checkboxes (`Space`), phrase Input, How recovery works, Back, Copy command, Erase. `Enter` in the phrase field never submits; GPUI Buttons activate on `Enter` and `Space`, so the safeguard is the position (last in the order) and the full gate, not the key. `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: All controls cleared, Erase disabled; *error*: Phrase mismatch: inline Tag "No match" (no expected-value echo); *loading*: n/a.
+**States:** *empty*: All controls cleared, Erase styled disabled; *error*: Phrase mismatch: inline Tag "No match"; *loading*: n/a.
 
 ### D8 Install
 
-**Purpose:** Show progress; make the point of no return and cancel rules obvious.
+**Purpose:** Show progress; make the point of no return and the cancel rules obvious.
 
 | # | Visible element (reading order) | Widget | Words |
 |---|---|---|---|
 | 1 | Installing | Label (title) | 1 |
 | 2 | Keep this window open. | Label (subtitle) | 4 |
-| 3 | {Phase 3 of 7} | Progress (value) + Label | data |
-| 4 | Staging | Tag (info) current phase; opens Popover with the 7 phases | 1 |
-| 5 | Boot flash | AccordionItem (open until finished): flash backup, agent, reboot, installer send | 2 |
-| 6 | Steps | AccordionItem (current step open) | 1 |
-| 7 | {1-12 engine step names} | List rows with Icon status; step 3 carries a Tag | data |
-| 8 | No return | Tag (danger) on step 3 | 2 |
+| 3 | {71 %} | Progress + big value | data |
+| 4 | {Install the Debian base system · Step 9 of 12 · about 7 min left} | Label: current step ONLY (engine text and numbers) | data |
+| 5 | Staging | Tag (info) with the current phase; opens Popover with the 7 phases | 1 |
+| 6 | Boot flash | AccordionItem (open until finished): backup, agent, reboot, installer send; Tag {Backed up} | 2 |
+| 7 | Steps | AccordionItem (collapsed after step 3, current step visible in the header): the 12 engine steps as a List with status icons | 1 |
+| 8 | No return | Tag (danger) on step 3 inside the Steps list | cond. |
 | 9 | Log | AccordionItem (collapsed): Input search, ToggleGroup level, VirtualList | 1 |
-| 10 | Cancel | Button (secondary); disabled after step 3 | 1 |
+| 10 | Cancel | Button (secondary); styled disabled after step 3 (focusable; activating opens Popover "Not possible after step 3") | 1 |
 | 11 | Connection lost | Alert (warning, conditional) + Button "Retry" | cond. |
 
-**Word budget:** screen 13 + shell 14 = **27** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 11 + shell 15 = **26** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
 | Element | Pattern | short (visible) | tip (one sentence) | help |
 |---|---|---|---|---|
 | Phase Tag | Popover | Phases | Seven phases from connecting to verifying. | List with current phase marked; help: first-install |
-| No return Tag | Tooltip | No return | From step 3 the first disk changes; cancel is free before. | help: recovery |
-| Cancel disabled | Tooltip | Cancel | Not possible after step 3. | help: recovery |
-| Cancel | AlertDialog | Cancel install? | The NAS returns to DSM within 60 seconds. | Buttons Stop install / Keep going |
-| Boot flash | Tooltip | Boot flash | Backed up and verified before the first write. | help: backups |
+| No return Tag | Popover | No return | From step 3 the first disk changes; cancel is free before. | help: recovery |
+| Cancel (after step 3) | Popover | Cancel | Not possible after step 3. | help: recovery |
+| Cancel (before step 3) | AlertDialog | Cancel install? | The NAS returns to DSM within 60 seconds. | Buttons Stop install / Keep going. After Stop the app shows D9 in its "stopped" variant: Disks untouched, Flash changed (our entries), a 60 s "DSM returns in" countdown, primary Wait for DSM, secondary Remove our entries. It never returns to Inspect with a Read-only Tag. |
+| Boot flash | Popover | Boot flash | Backed up and verified before the first write. | help: backups |
 | Open log file (icon) | Tooltip | Open log file | Opens the log in your editor. | - |
 
 **Primary:** none while running (Cancel is secondary). **Secondary:** Cancel, Open log file (icon).
@@ -466,41 +474,44 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 
 **States:** *empty*: n/a; *error*: Failure replaces this screen with D9; connection loss shows the Alert and keeps polling; *loading*: Progress indeterminate during staging until the first byte count.
 
-### D9 Install failed
+### D9 Install stopped
 
-**Purpose:** Say what happened, whether disks changed, the clock, and the next action.
+**Purpose:** Say what happened, whether disks and flash changed, the clock, and the one next action.
 
 | # | Visible element (reading order) | Widget | Words |
 |---|---|---|---|
 | 1 | Install stopped | Label (title) | 2 |
-| 2 | {Step 11 of 12 · Configure packages, users, boot} | Label (subtitle, engine text) | data |
+| 2 | {Step 11 of 12 · Configure packages, users, boot} | Label (subtitle, engine step name) | data |
 | 3 | Disks changed | Tag (danger) or "Disks untouched" Tag (success) | 2 |
 | 4 | Flash restored | Tag (warning) or "Flash changed" / "Flash untouched" | 2 |
-| 5 | {boot entry failed read-back; original restored} | Alert (error) body, engine text | data |
-| 6 | Rescue shell closes in | Label + mono countdown (custom timer, exception) | 4 |
-| 7 | Open rescue shell | Button (primary, pinned in the footer) | 3 |
-| 8 | Export diagnostics | Button (secondary) | 2 |
-| 9 | Recovery options | Button (secondary) | 2 |
-| 10 | What happens next | Link (opens Dialog) | 3 |
-| 11 | Log excerpt | AccordionItem (collapsed, mono) | 2 |
+| 5 | Boot entry check failed | Alert (error): SHORT cause label only; the engine sentence is the Alert tooltip/Popover and the Log excerpt | 4 |
+| 6 | Rescue shell closes in | Label + mono countdown (custom timer, exception); no decorative icon | 4 |
+| 7 | Rescue | GroupBox: mono {ssh root@192.168.1.40} + Clipboard, credential Field (mask_toggle + Clipboard); persistent, never a toast | 1 |
+| 8 | Export first. | Label (the one instruction; the NAS is unreachable after the clock) | 2 |
+| 9 | Open rescue shell | Button (primary, pinned in the footer): copies the command and focuses the Rescue GroupBox | 3 |
+| 10 | Export diagnostics | Button (secondary) | 2 |
+| 11 | Recovery options | Button (secondary) | 2 |
+| 12 | What happens next | Link (opens Dialog) | 3 |
+| 13 | Log excerpt | AccordionItem (collapsed, mono) | 2 |
 
-**Word budget:** screen 22 + shell 14 = **36** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 29 + shell 15 = **44** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
 | Element | Pattern | short (visible) | tip (one sentence) | help |
 |---|---|---|---|---|
-| Countdown | Tooltip | Rescue shell | Then DSM becomes the default and the NAS reboots. | help: recovery |
-| Disks changed tag | Tooltip | Disks changed | Repartitioned at {time}; DSM's own system may be gone. | help: recovery |
-| Flash tag | Tooltip | Boot flash | Entries are on it; the full backup is on this computer. | help: backups |
-| What happens next | Dialog | What happens next | Order of actions and what survives. | Dialog text per variant, section 4 (after PONR Wipe, after PONR Keep, before PONR) |
+| Alert | Popover | Cause | The installer's message, in full. | Engine text: {boot entry failed read-back; the original flash was restored and verified} |
+| Countdown | Popover | Rescue shell | Then DSM becomes the default and the NAS reboots. | help: recovery |
+| Disks changed tag | Popover | Disks changed | Repartitioned at {time}; DSM's own system may be gone. | help: recovery |
+| Flash tag | Popover | Boot flash | Entries are on it; the full backup is on this computer. | help: backups |
+| What happens next | Dialog | What happens next | Order of actions and what survives. | Three variants in section 4 (before step 3, after step 3 Wipe, after step 3 Keep) |
 | Export diagnostics | Tooltip | Export diagnostics | Do this before the clock ends; secrets are removed. | help: troubleshooting |
 
-**Primary:** Open rescue shell (after PONR) / Wait for DSM (before PONR). **Secondary:** Export diagnostics, Recovery options.
+**Primary:** Open rescue shell (after step 3) / Wait for DSM (before step 3). **Secondary:** Export diagnostics, Recovery options.
 
-**Keyboard:** Footer button pinned and focusable first; `Tab` order: primary, secondary, links; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
+**Keyboard:** Footer button pinned and focusable first; `Tab` order: primary, secondary, Rescue copy buttons, links; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: n/a; *error*: Variants: before PONR (60 s clock, no rescue shell), after PONR Wipe, after PONR Keep (volume untouched unless hardware failed); *loading*: Waiting for DSM shows Spinner and elapsed time.
+**States:** *empty*: n/a; *error*: Variants: stopped by you before step 3 (60 s clock, Flash changed, no rescue shell); failed before step 3; failed after step 3 Wipe; failed after step 3 Keep (volume untouched unless hardware failed); *loading*: Waiting for DSM shows Spinner and elapsed time.
 
 ### D10 Done
 
@@ -526,7 +537,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 16 | Next steps | AccordionItem (collapsed) | 2 |
 | 17 | Action needed | Alert (warning) ARM only + Button "Show commands" | cond. |
 
-**Word budget:** screen 23 + shell 14 = **37** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 23 + shell 15 = **38** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -561,7 +572,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 7 | Skip version | Button (ghost, in Dialog) | 2 |
 | 8 | {release notes: 3 bullets · size · date · progress · signature state} | Dialog body: List + Progress + Tag | data |
 
-**Word budget:** screen 10 + shell 14 = **24** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 10 + shell 15 = **25** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -599,7 +610,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 14 | Open | Button | 1 |
 | 15 | Send results | SettingItem + Switch (default off) | 2 |
 
-**Word budget:** screen 28 + shell 14 = **42** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 28 + shell 1 = **29** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -619,7 +630,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 
 ### D13 Boot manager
 
-**Purpose:** Install the one-shot SSH agent on the boot flash.
+**Purpose:** Install the one-shot SSH agent on the boot flash, with a confirmation, progress and a result.
 
 | # | Visible element (reading order) | Widget | Words |
 |---|---|---|---|
@@ -631,11 +642,12 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 6 | Generate | ToggleGroup option | 1 |
 | 7 | Paste | ToggleGroup option | 1 |
 | 8 | Login timeout | Field + Input (read-only, 30 min) | 2 |
-| 9 | Other OS: power cycle returns. | Alert (warning) | 5 |
-| 10 | Install agent | Button (primary) | 2 |
+| 9 | After another OS starts, only a power cycle returns. | Alert (warning) | 9 |
+| 10 | Install agent | Button (primary): opens the confirm AlertDialog "Install boot agent?" | 2 |
 | 11 | Back | Button (ghost) | 1 |
+| 12 | Agent ready | Result panel after install: Tag (success), mono {ssh boot@192.168.1.40} + Clipboard, Tag {30 min watchdog}, Buttons "Return to DSM" and "Done" | cond. |
 
-**Word budget:** screen 26 + shell 14 = **40** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 30 + shell 15 = **45** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -644,85 +656,96 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | Flash changes | Popover | Flash changes | Entries and files are added; DSM's entry stays. | Whole flash saved to this computer first and verified; help: boot-manager |
 | Disks untouched | Tooltip | Disks untouched | No partition table is written. | help: boot-manager |
 | Login timeout | Tooltip | Login timeout | The agent reboots to DSM after 30 minutes without a login. | help: boot-manager |
-| One-shot | Popover from the title (i) | One-shot agent | It resets the default to DSM when it starts. | kexec starts Linux kernels only; help: boot-manager |
-| Alert | Tooltip | Other OS | After kexec nothing of ours runs; power-cycling returns to the default. | help: boot-manager |
+| Title (i) | Popover | One-shot agent | It resets the default to DSM when it starts. | kexec starts Linux kernels only; help: boot-manager |
+| Alert | Popover | Other OS | After kexec nothing of ours runs; power-cycling returns to the default. | help: boot-manager |
+| Install agent | AlertDialog | Install boot agent? | The boot flash is saved here first, then modified. | Text: Install boot agent dialog, section 4; buttons Install / Cancel |
+| Progress | D8 pattern | Boot flash | Backup, add agent, reboot, agent answers. | Only the Boot flash Accordion is shown; the risk Tag reads Flash changed |
 
 **Primary:** Install agent. **Secondary:** Back.
 
 **Keyboard:** `Enter` Install agent; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: n/a; *error*: Flash not editable: Alert error, button disabled with reason Tooltip; *loading*: Install shows the D8 pattern: Boot flash accordion only.
+**States:** *empty*: n/a; *error*: Flash not editable: Alert error, button styled disabled; activating it opens a Popover with the reason; *loading*: D8 Boot-flash progress; Cancel is free until the first flash write.
 
 ### D14 Recovery
 
-**Purpose:** Read the unit's real state and offer only what is possible.
+**Purpose:** Read the unit's real state and offer only what is possible and safe.
 
 | # | Visible element (reading order) | Widget | Words |
 |---|---|---|---|
 | 1 | Recovery | Label (title) | 1 |
 | 2 | State read from the unit. | Label (subtitle) | 5 |
-| 3 | {Flash: ours present · Default: DSM · Disks: modified 14:25} | Tags (state facts) | data |
+| 3 | {Flash: ours present · Default: DSM · Disks: modified 14:25} | Tags (state facts); the status-bar risk Tag shows the same state, never Read-only | data |
 | 4 | Boot DSM next | List row label | 3 |
 | 5 | Open agent | List row label | 2 |
 | 6 | Restore flash | List row label | 2 |
 | 7 | Remove our entries | List row label | 3 |
 | 8 | Reinstall DSM | List row label | 2 |
-| 9 | Run | Button per row (disabled rows have a reason Tooltip) | 1 |
+| 9 | Run | Button per row (ghost; only the safe row is primary); "Reinstall DSM" uses "Open guide" | 1 |
 | 10 | Saved here | AccordionItem (collapsed): file paths + Button "Open folder" | 2 |
 | 11 | Open folder | Button | 2 |
 
-**Word budget:** screen 23 + shell 14 = **37** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 23 + shell 6 = **29** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
 | Element | Pattern | short (visible) | tip (one sentence) | help |
 |---|---|---|---|---|
-| Each row (i) | Tooltip | Row name | One sentence per action, from RECOVERY.md. | help: recovery |
-| Disabled row | Tooltip | Unavailable | The reason is stated, for example that our entries are not on the flash. | - |
+| Each row (i) | Popover | Row name | One sentence per action, from RECOVERY.md. | help: recovery |
+| Disabled row | Popover on activation | Unavailable | The reason, for example that our entries are the active boot path. | - |
+| Remove our entries | AlertDialog | Remove our entries? | Debian may no longer start. | Disabled when Debian is the default boot entry; otherwise confirm with the phrase REMOVE ENTRIES |
 | Restore flash | AlertDialog (typed phrase) | Restore boot flash? | Needs a working Linux on the unit. | Type RESTORE FLASH; backup file name shown |
-| Reinstall DSM | Dialog | Reinstall DSM | Use Synology's page; no data promise. | Opens find.synology.com; text per section 4 |
+| Reinstall DSM | Dialog | Reinstall DSM | Use Synology's page; no data promise. | Opens find.synology.com; dialog text, section 4 |
 | Saved here | Tooltip | Disk metadata backup | First and last 1 MiB of changed disks; not your files. | help: backups |
 
-**Primary:** Run (first enabled row). **Secondary:** other rows.
+**Primary:** Run (the safe row). **Secondary:** other rows.
 
 **Keyboard:** `Up`/`Down` row; `Enter` Run; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
 **States:** *empty*: Unit unreachable: Alert "Cannot reach unit" with the manual steps link; *error*: Action failed: Notification error; state re-read; *loading*: Skeleton tags while the state is read.
 
-### D15 Manage
+### D15 Manage: Overview and Health
 
-**Purpose:** Unit page for converted units.
+**Purpose:** One page per converted unit: health first, then the repair, then the management-app update.
 
 | # | Visible element (reading order) | Widget | Words |
 |---|---|---|---|
-| 1 | {DS918+} | Label (title, data) | data |
-| 2 | Running Debian 13. | Label (subtitle) | 3 |
-| 3 | Overview, Storage, Logins, Recovery, History | TabBar + Tab (5); Storage = D18 | 5 |
-| 4 | Address | DescriptionList label | 1 |
-| 5 | Default boot | DescriptionList label | 2 |
-| 6 | Web UI | DescriptionList label | 2 |
-| 7 | Open web UI | Button (primary) | 3 |
-| 8 | Diagnostics | Button (secondary, copies diagnostics) | 1 |
-| 9 | SSH command | Logins tab: Field + mono + Clipboard | 2 |
-| 10 | Password not kept | Tag (secondary) | 3 |
-| 11 | {timeline} | History tab: List of events | data |
+| 1 | Overview, Storage, Logins, Recovery, History | TabBar + Tab (5); Recovery opens D14 inside Manage (the TabBar stays); no page title: the unit header is the title | 5 |
+| 2 | Needs attention | Health Tag (success Healthy / warning Needs attention / danger Critical / secondary Unreachable) = the WORST component; reason chips {sdc failed · md1 degraded} (Tags, data); Button icon Refresh | 2 |
+| 3 | Management app | Card title + info icon (Popover) + Tag {Update available \| Updating \| Updated \| Rolled back} | 2 |
+| 4 | On unit | Label + mono {0.9.1} | 2 |
+| 5 | In this app | Label + mono {0.9.2} | 3 |
+| 6 | Update | Button: PRIMARY only when health is Healthy; secondary otherwise; while Updating it shows four phases (Upload, Install, Restart, Health check) as a Stepper-style Progress | 1 |
+| 7 | Open web UI | Button (secondary) | 3 |
+| 8 | Disks | Card title + info icon: rows {sda 37 °C OK ... sdc Failed [Replace]} | 1 |
+| 9 | Arrays | Card title + info icon: rows {md0 RAID 1 x3 Degraded [Replace disk] ...} | 1 |
+| 10 | Volumes | Card title: rows with Progress {/ 41 %, /srv/data 16 %} | 1 |
+| 11 | Services | Card title: Tags {ssh synofurb-mgmt smartd mdadm unattended-upgrades}; a down service is a danger Tag with a Restart button | 1 |
+| 12 | Updates | Card title: {12 pending · 3 security}, Tag {Reboot needed} | 1 |
+| 13 | Boot default | Card title: {Debian 13 · 6.12.57} and a Tag when the DSM loader entry remains | 2 |
+| 14 | Replace | Button (primary when Critical because of a disk or array): opens the Operation plan Dialog with a New disk Select | 1 |
+| 15 | Diagnostics | Footer Button (secondary) | 1 |
 
-**Word budget:** screen 22 + shell 14 = **36** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 27 + shell 6 = **33** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
 | Element | Pattern | short (visible) | tip (one sentence) | help |
 |---|---|---|---|---|
-| Password not kept | Tooltip | Password | synofurb does not store it; the NAS keeps a hash. | help: first-install |
+| Health Tag | Popover (focusable) | Health | The worst component decides. | Lists each component with its state; help: troubleshooting |
+| Management app (i) | Popover | Management app | The web UI service on the NAS. | Update copies the version in this app to the unit; rolls back by itself if the health check fails; help: troubleshooting |
+| Update | Dialog | Update management app | The web UI restarts for about 10 seconds. | Dialog text, section 4; buttons Cancel / Update. A warning line appears when an array is degraded or rebuilding. |
+| Update (not primary) | Tooltip | Update | Repair first; updating is not urgent. | - |
+| Replace | Dialog | Operation plan | Review the steps and exact commands first. | Steps, New disk Select (free disks, size check), Commands Accordion, typed phrase `REPLACE sdc`; buttons Run / Cancel |
+| Restart (service) | AlertDialog | Restart service? | Restarting synofurb-mgmt ends web sessions. | Buttons Restart / Cancel |
+| Password not kept (Logins tab) | Tooltip | Password | synofurb does not store it; the NAS keeps a hash. | help: first-install |
 | Default boot | Tooltip | Default boot | Debian; the DSM loader entry remains. | help: recovery |
-| Recovery tab | Link to D14 | Recovery | - | - |
-| Storage tab | Tab content D18 | Storage | Arrays, members and RAID operations. | help: raid-levels |
 
-**Primary:** Open web UI. **Secondary:** Diagnostics.
+**Primary:** Replace (Critical) / Update (Healthy, update available). **Secondary:** Open web UI, Diagnostics.
 
-**Keyboard:** `Left`/`Right` tabs; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
+**Keyboard:** `Left`/`Right` tabs; `Tab` through cards in reading order; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: No history: Empty; *error*: Unit offline: Tag "Offline", Open web UI disabled with Tooltip; *loading*: Skeleton while reading status.
+**States:** *empty*: No history: Empty; *error*: Unreachable: Health Tag "Unreachable", skeleton cards, Alert "Cannot reach unit" + Retry; Update and Open web UI styled disabled with a Popover reason; the status bar says Unreachable, never Debian running; *loading*: Skeleton cards while reading status; *updating*: Tabs stay usable; Update shows phases; web UI restarts about 10 s; *update failed*: Tag "Rolled back to {0.9.1}" + Alert with Retry.
 
 ### D16 Help centre
 
@@ -738,7 +761,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 6 | Back | Button (ghost) in topic view | 1 |
 | 7 | {topic body ≤150 words} | TextView.markdown + "More" Link | data |
 
-**Word budget:** screen 33 + shell 14 = **47** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 33 + shell 15 = **48** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -770,7 +793,7 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 9 | Credits | AccordionItem (collapsed) | 1 |
 | 10 | {Debian · Lucide · Inter · JetBrains Mono · Montserrat · GPUI Kit · gpui-component · synodeb note} | List inside Credits (name + licence) | data |
 
-**Word budget:** screen 15 + shell 14 = **29** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 15 + shell 1 = **16** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -795,30 +818,29 @@ Manage (D15) hides the Stepper (data-driven); Help (D16) is a Sheet over the cur
 | 1 | Storage | Tab content under D15 (TabBar tab) | 1 |
 | 2 | Array, Level, State, Size, Progress | DataTable column headers | 5 |
 | 3 | {md1 · RAID 5 · Rebuilding · 10.82 TiB · 24 %} | DataTable rows; State = Tag (success Clean / warning Degraded / info Rebuilding / warning Foreign) + Progress in the row | data |
-| 4 | Create array | DropdownButton (primary): RAID array, Hybrid array | 2 |
-| 5 | Actions | DropdownMenu per row: Add spare, Replace disk, Grow, Change level, Scrub, Stop, Tune (closed list, items not counted) | 1 |
-| 6 | Open web UI | Button (secondary): detail and history live in the web UI | 3 |
-| 7 | Array degraded | Alert (warning) + Button "Replace disk" | cond. |
-| 8 | No arrays | Empty + Button "Create array" | cond. |
+| 4 | Actions | DropdownMenu per row: Add spare, Replace disk, Grow, Change level, Scrub, Stop, Tune (closed list, items not counted). v1 minimum on desktop: Replace disk and Scrub; the rest may stay web-only IF the menu says "In web UI" on those items | 1 |
+| 5 | Open web UI | Button (primary when the desktop cannot do the chosen operation) | 3 |
+| 6 | Array degraded | Alert (warning) + Button "Replace disk" | cond. |
+| 7 | No arrays | Empty + Button "Open web UI" | cond. |
 
-**Word budget:** screen 12 + shell 14 = **26** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 10 + shell 6 = **16** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
 | Element | Pattern | short (visible) | tip (one sentence) | help |
 |---|---|---|---|---|
-| State Tag | Tooltip | State | Clean, degraded, rebuilding or foreign. | help: replace-disk |
+| State Tag | Popover | State | Clean, degraded, rebuilding or foreign. | help: replace-disk |
 | Level column (i) | Popover | Level | RAID level and minimum disks. | Same table as D5; help: raid-levels |
-| Actions item disabled | Tooltip | Unavailable | Wait for the rebuild to finish. | Other reasons: in use by LVM or mounted; foreign array needs "not mine" confirmation |
-| Every operation | Dialog (Operation plan) | Operation plan | Review the steps and exact commands first. | Ordered steps, Accordion "Commands" (mono, collapsed), typed phrase per section 5b; buttons Run / Cancel |
-| Foreign Tag | Tooltip | Foreign | Created by DSM or another system; you can assemble and scrub it. | help: hybrid-raid |
-| Open web UI | Tooltip | Open web UI | Full array detail and history. | help: raid-levels |
+| Actions item disabled | Popover on activation | Unavailable | Wait for the rebuild to finish. | Other reasons: in use by LVM or mounted; foreign array needs "not mine" |
+| Every operation | Dialog (Operation plan) | Operation plan | Review the steps and exact commands first. | Ordered steps, New disk Select where a disk is added, Accordion "Commands" (mono, collapsed), typed phrase per section 6.1; buttons Run / Cancel |
+| Foreign Tag | Popover | Foreign | Created by DSM or another system; you can assemble and scrub it. | help: hybrid-raid |
+| A disabled primary-looking "Create array" must not exist | Rule | - | - | If an operation is not available on the desktop, the menu item says "In web UI" and opens it; no dead buttons |
 
-**Primary:** Create array. **Secondary:** Actions, Open web UI.
+**Primary:** Open web UI / Replace disk. **Secondary:** Actions.
 
-**Keyboard:** `Up`/`Down` row; `Enter` opens the row's Actions menu; `Ctrl+N` Create array; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
+**Keyboard:** `Up`/`Down` row; `Enter` opens the row's Actions menu; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: Empty "No arrays" + Create array; *error*: Unit unreachable: Alert "Cannot reach unit"; an operation failing shows the real error and what was rolled back; *loading*: Skeleton rows; Progress per syncing array.
+**States:** *empty*: Empty "No arrays" + Open web UI; *error*: Unit unreachable: Alert "Cannot reach unit"; an operation failing shows the real error and what was rolled back; *loading*: Skeleton rows; Progress per syncing array.
 
 ## 6. Web UI screens
 
@@ -1637,23 +1659,23 @@ A scrub reads every block and compares copies or parity to find silent errors. C
 | Screen | Own | Shell | Total | Budget |
 |---|---|---|---|---|
 | D1 Inventory | 24 | 14 | 38 | ok |
-| D2 Connect | 23 | 14 | 37 | ok |
-| D3 Inspect | 24 | 14 | 38 | ok |
-| D4 Goal | 32 | 14 | 46 | ok |
-| D5 Plan | 28 | 14 | 42 | ok |
-| D6 System | 31 | 14 | 45 | ok |
-| D7 Confirm | 39 | 14 | 53 | ok |
-| D8 Install | 13 | 14 | 27 | ok |
-| D9 Install failed | 22 | 14 | 36 | ok |
-| D10 Done | 23 | 14 | 37 | ok |
-| D11 Update | 10 | 14 | 24 | ok |
-| D12 Settings | 28 | 14 | 42 | ok |
-| D13 Boot manager | 26 | 14 | 40 | ok |
-| D14 Recovery | 23 | 14 | 37 | ok |
-| D15 Manage | 22 | 14 | 36 | ok |
-| D16 Help centre | 33 | 14 | 47 | ok |
-| D17 About | 15 | 14 | 29 | ok |
-| D18 Manage: Storage / RAID | 12 | 14 | 26 | ok |
+| D2 Connect | 23 | 15 | 38 | ok |
+| D3 Inspect | 24 | 15 | 39 | ok |
+| D4 Goal | 32 | 15 | 47 | ok |
+| D5 Plan | 30 | 15 | 45 | ok |
+| D6 System | 31 | 15 | 46 | ok |
+| D7 Confirm | 43 | 15 | 58 | ok |
+| D8 Install | 11 | 15 | 26 | ok |
+| D9 Install stopped | 29 | 15 | 44 | ok |
+| D10 Done | 23 | 15 | 38 | ok |
+| D11 Update | 10 | 15 | 25 | ok |
+| D12 Settings | 28 | 1 | 29 | ok |
+| D13 Boot manager | 30 | 15 | 45 | ok |
+| D14 Recovery | 23 | 6 | 29 | ok |
+| D15 Manage: Overview and Health | 27 | 6 | 33 | ok |
+| D16 Help centre | 33 | 15 | 48 | ok |
+| D17 About | 15 | 1 | 16 | ok |
+| D18 Manage: Storage / RAID | 10 | 6 | 16 | ok |
 | W1 Login | 9 | 1 | 10 | ok |
 | W2 Dashboard | 19 | 14 | 33 | ok |
 | W3 Storage | 13 | 14 | 27 | ok |
@@ -1672,10 +1694,18 @@ A scrub reads every block and compares copies or parity to find silent errors. C
 | W16 Replace disk | 20 | 14 | 34 | ok |
 | W17 RAID operation | 5 | 14 | 19 | ok |
 
-Highest desktop screen: 53 words. Highest web screen: 41 words. Dialog and Help bodies are opened on purpose and are bounded separately (dialogs at most 90 words, topics at most 150).
+Highest desktop screen: 58 words. Highest web screen: 41 words. Dialog and Help bodies are opened on purpose and are bounded separately (dialogs at most 90 words, topics at most 150).
 
 ## 10. Review checklist for the real-app screenshots
 
-Proposed `synofurb gui --demo --screen <name>` names: `inventory`, `inventory-offline`, `connect`, `connect-hostkey`, `inspect`, `goal`, `plan`, `plan-keep`, `system`, `system-offline`, `confirm`, `confirm-keep`, `install`, `install-after-ponr`, `failed-pre`, `failed-post`, `failed-keep`, `done`, `done-arm`, `update`, `settings`, `boot-manager`, `recovery`, `manage`, `manage-storage`, `help`, `help-topic`, `about`, web `raid`, `raid-create`, `raid-shr`, `raid-replace`, `raid-operation`, `raid-degraded`, `raid-foreign`, `raid-empty`, and the dialogs `dlg-recovery`, `dlg-keep`, `dlg-next-pre`, `dlg-next-wipe`, `dlg-next-keep`. For each: light and dark at 960x640; focus ring visible; no horizontal scroll; word count at or under the table above; every element is the widget named here (hand-made imitations are defects); tooltips and popovers captured open for at least one screen per pattern; fonts Inter / JetBrains Mono visible; scrollbars themed.
+Proposed `synofurb gui --demo --screen <name>` names: `inventory`, `inventory-offline`, `connect`, `connect-hostkey`, `inspect`, `goal`, `plan`, `plan-keep`, `system`, `system-offline`, `confirm`, `confirm-keep`, `install`, `install-after-ponr`, `failed-pre`, `failed-post`, `failed-keep`, `done`, `done-arm`, `update`, `settings`, `boot-manager`, `recovery`, `manage` (= Overview with health), `manage-health-ok`, `manage-health-faildisk`, `manage-health-rebuild`, `manage-health-services`, `manage-health-unreachable`, `manage-update`, `manage-updating`, `manage-update-failed`, `manage-storage`, `boot-manager-confirm`, `boot-manager-done`, `install-stopped`, `help`, `help-topic`, `about`, web `raid`, `raid-create`, `raid-shr`, `raid-replace`, `raid-operation`, `raid-degraded`, `raid-foreign`, `raid-empty`, and the dialogs `dlg-recovery`, `dlg-keep`, `dlg-next-pre`, `dlg-next-wipe`, `dlg-next-keep`. For each: light and dark at 960x640; focus ring visible; no horizontal scroll; word count at or under the table above; every element is the widget named here (hand-made imitations are defects); tooltips and popovers captured open for at least one screen per pattern; fonts Inter / JetBrains Mono visible; scrollbars themed.
 
 Placeholders to confirm with engineering (shown as sample values in this spec): the web lockout numbers (5 failures in 10 minutes, 5 minute pause), the SSH confirm command name `synofurb-net confirm`, `synofurb-dom`/`sf-boot` command names as in `docs/BOOT.md` and `docs/RECOVERY.md`, and the `--screen` names above.
+
+## 11. Revision after the prototype review (design/reviews/v2/ux-expert-review.md)
+
+Folded into the spec from the UI expert's prototype (these are now requirements): **persistent unit header** (section 1.1; identity lines removed from D2 to D15); **Plan Now | After** two-panel layout with a text key (D5); **Manage Overview / Health** with the worst-component Health Tag, reason chips, six cards, and the **management-app update** (version on unit vs in this app, four phases, auto-rollback, Rolled back / Updated states, D15 and the Update management app dialog); **Operation plan dialog** for Replace with a typed phrase; **Boot flash / Steps / Log** accordions on Install; **GroupBox rules** (Destroyed, Changed, Preserved) with one row per group; **Setup merge** and **Install with defaults** as open decision O1.
+
+Corrected after the review: fact-derived risk Tag everywhere (B2); Boot manager confirm, progress and result (B1); persistent Rescue panel and the "Export first." instruction (B3); New disk Select in every disk-adding operation (B4); counting rule for prose inside data (B5); Confirm one-line recovery text and identity on the checkbox (M1, M2); Hybrid suggestion on Auto with mixed disks and a text key for diagram colours (M4); stepper out of the Tab order, focus to title, `F1` contextual (M5); GPUI tooltip and disabled-button rules (M6); text size must scale the whole window (M7); Health to action (Restart a down service, Replace on degraded arrays, Update demoted unless Healthy) (M8); Recovery rows with confirmation and a safe primary (M9); stopped-install outcome (M10); Boot manager alert copy (M11); one-row groups so all three lists fit at 960x640 (M12); `Alert::banner()` exists; TTF/OTF fonts.
+
+Open decisions: **O1** merge Plan and System into *Setup* (recommended); **O2** which RAID operations are native on desktop in v1 (minimum: Replace disk, Scrub; the rest say "In web UI"); **O3** block or warn on management-app update while an array is degraded (spec: warn); **O4** whether the NAS reports the rescue-shell deadline so the app can re-attach after a restart.

@@ -35,9 +35,10 @@ def palette(th):
     for k in ('danger_edge', 'scrim', 'log_wrn_bg', 'log_err_bg'): pass
     P.pop('danger_edge', None)
     dark = th == 'dark'
-    if dark:  # a red that is both >= 3:1 against the dark surfaces and carries a white label with margin (5.2 to 6.0:1)
-        P['danger'] = red_with_lum(0.150); P['danger_hover'] = red_with_lum(0.140); P['danger_pressed'] = red_with_lum(0.132)
-    P['on_danger'] = '#FFFFFF'
+    if dark:  # round-1 review B9: hover/pressed must be visible. Dark danger is a LIGHT red with a near-black label (like the dark primary):
+        # hover and pressed get lighter in clear steps (>= 1.18:1 each), label stays >= 4.5:1, fill stays >= 3:1 on every dark surface.
+        P['danger'] = red_with_lum(0.220); P['danger_hover'] = mix(P['danger'], '#FFFFFF', .20); P['danger_pressed'] = mix(P['danger'], '#FFFFFF', .38)
+    P['on_danger'] = oklch(.16, .02, 25) if dark else '#FFFFFF'
     for s, hue in (('ok', 150), ('warn', 75), ('err', 25), ('info', 255)):
         P[f'on_{s}'] = oklch(.16, .02, hue) if dark else '#FFFFFF'
         P[f'{s}_fg_hover'] = mix(P[f'{s}_fg'], P['fg'], .14); P[f'{s}_fg_active'] = mix(P[f'{s}_fg'], P['fg'], .26)
