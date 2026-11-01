@@ -271,6 +271,24 @@ pub fn confirm_phrase_for(base: &str, serial: &str, twin: bool) -> String {
     }
 }
 
+/// One line of the destroyed-disk list on Confirm: `sda · WDC WD40EFRX · …K0000 · 3.64 TiB` (name, model, serial tail,
+/// size). Names and sizes only: nothing here is a claim about the data on the disk.
+pub fn destroyed_disk_line(name: &str, model: &str, serial: &str, size: &str) -> String {
+    let tail: String = serial.chars().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect();
+    let mut parts: Vec<String> = vec![name.to_string()];
+    if !model.trim().is_empty() {
+        parts.push(model.trim().to_string());
+    }
+    if !tail.is_empty() {
+        parts.push(format!("\u{2026}{tail}"));
+    }
+    parts.push(size.to_string());
+    parts.join(" \u{00b7} ")
+}
+
+/// How many disk lines Confirm shows before "and N more" (a wide chassis has 12 or more bays).
+pub const DESTROYED_LINES_MAX: usize = 8;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,5 +428,11 @@ mod tests {
         assert_eq!(confirm_phrase_for("ERASE DS918+", "1930PDN123456", false), "ERASE DS918+");
         assert_eq!(confirm_phrase_for("ERASE DS918+", "1930PDN123456", true), "ERASE DS918+ 3456");
         assert_eq!(confirm_phrase_for("ERASE X", "12", true), "ERASE X 12");
+    }
+
+    #[test]
+    fn destroyed_disk_line_names_size_and_serial_tail() {
+        assert_eq!(destroyed_disk_line("sda", "WDC WD40EFRX", "WD-WCC7K0000", "3.64 TiB"), "sda \u{00b7} WDC WD40EFRX \u{00b7} \u{2026}K0000 \u{00b7} 3.64 TiB");
+        assert_eq!(destroyed_disk_line("nvme0n1", " ", "", "1.00 TiB"), "nvme0n1 \u{00b7} 1.00 TiB");
     }
 }

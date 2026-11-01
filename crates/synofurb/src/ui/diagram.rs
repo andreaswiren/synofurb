@@ -214,7 +214,7 @@ pub fn render(p: &Palette, m: &DiagramModel, cx: &App) -> impl IntoElement {
             .gap(px(space::S4))
             .child(
                 h_flex().child(
-                    kit::mono_sm(cx, format!("PV {} \u{2192} VG {}", v.pv, v.name))
+                    kit::mono_sm(cx, format!("PV {} in VG {}", v.pv, v.name))
                         .px(px(space::S6))
                         .py(px(space::S2))
                         .rounded(px(radius::SM))

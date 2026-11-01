@@ -336,6 +336,9 @@ mod strings {
         CONF_NO_MATCH: Label, "No match", "", "", "";
         CONF_FALLBACK: Prose, "Free to cancel until step 3; then no undo.", "", "", "";
         CONF_NO_BACKUP: Label, "Test your backup.", "synofurb does not look at DSM's backup tasks; only you can confirm a backup.", "backups", "";
+        CONF_KEEP_RISK: Prose, "Kept volumes are best effort; data can still be lost.", "", "", "";
+        CONF_LIST: Label, "Erased disks", "", "", "";
+        CONF_LIST_KEEP: Label, "Rewritten disks", "", "", "";
         CONF_ERASED: Prose, "Everything on the disks is erased.", "", "", "";
         CONF_AFTER: Label, "After", "", "", "";
         CONF_ADD_SERIAL: Prose, "Add serial last 4.", "", "", "";
@@ -357,7 +360,7 @@ mod strings {
         INSTALL_NO_RETURN: Label, "No return", "From step 3 the first disk changes; cancel is free before.", "recovery", "";
         INSTALL_LOG: Label, "Log", "", "", "";
         INSTALL_CANCEL: Button, "Cancel", "Not possible after step 3.", "recovery", "";
-        CONN_HOST_WHY: Label, "Enter the NAS address first.", "", "", "";
+        CONN_HOST_WHY: Label, "Why unavailable", "Enter the NAS address first.", "", "";
         INSTALL_OPEN_LOG: Label, "Open log file", "Opens the log folder.", "", "";
         INSTALL_CANCEL_DIALOG: Dialog, "Cancel install?", "The NAS returns to DSM within 60 seconds.", "recovery", "The NAS returns to DSM within 60 seconds.";
         INSTALL_STOP: Button, "Stop install", "", "", "";
@@ -442,9 +445,9 @@ mod strings {
         SET_REFRESH: Button, "Refresh", "", "", "";
         SET_BUNDLE: Label, "Offline bundle", "Installer files for one CPU architecture.", "offline-mode", "";
         SET_BUNDLE_DOWNLOAD: Button, "Download", "", "", "";
-        SET_BUNDLE_WHY: Label, "Not built into the app yet: run synofurb-cli bundle to build or download one.", "", "", "";
-        UPD_DOWNLOAD_KEY_WHY: Label, "This build cannot verify updates: its signing key is a placeholder.", "", "", "";
-        UPD_DOWNLOAD_ASSET_WHY: Label, "This release has no signed package for this system.", "", "", "";
+        SET_BUNDLE_WHY: Label, "Why unavailable", "Not built into the app yet: run synofurb-cli bundle to build or download one.", "", "";
+        UPD_DOWNLOAD_KEY_WHY: Label, "Why unavailable", "This build cannot verify updates: its signing key is a placeholder.", "", "";
+        UPD_DOWNLOAD_ASSET_WHY: Label, "Why unavailable", "This release has no signed package for this system.", "", "";
         SET_LOG_FOLDER: Label, "Log folder", "", "", "";
         SET_OPEN: Button, "Open", "", "", "";
         SET_SEND_RESULTS: Label, "Send results", "Asks before every report; serial numbers are left out.", "report-result", "";
@@ -801,6 +804,7 @@ pub static SCREENS: &[ScreenCopy] = &[
             &CONF_PRESERVED,
             &CONF_NO_BACKUP,
             &CONF_ERASED,
+            &CONF_LIST,
             &CONF_FALLBACK,
             &CONF_AFTER,
             &CONF_BACKUP,

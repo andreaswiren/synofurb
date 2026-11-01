@@ -4,9 +4,9 @@
 
 use crate::ui::app::App;
 use crate::ui::icons::{self, role};
-use crate::ui::logview::{LEVELS, format_line, level_name, level_tag};
+use crate::ui::logview::{LEVELS, format_line, level_name, level_word};
 use crate::ui::theme::{self, Palette, Themed};
-use gpui_kit::component::button::{Button, ButtonVariants, Toggle, ToggleGroup};
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -46,27 +46,17 @@ impl App {
         let min = log.filter().min_level;
         let sel = LEVELS.iter().position(|l| *l == min).unwrap_or(0);
 
-        let level_group = ToggleGroup::new("log-levels")
-            .segmented()
-            .small()
-            .children(
-                LEVELS
-                    .iter()
-                    .enumerate()
-                    .map(|(i, lv)| Toggle::new(i).label(format!("{} {}", level_name(*lv), log.count_at_least(*lv))).checked(i == sel)),
-            )
-            .on_click({
-                let app = app.clone();
-                move |checks: &Vec<bool>, _, cx| {
-                    if let Some(ix) = checks.iter().enumerate().find(|(i, on)| **on && *i != sel).map(|(i, _)| i) {
-                        app.update(cx, |a, cx| {
-                            a.install.log.set_min_level(LEVELS[ix]);
-                            a.log_selected_all = false;
-                            cx.notify();
-                        });
-                    }
-                }
-            });
+        let labels: Vec<String> = LEVELS.iter().map(|lv| format!("{} {}", level_name(*lv), log.count_at_least(*lv))).collect();
+        let level_group = crate::ui::kit::segmented("log-levels", &labels, sel, {
+            let app = app.clone();
+            move |ix, _, cx| {
+                app.update(cx, |a, cx| {
+                    a.install.log.set_min_level(LEVELS[ix]);
+                    a.log_selected_all = false;
+                    cx.notify();
+                });
+            }
+        });
         let toolbar = h_flex()
             .w_full()
             .gap(px(8.0))
@@ -121,8 +111,19 @@ impl App {
                 range
                     .filter_map(|i| this.install.log.visible_line(i).map(|l| (i, l.clone())))
                     .map(|(i, l)| {
-                        let (glyph, word) = level_tag(l.level);
+                        let word = level_word(l.level);
                         let c = level_color(&p, l.level);
+                        let glyph = icons::icon_sized(
+                            match l.level {
+                                Level::Debug => role::BUG,
+                                Level::Info => role::INFO,
+                                Level::Warn => role::WARN,
+                                Level::Error => role::ERR,
+                            },
+                            12.0,
+                            c,
+                        );
+                        let _ = &p;
                         let problem = l.level >= Level::Warn;
                         h_flex()
                             .id(("log-line", i))

@@ -65,7 +65,7 @@ impl App {
             .gap(px(2.0))
             .items_start()
             .child(
-                Alert::warning("backup", copy::CONF_ERASED.short)
+                Alert::warning("backup", if keep { copy::CONF_KEEP_RISK.short } else { copy::CONF_ERASED.short })
                     .title(copy::CONF_NO_BACKUP.short)
                     .icon(icons::icon(role::WARN))
                     .flex_1()
@@ -146,6 +146,31 @@ impl App {
             .border_color(cx.theme().border)
             .child(icons::icon(role::LAYERS))
             .child(div().text_sm().flex_1().min_w_0().child(after_text));
+        // The disks that change, by name and size, always visible (B4): not behind "Details".
+        let cand = f.candidate_disks();
+        let shown = cand.len().min(crate::ui::facts::DESTROYED_LINES_MAX);
+        let disk_list = v_flex()
+            .id("destroyed-list")
+            .gap(px(2.0))
+            .px(px(12.0))
+            .py(px(8.0))
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .border_l_4()
+            .border_color(p.err_solid)
+            .child(
+                h_flex()
+                    .gap(px(6.0))
+                    .items_center()
+                    .text_color(p.err_fg)
+                    .child(icons::icon_sized(role::DELETE, 14.0, p.err_fg))
+                    .child(kit::strong(if keep { copy::CONF_LIST_KEEP.short } else { copy::CONF_LIST.short })),
+            )
+            .children(cand.iter().take(shown).map(|d| {
+                kit::mono_sm(cx, crate::ui::facts::destroyed_disk_line(&d.name, &d.model, &d.serial, &size_2dp(d.size_bytes())))
+            }))
+            .when(cand.len() > shown, |c| c.child(kit::caption(cx, format!("and {} more", cand.len() - shown))));
         let details = v_flex().gap(px(2.0)).children(plan.destroyed.iter().map(|d| div().text_xs().child(d.clone())));
         let acc = Accordion::new("conf-details").bordered(true).item(|i| i.title(copy::CONF_DETAILS.short).child(details));
 
@@ -178,6 +203,7 @@ impl App {
                     .child(div().flex_1().min_w_0().child(chg))
                     .child(div().flex_1().min_w_0().child(pres)),
             )
+            .child(disk_list)
             .child(after)
             .child(acc);
 

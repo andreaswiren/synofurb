@@ -126,7 +126,7 @@ impl App {
         } else {
             "Check the BIOS boot order.".into()
         });
-        let next_ui = v_flex().gap(px(2.0)).text_sm().children(next.into_iter().map(|l| div().child(format!("\u{2022} {l}"))));
+        let next_ui = v_flex().gap(px(2.0)).text_sm().children(next.into_iter().map(|l| div().child(l)));
         let acc = Accordion::new("done-acc")
             .bordered(true)
             .item(|i| i.title(h_flex().gap(px(2.0)).child(copy::DONE_NEXT_STEPS.short)).child(next_ui));

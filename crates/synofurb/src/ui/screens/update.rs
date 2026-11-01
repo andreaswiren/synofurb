@@ -46,7 +46,7 @@ impl Render for UpdateView {
             .gap(px(8.0))
             .items_center()
             .flex_wrap()
-            .child(kit::chip(&p, format!("{} \u{2192} {}", info.current, info.latest)))
+            .child(kit::chip(&p, format!("{} to {}", info.current, info.latest)))
             .child(kit::chip(&p, size))
             .when(!published.is_empty(), |d| d.child(kit::chip(&p, published)))
             .when(info.prerelease, |d| d.child(kit::tag(&p, Tone::Warn, Some(role::WARN), "Pre-release")));
@@ -174,7 +174,7 @@ impl Render for UpdateView {
                                 .label(copy::UPD_DOWNLOAD.short)
                                 .on_click(move |_, _, cx| a3.update(cx, |a, cx| a.start_update_download(cx))),
                             dis.then(|| {
-                                if key_missing { copy::UPD_DOWNLOAD_KEY_WHY.short } else { copy::UPD_DOWNLOAD_ASSET_WHY.short }.to_string()
+                                if key_missing { copy::UPD_DOWNLOAD_KEY_WHY.tip } else { copy::UPD_DOWNLOAD_ASSET_WHY.tip }.to_string()
                             }),
                         ),
                     ],

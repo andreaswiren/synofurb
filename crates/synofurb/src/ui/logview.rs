@@ -7,13 +7,14 @@ use synofurb_core::logs::{Level, LogLine};
 pub const MAX_LINES: usize = 50_000;
 pub const DROP_CHUNK: usize = 10_000;
 
-/// Glyph + three-letter word for a level: status is never colour alone.
-pub fn level_tag(level: Level) -> (&'static str, &'static str) {
+/// The three-letter word of a level. Status is never colour alone: the viewer draws a Lucide icon (see
+/// `screens/logviewer.rs`, no Unicode symbol glyphs) before this word.
+pub fn level_word(level: Level) -> &'static str {
     match level {
-        Level::Debug => ("\u{00b7}", "DBG"),
-        Level::Info => ("\u{25cf}", "INF"),
-        Level::Warn => ("\u{25b2}", "WRN"),
-        Level::Error => ("\u{2716}", "ERR"),
+        Level::Debug => "DBG",
+        Level::Info => "INF",
+        Level::Warn => "WRN",
+        Level::Error => "ERR",
     }
 }
 
@@ -145,7 +146,7 @@ impl LogBuffer {
 
 /// `12:00:01 INF [inst] message`, for copy/export.
 pub fn format_line(l: &LogLine) -> String {
-    format!("{} {} [{}] {}", l.ts, level_tag(l.level).1, l.source.tag(), l.msg)
+    format!("{} {} [{}] {}", l.ts, level_word(l.level), l.source.tag(), l.msg)
 }
 
 /// U-Boot lines the installer printed (ARM boards): `uboot-env| setenv ...` -> `setenv ...`.
@@ -233,9 +234,12 @@ mod tests {
     }
 
     #[test]
-    fn tags_are_glyph_plus_word() {
-        assert_eq!(level_tag(Level::Warn), ("\u{25b2}", "WRN"));
-        assert_eq!(level_tag(Level::Error).1, "ERR");
+    fn level_words_are_three_ascii_letters() {
+        for l in LEVELS {
+            let w = level_word(l);
+            assert!(w.len() == 3 && w.is_ascii(), "{w}");
+        }
+        assert_eq!(level_word(Level::Warn), "WRN");
     }
 
     #[test]

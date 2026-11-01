@@ -109,7 +109,7 @@ impl App {
                         .loading(inspecting)
                         .disabled(inspecting)
                         .on_click(cx.listener(|this, _, window, cx| this.start_inspect(window, cx))),
-                    host_empty.then(|| copy::CONN_HOST_WHY.short.to_string()),
+                    host_empty.then(|| copy::CONN_HOST_WHY.tip.to_string()),
                 ),
             ])
     }

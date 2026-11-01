@@ -213,7 +213,7 @@ impl App {
                     .child(kit::with_reason(
                         "bundle-why",
                         Button::new("bundle-dl").ghost().small().label(copy::SET_BUNDLE_DOWNLOAD.short),
-                        Some(copy::SET_BUNDLE_WHY.short.to_string()),
+                        Some(copy::SET_BUNDLE_WHY.tip.to_string()),
                     ))
                     .into_any_element()
             },

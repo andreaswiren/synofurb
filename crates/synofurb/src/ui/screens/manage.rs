@@ -148,11 +148,13 @@ impl App {
             col = col.child(Progress::new("mgmt-progress").value(pct as f32)).child(h_flex().gap(px(16.0)).children(
                 ["Upload", "Install", "Restart", "Health check"].iter().enumerate().map(|(i, s)| {
                     let k = (pct as usize / 26).min(3);
-                    div().text_xs().when(i == k, |d| d.font_weight(gpui_kit::FontWeight::SEMIBOLD)).child(format!(
-                        "{}{}",
-                        if i < k { "\u{2713} " } else { "" },
-                        s
-                    ))
+                    h_flex()
+                        .gap(px(2.0))
+                        .items_center()
+                        .text_xs()
+                        .when(i == k, |d| d.font_weight(gpui_kit::FontWeight::SEMIBOLD))
+                        .when(i < k, |d| d.child(icons::icon_sized(role::CHECK, 12.0, p.ok_fg)))
+                        .child(*s)
                 }),
             ));
         }
