@@ -121,6 +121,10 @@ pub struct Inputs {
     pub add_ip: Entity<InputState>,
     pub bundle: Entity<InputState>,
     pub bm_timeout: Entity<InputState>,
+    /// The Manage page's own sign-in (never the Connect form's).
+    pub mg_user: Entity<InputState>,
+    pub mg_password: Entity<InputState>,
+    pub mg_key_path: Entity<InputState>,
 }
 
 pub struct PlanForm {
@@ -222,6 +226,15 @@ pub struct App {
     /// The last `health --json` of the managed unit; `None` = it did not answer.
     pub manage_report: Option<synofurb_core::manage::Health>,
     pub manage_loading: bool,
+    /// Which unit Manage is bound to; another unit starts with nothing.
+    pub manage_bind: super::mgmt::ManageBinding,
+    /// The user pressed "Read health" for the bound unit (the credential is the one typed on the Manage page).
+    pub manage_signed_in: bool,
+    /// Why the last health read failed (the unit's own error), shown instead of a guess.
+    pub manage_err: Option<String>,
+    pub mg_use_key: bool,
+    /// Recovery was opened from Manage: its actions target the managed unit, not the Connect form.
+    pub recover_for_manage: bool,
     pub mgmt: super::screens::manage::MgmtState,
     /// The engine's one-sentence result of the last management update or rollback.
     pub mgmt_note: Option<String>,
@@ -289,6 +302,9 @@ impl App {
             add_ip: input("192.168.1.20", "", false, &mut subs, cx),
             bundle: input("/path/to/bundle", "", false, &mut subs, cx),
             bm_timeout: input("", "30 min", false, &mut subs, cx),
+            mg_user: input("nasadmin", "nasadmin", false, &mut subs, cx),
+            mg_password: input("password of this NAS", "", true, &mut subs, cx),
+            mg_key_path: input("path to an OpenSSH private key", "", false, &mut subs, cx),
         };
         // Enter in the connection fields starts the inspection (the primary action of that screen).
         for st in [&inp.host, &inp.port, &inp.user, &inp.password, &inp.sudo, &inp.key_path] {
@@ -448,6 +464,11 @@ impl App {
             manage_tab: 0,
             manage_report: None,
             manage_loading: false,
+            manage_bind: Default::default(),
+            manage_signed_in: false,
+            manage_err: None,
+            mg_use_key: false,
+            recover_for_manage: false,
             mgmt: super::screens::manage::MgmtState::Idle,
             mgmt_note: None,
             manage_hybrid: false,
@@ -504,6 +525,9 @@ impl App {
     pub fn go(&mut self, screen: Screen, window: &mut Window, cx: &mut Context<App>) {
         if screen == Screen::Settings && self.screen != Screen::Settings {
             self.return_to = self.screen;
+        }
+        if screen != Screen::Manage && screen != Screen::Recover {
+            self.recover_for_manage = false;
         }
         self.screen = screen;
         self.error = None;
@@ -623,7 +647,13 @@ impl App {
             }
             Screen::Manage => {
                 self.manage_unit = demo::inventory().devices.into_iter().find(|d| d.synofurb_debian);
-                self.manage_report = (t.health != super::mgmt::DemoHealth::Unreachable).then(|| super::mgmt::demo_health(t.health));
+                if let Some(u) = &self.manage_unit {
+                    self.manage_bind.bind(&super::mgmt::unit_key(&u.serial, u.primary_ip()));
+                }
+                use super::mgmt::DemoHealth as DH;
+                self.manage_signed_in = t.health != DH::NeedsSignIn;
+                self.manage_report = (!matches!(t.health, DH::Unreachable | DH::NeedsSignIn)).then(|| super::mgmt::demo_health(t.health));
+                self.manage_err = (t.health == DH::Unreachable).then(|| "connection to 192.168.1.60 timed out".to_string());
                 self.manage_tab = t.tab;
                 self.manage_hybrid = t.hybrid_view;
                 if t.updating {
@@ -789,8 +819,14 @@ impl App {
             Msg::ManageHealth(r) => {
                 self.manage_loading = false;
                 match r {
-                    Ok(h) => self.manage_report = Some(*h),
-                    Err(_) => self.manage_report = None,
+                    Ok(h) => {
+                        self.manage_report = Some(*h);
+                        self.manage_err = None;
+                    }
+                    Err(e) => {
+                        self.manage_report = None;
+                        self.manage_err = Some(e);
+                    }
                 }
                 self.svc_fixed = false;
             }
@@ -988,7 +1024,69 @@ impl App {
 
     // ------------------------------------------------------------------------------------------ connect / inspect
 
+    /// The SSH target of what is on screen: Manage (and Recovery opened from it) uses the managed unit and the sign-in typed on
+    /// that page; everything else uses the Connect form. The two never mix.
     pub fn target(&self, cx: &gpui_kit::App) -> Result<SshTarget, String> {
+        if self.manage_bound() {
+            return self.manage_target(cx);
+        }
+        self.form_target(cx)
+    }
+
+    /// Is what the user sees about the managed unit (Manage, or Recovery opened from it)?
+    pub fn manage_bound(&self) -> bool {
+        self.screen == Screen::Manage || (self.screen == Screen::Recover && self.recover_for_manage)
+    }
+
+    pub fn manage_target(&self, cx: &gpui_kit::App) -> Result<SshTarget, String> {
+        use super::mgmt::{ManageSecret, manage_target_for};
+        let addr = self.manage_unit.as_ref().and_then(|u| u.primary_ip());
+        let secret = if self.mg_use_key {
+            let p = self.input_value(&self.inp.mg_key_path, cx);
+            ManageSecret::Key(std::fs::read_to_string(p.trim()).map_err(|e| format!("cannot read the key file: {e}"))?)
+        } else {
+            ManageSecret::Password(self.input_value(&self.inp.mg_password, cx))
+        };
+        manage_target_for(addr, &self.input_value(&self.inp.mg_user, cx), &secret)
+    }
+
+    /// The address actions work on: the managed unit's on Manage (and Recovery from it), else the Connect form's.
+    pub fn active_host(&self, cx: &gpui_kit::App) -> String {
+        if self.manage_bound() {
+            return self.manage_unit.as_ref().and_then(|u| u.primary_ip()).map(|i| i.to_string()).unwrap_or_default();
+        }
+        super::format::display_host(&self.input_value(&self.inp.host, cx))
+    }
+
+    pub fn active_user(&self, cx: &gpui_kit::App) -> String {
+        if self.manage_bound() {
+            return self.input_value(&self.inp.mg_user, cx).trim().to_string();
+        }
+        self.input_value(&self.inp.user, cx).trim().to_string()
+    }
+
+    /// Open Manage for `unit`. Another unit than the bound one starts clean: no report, no sign-in, no recovery facts.
+    pub fn open_manage(&mut self, unit: Found, window: &mut Window, cx: &mut Context<App>) {
+        let key = super::mgmt::unit_key(&unit.serial, unit.primary_ip());
+        if self.manage_bind.bind(&key) {
+            self.manage_report = None;
+            self.manage_err = None;
+            self.manage_loading = false;
+            self.manage_signed_in = false;
+            self.mgmt = super::screens::manage::MgmtState::Idle;
+            self.mgmt_note = None;
+            self.reset_unit_session();
+            self.set_input(&self.inp.mg_password.clone(), "", window, cx);
+        }
+        self.manage_unit = Some(unit);
+        self.recover_for_manage = false;
+        self.go(Screen::Manage, window, cx);
+        if self.manage_signed_in && self.manage_report.is_none() {
+            self.read_manage_health(cx);
+        }
+    }
+
+    pub fn form_target(&self, cx: &gpui_kit::App) -> Result<SshTarget, String> {
         let password = self.input_value(&self.inp.password, cx);
         let auth = if self.use_key {
             let p = self.input_value(&self.inp.key_path, cx);
@@ -1281,6 +1379,14 @@ impl App {
         self.start_scan(cx);
     }
 
+    /// `(model, serial)` of the unit the current page is about (the managed unit on Manage, else the inspected one).
+    pub fn unit_identity(&self, _cx: &gpui_kit::App) -> (String, String) {
+        if self.manage_bound() {
+            return self.manage_unit.as_ref().map(|u| (u.model.clone(), u.serial.clone())).unwrap_or_default();
+        }
+        self.facts.as_ref().map(|f| (f.model.clone(), f.serial.clone())).unwrap_or_default()
+    }
+
     /// What the installer of the planned install does after a failure (boot-flash units reboot, the rest halt).
     pub fn fail_clock(&self) -> super::facts::FailClock {
         super::facts::fail_clock(self.form.plan.as_ref().map(synofurb_core::script::failure_handling), self.install.past_no_return)
@@ -1288,11 +1394,11 @@ impl App {
 
     /// The name the unit's agent key is kept under: its serial number, else the address.
     pub fn unit_key_name(&self, cx: &gpui_kit::App) -> String {
-        match &self.facts {
+        match self.facts.as_ref().filter(|_| !self.manage_bound()) {
             Some(f) if !f.serial.is_empty() => f.serial.clone(),
             _ => match &self.manage_unit {
                 Some(u) if !u.serial.is_empty() => u.serial.clone(),
-                _ => super::format::display_host(&self.input_value(&self.inp.host, cx)),
+                _ => self.active_host(cx),
             },
         }
     }
@@ -1384,7 +1490,7 @@ impl App {
             })
             .detach();
         } else {
-            let host = self.input_value(&self.inp.host, cx).trim().to_string();
+            let host = self.active_host(cx);
             let host = if host.is_empty() { self.selected_ip.clone().unwrap_or_default() } else { host };
             worker::spawn_wait_dsm(self.tx.clone(), host, self.dsm_cancel.clone());
         }

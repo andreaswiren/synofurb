@@ -20,6 +20,8 @@ pub struct UnitFacts {
     pub agent_unknown: bool,
     /// The default boot entry is Debian (or our agent), not DSM.
     pub default_not_dsm: bool,
+    /// The unit is running the boot agent right now (read from the unit).
+    pub agent_running: bool,
 }
 
 /// Health of a running Debian unit (Manage).
@@ -148,6 +150,14 @@ pub struct RecRow {
 
 /// The phrases that unlock the two destructive recovery actions.
 pub const RESTORE_PHRASE: &str = "RESTORE FLASH";
+
+/// The phrase that unlocks Restore flash names the unit like the erase phrase does: `RESTORE FLASH DS918+ 3456` (model, then the
+/// last four characters of the serial number or address), so a phrase typed for one unit does not open another.
+pub fn restore_phrase(model: &str, serial_or_host: &str) -> String {
+    let tail: String = serial_or_host.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let model = model.trim();
+    format!("{RESTORE_PHRASE} {} {tail}", if model.is_empty() { "NAS" } else { model }).trim().to_string()
+}
 pub const REMOVE_PHRASE: &str = "REMOVE ENTRIES";
 
 /// The Recovery rows as a function of the facts: a row that cannot work says why.
@@ -170,7 +180,13 @@ pub fn recovery_rows(f: &UnitFacts) -> Vec<RecRow> {
             label: "Open agent",
             button: "Start",
             desc: "Reboots into the SSH agent once; DSM stays the way back.",
-            off: (!f.flash).then_some("No agent on the flash. Set it up under Boot manager."),
+            off: if f.agent_running {
+                Some("The agent is already running. Open a shell on it instead.")
+            } else if !f.flash {
+                Some("No agent on the flash. Set it up under Boot manager.")
+            } else {
+                None
+            },
         },
         RecRow {
             kind: RecKind::RestoreFlash,
@@ -246,9 +262,19 @@ pub fn scrub_agent_promise(text: &str) -> String {
 /// The two commands of the manual recovery (`boot/dom/README.md`, "Manual recovery"): 1. on DSM after choosing
 /// `SYNOLOGY_2` in the boot menu, 2. on another Linux computer with the boot flash attached. `/dev/sdX` is the one
 /// thing only the user can fill in (the text says so); the image path is the newest saved backup when there is one.
-pub fn manual_recovery_commands(backup: Option<&str>) -> [String; 2] {
+pub fn manual_recovery_commands(backup: Option<&str>) -> [String; 3] {
     let image = backup.map(shell_quote).unwrap_or_else(|| "<saved boot-flash image>".to_string());
-    ["sudo synofurb-dom default dsm --yes".to_string(), format!("sudo SYNOFURB_DOM=/dev/sdX synofurb-dom restore --yes {image}")]
+    [
+        "sudo synofurb-dom default dsm --yes".to_string(),
+        format!("sudo SYNOFURB_DOM=/dev/sdX synofurb-dom restore --yes {image}"),
+        // for a computer without synofurb-dom: boot/dom/README.md, "Manual recovery"
+        format!("sha256sum -c {image}.sha256 && sudo dd if={image} of=/dev/sdX bs=1M conv=fsync"),
+    ]
+}
+
+/// "Use these" in Quick setup is available when there is nothing to choose (one layout) or a layout was picked.
+pub fn quick_ready(selected: Option<usize>, options: usize) -> bool {
+    options <= 1 || selected.is_some_and(|i| i < options)
 }
 
 pub fn shell_arg(s: &str) -> String {
@@ -266,17 +292,6 @@ fn shell_quote(s: &str) -> String {
 /// The command that boots the agent once (`boot-manager enter`), with the host and user already filled in.
 pub fn agent_command(host: &str, user: &str) -> String {
     format!("synofurb-cli boot-manager enter --host {} --user {}", shell_quote(host), shell_quote(user))
-}
-
-/// The newest `synofurb-dom-backup-*.img` in `dir` (the names carry a sortable time stamp), if any.
-pub fn latest_backup(dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("synofurb-dom-backup-") && n.ends_with(".img")))
-        .collect();
-    found.sort();
-    found.pop()
 }
 
 // ------------------------------------------------------------------------------------------------ installer failure
@@ -556,18 +571,14 @@ mod tests {
         let q = manual_recovery_commands(Some("/tmp/my dir/x.img"));
         assert!(q[1].ends_with("'/tmp/my dir/x.img'"));
         assert!(manual_recovery_commands(None)[1].contains("<saved boot-flash image>"));
-    }
-
-    #[test]
-    fn latest_backup_is_the_newest_stamp() {
-        let dir = std::env::temp_dir().join(format!("fv-latest-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        for n in ["synofurb-dom-backup-a-20260101.img", "synofurb-dom-backup-a-20260301.img", "other.img"] {
-            std::fs::write(dir.join(n), b"x").unwrap();
-        }
-        assert_eq!(latest_backup(&dir).unwrap().file_name().unwrap(), "synofurb-dom-backup-a-20260301.img");
-        std::fs::remove_dir_all(&dir).unwrap();
-        assert!(latest_backup(&dir).is_none());
+        // another computer without synofurb-dom: sha256sum + dd, the README's alternative
+        let dd = &c[2];
+        assert!(
+            dd.starts_with("sha256sum -c /home/u/")
+                && dd.contains(".img.sha256 && sudo dd if=/home/u/")
+                && dd.ends_with("of=/dev/sdX bs=1M conv=fsync"),
+            "{dd}"
+        );
     }
 
     #[test]
@@ -607,5 +618,42 @@ mod tests {
         for it in crate::ui::copy::ALL {
             assert!(!it.body.to_lowercase().contains("open the rescue shell") && !it.short.contains("Open rescue"), "{}", it.key);
         }
+    }
+
+    #[test]
+    fn the_restore_phrase_names_the_unit() {
+        assert_eq!(restore_phrase("DS918+", "1920PDN123456"), "RESTORE FLASH DS918+ 3456");
+        assert_eq!(restore_phrase("DS918+", "1920PDN999999"), "RESTORE FLASH DS918+ 9999");
+        assert_ne!(restore_phrase("DS918+", "1920PDN123456"), restore_phrase("DS918+", "1920PDN654321"), "twins differ");
+        assert_eq!(restore_phrase("", "192.168.1.20"), "RESTORE FLASH NAS 1.20");
+    }
+
+    #[test]
+    fn only_the_images_of_one_unit_are_listed() {
+        let dir = std::env::temp_dir().join(format!("fv-bk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["synofurb-dom-backup-SN1-20260101.img", "synofurb-dom-backup-SN12-20260202.img", "synofurb-dom-backup-SN2-20260303.img"] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        let mine = synofurb_core::recovery::find_local_backups(&dir, "SN1");
+        assert_eq!(mine.len(), 1, "SN12 and SN2 are other units");
+        assert!(mine[0].path.ends_with("synofurb-dom-backup-SN1-20260101.img"));
+        assert!(synofurb_core::recovery::find_local_backups(&dir, "SN3").is_empty(), "no image for this unit: no fallback to another");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quick_setup_primary_enables_once_a_layout_is_chosen() {
+        assert!(quick_ready(None, 1), "one layout: nothing to choose");
+        assert!(!quick_ready(None, 2), "mixed disks: nothing preselected");
+        assert!(quick_ready(Some(0), 2) && quick_ready(Some(1), 2));
+        assert!(!quick_ready(Some(5), 2));
+    }
+
+    #[test]
+    fn open_agent_is_off_on_a_unit_that_already_runs_it() {
+        let rows = recovery_rows(&UnitFacts { flash: true, agent_running: true, ..f() });
+        assert!(rows[1].off.unwrap().contains("already running"));
+        assert!(recovery_rows(&UnitFacts { flash: true, ..f() })[1].off.is_none());
     }
 }

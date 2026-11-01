@@ -372,14 +372,16 @@ impl gpui_kit::Render for CommandView {
 pub struct QuickView {
     opts: Vec<(synofurb_core::plan::DataRaid, String)>,
     pub sel: Option<usize>,
-    summary: String,
+    /// `(label, value)` rows: Storage (one layout only), System, Boot.
+    rows: Vec<(&'static str, String)>,
 }
 
 impl gpui_kit::Render for QuickView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::ActiveTheme;
         use gpui_kit::component::alert::Alert;
         use gpui_kit::component::radio::{Radio, RadioGroup};
-        let mut col = v_flex().gap(px(12.0)).child(super::kit::mono(cx, self.summary.clone()));
+        let mut col = v_flex().gap(px(12.0)).child(div().text_sm().child(copy::QUICK_INTRO.short));
         if self.opts.len() > 1 {
             col = col
                 .child(
@@ -393,7 +395,15 @@ impl gpui_kit::Render for QuickView {
                 )
                 .child(Alert::info("quick-hybrid", copy::QUICK_HYBRID_CAUTION.short).icon(super::icons::icon(role::INFO)));
         }
-        col
+        let muted = cx.theme().muted_foreground;
+        col = col.child(v_flex().gap(px(4.0)).children(self.rows.iter().map(|(k, v)| {
+            gpui_kit::component::h_flex()
+                .gap(px(12.0))
+                .items_baseline()
+                .child(div().w(px(72.0)).flex_none().text_sm().text_color(muted).child(*k))
+                .child(div().flex_1().min_w_0().text_sm().child(v.clone()))
+        })));
+        col.child(div().text_sm().text_color(muted).child(copy::QUICK_NOTES.short))
     }
 }
 
@@ -413,22 +423,32 @@ impl App {
                 super::raid::survives(plan).map(|n| format!(" \u{00b7} survives {}", super::raid::survives_text(n))).unwrap_or_default();
             format!("{}{surv} \u{00b7} {}", super::raid::resolved_label(plan), super::format::size_2dp(plan.sizes.data_usable_bytes))
         };
-        let (opts, summary_layout) = if q.mixed {
-            (vec![(DataRaid::Auto, label(&auto_plan)), (DataRaid::Shr1, label(&hyb_plan))], "choose a layout".to_string())
+        let opts = if q.mixed {
+            vec![(DataRaid::Auto, label(&auto_plan)), (DataRaid::Shr1, label(&hyb_plan))]
         } else {
-            (vec![(q.raid, String::new())], label(&auto_plan))
+            vec![(q.raid, label(&auto_plan))]
         };
-        let summary = format!(
-            "Wipe all \u{00b7} system {} GiB \u{00d7} {} \u{00b7} free {} % \u{00b7} Newest kernel \u{00b7} {}",
-            q.system_gib, q.copies, q.free_percent, summary_layout
-        );
+        let hostname = self.input_value(&self.inp.hostname, cx);
+        let user = self.input_value(&self.inp.username, cx);
+        let boot = match self.sys.boot.resolve(&f) {
+            BootChoice::Dom => "boot flash",
+            BootChoice::Kexec => "kexec",
+            _ => "installer kit",
+        };
+        let mut rows: Vec<(&'static str, String)> = vec![];
+        if !q.mixed {
+            rows.push(("Storage", format!("Wipe all {} disks \u{00b7} {}", f.candidate_disks().len(), opts[0].1)));
+        }
+        rows.push(("System", format!("{} GiB \u{00d7} {} copies \u{00b7} {hostname} \u{00b7} {user}", q.system_gib, q.copies)));
+        rows.push(("Boot", format!("Newest kernel \u{00b7} {} \u{00b7} {boot}", if self.source_offline { "Offline" } else { "Online" })));
         let raids: Vec<DataRaid> = opts.iter().map(|o| o.0).collect();
         let single = opts.len() == 1;
-        let view = cx.new(|_| QuickView { opts, sel: single.then_some(0), summary });
+        let n_opts = opts.len();
+        let view = cx.new(|_| QuickView { opts: if single { vec![] } else { opts }, sel: single.then_some(0), rows });
         let app = cx.entity();
         window.open_dialog(cx, move |d, _, cx| {
             let (app, view2, raids) = (app.clone(), view.clone(), raids.clone());
-            let unchosen = view.read(cx).sel.is_none();
+            let unchosen = !super::facts::quick_ready(view.read(cx).sel, n_opts);
             d.title(copy::QUICK_TITLE.short).w(px(layout::DIALOG_W)).child(view.clone()).footer(
                 DialogFooter::new()
                     .child(

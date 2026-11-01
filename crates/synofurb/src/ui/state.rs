@@ -29,12 +29,13 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 45] = [
+pub const DEMO_SCREEN_NAMES: [&str; 46] = [
     "failed-agent",
     "manage-rebuild",
     "manage-faildisk",
     "manage-services",
     "manage-unreachable",
+    "manage-signin",
     "manage-update",
     "manage-storage",
     "manage-storage-degraded",
@@ -186,6 +187,7 @@ impl DemoTarget {
             "manage-faildisk" => DemoTarget { health: super::mgmt::DemoHealth::FailedDisk, ..DemoTarget::at(Screen::Manage) },
             "manage-services" => DemoTarget { health: super::mgmt::DemoHealth::ServicesDown, ..DemoTarget::at(Screen::Manage) },
             "manage-unreachable" => DemoTarget { health: super::mgmt::DemoHealth::Unreachable, ..DemoTarget::at(Screen::Manage) },
+            "manage-signin" => DemoTarget { health: super::mgmt::DemoHealth::NeedsSignIn, ..DemoTarget::at(Screen::Manage) },
             "manage-update" => DemoTarget { updating: true, ..DemoTarget::at(Screen::Manage) },
             "manage-storage" => DemoTarget { tab: 1, ..DemoTarget::at(Screen::Manage) },
             "manage-storage-degraded" => {

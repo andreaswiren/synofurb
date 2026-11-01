@@ -13,12 +13,14 @@ pub enum DemoHealth {
     FailedDisk,
     ServicesDown,
     Unreachable,
+    /// The page has no sign-in for this unit yet (nothing was read).
+    NeedsSignIn,
 }
 
 /// A `health --json` document as the unit's management plane would print it (sample data).
 pub fn demo_health_json(kind: DemoHealth) -> String {
     let (overall, md2_state, md2_degraded, sync, sdc_smart, svc_down, warnings) = match kind {
-        DemoHealth::Ok | DemoHealth::Unreachable => ("ok", "clean", false, "null", "passed", false, "[]"),
+        DemoHealth::Ok | DemoHealth::Unreachable | DemoHealth::NeedsSignIn => ("ok", "clean", false, "null", "passed", false, "[]"),
         DemoHealth::Rebuild => ("warn", "active", false, "24.0", "passed", false, r#"["md2 rebuilding 24 %"]"#),
         DemoHealth::FailedDisk => ("crit", "degraded", true, "null", "failed", false, r#"["sdc failed","md2 degraded"]"#),
         DemoHealth::ServicesDown => ("warn", "clean", false, "null", "passed", true, r#"["2 services down"]"#),
@@ -92,6 +94,61 @@ pub fn update_gate(h: Option<&Health>, updating: bool, up_to_date: bool) -> Upda
     }
 }
 
+// ------------------------------------------------------------------------------------------------ which unit Manage talks to
+
+/// The credential typed on the Manage page for ONE unit (never the Connect form's).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ManageSecret {
+    Password(String),
+    /// The text of an OpenSSH private key.
+    Key(String),
+}
+
+/// The SSH target of the unit shown on the Manage page: its own address and the sign-in typed for it. The Connect form is never
+/// an input here, so Health, Update and Roll back can only reach the unit on screen.
+pub fn manage_target_for(
+    addr: Option<std::net::IpAddr>,
+    user: &str,
+    secret: &ManageSecret,
+) -> Result<synofurb_core::session::SshTarget, String> {
+    use synofurb_core::remote::Auth;
+    let Some(addr) = addr else { return Err("This unit has no address; scan again.".into()) };
+    let user = user.trim();
+    if user.is_empty() {
+        return Err("Enter the user of this NAS.".into());
+    }
+    let (auth, sudo) = match secret {
+        ManageSecret::Password(p) if p.is_empty() => return Err("Enter the password of this NAS.".into()),
+        ManageSecret::Password(p) => (Auth::Password(p.clone()), Some(p.clone())),
+        ManageSecret::Key(k) if k.trim().is_empty() => return Err("The key file is empty.".into()),
+        ManageSecret::Key(k) => (Auth::Key(k.clone()), None),
+    };
+    Ok(synofurb_core::session::SshTarget { host: addr.to_string(), port: 22, user: user.to_string(), auth, sudo_password: sudo })
+}
+
+/// Which unit the Manage page is bound to. Binding another unit forgets the sign-in, the report and every result of the
+/// previous one: nothing carries over.
+#[derive(Default, Debug)]
+pub struct ManageBinding {
+    unit: Option<String>,
+}
+
+impl ManageBinding {
+    /// `true` when `unit` is not the bound unit (so the caller must reset the page state); binds it.
+    pub fn bind(&mut self, unit: &str) -> bool {
+        if self.unit.as_deref() == Some(unit) {
+            return false;
+        }
+        self.unit = Some(unit.to_string());
+        true
+    }
+}
+
+/// The key a unit is bound by: its serial number, else its address.
+pub fn unit_key(serial: &str, addr: Option<std::net::IpAddr>) -> String {
+    if serial.is_empty() { addr.map(|a| a.to_string()).unwrap_or_default() } else { serial.to_string() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +177,32 @@ mod tests {
         assert!(matches!(update_gate(Some(&ok), true, false), UpdateGate::Blocked("Updating now.")));
         assert!(matches!(update_gate(Some(&ok), false, true), UpdateGate::Blocked("Already up to date.")));
         assert!(matches!(update_gate(None, false, false), UpdateGate::Blocked("Unit unreachable.")));
+    }
+
+    #[test]
+    fn manage_actions_target_the_unit_on_screen_never_the_connect_form() {
+        let a: std::net::IpAddr = "192.168.1.60".parse().unwrap();
+        let b: std::net::IpAddr = "192.168.1.61".parse().unwrap();
+        let pw = ManageSecret::Password("pw".into());
+        let ta = manage_target_for(Some(a), "nasadmin", &pw).unwrap();
+        let tb = manage_target_for(Some(b), "nasadmin", &pw).unwrap();
+        assert_eq!((ta.host.as_str(), tb.host.as_str()), ("192.168.1.60", "192.168.1.61"));
+        assert_eq!(ta.user, "nasadmin");
+        // a missing credential is an error to show ("Sign in"), not a target
+        assert!(manage_target_for(Some(a), "", &pw).is_err());
+        assert!(manage_target_for(Some(a), "u", &ManageSecret::Password(String::new())).is_err());
+        assert!(manage_target_for(None, "u", &pw).is_err());
+        assert!(manage_target_for(Some(a), "u", &ManageSecret::Key("  ".into())).is_err());
+    }
+
+    #[test]
+    fn binding_another_unit_forgets_everything_of_the_first() {
+        let mut b = ManageBinding::default();
+        assert!(b.bind("A"), "first bind resets");
+        assert!(!b.bind("A"), "the same unit keeps its state");
+        assert!(b.bind("B"), "another unit starts clean");
+        assert!(b.bind("A"), "and so does going back: no credential survives a switch");
+        assert_eq!(unit_key("SN1", None), "SN1");
+        assert_eq!(unit_key("", "10.0.0.2".parse().ok()), "10.0.0.2");
     }
 }

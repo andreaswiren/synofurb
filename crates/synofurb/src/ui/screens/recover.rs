@@ -243,32 +243,54 @@ impl App {
             RecKind::BootDsm => self.open_boot_dsm_dialog(window, cx),
             RecKind::Agent => {
                 let app2 = app.clone();
-                crate::ui::disclosure::dialog_with(window, cx, &copy::DLG_AGENT, &app, copy::REC_AGENT_OK.short, move |cx| {
-                    app2.update(cx, |a, cx| a.start_recovery(RecKind::Agent, RecAction::Agent, cx))
-                });
+                crate::ui::disclosure::dialog_with(
+                    window,
+                    cx,
+                    if self.unit_facts().debian { &copy::DLG_AGENT_DEBIAN } else { &copy::DLG_AGENT },
+                    &app,
+                    copy::REC_AGENT_OK.short,
+                    move |cx| app2.update(cx, |a, cx| a.start_recovery(RecKind::Agent, RecAction::Agent, cx)),
+                );
             }
             RecKind::RestoreFlash => {
+                // Only an image made for THIS unit (its serial number, or its address when no serial was known); never "the newest".
                 let unit = self.unit_key_name(cx);
-                let backup = synofurb_core::recovery::find_local_backups(&backups, &unit)
-                    .into_iter()
-                    .next()
-                    .map(|b| b.path)
-                    .or_else(|| facts::latest_backup(&backups));
+                let (model, serial) = self.unit_identity(cx);
+                let backup = synofurb_core::recovery::find_local_backups(&backups, &unit).into_iter().next();
                 let Some(backup) = backup else {
-                    self.rec_result =
-                        Some(RecResult::error(copy::REC_NO_BACKUP.short, format!("{} {}", copy::REC_NO_BACKUP.tip, backups.display())));
+                    self.rec_result = Some(RecResult::error(
+                        copy::REC_NO_BACKUP.short,
+                        format!("{} {} ({})", copy::REC_NO_BACKUP.tip, backups.display(), unit),
+                    ));
                     cx.notify();
                     return;
                 };
-                let body = format!("{} {}", copy::DLG_RESTORE.body, backup.display());
-                typed_confirm(window, cx, &copy::DLG_RESTORE, body, facts::RESTORE_PHRASE, app, move |a, cx| {
-                    a.start_recovery(RecKind::RestoreFlash, RecAction::Restore { backup: backup.clone() }, cx)
+                let phrase = facts::restore_phrase(&model, if serial.is_empty() { &unit } else { &serial });
+                let name = backup.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let body = format!(
+                    "{}\n\nUnit: {} {}\nFile: {}\nSaved: {} \u{b7} {} MiB",
+                    copy::DLG_RESTORE.body,
+                    model,
+                    unit,
+                    name,
+                    backup.modified.clone().unwrap_or_else(|| "date unknown".into()),
+                    backup.bytes / 1_048_576
+                );
+                let path = backup.path.clone();
+                typed_confirm(window, cx, &copy::DLG_RESTORE, body, phrase, app, move |a, cx| {
+                    a.start_recovery(RecKind::RestoreFlash, RecAction::Restore { backup: path.clone() }, cx)
                 });
             }
             RecKind::RemoveEntries => {
-                typed_confirm(window, cx, &copy::DLG_REMOVE, copy::DLG_REMOVE.body.to_string(), facts::REMOVE_PHRASE, app, |a, cx| {
-                    a.start_recovery(RecKind::RemoveEntries, RecAction::Remove, cx)
-                });
+                typed_confirm(
+                    window,
+                    cx,
+                    &copy::DLG_REMOVE,
+                    copy::DLG_REMOVE.body.to_string(),
+                    facts::REMOVE_PHRASE.to_string(),
+                    app,
+                    |a, cx| a.start_recovery(RecKind::RemoveEntries, RecAction::Remove, cx),
+                );
             }
             RecKind::ReinstallDsm => {
                 window.open_dialog(cx, move |d, _, cx| {
@@ -348,7 +370,9 @@ impl App {
                 vec![facts::agent_command(&host, &user)],
             ),
             RecKind::RestoreFlash => {
-                let image = facts::latest_backup(&backups).map(|p| p.display().to_string());
+                let unit = self.unit_key_name(cx);
+                let image =
+                    synofurb_core::recovery::find_local_backups(&backups, &unit).into_iter().next().map(|b| b.path.display().to_string());
                 (
                     "Run on this computer, or on another Linux computer",
                     "Writes the saved image back. On another computer use the second line and replace /dev/sdX with the 128 MB flash; check twice.",
@@ -378,7 +402,9 @@ impl App {
     }
 
     pub fn open_manual_recovery(&mut self, window: &mut Window, cx: &mut Context<App>) {
-        let backup = facts::latest_backup(&self.cfg_dir.join("dom-backups"));
+        let unit = self.unit_key_name(cx);
+        let backup =
+            synofurb_core::recovery::find_local_backups(&self.cfg_dir.join("dom-backups"), &unit).into_iter().next().map(|b| b.path);
         let cmds = facts::manual_recovery_commands(backup.as_ref().map(|p| p.display().to_string()).as_deref());
         let app = cx.entity();
         window.open_dialog(cx, move |d, _, cx| {
@@ -390,7 +416,8 @@ impl App {
                         .gap(px(8.0))
                         .child(paragraphs(copy::DLG_MANUAL.body, cx))
                         .child(kit::command_row(cx, "mr-1", cmds[0].clone()))
-                        .child(kit::command_row(cx, "mr-2", cmds[1].clone())),
+                        .child(kit::command_row(cx, "mr-2", cmds[1].clone()))
+                        .child(kit::command_row(cx, "mr-3", cmds[2].clone())),
                 )
                 .footer(
                     DialogFooter::new()
@@ -417,7 +444,7 @@ type OnOk = std::rc::Rc<dyn Fn(&mut App, &mut Context<App>)>;
 struct TypedConfirm {
     item: &'static copy::Item,
     body: String,
-    phrase: &'static str,
+    phrase: String,
     input: Entity<InputState>,
     on_ok: OnOk,
     app: Entity<App>,
@@ -429,13 +456,13 @@ fn typed_confirm(
     cx: &mut gpui_kit::App,
     item: &'static copy::Item,
     body: String,
-    phrase: &'static str,
+    phrase: String,
     app: Entity<App>,
     on_ok: impl Fn(&mut App, &mut Context<App>) + 'static,
 ) {
     let a2 = app.clone();
     let view = cx.new(|cx| {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(phrase));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(phrase.clone()));
         let sub = cx.subscribe(&input, |_, _, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
                 cx.notify();
@@ -460,8 +487,8 @@ impl Render for TypedConfirm {
         v_flex()
             .gap(px(8.0))
             .child(div().text_sm().child(self.body.clone()))
-            .child(kit::mono(cx, self.phrase.to_string()))
-            .child(Input::new(&self.input).aria_label(copy::REC_TYPE.fmt(&[self.phrase])))
+            .child(kit::mono(cx, self.phrase.clone()))
+            .child(Input::new(&self.input).aria_label(copy::REC_TYPE.fmt(&[self.phrase.as_str()])))
             .child(
                 h_flex()
                     .gap(px(8.0))
@@ -469,7 +496,7 @@ impl Render for TypedConfirm {
                     .child(
                         Button::new("tc-cancel").outline().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)),
                     )
-                    .child(kit::with_reason("tc-why", ok_btn, (!ok).then(|| copy::REC_TYPE.fmt(&[self.phrase])))),
+                    .child(kit::with_reason("tc-why", ok_btn, (!ok).then(|| copy::REC_TYPE.fmt(&[self.phrase.as_str()])))),
             )
     }
 }

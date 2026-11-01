@@ -186,6 +186,55 @@ impl App {
         GroupBox::new().outline().id("mgmt").child(col).into_any_element()
     }
 
+    /// "Sign in to read health": the user and secret of THIS unit (the address is the unit's, shown beside it).
+    fn manage_signin_form(&self, cx: &mut Context<App>) -> AnyElement {
+        use gpui_kit::component::input::Input;
+        let app = cx.entity();
+        let ip = self.manage_unit.as_ref().and_then(|u| u.primary_ip()).map(|i| i.to_string()).unwrap_or_default();
+        let secret: AnyElement = if self.mg_use_key {
+            Input::new(&self.inp.mg_key_path).cleanable(true).into_any_element()
+        } else {
+            Input::new(&self.inp.mg_password).mask_toggle().into_any_element()
+        };
+        let mode = kit::segmented("mg-mode", &[copy::CONN_PASSWORD.short, copy::CONN_KEY.short], usize::from(self.mg_use_key), {
+            let app = app.clone();
+            move |ix, _, cx| {
+                app.update(cx, |a, cx| {
+                    a.mg_use_key = ix == 1;
+                    cx.notify();
+                })
+            }
+        });
+        let ready = if self.mg_use_key {
+            !self.input_value(&self.inp.mg_key_path, cx).trim().is_empty()
+        } else {
+            !self.input_value(&self.inp.mg_password, cx).is_empty()
+        } && !self.input_value(&self.inp.mg_user, cx).trim().is_empty();
+        v_flex()
+            .gap(px(12.0))
+            .max_w(px(480.0))
+            .child(
+                Alert::info("m-signin", format!("{ip}: {}", copy::MAN_SIGNIN.tip))
+                    .title(copy::MAN_SIGNIN.short)
+                    .icon(icons::icon(role::LOCK)),
+            )
+            .child(kit::field_plain(copy::CONN_USER.short, Input::new(&self.inp.mg_user)))
+            .child(kit::field_plain(copy::CONN_SIGNIN.short, mode))
+            .child(kit::field_plain(if self.mg_use_key { copy::CONN_KEY_FILE.short } else { copy::CONN_PASSWORD.short }, secret))
+            .child(
+                h_flex().child(kit::with_reason(
+                    "m-signin-why",
+                    Button::new("m-signin-go")
+                        .primary()
+                        .icon(icons::icon(role::NEXT))
+                        .label(copy::MAN_READ_HEALTH.short)
+                        .on_click(cx.listener(|this, _, _, cx| this.sign_in_manage(cx))),
+                    (!ready).then(|| copy::MAN_SIGNIN_WHY.tip.to_string()),
+                )),
+            )
+            .into_any_element()
+    }
+
     fn overview_tab(&self, cx: &mut Context<App>, url: String) -> AnyElement {
         let p = cx.pal();
         let mut col = v_flex().gap(px(12.0));
@@ -197,12 +246,13 @@ impl App {
                     .child(Skeleton::new().h(px(16.0)).w(px(160.0)))
                     .into_any_element();
             }
+            if !self.manage_signed_in {
+                return self.manage_signin_form(cx);
+            }
+            // signed in, but the read failed: show the unit's own error, never a guess about power or cables
+            let why = self.manage_err.clone().unwrap_or_default();
             return col
-                .child(
-                    Alert::error("unreach", "Check power, cable and network.")
-                        .title(copy::RAID_UNREACHABLE.short)
-                        .icon(icons::icon(role::OFFLINE)),
-                )
+                .child(Alert::error("unreach", why).title(copy::MAN_READ_FAILED.short).icon(icons::icon(role::OFFLINE)))
                 .child(
                     h_flex()
                         .gap(px(8.0))
@@ -213,6 +263,13 @@ impl App {
                                 .label(copy::INSTALL_RETRY.short)
                                 .on_click(cx.listener(|this, _, _, cx| this.read_manage_health(cx))),
                         )
+                        .child(Button::new("change-signin").ghost().label(copy::MAN_CHANGE_SIGNIN.short).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.manage_signed_in = false;
+                                this.manage_err = None;
+                                cx.notify();
+                            },
+                        )))
                         .child(
                             Button::new("rescan")
                                 .ghost()
@@ -220,7 +277,6 @@ impl App {
                                 .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Inventory, window, cx))),
                         ),
                 )
-                .child(self.mgmt_row(cx, url))
                 .into_any_element();
         };
         let s = h.summary();
@@ -474,7 +530,10 @@ impl App {
                 .outline()
                 .icon(icons::icon(role::HELP))
                 .label(copy::MAN_RECOVERY.short)
-                .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Recover, window, cx)))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.recover_for_manage = true;
+                    this.go(Screen::Recover, window, cx)
+                }))
                 .into_any_element(),
             _ => Empty::new().header(EmptyHeader::new().title(EmptyTitle::new().child(copy::MAN_NO_HISTORY.short))).into_any_element(),
         };
@@ -517,21 +576,35 @@ impl App {
             ])
     }
 
-    /// Read the unit's health (demo: the sample report; real: over SSH with the connection form).
+    /// Read the health of the unit on screen (demo: the sample report; real: over SSH with the sign-in typed on this page,
+    /// never the Connect form). A missing credential is the sign-in state, not an error and not "unreachable".
     pub fn read_manage_health(&mut self, cx: &mut Context<App>) {
         if self.demo.is_some() {
             self.manage_report = Some(mgmt::demo_health(mgmt::DemoHealth::Ok));
+            self.manage_err = None;
             cx.notify();
             return;
         }
         match self.target(cx) {
             Ok(t) => {
                 self.manage_loading = true;
+                self.manage_err = None;
                 crate::ui::worker::spawn_manage_health(self.tx.clone(), t);
             }
-            Err(_) => self.manage_report = None,
+            Err(e) => {
+                self.manage_report = None;
+                self.manage_signed_in = false;
+                self.manage_err = Some(e);
+            }
         }
         cx.notify();
+    }
+
+    /// "Read health": accept the typed sign-in for the unit on screen and read it.
+    pub fn sign_in_manage(&mut self, cx: &mut Context<App>) {
+        self.manage_signed_in = true;
+        self.manage_err = None;
+        self.read_manage_health(cx);
     }
 
     /// Demo: a scripted update. A real run calls the engine's `push_update` on a worker thread (it rolls the unit back by

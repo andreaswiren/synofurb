@@ -243,6 +243,8 @@ mod strings {
         QUICK_USE: Button, "Use these", "", "", "";
         QUICK_HYBRID_LABEL: Label, "Hybrid 1-disk", "", "", "";
         QUICK_HYBRID_CAUTION: Prose, "Hybrid is built by synofurb; DSM may not adopt it.", "", "", "";
+        QUICK_INTRO: Prose, "Recommended defaults for this unit:", "", "", "";
+        QUICK_NOTES: Prose, "The password is generated and shown once on Done. Confirm shows what is erased before anything changes.", "", "", "";
         QUICK_CHOOSE: Label, "Why unavailable", "Choose a layout first.", "", "";
         GOAL_PLAN_INSTALL: Button, "Plan install", "Debian 13 cannot run on this hardware.", "", "";
         GOAL_RECOVER: Label, "Restore / Recover", "Reads the unit's state before offering anything.", "recovery", "";
@@ -522,6 +524,7 @@ mod strings {
         DLG_BOOT_DSM: Dialog, "Boot DSM next?", "Makes DSM the default boot entry.", "recovery", "This makes DSM the default boot entry on the unit and reads it back. Set default does not reboot it; Set and reboot also asks the unit to reboot, and DSM is back only when it answers. If the unit does not answer, use Manual recovery.";
         REC_BOOT_DSM_REBOOT: Button, "Set and reboot", "", "", "";
         DLG_AGENT: Dialog, "Reboot into the agent?", "The unit reboots once into the SSH agent.", "boot-manager", "The unit reboots into the boot agent and this app waits up to 10 minutes for it. The agent resets the default to DSM when it starts. If it does not answer, the default is not confirmed.";
+        DLG_AGENT_DEBIAN: Dialog, "Reboot into the agent?", "This unit runs Debian; the agent makes DSM the default.", "boot-manager", "This unit runs Debian. The agent makes DSM the default boot entry. After the agent's watchdog or any reboot the unit starts DSM's loader instead of Debian, until you choose Debian again from the agent. Your Debian stays on the disks. The app waits up to 10 minutes for the agent.";
         REC_AGENT_OK: Button, "Reboot", "", "", "";
         REC_AGENT_RUNNING: Label, "Waiting for the agent", "", "", "";
         REC_RESTORE_RUNNING: Label, "Restoring the flash", "", "", "";
@@ -543,6 +546,11 @@ mod strings {
         HK_PIN: Label, "Host key", "The fingerprint saved when you first trusted this NAS; later connections must match it.", "troubleshooting", "";
         HK_PINNED_TAG: Label, "Pinned", "", "", "";
         HK_NOT_PINNED: Label, "Not saved yet", "", "", "";
+        MAN_READ_FAILED: Label, "Health not read", "", "", "";
+        MAN_CHANGE_SIGNIN: Button, "Change sign-in", "", "", "";
+        MAN_SIGNIN: Subtitle, "Sign in to read health", "Use the user and password or key of the NAS at this address.", "", "";
+        MAN_READ_HEALTH: Button, "Read health", "", "", "";
+        MAN_SIGNIN_WHY: Label, "Why unavailable", "Enter the user and the password or key of this NAS first.", "", "";
         REC_RUN: Button, "Run", "", "", "";
         REC_SAVED: Label, "Saved here", "First and last 1 MiB of changed disks; not your files.", "backups", "";
         REC_OPEN_FOLDER: Button, "Open folder", "", "", "";
@@ -557,7 +565,7 @@ mod strings {
         REC_MANUAL: Button, "Manual recovery", "Steps that work without the unit answering.", "recovery", "";
         REC_NOTHING: Label, "Nothing known to recover.", "This session changed nothing; the app cannot read earlier changes.", "", "";
         DLG_MANUAL: Dialog, "Manual recovery", "Steps that work without the unit answering.", "recovery",
-            "Both ways need physical access to the NAS.\n\n1. On a serial or VGA console, choose SYNOLOGY_2 in the boot menu. When DSM runs, run the first command in a terminal on the NAS.\n\n2. Or put the boot flash in another Linux computer and restore the saved image with the second command. Replace /dev/sdX with the 128 MB flash; check twice.\n\nYour disks are untouched. We promise nothing about your data.";
+            "Both ways need physical access to the NAS.\n\n1. On a serial or VGA console, choose SYNOLOGY_2 in the boot menu. When DSM runs, run the first command on the NAS.\n\n2. Or put the boot flash in another Linux computer: with synofurb-dom there run the second command, without it the third. Replace /dev/sdX with the 128 MB flash; check twice.\n\nYour disks are untouched. No promise about your data.";
         REC_TYPE: Label, "Type {phrase} to continue.", "", "", "";
         REC_COPY_CMD: Button, "Copy command", "", "", "";
         REC_UNAVAILABLE: Label, "Unavailable", "", "", "";

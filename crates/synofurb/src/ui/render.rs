@@ -147,7 +147,7 @@ impl App {
     /// What the app knows has been written to the unit (the risk Tag and Recovery read this, never the screen name).
     pub fn unit_facts(&self) -> UnitFacts {
         let dom = self.facts.as_ref().is_some_and(|f| self.sys.boot.resolve(f) == BootChoice::Dom);
-        let debian = matches!(self.result, Some(Ok(_))) || self.screen == Screen::Manage;
+        let debian = matches!(self.result, Some(Ok(_))) || self.manage_bound();
         let agent = matches!(self.bootmgr, super::app::Job::Running | super::app::Job::Done(Ok(())));
         let fail = self.screen == Screen::Failed || matches!(self.result, Some(Err(_)));
         // The unit's own boot state, when it was read over SSH, beats this session's memory.
@@ -160,6 +160,7 @@ impl App {
                 debian: debian || s.running == synofurb_core::recovery::RunningSystem::Debian,
                 fail,
                 agent_unknown: false,
+                agent_running: s.running == synofurb_core::recovery::RunningSystem::Agent,
                 default_not_dsm: !s.default_entry.is_dsm(),
             },
             None => UnitFacts {
@@ -168,6 +169,7 @@ impl App {
                 debian,
                 fail,
                 agent_unknown: self.agent_unknown,
+                agent_running: false,
                 default_not_dsm: debian || self.agent_unknown,
             },
         }
@@ -306,7 +308,7 @@ impl App {
         let p = cx.pal();
         let (mut model, mut serial, status) = self.selected_unit_model();
         let mut host = super::format::display_host(&self.input_value(&self.inp.host, cx));
-        if self.screen == Screen::Manage
+        if self.manage_bound()
             && let Some(u) = &self.manage_unit
         {
             model = if u.model.is_empty() { u.title() } else { u.model.clone() };
@@ -315,7 +317,7 @@ impl App {
         }
         let debian = self.unit_facts().debian;
         let twin = self.twin_of_selected(cx);
-        let (disks, cpu, ram, dsm) = match self.facts.as_ref().filter(|_| self.screen != Screen::Manage) {
+        let (disks, cpu, ram, dsm) = match self.facts.as_ref().filter(|_| !self.manage_bound()) {
             Some(f) => (
                 format!(
                     "{} disks \u{00b7} {}",

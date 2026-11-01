@@ -306,8 +306,7 @@ impl App {
                                         .label(copy::INV_MANAGE.short)
                                         .tooltip(copy::INV_MANAGE.tip)
                                         .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.manage_unit = Some(d2.clone());
-                                            this.go(crate::ui::state::Screen::Manage, window, cx);
+                                            this.open_manage(d2.clone(), window, cx);
                                         })),
                                 ),
                             )
