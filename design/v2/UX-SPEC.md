@@ -34,7 +34,7 @@ Three variants: **wizard** (D2 to D11, D13, D16), **page** (Manage D15/D18 and R
 
 **Shell words: wizard 12** (wordmark 1 + Stepper 6 + unit-header Tag 1 + risk Tag 2 + Way back 2), **page 6**, **app 1**, Find 14.
 
-**Risk Tag is a pure function of the unit's facts**, never of the screen name: *Read-only* (nothing written, no flash entries); *Plan only* (plan prepared, not applied); *Flash changed* (our entries or the agent are on the boot flash, no disk written; also after a cancel, a stopped install and a boot-manager install); *Disks changed* (the first disk was written; also on Recovery after a failed install); *Failed safely* (failed, disks untouched, flash may hold our entries); *Debian running* (verified, default boot is Debian); *Needs attention* / *Critical* / *Unreachable* (Manage: the worst health component or no answer: these replace *Debian running*). The Tag and Way back are **hidden on Settings, About and Help** (they are not about a unit). Way back popover, one sentence per state: Read-only/Plan only "Nothing to undo."; Flash changed "Power-cycle or Cancel: DSM boots. Our entries stay until removed."; Disks changed "Rescue shell 15 min, then the DSM loader; no data promise."; Failed safely "DSM boots again by itself."; Debian running "Recovery stays under Manage."; Unreachable "Check power and network, then Retry."
+**Risk Tag is a pure function of the unit's facts**, never of the screen name: *Read-only* (nothing written, no flash entries); *Plan only* (plan prepared, not applied); *Flash changed* (our entries or the agent are on the boot flash, no disk written; also after a cancel, a stopped install and a boot-manager install); *Disks changed* (the first disk was written; also on Recovery after a failed install); *Failed safely* (failed, disks untouched, flash may hold our entries, and the engine confirmed DSM as the default); *Boot unconfirmed* (the agent did not answer within the 10-minute wait: disks untouched, but the engine reset nothing and cannot tell whether DSM is the default, see D9); *Debian running* (verified, default boot is Debian); *Needs attention* / *Critical* / *Unreachable* (Manage: the worst health component or no answer: these replace *Debian running*). The Tag and Way back are **hidden on Settings, About and Help** (they are not about a unit). Way back popover, one sentence per state: Read-only/Plan only "Nothing to undo."; Flash changed "Power-cycle or Cancel: DSM boots. Our entries stay until removed."; Disks changed "Rescue shell 15 min, then the DSM loader; no data promise."; Failed safely "DSM boots again by itself."; Boot unconfirmed "DSM may not return by itself: see Help, Recovery."; Debian running "Recovery stays under Manage."; Unreachable "Check power and network, then Retry."
 
 Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (D16) is a Sheet over the current screen; Settings (D12) and About (D17) replace the content area.
 
@@ -82,7 +82,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 
 **F4 CLI equivalent.** *Copy command* (terminal icon, tooltip only) on D5, D6 and D7 copies `synofurb install --host <ip> --user <admin> ...` for the current choices. On D7 the three confirmation flags `--have-backup --accept-data-loss --confirm` are included **only after** the three confirmations and the phrase are satisfied; before that the copied command is the `plan` form (read-only). Shortcut `Ctrl+Shift+C`.
 
-**F5 Failure.** Before step 3: D9 with 60 s countdown ("DSM returns in"), *Disks untouched*, primary *Wait for DSM*, no rescue shell. After step 3: D9 with 15 min countdown ("Rescue shell closes in"), *Disks changed*, primary *Open rescue shell*, secondary *Export diagnostics* (first in the Dialog text, because the NAS is unreachable after the clock), Wipe and Keep variants differ only in the *What happens next* Dialog. Recovery options -> D14.
+**F5 Failure.** Before step 3: D9 with 60 s countdown ("DSM returns in"), *Disks untouched*, primary *Wait for DSM*, no rescue shell. After step 3: D9 with 15 min countdown ("Rescue shell closes in"), *Disks changed*, primary *Open rescue shell*, secondary *Export diagnostics* (first in the Dialog text, because the NAS is unreachable after the clock), Wipe and Keep variants differ only in the *What happens next* Dialog. Agent did not appear: D9 shows *Boot unconfirmed* and both outcomes (section 5, D9). Recovery options -> D14.
 
 **F6 Boot manager.** D4 -> D13 -> D8-style progress (Boot flash accordion only) -> D15 Manage; Boot page (web W8) for next boot. Power-cycling is always the way back from another system.
 
@@ -101,6 +101,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | How recovery works | D7 Confirm | Close | 71 | DSM stays the default boot entry. Before installer step 3 (the point of no return), a failure or cancel reboots the NAS into DSM within 60 seconds. From step 3, a failure leaves a rescue shell open for 15 minutes, then the NAS reboots into the DSM loader, which shows Synology's install page. DSM's own system may be gone by then; reinstall it from Synology. We promise nothing about your data. |
 | Keep existing volumes | D5 Plan (Advanced) | Use Keep / Cancel | 51 | Keep mode reuses only DSM's system and swap area, about 10 GiB per disk; the system is capped near 9.5 GiB. DSM, its settings, users and packages are erased. Your data volume is left alone on a best-effort basis, with no guarantee. It is not mounted automatically; import it read-only later. |
 | What happens next (before step 3) | D9 Install failed | Close | 45 | No disk was changed. The NAS sets DSM as the default and reboots in 60 seconds, then DSM starts as before. If DSM is not back after 10 minutes, power-cycle the NAS. Our entries stay on the boot flash until you remove them under Recovery. |
+| What happens next (agent did not answer) | D9 Install failed | Close | 66 | The app waited 10 minutes and cannot tell what happened. If the agent started, its watchdog reboots the NAS into DSM, 20 minutes or more from now. If it never started, the NAS may keep booting the agent after every power cycle. Then choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or restore the boot flash from another computer. DSM is not confirmed. See Help, Recovery. |
 | What happens next (after step 3, Wipe) | D9 Install failed | Close | 51 | The first disk was changed and DSM's own system may be gone. Export diagnostics first, then open the rescue shell. At zero DSM becomes the default and the NAS reboots into the DSM loader, which shows Synology's install page. Reinstall DSM from Synology. A Wipe install leaves no data to keep. |
 | What happens next (after step 3, Keep) | D9 Install failed | Close | 63 | The first disk was changed. Export diagnostics, then open the rescue shell. At zero the NAS reboots into the DSM loader and Synology's install page. Your data volume was not part of any write command and should be intact unless the failure was a hardware problem. Synology documents a reinstall that can keep data volumes; check its current documentation. We cannot guarantee it. |
 | Trust this NAS? | D2 Connect | Trust / Cancel | 36 | First connection to {192.168.1.40}. Compare this fingerprint with DSM (Control Panel, Terminal and SNMP). If you did not expect a new key, cancel. A changed key shows the same dialog in danger style and offers only Cancel. |
@@ -493,6 +494,8 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | 11 | Recovery options | Button (secondary) | 2 |
 | 12 | What happens next | Link (opens Dialog) | 3 |
 | 13 | Log excerpt | AccordionItem (collapsed, mono) | 2 |
+| 14 | Default: not confirmed | Tag (warning), only in the agent-did-not-answer variant; replaces any green "Default" Tag; never "Failed safely" | cond. |
+| 15 | Boot unconfirmed | Status-bar risk Tag (warning) in the same variant | cond. |
 
 **Word budget:** screen 29 + shell 12 = **41** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
@@ -506,12 +509,13 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | Flash tag | Popover | Boot flash | Entries are on it; the full backup is on this computer. | help: backups |
 | What happens next | Dialog | What happens next | Order of actions and what survives. | Three variants in section 4 (before step 3, after step 3 Wipe, after step 3 Keep) |
 | Export diagnostics | Tooltip | Export diagnostics | Do this before the clock ends; secrets are removed. | help: troubleshooting |
+| Default: not confirmed (agent variant) | Popover | Default not confirmed | We cannot tell if the agent ran; if it did not, a power cycle boots it again. | The dialog above; manual recovery: choose SYNOLOGY_2 in the boot menu (serial or VGA console), or restore the boot flash from another computer; help: recovery |
 
 **Primary:** Open rescue shell (after step 3) / Wait for DSM (before step 3). **Secondary:** Export diagnostics, Recovery options.
 
 **Keyboard:** Footer button pinned and focusable first; `Tab` order: primary, secondary, Rescue copy buttons, links; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: n/a; *error*: Variants: flash backup did not verify (nothing changed, DSM running, primary Back to Confirm); agent did not appear (Phase 4 of 7, Booting; the app waits 10 minutes for it and the install agent's watchdog is 30 minutes from its start, so the clock is an estimate: "DSM returns in about 20 min"; Wait for DSM); stopped by you before step 3 (60 s clock, Flash changed); failed before step 3; failed after step 3 Wipe or Keep running (15:00 clock, Rescue panel); waiting (clock 0: "The shell closed. The NAS is rebooting.", no Rescue panel); loader (only Reinstall DSM); lost (Reconnect; the clock keeps running on the NAS); *loading*: Waiting for DSM shows Spinner and elapsed time.
+**States:** *empty*: n/a; *error*: Variants: flash backup did not verify (nothing changed, DSM running, primary Back to Confirm); agent did not appear (Phase 4 of 7, Booting; the engine resets nothing after the 10-minute wait, so the screen shows *Default: not confirmed* and *Boot unconfirmed*, never "Failed safely" or "DSM is the default". It states both outcomes: (a) the agent booted but is unreachable: the DSM default was set at its start and its watchdog reboots to DSM 30 minutes after the agent started; (b) the agent never ran: the default is still the agent, a power cycle boots it again and no watchdog exists. The clock reads "DSM may return in about 20 minutes or more": the watchdog counts from when the agent booted, 1 to 3 minutes after the reboot command, so 20 plus that many minutes remain when the app gives up, typically 21 to 23; it is an estimate, not a promise, and at 0:00 the screen says "DSM not back" and keeps the manual recovery in view. Manual recovery, named on the screen: choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or take the boot flash to another computer and restore the backup. Primary Wait for DSM; the Way back text never says "by itself" without "if the agent started"); stopped by you before step 3 (60 s clock, Flash changed); failed before step 3; failed after step 3 Wipe or Keep running (15:00 clock, Rescue panel); waiting (clock 0: "The shell closed. The NAS is rebooting.", no Rescue panel); loader (only Reinstall DSM); lost (Reconnect; the clock keeps running on the NAS); *loading*: Waiting for DSM shows Spinner and elapsed time.
 
 ### D10 Done
 
@@ -1460,12 +1464,12 @@ Health summary: mail on degrade comes from `mdadm --monitor` (`mdmonitor.service
 | first-install | First install | 112 | README.md, docs/INSTALL.md |
 | compat-status | Status meanings | 96 | docs/COMPAT.md |
 | backups | Backups | 93 | docs/RECOVERY.md |
-| recovery | Recovery | 105 | docs/RECOVERY.md |
-| boot-manager | Boot manager | 103 | docs/BOOT.md |
+| recovery | Recovery | 150 | docs/RECOVERY.md |
+| boot-manager | Boot manager | 137 | docs/BOOT.md |
 | serial-console | Serial console | 83 | docs/BOOT.md, docs/ARM.md |
 | offline-mode | Offline mode | 66 | docs/INSTALL.md |
 | cli | Command line | 80 | README.md |
-| troubleshooting | Troubleshooting | 97 | docs/RECOVERY.md |
+| troubleshooting | Troubleshooting | 139 | docs/RECOVERY.md |
 | report-result | Report a result | 76 | docs/COMPAT.md |
 | raid-levels | RAID levels | 108 | docs/RAID.md |
 | hybrid-raid | Hybrid RAID | 131 | docs/RAID.md |
@@ -1500,20 +1504,21 @@ synofurb also saves on this computer:
 
 #### recovery: Recovery
 
-DSM stays the default boot entry; every failure points it back at DSM.
+DSM stays the default boot entry; every failure points it back at DSM, except the unconfirmed case in the last row.
 | When | What happens |
 |---|---|
 | Before the boot flash is changed | Nothing to undo |
-| Agent installed | The agent resets the default to DSM first; it reboots to DSM if nobody logs in |
+| Agent started | It resets the default to DSM first and reboots if nobody logs in |
 | Before step 3 | A failure reboots to DSM after 60 s; a power cycle also works |
-| After step 3 | Rescue shell for 15 minutes, then the DSM loader runs; DSM's own system may be gone, reinstall it from Synology (find.synology.com); no data promise |
-| Debian installed | Pick the previous kernel in the boot menu or boot DSM |
+| Agent silent after 10 minutes | Not confirmed. Agent started: it reboots to DSM, 20 minutes or more later. Never started: the default stays the agent and a power cycle loops. Use SYNOLOGY_2 in the boot menu (serial or VGA console), or restore the flash from another computer. |
+| After step 3 | Rescue shell 15 minutes, then the DSM loader; DSM may be gone, reinstall from Synology; no data promise |
+| Debian installed | Pick the previous kernel or DSM in the boot menu |
 Commands: `synofurb recover`, `synofurb boot-manager enter`.
 
 #### boot-manager: Boot manager
 
 x86 units boot through a small internal boot flash. Boot manager adds an SSH agent entry to it. The whole flash is saved to this computer first; disks are untouched; DSM's entry stays and stays the default.
-The agent is one-shot: it resets the default to DSM when it starts and reboots to DSM after 60 minutes without a login. From it, `sf-boot kexec <kernel-url> <initrd-url>` starts another Linux kernel. kexec starts Linux kernels only, not Windows or UEFI-only ISOs. Once another system runs, nothing of ours is running: power-cycling returns to the default entry. That system can see and change your disks.
+The agent is one-shot: it resets the default to DSM when it starts and reboots to DSM after 60 minutes without a login. From it, `sf-boot kexec <kernel-url> <initrd-url>` starts another Linux kernel. kexec starts Linux kernels only, not Windows or UEFI-only ISOs. Once another system runs, nothing of ours is running: power-cycling returns to the default entry. That system can see and change your disks. If the agent never runs, nothing resets the default and there is no watchdog: the NAS keeps booting the agent. Choose SYNOLOGY_2 in the boot menu on a console, or restore the flash from another computer. If the agent never starts, nothing resets the default and nothing reboots the unit: choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or restore the boot flash from another computer.
 
 #### serial-console: Serial console
 
@@ -1537,7 +1542,7 @@ The Copy command button on Plan, System and Confirm copies the equivalent comman
 **No units found**: wrong network or VLAN, NAS still booting, firewall (UDP 9999, mDNS 5353, TCP 22). Use Add by IP.
 **SSH is off**: enable it in DSM, Control Panel, Terminal and SNMP.
 **Login failed**: DSM may auto-block this computer after a few failures; check the account is an administrator.
-**Installer did not come up**: DSM is already the default; wait, then power-cycle.
+**Installer did not come up**: not confirmed. If the agent started, DSM returns by itself in 20 minutes or more; a power cycle also works. If it never started, the unit may keep booting the agent: choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or restore the boot flash from another computer (Help, Recovery).
 **Boot flash write failed**: the tool restores the flash and verifies it; use the rescue shell within 15 minutes.
 Logs: `~/.local/share/synofurb/logs` (secrets removed). Settings, Logs opens the folder; About copies diagnostics.
 
@@ -1583,8 +1588,8 @@ A scrub reads every block and compares copies or parity to find silent errors. C
 | certificate | Certificate | 50 |
 | storage | Storage | 74 |
 | imports | Imported volumes | 36 |
-| boot | Boot page | 63 |
-| recovery | Recovery | 55 |
+| boot | Boot page | 99 |
+| recovery | Recovery | 118 |
 | report | Report a result | 32 |
 | raid-levels | RAID levels | 108 |
 | hybrid-raid | Hybrid RAID | 131 |
@@ -1613,11 +1618,11 @@ Disks from an old Synology are assembled and mounted read-only at `/mnt/dsm/<nam
 
 #### web:boot: Boot page
 
-These are the entries in the boot flash menu: Debian (default), the previous kernel, the one-shot boot agent and the DSM loader. Power-cycling always returns to the default entry. The agent returns to DSM after 60 idle minutes. Once another system is started with kexec, nothing of ours is running. The DSM loader shows Synology's install page; DSM's own system may be gone.
+These are the entries in the boot flash menu: Debian (default), the previous kernel, the one-shot boot agent and the DSM loader. Power-cycling always returns to the default entry. The agent returns to DSM after 60 idle minutes, but only if it started; if it never starts, the default can stay on the agent: choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or restore the boot flash from another computer. Once another system is started with kexec, nothing of ours is running. The DSM loader shows Synology's install page; DSM's own system may be gone.
 
 #### web:recovery: Recovery
 
-If something fails: DSM stays the default boot entry. Before the installer's step 3 a failure reboots to DSM in 60 seconds; after it a rescue shell stays open for 15 minutes, then the DSM loader runs and DSM must be reinstalled from Synology. We promise nothing about data. Commands: `synofurb recover` on your computer.
+If something fails: DSM stays the default boot entry, except while the agent is armed for one boot. Before the installer's step 3 a failure reboots to DSM in 60 seconds; if the agent does not answer within 10 minutes, DSM is not confirmed: if the agent started its watchdog reboots to DSM, if it never started a power cycle boots the agent again, so choose SYNOLOGY_2 in the boot menu on a serial or VGA console or restore the boot flash from another computer; after it a rescue shell stays open for 15 minutes, then the DSM loader runs and DSM must be reinstalled from Synology. We promise nothing about data. Commands: `synofurb recover` on your computer.
 
 #### web:report: Report a result
 
@@ -1713,3 +1718,5 @@ Open decisions: **O1** (closed in round 3: merged into *Setup*); **O2** which RA
 ## 12. Round 2 and 3 folds (design/reviews/v2/ux-expert-review-round2.md and round3.md)
 
 Adopted from the final prototype and now requirements: (1) **twin phrase suffix**: with a same-model unit on the network (the demo inventory always contains one, DS918+ at .40 and .58) the unit header carries a `Twin` Tag, the gate shows a `Twin {IP · SN last 4}` Alert, the checkbox reads "This is {IP · …last 4}", and the typed phrase is `ERASE <MODEL> <last 4 of serial>` (here `ERASE DS918+ 3456`); the hint "Add serial last 4." shows until typed and a wrong suffix shows No match; without a twin the phrase is `ERASE <MODEL>`; (2) **Recovery rows**: label, one line, one action, info icon; Boot DSM and Open agent confirm in an AlertDialog, Restore flash needs `RESTORE FLASH`, Remove entries needs `REMOVE ENTRIES` and is disabled with a reason when Debian is the default entry, Reinstall DSM is *Open guide*; Recovery is also a tab of Manage; (3) **D9 variants**: flash backup did not verify (nothing changed, *Back to Confirm*), agent did not answer (30:00 watchdog, *Wait for DSM*), stopped by you (60 s), failed before step 3, failed after step 3 running (15:00, Rescue panel), waiting (clock 0, "The shell closed. The NAS is rebooting."), loader (only *Reinstall DSM*), lost (*Reconnect*, the clock keeps running on the NAS), Keep variant; a control whose resource is gone disappears or is disabled with a reason, and an open Cancel dialog re-evaluates when step 3 starts ("Too late to cancel", *Stop install* disabled); (4) **disabled controls are real disabled Buttons and not Tab stops; the reason is a sibling info Button** ("Why locked", "Why unavailable") that opens a Popover (this replaces the earlier styled-disabled-but-focusable rule); (5) **six-step wizard**: Find, Connect (Inspect opens automatically after the host-key Trust), Goal, Setup (TabBar Storage | System), Confirm, Install; Boot manager and Recovery show **no Stepper**; Goal's Install card has *Quick setup* (summary Dialog: Cancel, Customize, Continue to Confirm; for mixed disk sizes it defaults to Hybrid 1-disk and says what RAID 6 would give) and *Customize*; Confirm always shows an After line (RAID level, usable, system size, hostname); the hostname follows the unit; (6) **Manage**: Health card, management-app card (Update primary only when Healthy; updating while an array is degraded or rebuilding is allowed with "The rebuild keeps running."), read-only Storage with intent-named *Open web UI* hand-offs; (7) **Boot manager**: confirm AlertDialog, progress (Boot flash backup, Agent added, Reboot into the agent, Agent answers), result with *Return to DSM*, "Back in DSM. Our entries remain on the flash.", and the Tag "Boot agent installed" on the unit in Find; the page Tag reads "Will change flash"; (8) **Colour key** button and a Hybrid suggestion beside Data RAID that states capacity and fault tolerance of both options; (9) the footer button is labelled **Command** (terminal icon) on Setup and Confirm; (10) the one-line recovery text on Confirm is "Free to cancel until step 3; then no undo." (the dialog says DSM may be gone); (11) text size is `rem` based, px-sized widgets must be verified in the real app.
+
+**Round 4 fold (NB4-1, N4-1).** After the 10-minute agent wait the engine resets nothing, so D9's agent-did-not-answer variant no longer claims DSM is the default or that the unit "boots again by itself". It shows *Default: not confirmed* and the status-bar Tag *Boot unconfirmed*, states both outcomes (agent booted but unreachable: watchdog reboots to DSM 30 minutes after the agent started; agent never ran: default still the agent, power cycles loop, no watchdog) and names the manual recovery (choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or restore the boot flash from another computer). The same wording is in the Way back popover, a new "What happens next (agent did not answer)" dialog, and the Help topics recovery, boot-manager, troubleshooting, web boot and web recovery. The clock is "about 20 minutes or more" (20 plus the 1 to 3 minutes the agent needed to boot, typically 21 to 23), not "up to 20:00". Phase 4 of 7 (Booting) for this variant; flash-backup failure stays Phase 3.
