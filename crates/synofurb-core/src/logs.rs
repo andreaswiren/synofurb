@@ -69,9 +69,16 @@ pub enum Event {
     Log(LogLine),
     Phase(Phase),
     /// Installer step `n` of `total`.
-    Step { n: u32, total: u32, name: String },
+    Step {
+        n: u32,
+        total: u32,
+        name: String,
+    },
     /// Upload/download progress 0.0..=1.0
-    Progress { what: String, fraction: f32 },
+    Progress {
+        what: String,
+        fraction: f32,
+    },
     PointOfNoReturn,
     InstallerFailed(String),
     InstallerDone,
@@ -85,7 +92,7 @@ pub struct Logger {
 struct Inner {
     file: Mutex<Option<File>>,
     path: Option<PathBuf>,
-    tx: Mutex<Option<Sender<Event>>>,
+    tx: Mutex<Vec<Sender<Event>>>,
     secrets: Mutex<Vec<String>>,
 }
 
@@ -100,20 +107,35 @@ impl Logger {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         }
-        Ok(Logger { inner: Arc::new(Inner { file: Mutex::new(Some(file)), path: Some(path), tx: Mutex::new(tx), secrets: Mutex::new(vec![]) }) })
+        Ok(Logger {
+            inner: Arc::new(Inner {
+                file: Mutex::new(Some(file)),
+                path: Some(path),
+                tx: Mutex::new(tx.into_iter().collect()),
+                secrets: Mutex::new(vec![]),
+            }),
+        })
     }
 
     /// A logger that only forwards events (tests, CLI dry-runs).
     pub fn memory(tx: Option<Sender<Event>>) -> Logger {
-        Logger { inner: Arc::new(Inner { file: Mutex::new(None), path: None, tx: Mutex::new(tx), secrets: Mutex::new(vec![]) }) }
+        Logger {
+            inner: Arc::new(Inner {
+                file: Mutex::new(None),
+                path: None,
+                tx: Mutex::new(tx.into_iter().collect()),
+                secrets: Mutex::new(vec![]),
+            }),
+        }
     }
 
     pub fn path(&self) -> Option<&Path> {
         self.inner.path.as_deref()
     }
 
-    pub fn set_sender(&self, tx: Option<Sender<Event>>) {
-        *self.inner.tx.lock().unwrap() = tx;
+    /// Add another listener (the GUI and the install job both observe events).
+    pub fn add_sender(&self, tx: Sender<Event>) {
+        self.inner.tx.lock().unwrap().push(tx);
     }
 
     /// Anything registered here is replaced with `***` in every log line.
@@ -132,16 +154,22 @@ impl Logger {
     }
 
     pub fn emit(&self, e: Event) {
-        if let Some(tx) = self.inner.tx.lock().unwrap().as_ref() {
-            let _ = tx.send(e);
-        }
+        let mut senders = self.inner.tx.lock().unwrap();
+        senders.retain(|tx| tx.send(e.clone()).is_ok());
     }
 
     pub fn log(&self, level: Level, source: Source, msg: &str) {
         for line in msg.lines() {
             let l = LogLine { ts: Local::now().format("%H:%M:%S%.3f").to_string(), level, source, msg: self.redact(line) };
             if let Some(f) = self.inner.file.lock().unwrap().as_mut() {
-                let _ = writeln!(f, "{} {:5} [{}] {}", Local::now().format("%Y-%m-%d %H:%M:%S%.3f"), format!("{level:?}").to_uppercase(), source.tag(), l.msg);
+                let _ = writeln!(
+                    f,
+                    "{} {:5} [{}] {}",
+                    Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                    format!("{level:?}").to_uppercase(),
+                    source.tag(),
+                    l.msg
+                );
                 let _ = f.flush();
             }
             self.emit(Event::Log(l));

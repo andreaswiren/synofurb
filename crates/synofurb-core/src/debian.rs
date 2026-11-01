@@ -61,7 +61,11 @@ pub fn sha256_hex(data: &[u8]) -> String {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(std::time::Duration::from_secs(20)).timeout_read(std::time::Duration::from_secs(60)).user_agent("synofurb").build()
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(20))
+        .timeout_read(std::time::Duration::from_secs(60))
+        .user_agent("synofurb")
+        .build()
 }
 
 fn get_text(url: &str) -> Result<String> {
@@ -70,12 +74,12 @@ fn get_text(url: &str) -> Result<String> {
 
 /// Download `url` into `dest`, verifying `sha256`. Re-uses a cached file with the right hash.
 pub fn download_verified(url: &str, dest: &Path, sha256: &str, log: &Logger, progress: &mut dyn FnMut(f32)) -> Result<()> {
-    if let Ok(existing) = std::fs::read(dest) {
-        if sha256_hex(&existing) == sha256 {
-            log.info(format!("cached and verified: {}", dest.display()));
-            progress(1.0);
-            return Ok(());
-        }
+    if let Ok(existing) = std::fs::read(dest)
+        && sha256_hex(&existing) == sha256
+    {
+        log.info(format!("cached and verified: {}", dest.display()));
+        progress(1.0);
+        return Ok(());
     }
     log.info(format!("downloading {url}"));
     let resp = agent().get(url).call().with_context(|| format!("GET {url}"))?;
@@ -114,7 +118,9 @@ pub fn download_verified(url: &str, dest: &Path, sha256: &str, log: &Logger, pro
 
 /// Best-effort PGP verification of `InRelease` with the local `gpgv` and Debian's keyring.
 pub fn gpg_verify_inrelease(text: &str, log: &Logger) -> bool {
-    let keyring = ["/usr/share/keyrings/debian-archive-keyring.pgp", "/usr/share/keyrings/debian-archive-keyring.gpg"].into_iter().find(|p| Path::new(p).exists());
+    let keyring = ["/usr/share/keyrings/debian-archive-keyring.pgp", "/usr/share/keyrings/debian-archive-keyring.gpg"]
+        .into_iter()
+        .find(|p| Path::new(p).exists());
     let Some(keyring) = keyring else {
         log.warn("PGP check of the Debian Release file skipped: debian-archive-keyring is not installed on this machine (HTTPS + SHA-256 chain only)");
         return false;
@@ -131,7 +137,7 @@ pub fn gpg_verify_inrelease(text: &str, log: &Logger) -> bool {
             true
         }
         Ok(o) => {
-            log.error(format!("PGP verification of InRelease FAILED: {}", String::from_utf8_lossy(&o.stderr)));
+            log.warn(format!("PGP verification of the Debian Release file did not pass ({}). Most often this computer's debian-archive-keyring is older than the trixie signing key; continuing on the HTTPS + SHA-256 chain only. Update debian-archive-keyring to get the signature check.", String::from_utf8_lossy(&o.stderr).trim()));
             false
         }
         Err(_) => {
@@ -149,7 +155,15 @@ pub struct InstallerFiles {
     pub dtb: Option<PathBuf>,
 }
 
-pub fn fetch_installer(arch: Arch, suite: &str, cache: &Path, with_firmware: bool, dtb: Option<&str>, log: &Logger, progress: &mut dyn FnMut(&str, f32)) -> Result<InstallerFiles> {
+pub fn fetch_installer(
+    arch: Arch,
+    suite: &str,
+    cache: &Path,
+    with_firmware: bool,
+    dtb: Option<&str>,
+    log: &Logger,
+    progress: &mut dyn FnMut(&str, f32),
+) -> Result<InstallerFiles> {
     let (kpath, ipath) = netboot_paths(arch).context("no installer for this architecture")?;
     let da = arch.debian();
     log.info(format!("fetching the Debian {suite} installer for {da}"));
@@ -275,7 +289,23 @@ pub fn cpio_gz(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
     let mut put = |name: &str, data: &[u8], mode: u32, out: &mut Vec<u8>| {
         let namesz = name.len() + 1;
         out.extend_from_slice(
-            format!("070701{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}", ino, mode, 0, 0, 1, 0, data.len(), 0, 0, 0, 0, namesz, 0).as_bytes(),
+            format!(
+                "070701{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}",
+                ino,
+                mode,
+                0,
+                0,
+                1,
+                0,
+                data.len(),
+                0,
+                0,
+                0,
+                0,
+                namesz,
+                0
+            )
+            .as_bytes(),
         );
         out.extend_from_slice(name.as_bytes());
         out.push(0);
@@ -314,7 +344,10 @@ mod tests {
 
     #[test]
     fn release_lookup_uses_only_sha256_section() {
-        assert_eq!(release_sha256(RELEASE, "main/installer-amd64/current/images/SHA256SUMS").as_deref(), Some("31a1a4fc99c5b0a729d261f137cd7e1599bfa6f214f83fe4e596543d8ccf2dec"));
+        assert_eq!(
+            release_sha256(RELEASE, "main/installer-amd64/current/images/SHA256SUMS").as_deref(),
+            Some("31a1a4fc99c5b0a729d261f137cd7e1599bfa6f214f83fe4e596543d8ccf2dec")
+        );
         assert!(release_sha256(RELEASE, "other").is_none(), "MD5 section must be ignored");
     }
 
@@ -357,7 +390,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("x.cpio.gz");
         std::fs::write(&f, &gz).unwrap();
-        let out = std::process::Command::new("sh").arg("-c").arg(format!("cd {} && gzip -dc x.cpio.gz | cpio -it 2>&1", dir.display())).output().unwrap();
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("cd {} && gzip -dc x.cpio.gz | cpio -it 2>&1", dir.display()))
+            .output()
+            .unwrap();
         let text = String::from_utf8_lossy(&out.stdout).to_string();
         if text.contains("not found") {
             eprintln!("cpio not installed; skipping format check");

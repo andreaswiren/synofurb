@@ -37,7 +37,11 @@ pub fn local_ip_towards(peer: IpAddr) -> Result<IpAddr> {
 impl Server {
     /// Binds to `bind_ip` on ephemeral ports (or the given ones when non-zero).
     pub fn start(bind_ip: IpAddr, served: Served, log: Logger, ports: (u16, u16, u16)) -> Result<Server> {
-        let http = Arc::new(tiny_http::Server::http(SocketAddr::new(bind_ip, ports.0)).map_err(|e| anyhow::anyhow!("{e}")).context("binding HTTP server")?);
+        let http = Arc::new(
+            tiny_http::Server::http(SocketAddr::new(bind_ip, ports.0))
+                .map_err(|e| anyhow::anyhow!("{e}"))
+                .context("binding HTTP server")?,
+        );
         let http_port = http.server_addr().to_ip().map(|a| a.port()).context("no http port")?;
         let tcp = TcpListener::bind(SocketAddr::new(bind_ip, ports.1)).context("binding TCP log port")?;
         let tcp_log_port = tcp.local_addr()?.port();
@@ -67,7 +71,10 @@ impl Server {
                     match resp {
                         Some((body, ct)) => {
                             log.info(format!("HTTP {peer} GET {} ({} bytes)", url.strip_prefix(&prefix).unwrap_or(""), body.len()));
-                            let _ = req.respond(tiny_http::Response::from_data(body).with_header(tiny_http::Header::from_bytes("Content-Type", ct).unwrap()));
+                            let _ = req.respond(
+                                tiny_http::Response::from_data(body)
+                                    .with_header(tiny_http::Header::from_bytes("Content-Type", ct).unwrap()),
+                            );
                         }
                         None => {
                             log.warn(format!("HTTP {peer} rejected request for an unknown path"));
@@ -128,12 +135,12 @@ impl Server {
 
 /// `<30>Nov  1 12:00:00 tag: msg` -> `Nov  1 12:00:00 tag: msg`
 pub fn strip_syslog_pri(s: &str) -> &str {
-    if let Some(rest) = s.strip_prefix('<') {
-        if let Some((pri, tail)) = rest.split_once('>') {
-            if pri.chars().all(|c| c.is_ascii_digit()) && !pri.is_empty() {
-                return tail;
-            }
-        }
+    if let Some(rest) = s.strip_prefix('<')
+        && let Some((pri, tail)) = rest.split_once('>')
+        && pri.chars().all(|c| c.is_ascii_digit())
+        && !pri.is_empty()
+    {
+        return tail;
     }
     s
 }

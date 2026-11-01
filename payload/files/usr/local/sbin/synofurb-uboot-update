@@ -11,7 +11,7 @@ CONF=/etc/synofurb/uboot.conf
 LOAD_KERNEL=${LOAD_KERNEL:-0x02000000}
 LOAD_INITRD=${LOAD_INITRD:-0x03000000}
 EXTRA_ARGS=${EXTRA_ARGS:-rootdelay=10 earlyprintk=serial}
-KVER=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|/boot/vmlinuz-||' | sort -V | tail -n1)
+KVER=$(for f in /boot/vmlinuz-*; do [ -e "$f" ] && echo "${f#/boot/vmlinuz-}"; done | sort -V | tail -n1)
 [ -n "$KVER" ] || { echo "no kernel in /boot" >&2; exit 0; }
 INITRD=/boot/initrd.img-$KVER
 [ -f "$INITRD" ] || { echo "initrd for $KVER not built yet" >&2; exit 0; }

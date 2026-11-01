@@ -34,10 +34,8 @@ pub fn generate_password(len: usize) -> String {
 /// SHA-512 crypt (`$6$...`) hash accepted by `chpasswd -e` on Debian.
 pub fn hash_password(password: &str) -> Result<String> {
     use sha_crypt::{PasswordHasher, ShaCrypt};
-    let h = ShaCrypt::default()
-        .hash_password(password.as_bytes())
-        .map_err(|e| anyhow::anyhow!("password hashing failed: {e}"))?;
-    canonical_sha512_crypt(&h.to_string())
+    let h = ShaCrypt::default().hash_password(password.as_bytes()).map_err(|e| anyhow::anyhow!("password hashing failed: {e}"))?;
+    canonical_sha512_crypt(h.as_ref())
 }
 
 /// glibc's crypt(3) only uses 16 salt characters and re-emits them, so a stored hash with a
@@ -152,10 +150,10 @@ impl InstallConfig {
                 bail!("invalid package name '{p}'");
             }
         }
-        if let Some(d) = &self.dtb {
-            if !d.ends_with(".dtb") || !d.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
-                bail!("invalid DTB file name");
-            }
+        if let Some(d) = &self.dtb
+            && (!d.ends_with(".dtb") || !d.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)))
+        {
+            bail!("invalid DTB file name");
         }
         Ok(())
     }
@@ -180,7 +178,10 @@ pub fn validate_hostname(h: &str) -> Result<()> {
 }
 
 pub fn validate_username(u: &str) -> Result<()> {
-    let reserved = ["root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail", "news", "uucp", "proxy", "www-data", "backup", "list", "irc", "nobody", "admin_"];
+    let reserved = [
+        "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail", "news", "uucp", "proxy", "www-data", "backup", "list", "irc",
+        "nobody", "admin_",
+    ];
     let ok = !u.is_empty()
         && u.len() <= 32
         && u.chars().next().is_some_and(|c| c.is_ascii_lowercase())
@@ -202,7 +203,15 @@ pub fn validate_ssh_public_key(k: &str) -> Result<()> {
     let mut it = k.split_whitespace();
     let kind = it.next().unwrap_or("");
     let blob = it.next().unwrap_or("");
-    let known = ["ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com"];
+    let known = [
+        "ssh-ed25519",
+        "ssh-rsa",
+        "ecdsa-sha2-nistp256",
+        "ecdsa-sha2-nistp384",
+        "ecdsa-sha2-nistp521",
+        "sk-ssh-ed25519@openssh.com",
+        "sk-ecdsa-sha2-nistp256@openssh.com",
+    ];
     if !known.contains(&kind) || blob.len() < 20 || !blob.chars().all(|c| c.is_ascii_alphanumeric() || "+/=".contains(c)) {
         bail!("not a valid OpenSSH public key");
     }
@@ -231,10 +240,10 @@ mod tests {
         assert!(!h.contains("rounds="));
         // Cross-check against openssl when available.
         let salt = h.split('$').nth(2).unwrap();
-        if let Ok(out) = std::process::Command::new("openssl").args(["passwd", "-6", "-salt", salt, "correct horse"]).output() {
-            if out.status.success() {
-                assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), h, "sha512-crypt must match openssl");
-            }
+        if let Ok(out) = std::process::Command::new("openssl").args(["passwd", "-6", "-salt", salt, "correct horse"]).output()
+            && out.status.success()
+        {
+            assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), h, "sha512-crypt must match openssl");
         }
     }
 

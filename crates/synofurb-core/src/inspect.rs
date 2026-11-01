@@ -228,11 +228,9 @@ pub fn parse_inspect(out: &str) -> Result<DeviceFacts> {
                 vg: None,
             }),
             Some("PV") if c.len() >= 3 => pvs.push((c[1].into(), c[2].into())),
-            Some("LV") if c.len() >= 4 => f.lvs.push(Lv {
-                vg: c[1].into(),
-                name: c[2].into(),
-                bytes: c[3].split('.').next().map(num).unwrap_or(0),
-            }),
+            Some("LV") if c.len() >= 4 => {
+                f.lvs.push(Lv { vg: c[1].into(), name: c[2].into(), bytes: c[3].split('.').next().map(num).unwrap_or(0) })
+            }
             Some("MNT") if c.len() >= 6 => f.mounts.push(Mount {
                 device: c[1].into(),
                 mountpoint: c[2].into(),
@@ -275,11 +273,7 @@ pub fn parse_inspect(out: &str) -> Result<DeviceFacts> {
     }
 
     if f.model.is_empty() {
-        f.model = if !hw_version.is_empty() {
-            hw_version
-        } else {
-            platform::model_from_unique(&f.unique).unwrap_or_default()
-        };
+        f.model = if !hw_version.is_empty() { hw_version } else { platform::model_from_unique(&f.unique).unwrap_or_default() };
     }
     let info = platform::classify(&f.unique, &f.uname_m);
     f.arch = info.arch;

@@ -1,13 +1,15 @@
 //! synofurb-core: discovery, inspection, planning and installer engine.
+pub mod config;
+pub mod debian;
+pub mod discovery;
 pub mod inspect;
+pub mod kexec;
+pub mod logs;
 pub mod model;
+pub mod payload;
 pub mod plan;
 pub mod platform;
-pub mod config;
-pub mod script;
-pub mod payload;
-pub mod logs;
 pub mod remote;
-pub mod debian;
+pub mod script;
 pub mod server;
-pub mod kexec;
+pub mod session;

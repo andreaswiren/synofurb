@@ -92,7 +92,7 @@ fail() {
   while :; do sleep 3600; done
 }
 
-DRY=@@DRY@@
+DRY=${SYNOFURB_DRY:-@@DRY@@}
 run() {
   emit "CMD   $*"
   [ "$DRY" = 1 ] && return 0
@@ -117,8 +117,9 @@ runsh() {
   [ $_rc -eq 0 ] || fail "shell snippet failed (rc=$_rc): $*"
 }
 
-[ -e /tmp/synofurb.lock ] && { emit "WARN  stage-2 already running or finished; refusing to start twice"; while :; do sleep 3600; done; }
-: > /tmp/synofurb.lock
+LOCK=${SYNOFURB_LOCK:-/tmp/synofurb.lock}
+[ -e "$LOCK" ] && { emit "WARN  stage-2 already running or finished; refusing to start twice"; while :; do sleep 3600; done; }
+: > "$LOCK"
 
 @@DISK_SERIAL_FN@@
 pdev() { case "$1" in *[0-9]) echo "${1}p$2" ;; *) echo "${1}$2" ;; esac; }
@@ -258,7 +259,10 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     writeln!(w, "settle")?;
     writeln!(w, "for m in dm_mod raid0 raid1 raid10 raid456 xfs ext4 vfat loop; do try modprobe $m; done")?;
     writeln!(w, "for t in parted mdadm lvm mkfs.xfs mkfs.ext4 mkfs.fat mkswap debootstrap blockdev wget; do")?;
-    writeln!(w, "  command -v $t >/dev/null 2>&1 || [ \"$DRY\" = 1 ] || fail \"required tool '$t' is missing in the installer environment\"")?;
+    writeln!(
+        w,
+        "  command -v $t >/dev/null 2>&1 || [ \"$DRY\" = 1 ] || fail \"required tool '$t' is missing in the installer environment\""
+    )?;
     writeln!(w, "done")?;
 
     // -- 2. preflight --------------------------------------------------------
@@ -296,8 +300,14 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
         sh_quote(&format!("http://{}{}/dists/{}/Release", p.cfg.mirror_host, p.cfg.mirror_dir, p.cfg.suite))
     )?;
     writeln!(w, "KEYRING=''")?;
-    writeln!(w, "for k in /usr/share/keyrings/debian-archive-keyring.pgp /usr/share/keyrings/debian-archive-keyring.gpg /usr/share/keyrings/archive.gpg; do [ -f \"$k\" ] && KEYRING=$k && break; done")?;
-    writeln!(w, "[ -n \"$KEYRING\" ] || [ \"$DRY\" = 1 ] || fail \"Debian archive keyring not found in the installer; refusing to install unsigned packages\"")?;
+    writeln!(
+        w,
+        "for k in /usr/share/keyrings/debian-archive-keyring.pgp /usr/share/keyrings/debian-archive-keyring.gpg /usr/share/keyrings/archive.gpg; do [ -f \"$k\" ] && KEYRING=$k && break; done"
+    )?;
+    writeln!(
+        w,
+        "[ -n \"$KEYRING\" ] || [ \"$DRY\" = 1 ] || fail \"Debian archive keyring not found in the installer; refusing to install unsigned packages\""
+    )?;
 
     // -- 3. point of no return ----------------------------------------------
     writeln!(w, "\nstep 3 \"POINT OF NO RETURN: releasing existing RAID/LVM and wiping reclaimed areas\"")?;
@@ -320,8 +330,7 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
         if dp.new_table {
             writeln!(w, "zero_ends \"/dev/$D_{id}\"")?;
         }
-        if plan.raw_boot.is_some() && dp.create.iter().any(|c| c.role == PartRole::SystemPv) {
-            let rb = plan.raw_boot.as_ref().unwrap();
+        if let Some(rb) = plan.raw_boot.as_ref().filter(|_| dp.create.iter().any(|c| c.role == PartRole::SystemPv)) {
             writeln!(w, "zero_range \"/dev/$D_{id}\" {} {}", rb.kernel_mib, rb.reserved_mib - rb.kernel_mib)?;
         }
     }
@@ -338,13 +347,7 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
         }
         for c in &dp.create {
             let in_md = part_in_md(plan, &dp.disk, c.number);
-            writeln!(
-                w,
-                "run parted -s -a none \"/dev/$D_{id}\" unit s mkpart sf-{} {}s {}s",
-                c.role.label(),
-                c.start,
-                c.end() - 1
-            )?;
+            writeln!(w, "run parted -s -a none \"/dev/$D_{id}\" unit s mkpart sf-{} {}s {}s", c.role.label(), c.start, c.end() - 1)?;
             if let Some(flag) = flag_for(c.role, in_md) {
                 writeln!(w, "run parted -s \"/dev/$D_{id}\" set {} {} on", c.number, flag)?;
             }
@@ -479,7 +482,10 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     writeln!(w, "  }} > /target/etc/mdadm/mdadm.conf")?;
     writeln!(w, "  cat /target/etc/fstab /target/etc/mdadm/mdadm.conf >> \"$LOG\"")?;
     writeln!(w, "fi")?;
-    writeln!(w, "if [ \"$DRY\" != 1 ] && [ -n \"$KEYRING\" ] && [ ! -f /target/usr/share/keyrings/debian-archive-keyring.pgp ] && [ ! -f /target/usr/share/keyrings/debian-archive-keyring.gpg ]; then")?;
+    writeln!(
+        w,
+        "if [ \"$DRY\" != 1 ] && [ -n \"$KEYRING\" ] && [ ! -f /target/usr/share/keyrings/debian-archive-keyring.pgp ] && [ ! -f /target/usr/share/keyrings/debian-archive-keyring.gpg ]; then"
+    )?;
     writeln!(w, "  log \"target has no archive keyring yet; copying the installer's\"")?;
     writeln!(w, "  mkdir -p /target/usr/share/keyrings && cp \"$KEYRING\" /target/usr/share/keyrings/debian-archive-keyring.gpg")?;
     writeln!(w, "fi")?;
@@ -506,6 +512,19 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     // -- 11. configure in chroot -----------------------------------------------------------------
     writeln!(w, "\nstep 11 \"Configuring the system (packages, users, SSH, serial console, network, bootloader)\"")?;
     writeln!(w, "run chroot /target /bin/sh /opt/synofurb-install/chroot-setup.sh")?;
+    if plan.raw_boot.is_some() {
+        // U-Boot boards cannot find Debian by themselves: the user needs these commands on the serial
+        // console BEFORE the reboot (DSM's system partition is gone, so U-Boot's default boot fails).
+        writeln!(w, "if [ -f /target/boot/uboot-env.txt ]; then")?;
+        writeln!(w, "  emit \"INFO  uboot-env| ==== U-Boot commands for the NAS serial console (also in /boot/uboot-env.txt) ====\"")?;
+        writeln!(w, "  while IFS= read -r _l; do emit \"INFO  uboot-env| $_l\"; done < /target/boot/uboot-env.txt")?;
+        writeln!(w, "else")?;
+        writeln!(
+            w,
+            "  warn \"no /boot/uboot-env.txt was produced (is the board DTB configured?); Debian will not boot until U-Boot is set up by hand\""
+        )?;
+        writeln!(w, "fi")?;
+    }
     if !plan.kept_arrays.is_empty() {
         writeln!(w, "log \"verifying that preserved arrays were not touched\"")?;
         for name in &plan.kept_arrays {
@@ -537,7 +556,10 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     writeln!(w, "try cp \"$LOG\" /target/var/log/synofurb/install.log")?;
     writeln!(w, "try cp /tmp/synofurb-stage2.sh /target/var/log/synofurb/stage2.sh")?;
     writeln!(w, "sync")?;
-    writeln!(w, "for m in /target/dev/pts /target/dev /target/proc /target/sys /target/srv/data /target/boot/efi /target/boot /target; do try umount $m; done")?;
+    writeln!(
+        w,
+        "for m in /target/dev/pts /target/dev /target/proc /target/sys /target/srv/data /target/boot/efi /target/boot /target; do try umount $m; done"
+    )?;
     writeln!(w, "try vgchange -an --noudevsync")?;
     writeln!(w, "emit \"@@DONE install completed\"")?;
     writeln!(w, "try cp \"$LOG\" /var/log/synofurb-install.final.log")?;
@@ -632,9 +654,14 @@ mod tests {
         // No command that writes or wipes may ever reference the preserved partition 5.
         // (Reading its RAID superblock for verification is fine.)
         for line in s.lines() {
-            let mutating = line.starts_with("zero_ends") || line.starts_with("zero_range") || line.starts_with("run ") || line.starts_with("try ");
+            let mutating =
+                line.starts_with("zero_ends") || line.starts_with("zero_range") || line.starts_with("run ") || line.starts_with("try ");
             if mutating && line.contains("pdev") {
-                assert!(!line.contains(" 5)") && !line.contains(" 5 "), "preserved partition touched: {line} (kept {})", plan.kept_arrays.join(","));
+                assert!(
+                    !line.contains(" 5)") && !line.contains(" 5 "),
+                    "preserved partition touched: {line} (kept {})",
+                    plan.kept_arrays.join(",")
+                );
             }
         }
         assert!(s.contains("mdadm --examine --export"));
@@ -668,6 +695,52 @@ mod tests {
     }
 
     #[test]
+    fn live_script_can_be_forced_into_dry_run_from_the_environment() {
+        let facts = parse_inspect(&fixtures::ds_4bay()).unwrap();
+        let plan = build_plan(&facts, &PlanRequest::default());
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let mut p = params(&plan, &facts, &cfg);
+        p.dry_run = false;
+        let s = render_stage2(&p).unwrap();
+        assert!(s.contains("DRY=${SYNOFURB_DRY:-0}"));
+        let dir = std::env::temp_dir().join(format!("sf-live-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("live.sh");
+        std::fs::write(&script, &s).unwrap();
+        let log = dir.join("install.log");
+        let out = std::process::Command::new("sh")
+            .arg(&script)
+            .env("SYNOFURB_LOG", &log)
+            .env("SYNOFURB_DRY", "1")
+            .env("SYNOFURB_LOCK", dir.join("lock"))
+            .output()
+            .unwrap();
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(out.status.success(), "{text}");
+        assert!(text.contains("dry=1") && text.contains("@@DONE"), "{text}");
+    }
+
+    #[test]
+    fn uboot_commands_are_printed_before_the_reboot() {
+        let mut facts = parse_inspect(&fixtures::ds_4bay()).unwrap();
+        facts.uname_m = "armv7l".into();
+        facts.unique = "synology_armada38x_ds116".into();
+        facts.arch = Arch::Armhf;
+        facts.firmware = Firmware::UBoot;
+        facts.mem_kib = 512 * 1024;
+        let plan = build_plan(&facts, &PlanRequest { mode: StorageMode::KeepVolumes, ..Default::default() });
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let s = render_stage2(&params(&plan, &facts, &cfg)).unwrap();
+        let chroot = s.find("run chroot /target").unwrap();
+        let recipe = s.find("uboot-env|").unwrap();
+        let reboot = s.find("reboot -f").unwrap();
+        assert!(chroot < recipe && recipe < reboot, "recipe must be printed after configuration and before the reboot");
+        let (_, x86_plan) = render(StorageMode::WipeAll);
+        assert!(x86_plan.raw_boot.is_none());
+        assert!(!render(StorageMode::WipeAll).0.contains("uboot-env"));
+    }
+
+    #[test]
     fn dry_run_executes_end_to_end() {
         let (s, _) = render(StorageMode::WipeAll);
         let dir = std::env::temp_dir().join(format!("sf-dry-{}", std::process::id()));
@@ -675,10 +748,10 @@ mod tests {
         let script = dir.join("stage2.sh");
         std::fs::write(&script, &s).unwrap();
         let log = dir.join("install.log");
-        let _ = std::fs::remove_file("/tmp/synofurb.lock");
         let out = std::process::Command::new("sh")
             .arg(&script)
             .env("SYNOFURB_LOG", &log)
+            .env("SYNOFURB_LOCK", dir.join("lock"))
             .output()
             .expect("sh available");
         let text = std::fs::read_to_string(&log).unwrap_or_default();
@@ -686,6 +759,5 @@ mod tests {
         assert!(text.contains("@@DONE"), "{text}");
         assert!(text.contains("CMD   mdadm --create /dev/md/boot"));
         assert!(!text.contains("@@FAIL"), "{text}");
-        let _ = std::fs::remove_file("/tmp/synofurb.lock");
     }
 }

@@ -83,15 +83,8 @@ impl DataRaid {
             DataRaid::Raid6 | DataRaid::Raid10 => 4,
         }
     }
-    pub const ALL: [DataRaid; 7] = [
-        DataRaid::Auto,
-        DataRaid::None,
-        DataRaid::Raid0,
-        DataRaid::Raid1,
-        DataRaid::Raid5,
-        DataRaid::Raid6,
-        DataRaid::Raid10,
-    ];
+    pub const ALL: [DataRaid; 7] =
+        [DataRaid::Auto, DataRaid::None, DataRaid::Raid0, DataRaid::Raid1, DataRaid::Raid5, DataRaid::Raid6, DataRaid::Raid10];
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -376,11 +369,7 @@ fn fw_overhead_mib(fw: Firmware) -> u64 {
 
 /// First sector of the system layout inside an extent.
 fn layout_start(fw: Firmware, ext_start: u64) -> u64 {
-    if fw == Firmware::UBoot {
-        ext_start.max(UBOOT_RESERVED_MIB * SECTORS_PER_MIB)
-    } else {
-        ext_start
-    }
+    if fw == Firmware::UBoot { ext_start.max(UBOOT_RESERVED_MIB * SECTORS_PER_MIB) } else { ext_start }
 }
 
 /// On U-Boot boards the raw kernel/initrd area (10..50 MiB) must be inside the extent.
@@ -470,12 +459,10 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         return plan;
     }
     if facts.mem_kib > 0 && facts.mem_kib < 480 * 1024 {
-        plan.errors.push(format!(
-            "Only {} MiB of RAM: the Debian installer needs about 512 MiB.",
-            facts.mem_kib / 1024
-        ));
+        plan.errors.push(format!("Only {} MiB of RAM: the Debian installer needs about 512 MiB.", facts.mem_kib / 1024));
     } else if facts.mem_kib < 900 * 1024 {
-        plan.warnings.push("Less than 1 GiB of RAM: installation works but the system will be tight; keep the management services light.".into());
+        plan.warnings
+            .push("Less than 1 GiB of RAM: installation works but the system will be tight; keep the management services light.".into());
     }
     if fw == Firmware::UBoot {
         plan.warnings.push("This ARM board has no UEFI. Debian boots from raw disk sectors through U-Boot; the U-Boot environment must be changed once over the serial console (Debian wiki: InstallingDebianOn/Synology). Keep a TTL serial adapter ready (115200 baud).".into());
@@ -505,17 +492,15 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         .iter()
         .filter(|a| {
             !a.locked
-                && a.extents.first().is_some_and(|e| {
-                    raw_area_free(fw, e) && e.end.saturating_sub(layout_start(fw, e.start)) >= need_sectors_min
-                })
+                && a.extents
+                    .first()
+                    .is_some_and(|e| raw_area_free(fw, e) && e.end.saturating_sub(layout_start(fw, e.start)) >= need_sectors_min)
         })
         .collect();
 
     for a in analyses.iter().filter(|a| a.locked) {
-        plan.warnings.push(format!(
-            "Disk {} uses an MBR partition table with preserved partitions; it is left completely untouched.",
-            a.disk.name
-        ));
+        plan.warnings
+            .push(format!("Disk {} uses an MBR partition table with preserved partitions; it is left completely untouched.", a.disk.name));
     }
 
     let copies = match req.system_copies {
@@ -552,11 +537,8 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     plan.system_disks = sys.iter().map(|a| a.disk.name.clone()).collect();
 
     // -- sizes
-    let max_mib_raw = sys
-        .iter()
-        .map(|a| (a.extents[0].end - layout_start(fw, a.extents[0].start)) / SECTORS_PER_MIB - overhead - 1)
-        .min()
-        .unwrap_or(0);
+    let max_mib_raw =
+        sys.iter().map(|a| (a.extents[0].end - layout_start(fw, a.extents[0].start)) / SECTORS_PER_MIB - overhead - 1).min().unwrap_or(0);
     let max_mib = max_mib_raw.min(MAX_SYSTEM_MIB);
     let smallest = sys.iter().map(|a| a.disk.size_bytes()).min().unwrap_or(0);
     let rec = recommended_system_mib(smallest, max_mib);
@@ -569,11 +551,7 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         plan.errors.push(format!("System size must be at least {} GiB.", MIN_SYSTEM_MIB / 1024));
     }
     if chosen > max_mib {
-        plan.errors.push(format!(
-            "System size {} GiB exceeds the {} GiB available on the system disks.",
-            chosen / 1024,
-            max_mib / 1024
-        ));
+        plan.errors.push(format!("System size {} GiB exceeds the {} GiB available on the system disks.", chosen / 1024, max_mib / 1024));
     }
     if !plan.errors.is_empty() {
         return plan;
@@ -593,9 +571,7 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     for a in &analyses {
         let d = a.disk;
         let is_sys = plan.system_disks.contains(&d.name);
-        let touched = is_sys
-            || (!a.locked && !a.reclaim.is_empty())
-            || (!a.locked && a.fully_wiped && !a.extents.is_empty());
+        let touched = is_sys || (!a.locked && !a.reclaim.is_empty()) || (!a.locked && a.fully_wiped && !a.extents.is_empty());
         if !touched {
             plan.untouched.push(d.name.clone());
             continue;
@@ -702,16 +678,12 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
             _ => 4,
         };
         if req.data_raid != DataRaid::Auto && n < min_members {
-            plan.errors.push(format!(
-                "{} needs at least {} disks for data but {} are available.",
-                req.data_raid.label(),
-                min_members,
-                n
-            ));
+            plan.errors.push(format!("{} needs at least {} disks for data but {} are available.", req.data_raid.label(), min_members, n));
             return plan;
         }
         if level == "none" && n > 1 {
-            plan.warnings.push("Data disks without RAID are concatenated by LVM: losing any one disk loses the whole data volume group.".into());
+            plan.warnings
+                .push("Data disks without RAID are concatenated by LVM: losing any one disk loses the whole data volume group.".into());
         }
         if level == "0" {
             plan.warnings.push("RAID 0 has no redundancy: losing any disk loses all data.".into());
@@ -731,12 +703,22 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         plan.sizes.data_usable_bytes = data_usable(&level, n, min_bytes);
         let pv = if level == "none" && n > 1 {
             // one VG spanning plain partitions: model as separate PVs via a special array name
-            plan.arrays.push(ArrayPlan { name: "data".into(), level: "linear".into(), metadata: "1.2".into(), members: data_members.clone() });
+            plan.arrays.push(ArrayPlan {
+                name: "data".into(),
+                level: "linear".into(),
+                metadata: "1.2".into(),
+                members: data_members.clone(),
+            });
             BlockRef::Md("data".into())
         } else if n == 1 {
             BlockRef::Part(data_members[0].0.clone(), data_members[0].1)
         } else {
-            plan.arrays.push(ArrayPlan { name: "data".into(), level: level.clone(), metadata: "1.2".into(), members: data_members.clone() });
+            plan.arrays.push(ArrayPlan {
+                name: "data".into(),
+                level: level.clone(),
+                metadata: "1.2".into(),
+                members: data_members.clone(),
+            });
             BlockRef::Md("data".into())
         };
         let pct = 100 - req.data_free_percent;
@@ -762,7 +744,9 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
             .mounts
             .iter()
             .filter(|m| arr.vg.as_ref().is_some_and(|vg| m.device.contains(vg)) || m.device == format!("/dev/{}", arr.name))
-            .map(|m| format!("{} ({}, {} used of {})", m.mountpoint, m.fstype, human_bytes(m.used_kib * 1024), human_bytes(m.size_kib * 1024)))
+            .map(|m| {
+                format!("{} ({}, {} used of {})", m.mountpoint, m.fstype, human_bytes(m.used_kib * 1024), human_bytes(m.size_kib * 1024))
+            })
             .collect();
         let lv_desc: Vec<String> = arr
             .vg
@@ -792,7 +776,12 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     for a in &analyses {
         for p in a.disk.parts.iter().filter(|p| a.reclaim.contains(&p.number)) {
             if array_of(facts, &p.name).is_none() {
-                plan.destroyed.push(format!("Partition {} on {} ({}), contents unknown", p.name, a.disk.name, human_bytes(p.sectors * SECTOR)));
+                plan.destroyed.push(format!(
+                    "Partition {} on {} ({}), contents unknown",
+                    p.name,
+                    a.disk.name,
+                    human_bytes(p.sectors * SECTOR)
+                ));
             }
         }
         if req.mode == StorageMode::KeepVolumes {
@@ -804,6 +793,27 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
                     });
                 }
             }
+        }
+    }
+    // DSM data volumes (/volume1, ...) live on LVM/md devices we cannot always map back to a single
+    // array (cachedev_N), so describe them once and attach them to whichever side holds the data arrays.
+    let volumes: Vec<String> = facts
+        .mounts
+        .iter()
+        .filter(|m| m.mountpoint.starts_with("/volume"))
+        .map(|m| format!("{} ({}, {} used of {})", m.mountpoint, m.fstype, human_bytes(m.used_kib * 1024), human_bytes(m.size_kib * 1024)))
+        .collect();
+    if !volumes.is_empty() {
+        if plan.kept_arrays.is_empty() {
+            plan.destroyed.push(format!("DSM volumes with all their shares and files: {}", volumes.join("; ")));
+        } else {
+            plan.preserved.push(Preserved {
+                what: "DSM volumes".into(),
+                detail: format!(
+                    "{} (kept intact on the preserved arrays; shares and DSM settings are not carried over)",
+                    volumes.join("; ")
+                ),
+            });
         }
     }
     if req.mode == StorageMode::KeepVolumes && plan.preserved.is_empty() {
@@ -881,19 +891,19 @@ impl Plan {
             if dp.new_table && self.mode == StorageMode::KeepVolumes {
                 // allowed only if nothing is preserved on the disk
                 for p in &d.parts {
-                    if let Some(a) = array_of(facts, &p.name) {
-                        if self.kept_arrays.contains(&a.name) {
-                            errs.push(format!("{}: new partition table would destroy preserved array {}", d.name, a.name));
-                        }
+                    if let Some(a) = array_of(facts, &p.name)
+                        && self.kept_arrays.contains(&a.name)
+                    {
+                        errs.push(format!("{}: new partition table would destroy preserved array {}", d.name, a.name));
                     }
                 }
             }
         }
         for v in &self.vgs {
-            if let BlockRef::Md(n) = &v.pv {
-                if !self.arrays.iter().any(|a| &a.name == n) {
-                    errs.push(format!("VG {} references missing array {}", v.name, n));
-                }
+            if let BlockRef::Md(n) = &v.pv
+                && !self.arrays.iter().any(|a| &a.name == n)
+            {
+                errs.push(format!("VG {} references missing array {}", v.name, n));
             }
         }
         if errs.is_empty() { Ok(()) } else { Err(errs) }
@@ -912,8 +922,15 @@ impl Plan {
             self.sizes.vg_sys_free_mib
         ));
         match self.firmware {
-            Firmware::Bios => v.push("Boot: BIOS GRUB, ext4 /boot on md RAID1 (installed to every system disk)".into()),
-            Firmware::Uefi => v.push("Boot: UEFI GRUB, mirrored ESP + ext4 /boot on md RAID1".into()),
+            Firmware::Bios => v.push(format!(
+                "Boot: BIOS GRUB, ext4 /boot {} (GRUB installed on every system disk)",
+                if matches!(self.boot, Some(BlockRef::Md(_))) { "on md RAID1" } else { "on a plain partition" }
+            )),
+            Firmware::Uefi => v.push(format!(
+                "Boot: UEFI GRUB, {}ext4 /boot {}",
+                if matches!(self.esp, Some(BlockRef::Md(_))) { "mirrored ESP + " } else { "ESP + " },
+                if matches!(self.boot, Some(BlockRef::Md(_))) { "on md RAID1" } else { "on a plain partition" }
+            )),
             Firmware::UBoot => v.push(format!(
                 "Boot: U-Boot raw sectors (kernel @ {} MiB, initrd @ {} MiB, first {} MiB reserved) on every system disk - needs a serial console to point U-Boot at the disk",
                 UBOOT_KERNEL_MIB, UBOOT_INITRD_MIB, UBOOT_RESERVED_MIB
@@ -1062,14 +1079,8 @@ mod tests {
         let f = facts();
         let p = build_plan(&f, &PlanRequest { data_raid: DataRaid::Raid6, ..Default::default() });
         assert!(p.is_ok());
-        let min_data = p
-            .disks
-            .iter()
-            .flat_map(|d| d.create.iter())
-            .filter(|c| c.role == PartRole::Data)
-            .map(|c| c.sectors * SECTOR)
-            .min()
-            .unwrap();
+        let min_data =
+            p.disks.iter().flat_map(|d| d.create.iter()).filter(|c| c.role == PartRole::Data).map(|c| c.sectors * SECTOR).min().unwrap();
         assert_eq!(p.sizes.data_usable_bytes, 2 * min_data, "RAID6 over 4 members keeps two members' worth");
         let mut f2 = f.clone();
         f2.disks.retain(|d| d.name == "sda" || d.name == "sdb" || d.name == "synoboot");
@@ -1190,6 +1201,16 @@ mod tests {
         let p = build_plan(&f, &PlanRequest { mode: StorageMode::KeepVolumes, ..Default::default() });
         // partition 1 is now an unknown partition (array removed) and is preserved: raw area not free
         assert!(!p.is_ok(), "{:?}", p.warnings);
+    }
+
+    #[test]
+    fn dsm_volumes_are_named_in_the_destroy_list() {
+        let f = facts();
+        let p = build_plan(&f, &PlanRequest::default());
+        assert!(p.destroyed.iter().any(|d| d.contains("/volume1") && d.contains("btrfs")), "{:?}", p.destroyed);
+        let k = build_plan(&f, &PlanRequest { mode: StorageMode::KeepVolumes, ..Default::default() });
+        assert!(k.preserved.iter().any(|d| d.what == "DSM volumes" && d.detail.contains("/volume1")));
+        assert!(!k.destroyed.iter().any(|d| d.contains("/volume1")));
     }
 
     #[test]

@@ -13,8 +13,15 @@ fn main() {
     }
     let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
     let p = ScriptParams {
-        plan: &plan, facts: &facts, cfg: &cfg, run_id: "dev", http_base: "http://127.0.0.1:1/t",
-        payload_sha256: "00", log_host: "127.0.0.1", log_tcp_port: 1, dry_run: !a.iter().any(|x| x == "--live"),
+        plan: &plan,
+        facts: &facts,
+        cfg: &cfg,
+        run_id: "dev",
+        http_base: "http://127.0.0.1:1/t",
+        payload_sha256: "00",
+        log_host: "127.0.0.1",
+        log_tcp_port: 1,
+        dry_run: !a.iter().any(|x| x == "--live"),
     };
     print!("{}", render_stage2(&p).unwrap());
 }

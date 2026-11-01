@@ -160,11 +160,7 @@ impl Disk {
 }
 
 pub fn part_device_name(disk: &str, number: u32) -> String {
-    if disk.chars().last().is_some_and(|c| c.is_ascii_digit()) {
-        format!("{disk}p{number}")
-    } else {
-        format!("{disk}{number}")
-    }
+    if disk.chars().last().is_some_and(|c| c.is_ascii_digit()) { format!("{disk}p{number}") } else { format!("{disk}{number}") }
 }
 
 /// What a RAID array was used for by DSM.
@@ -231,7 +227,12 @@ impl SerialConsole {
         for tok in cmdline.split_whitespace() {
             let Some(v) = tok.strip_prefix("console=") else { continue };
             let (tty, rest) = v.split_once(',').unwrap_or((v, ""));
-            if !(tty.starts_with("ttyS") || tty.starts_with("ttyAMA") || tty.starts_with("ttyUSB") || tty.starts_with("ttyMV") || tty.starts_with("ttyPS")) {
+            if !(tty.starts_with("ttyS")
+                || tty.starts_with("ttyAMA")
+                || tty.starts_with("ttyUSB")
+                || tty.starts_with("ttyMV")
+                || tty.starts_with("ttyPS"))
+            {
                 continue;
             }
             if !tty.chars().all(|c| c.is_ascii_alphanumeric()) {

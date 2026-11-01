@@ -27,16 +27,16 @@ pub fn find_kexec_binary(arch: Arch, explicit: Option<&Path>) -> Result<PathBuf>
         }
         bail!("kexec binary {} does not exist", p.display());
     }
-    if let Ok(p) = std::env::var("SYNOFURB_KEXEC") {
-        if Path::new(&p).is_file() {
-            return Ok(p.into());
-        }
+    if let Ok(p) = std::env::var("SYNOFURB_KEXEC")
+        && Path::new(&p).is_file()
+    {
+        return Ok(p.into());
     }
     let mut dirs = vec![PathBuf::from("assets/kexec")];
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(d) = exe.parent() {
-            dirs.push(d.join("assets/kexec"));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(d) = exe.parent()
+    {
+        dirs.push(d.join("assets/kexec"));
     }
     for d in dirs {
         let p = d.join(arch.debian()).join("kexec");
@@ -67,7 +67,14 @@ fn file_sha(path: &Path) -> Result<(String, u64)> {
     Ok((sha256_hex(&data), data.len() as u64))
 }
 
-fn upload_checked(sh: &mut dyn RemoteShell, local: &Path, remote: &str, mode: u32, log: &Logger, progress: &mut dyn FnMut(&str, f32)) -> Result<()> {
+fn upload_checked(
+    sh: &mut dyn RemoteShell,
+    local: &Path,
+    remote: &str,
+    mode: u32,
+    log: &Logger,
+    progress: &mut dyn FnMut(&str, f32),
+) -> Result<()> {
     let (sha, size) = file_sha(local)?;
     let mut f = File::open(local)?;
     let name = local.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -89,8 +96,19 @@ fn upload_checked(sh: &mut dyn RemoteShell, local: &Path, remote: &str, mode: u3
 }
 
 /// Upload everything and `kexec -l` it. Does NOT execute the kernel; see [`execute`].
-pub fn stage_and_load(sh: &mut dyn RemoteShell, privileged_root: bool, sudo_pw: Option<String>, job: &KexecJob, log: &Logger, progress: &mut dyn FnMut(&str, f32)) -> Result<String> {
-    let need: u64 = [job.kexec_bin, job.kernel, job.initrd].iter().chain(job.dtb.iter()).map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)).sum();
+pub fn stage_and_load(
+    sh: &mut dyn RemoteShell,
+    privileged_root: bool,
+    sudo_pw: Option<String>,
+    job: &KexecJob,
+    log: &Logger,
+    progress: &mut dyn FnMut(&str, f32),
+) -> Result<String> {
+    let need: u64 = [job.kexec_bin, job.kernel, job.initrd]
+        .iter()
+        .chain(job.dtb.iter())
+        .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+        .sum();
     let need_kib = need / 1024 * 12 / 10 + 1024;
     let df = sh.exec("df -P -k /tmp /var/tmp 2>/dev/null", None)?;
     let dir = parse_df(&df.stdout)
@@ -113,7 +131,11 @@ pub fn stage_and_load(sh: &mut dyn RemoteShell, privileged_root: bool, sudo_pw: 
     }
     let v = sh.exec(&format!("'{kx}' --version"), None)?;
     if !v.ok() {
-        bail!("the uploaded kexec binary does not run on this NAS ({}); it must be statically linked for {}", v.stderr.trim(), job.arch.debian());
+        bail!(
+            "the uploaded kexec binary does not run on this NAS ({}); it must be statically linked for {}",
+            v.stderr.trim(),
+            job.arch.debian()
+        );
     }
     log.info(format!("kexec on the NAS: {}", v.stdout.trim()));
     if job.cmdline.contains('\'') {
@@ -229,7 +251,13 @@ pub fn render_kit_readme(p: &KitParams) -> String {
     s
 }
 
-pub fn export_kit(dir: &Path, files: &crate::debian::InstallerFiles, initrd_with_preseed: &Path, preseed: &str, p: &KitParams) -> Result<()> {
+pub fn export_kit(
+    dir: &Path,
+    files: &crate::debian::InstallerFiles,
+    initrd_with_preseed: &Path,
+    preseed: &str,
+    p: &KitParams,
+) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     std::fs::copy(&files.kernel, dir.join("vmlinuz"))?;
     std::fs::copy(initrd_with_preseed, dir.join("initrd-synofurb.gz"))?;
@@ -277,7 +305,14 @@ mod tests {
         m.push_ok(""); // kexec -l
         m.push_ok("1\n"); // kexec_loaded
         let log = Logger::memory(None);
-        let job = KexecJob { arch: Arch::X86_64, kexec_bin: &kx, kernel: &kr, initrd: &ir, dtb: None, cmdline: "auto=true console=ttyS0,115200n8" };
+        let job = KexecJob {
+            arch: Arch::X86_64,
+            kexec_bin: &kx,
+            kernel: &kr,
+            initrd: &ir,
+            dtb: None,
+            cmdline: "auto=true console=ttyS0,115200n8",
+        };
         let stage = stage_and_load(&mut m, true, None, &job, &log, &mut |_, _| {}).unwrap();
         assert!(stage.starts_with("/tmp/.synofurb-"));
         assert_eq!(m.uploads.len(), 3);
@@ -321,7 +356,14 @@ mod tests {
     fn kit_readme_variants() {
         let facts = parse_inspect(&fixtures::ds_4bay()).unwrap();
         let serial = SerialConsole::default();
-        let p = KitParams { facts: &facts, cmdline: "auto=true x", serial: &serial, desktop_ip: "10.0.0.2", preseed_url: "http://10.0.0.2:1/t/preseed.cfg", dtb_name: None };
+        let p = KitParams {
+            facts: &facts,
+            cmdline: "auto=true x",
+            serial: &serial,
+            desktop_ip: "10.0.0.2",
+            preseed_url: "http://10.0.0.2:1/t/preseed.cfg",
+            dtb_name: None,
+        };
         let r = render_kit_readme(&p);
         assert!(r.contains("menuentry") && r.contains("url=http://10.0.0.2:1/t/preseed.cfg") && r.contains("backup"));
         let mut arm = facts.clone();
@@ -329,7 +371,9 @@ mod tests {
         arm.arch = Arch::Armhf;
         let p = KitParams { facts: &arm, dtb_name: Some("armada-385-synology-ds116.dtb"), ..p };
         let r = render_kit_readme(&p);
-        assert!(r.contains("bootz") && r.contains("armada-385-synology-ds116.dtb") && r.contains("wiki.debian.org/InstallingDebianOn/Synology"));
+        assert!(
+            r.contains("bootz") && r.contains("armada-385-synology-ds116.dtb") && r.contains("wiki.debian.org/InstallingDebianOn/Synology")
+        );
     }
 
     #[test]

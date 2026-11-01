@@ -99,7 +99,11 @@ pub fn build_payload(cfg: &InstallConfig, plan: &Plan, facts: &DeviceFacts, dsm_
         add(path, content.as_bytes(), mode)?;
     }
     add("env.sh", render_env(cfg, plan, facts).as_bytes(), 0o600)?;
-    add("authorized_keys", (cfg.ssh_authorized_keys.join("\n") + if cfg.ssh_authorized_keys.is_empty() { "" } else { "\n" }).as_bytes(), 0o600)?;
+    add(
+        "authorized_keys",
+        (cfg.ssh_authorized_keys.join("\n") + if cfg.ssh_authorized_keys.is_empty() { "" } else { "\n" }).as_bytes(),
+        0o600,
+    )?;
     add("plan.json", serde_json::to_string_pretty(plan)?.as_bytes(), 0o644)?;
     add("dsm-inspect.txt", dsm_inspect_output.as_bytes(), 0o644)?;
     let bytes = tar.into_inner()?.finish()?;
@@ -142,7 +146,16 @@ mod tests {
             }
             names.push(n);
         }
-        for need in ["env.sh", "authorized_keys", "chroot-setup.sh", "plan.json", "dsm-inspect.txt", "mgmt/synofurb_mgmt.py", "mgmt/synofurb-mgmt.service", "files/etc/ssh/sshd_config.d/10-synofurb.conf"] {
+        for need in [
+            "env.sh",
+            "authorized_keys",
+            "chroot-setup.sh",
+            "plan.json",
+            "dsm-inspect.txt",
+            "mgmt/synofurb_mgmt.py",
+            "mgmt/synofurb-mgmt.service",
+            "files/etc/ssh/sshd_config.d/10-synofurb.conf",
+        ] {
             assert!(names.iter().any(|n| n == need), "missing {need} in {names:?}");
         }
         assert_eq!(p.sha256.len(), 64);
@@ -166,7 +179,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("env.sh");
         std::fs::write(&f, &env).unwrap();
-        let out = std::process::Command::new("sh").arg("-c").arg(format!(". {} && echo \"$NAS_HOSTNAME:$ARCH:$PASSWORD_HASH\"", f.display())).output().unwrap();
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(". {} && echo \"$NAS_HOSTNAME:$ARCH:$PASSWORD_HASH\"", f.display()))
+            .output()
+            .unwrap();
         assert!(out.status.success());
         assert!(String::from_utf8_lossy(&out.stdout).starts_with("nas:amd64:$6$"));
     }

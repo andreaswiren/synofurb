@@ -85,7 +85,11 @@ impl SshSession {
         let fingerprint = Arc::new(Mutex::new(None));
         let fp2 = fingerprint.clone();
         let handle = rt.block_on(async {
-            let cfg = Arc::new(client::Config { inactivity_timeout: Some(Duration::from_secs(3600)), keepalive_interval: Some(Duration::from_secs(20)), ..Default::default() });
+            let cfg = Arc::new(client::Config {
+                inactivity_timeout: Some(Duration::from_secs(3600)),
+                keepalive_interval: Some(Duration::from_secs(20)),
+                ..Default::default()
+            });
             let mut h = tokio::time::timeout(Duration::from_secs(20), client::connect(cfg, (host, port), Handler { fingerprint: fp2 }))
                 .await
                 .map_err(|_| anyhow!("connection to {host}:{port} timed out"))?
@@ -138,7 +142,11 @@ impl RemoteShell for SshSession {
                     _ => {}
                 }
             }
-            Ok::<_, anyhow::Error>(ExecResult { code: code.unwrap_or(255), stdout: String::from_utf8_lossy(&out).into(), stderr: String::from_utf8_lossy(&err).into() })
+            Ok::<_, anyhow::Error>(ExecResult {
+                code: code.unwrap_or(255),
+                stdout: String::from_utf8_lossy(&out).into(),
+                stderr: String::from_utf8_lossy(&err).into(),
+            })
         })?;
         if res.code != 0 {
             self.log.log(Level::Warn, Source::Remote, &format!("exit status {}", res.code));
