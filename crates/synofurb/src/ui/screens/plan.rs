@@ -18,7 +18,7 @@ use gpui_kit::component::hover_card::HoverCard;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::slider::Slider;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, IntoElement, Window, div, px};
 use synofurb_core::plan::StorageMode;
@@ -248,7 +248,6 @@ impl App {
             body = body.child(Alert::warning(("plan-warn", i), w.clone()).icon(icons::icon(role::WARN)));
         }
         let ok = self.plan_ok();
-        let _ = cx.theme();
         Page::new(copy::PLAN_TITLE.short, body)
             .subtitle(copy::PLAN_SUB.short)
             .left(vec![

@@ -19,7 +19,6 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::stepper::{Stepper, StepperItem};
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Anchor, AnyElement, Context, FontWeight, IntoElement, KeyBinding, Render, Role, SharedString, Window, actions, div, px};
@@ -500,11 +499,7 @@ impl App {
                     self.go(Screen::System, window, cx)
                 }
             }
-            Screen::System => {
-                if self.system_form_errors(cx).is_empty() {
-                    self.go(Screen::Confirm, window, cx)
-                }
-            }
+            Screen::System if self.system_form_errors(cx).is_empty() => self.go(Screen::Confirm, window, cx),
             _ => {}
         }
     }

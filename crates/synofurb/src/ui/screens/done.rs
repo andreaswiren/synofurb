@@ -6,7 +6,7 @@ use crate::ui::disclosure::paragraphs;
 use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
-use crate::ui::theme::{Themed, Tone};
+use crate::ui::theme::Themed;
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -57,7 +57,6 @@ impl App {
     }
 
     pub(crate) fn page_done(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
-        let p = cx.pal();
         let app = cx.entity();
         let Some(Ok(o)) = self.result.clone() else {
             return Page::new(copy::DONE_TITLE.short, kit::muted(cx, "-"));
@@ -186,7 +185,6 @@ impl App {
             )),
         ));
         let copied = self.password_copied;
-        let _ = (&p, Tone::Ok);
         Page::new(copy::DONE_TITLE.short, body)
             .subtitle(copy::DONE_SUB.short)
             .left(vec![

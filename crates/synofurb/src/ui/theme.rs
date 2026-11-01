@@ -17,7 +17,7 @@ use gpui_kit::{App, Global, Hsla, Rems, WindowAppearance, px, rems};
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
-pub use super::tokens::{DARK, Hexes, LIGHT, Palette};
+pub use super::tokens::{DARK, LIGHT, Palette};
 
 /// The designer's GPUI theme set (light + dark). Copied from `design/v2/synofurb-theme.json`.
 pub const THEME_JSON: &str = include_str!("../../assets/theme/synofurb-theme.json");

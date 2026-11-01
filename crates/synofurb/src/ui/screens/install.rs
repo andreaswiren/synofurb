@@ -13,7 +13,6 @@ use crate::ui::theme::{Themed, Tone};
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::spinner::Spinner;
@@ -220,6 +219,3 @@ impl App {
         });
     }
 }
-
-#[allow(dead_code)]
-fn _unused(_: DialogButtonProps) {}

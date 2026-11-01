@@ -16,6 +16,10 @@
 //! * `render`    - window chrome (step rail, safety bar, action bar)
 //! * `screens`   - one module per screen
 
+// The desktop UI is mid-rebuild (phase 1 done: fonts, icons, theme, scrollbars, copy, disclosure, help, about; phase 2
+// screens await the owner's mockup approval), so some helpers and copy items are not wired in yet.
+#![allow(dead_code)]
+
 pub mod app;
 pub mod assets;
 pub mod brand;

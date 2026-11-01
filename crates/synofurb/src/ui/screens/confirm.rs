@@ -20,17 +20,15 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Anchor, AnyElement, Context, Hsla, IntoElement, StyleRefinement, Window, div, px};
-use synofurb_core::compat::Status;
 
 impl App {
-    fn gate_box(&self, cx: &Context<App>, title: AnyElement, border: Hsla, lines: Vec<AnyElement>) -> impl IntoElement {
+    fn gate_box(&self, title: AnyElement, border: Hsla, lines: Vec<AnyElement>) -> impl IntoElement {
         GroupBox::new()
             .outline()
             .content_style(StyleRefinement::default().border_color(border).border_2())
             .title(title)
             .child(v_flex().gap(px(4.0)).children(lines))
             .id(border.h.to_bits() as usize)
-            .when(false, |d| d.child(cx.theme().foreground.to_string()))
     }
 
     pub(crate) fn page_confirm(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
@@ -58,7 +56,6 @@ impl App {
 
         let line = |t: String| div().text_xs().child(t).into_any_element();
         let destroyed = self.gate_box(
-            cx,
             h_flex()
                 .gap(px(6.0))
                 .items_center()
@@ -80,7 +77,6 @@ impl App {
             vec![kit::caption(cx, "-").into_any_element()]
         };
         let changed = self.gate_box(
-            cx,
             h_flex()
                 .gap(px(6.0))
                 .items_center()
@@ -95,7 +91,6 @@ impl App {
             kept.push(line(copy::CONF_NOTHING_PRESERVED.short.into()));
         }
         let preserved = self.gate_box(
-            cx,
             h_flex()
                 .gap(px(2.0))
                 .items_center()
@@ -242,6 +237,3 @@ impl App {
             ])
     }
 }
-
-#[allow(dead_code)]
-fn _unused(_: Status) {}

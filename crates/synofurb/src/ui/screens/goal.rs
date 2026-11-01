@@ -9,7 +9,6 @@ use crate::ui::render::Page;
 use crate::ui::state::{BootChoice, Screen};
 use crate::ui::theme::{Themed, Tone};
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::{ActiveTheme, Disableable, h_flex, v_flex};

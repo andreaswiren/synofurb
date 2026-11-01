@@ -1,7 +1,6 @@
 //! The root view: all UI state, the message pump from the worker threads, and the actions screens trigger.
 //! Rendering lives in `render.rs` (chrome) and `screens/` (one module per screen).
 
-use super::cli_cmd::CliCommand;
 use super::copy;
 use super::demo::{self, DemoUnit, Script};
 use super::screens::inventory::InventoryTable;

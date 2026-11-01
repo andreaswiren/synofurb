@@ -12,7 +12,6 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
-use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AppContext, Context, Entity, IntoElement, Render, Window, div, px};

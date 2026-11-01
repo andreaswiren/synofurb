@@ -9,8 +9,7 @@ use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::state::Screen;
-use crate::ui::theme::{Themed, Tone};
-use gpui_kit::component::Sizable;
+use crate::ui::theme::Themed;
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -144,7 +143,6 @@ impl App {
         }
         body = body.child(facts).child(disks).child(accordion);
         let blocked = verdict.blocking || f.candidate_disks().is_empty();
-        let _ = Tone::Ok;
         Page::new(copy::INSPECT_TITLE.short, body)
             .subtitle(copy::INSPECT_SUB.short)
             .left(vec![

@@ -7,7 +7,7 @@ use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::state::Screen;
-use crate::ui::theme::{Themed, Tone};
+use crate::ui::theme::Themed;
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -99,7 +99,6 @@ impl App {
             .bordered(true)
             .item(|i| i.title(h_flex().gap(px(2.0)).items_center().child(copy::REC_SAVED.short)).child(saved));
         let body = v_flex().w_full().max_w(px(640.0)).gap(px(14.0)).child(facts).child(list).child(status).child(acc);
-        let _ = Tone::Ok;
         Page::new(copy::REC_TITLE.short, body).subtitle(copy::REC_SUB.short).left(vec![
             Button::new("back")
                 .ghost()

@@ -6,7 +6,7 @@ use crate::ui::disclosure::info_tip;
 use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
-use crate::ui::theme::{Palette, Themed};
+use crate::ui::theme::Themed;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::empty::{Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle};
 use gpui_kit::component::input::Input;
@@ -18,7 +18,7 @@ use gpui_kit::component::table::{
 };
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Anchor, App as GpuiApp, Context, IntoElement, SharedString, WeakEntity, Window, div, px};
+use gpui_kit::{Anchor, App as GpuiApp, Context, IntoElement, WeakEntity, Window, div, px};
 use synofurb_core::compat::Status;
 use synofurb_core::discovery::Found;
 
@@ -72,7 +72,7 @@ impl TableDelegate for InventoryTable {
             _ => Column::new("status", copy::INV_COL_STATUS.short).width(px(200.0)),
         }
     }
-    fn render_th(&mut self, ix: usize, _: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
+    fn render_th(&mut self, ix: usize, _: &mut Window, _cx: &mut Context<TableState<Self>>) -> impl IntoElement {
         let item = match ix {
             0 => &copy::INV_COL_MODEL,
             1 => &copy::INV_COL_ADDR,
@@ -86,7 +86,6 @@ impl TableDelegate for InventoryTable {
             .gap(px(2.0))
             .child(item.short)
             .when_some(app.filter(|_| item.has_more() || !item.tip.is_empty()), |d, app| d.child(info_tip(("th-info", ix), item, &app)))
-            .when(false, |d| d.child(cx.theme().foreground.to_string()))
     }
     fn render_td(&mut self, row: usize, col: usize, _: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
         let p = cx.pal();
@@ -151,10 +150,10 @@ impl App {
                 t.refresh(cx);
             }
         });
-        if let Some(ix) = sel_ix {
-            if self.inv_table.read(cx).selected_row() != Some(ix) {
-                self.inv_table.update(cx, |t, cx| t.set_selected_row(ix, cx));
-            }
+        if let Some(ix) = sel_ix
+            && self.inv_table.read(cx).selected_row() != Some(ix)
+        {
+            self.inv_table.update(cx, |t, cx| t.set_selected_row(ix, cx));
         }
 
         let methods: Vec<(String, bool)> = self.scan.methods.iter().map(|(n, r)| (n.to_string(), r.is_ok())).collect();
@@ -169,20 +168,14 @@ impl App {
                     .accessibility_label(copy::INV_RESCAN.tip),
             )
             .content({
-                let p = p;
-                move |_, _, cx| {
-                    v_flex()
-                        .w(px(300.0))
-                        .gap(px(6.0))
-                        .text_sm()
-                        .child(kit::strong("Scan details"))
-                        .child(copy::INV_RESCAN.body)
-                        .children(methods.iter().map(|(n, ok)| {
+                move |_, _, _cx| {
+                    v_flex().w(px(300.0)).gap(px(6.0)).text_sm().child(kit::strong("Scan details")).child(copy::INV_RESCAN.body).children(
+                        methods.iter().map(|(n, ok)| {
                             let (tone, icon) =
                                 if *ok { (crate::ui::theme::Tone::Ok, role::OK) } else { (crate::ui::theme::Tone::Warn, role::WARN) };
                             kit::tag(&p, tone, Some(icon), n.clone())
-                        }))
-                        .child(div().when(false, |d| d.child(cx.theme().foreground.to_string())))
+                        }),
+                    )
                 }
             });
         let toolbar =
@@ -319,6 +312,3 @@ impl App {
             .unwrap_or_else(|| "the NAS".into())
     }
 }
-
-#[allow(dead_code)]
-fn _palette_used(_: &Palette, _: SharedString) {}

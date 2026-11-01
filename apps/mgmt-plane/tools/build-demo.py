@@ -38,6 +38,27 @@ def node(name, typ, size, fstype=None, mps=(), pk=None, label=None, uuid=None, m
     return d
 
 
+
+def md_detail_text(dev, level, size_bytes, used_bytes, members, name, host, local=True, state="clean", extra=()):
+    """Realistic ``mdadm --detail`` output. members: [(slot, device, state_text)]"""
+    n_active = sum(1 for _, _, st in members if st.startswith("active"))
+    lines = ["%s:" % dev, "           Version : 1.2", "     Creation Time : Mon Oct 28 10:12:44 2024", "        Raid Level : %s" % level,
+             "        Array Size : %d (%.2f TiB %.2f TB)" % (size_bytes // 1024, size_bytes / TiB, size_bytes / 1e12),
+             "     Used Dev Size : %d (%.2f TiB %.2f TB)" % (used_bytes // 1024, used_bytes / TiB, used_bytes / 1e12),
+             "      Raid Devices : %d" % len([1 for _, d, st in members if not st.startswith("spare")]), "     Total Devices : %d" % len(members),
+             "       Persistence : Superblock is persistent", "", "     Intent Bitmap : Internal", "",
+             "       Update Time : Tue Oct 29 08:00:01 2024", "             State : %s" % state, "    Active Devices : %d" % n_active,
+             "   Working Devices : %d" % len(members), "    Failed Devices : 0", "     Spare Devices : %d" % sum(1 for _, _, st in members if st.startswith("spare")), ""]
+    if level != "raid1":
+        lines += ["            Layout : left-symmetric" if level in ("raid5",) else "            Layout : left-symmetric", "        Chunk Size : 512K", ""]
+    lines += list(extra) + ["Consistency Policy : bitmap", "", "              Name : %s:%s%s" % (host if local else "DiskStation", name, "  (local to host %s)" % host if local else ""),
+              "              UUID : %s" % ("3a5f1c77:0b4e9d21:7c8a2e66:%08x" % (abs(hash(dev)) % 0xFFFFFFFF) if local else "11112222:33334444:55556666:77778888"), "            Events : 12345", "",
+              "    Number   Major   Minor   RaidDevice State"]
+    for i, (slot, d, st) in enumerate(members):
+        lines.append("   %4d %7d %7d %8s      %s   %s" % (i, 8, 2 + i, slot, st, d))
+    return "\n".join(lines) + "\n"
+
+
 def build_unit(key: str) -> dict:
     """Canned system description of one unit."""
     amd = key == "ds1621"
@@ -71,12 +92,25 @@ def build_unit(key: str) -> dict:
         extra += [node("sdg", "disk", int(0.93 * TiB), model="My Passport 25E1", serial="WX21A12B3C4D", tran="usb", rota=True, children=[
             node("sdg1", "part", int(0.93 * TiB), "ntfs", pk="sdg", label="Backup", uuid="1234567890ABCDEF")])]
     else:
-        extra += [node("sde", "disk", int(1.82 * TiB), model="ST2000DM008-2FR102", serial="ZFL1ABCD", tran="usb", rota=True),
-                  node("sdg", "disk", int(1.82 * TiB), model="ST2000DM008-2FR102", serial="ZFL1WXYZ", tran="usb", rota=True),
-                  node("sdf", "disk", int(0.93 * TiB), model="My Passport 25E1", serial="WX21A12B3C4D", tran="usb", rota=True, children=[
-                      node("sdf1", "part", int(0.93 * TiB), "ntfs", pk="sdf", label="Backup", uuid="1234567890ABCDEF")])]
-    syno = node("vg1000-lv", "lvm", int(3.1 * TiB), "btrfs", pk="sdh", label="1.42.6-25556", uuid="5d0c4a1e-77b1-4f3b-a2d8-0f1c9e6b7a44", kname="dm-9")
-    extra.append(node("sdh", "disk", int(3.64 * TiB), model="WD40EFRX-68WT0N0", serial="WD-WCC4E0XYZ12", tran="sata", rota=True, children=[syno]))
+        P4 = 3725 * GiB                                           # data partition of a 4 TB disk after the SHR reserve
+        media_md = 2 * P4 - 128 * 1024 ** 2
+        lv_media = node("vg_media-media", "lvm", media_md, "xfs", ["/srv/media"], "md2", "media", "5a1d2c3e-9b4f-4f60-8a71-0c2d3e4f5a66", kname="dm-3")
+        md2 = node("md2", "raid5", media_md, "LVM2_member", uuid="x2", kname="md2", children=[lv_media])
+        for_c = 1800 * GiB
+        lv_syno = node("vg1000-lv", "lvm", int(1.7 * TiB), "btrfs", pk="md5", label="1.42.6-25556", uuid="5d0c4a1e-77b1-4f3b-a2d8-0f1c9e6b7a44", kname="dm-9")
+        md5 = node("md5", "raid1", for_c - 64 * 1024 ** 2, "LVM2_member", uuid="x5", kname="md5", children=[lv_syno])
+        extra += [node("sde", "disk", 4000787030016, model="WD40EFRX-68N32N0", serial="WD-WCC7K7ABC1", tran="sata", rota=True, children=[node("sde1", "part", P4, "linux_raid_member", pk="sde", children=[md2])]),
+                  node("sdf", "disk", 4000787030016, model="WD40EFRX-68N32N0", serial="WD-WCC7K7ABC2", tran="sata", rota=True, children=[node("sdf1", "part", P4, "linux_raid_member", pk="sdf", children=[md2])]),
+                  node("sdg", "disk", 8001563222016, model="ST8000VN004-2M2101", serial="ZR5X7781", tran="sata", rota=True, children=[node("sdg1", "part", P4, "linux_raid_member", pk="sdg", children=[md2])]),
+                  node("sdh", "disk", 2000398934016, model="ST2000VN004-2E4164", serial="W524AB11", tran="sata", rota=True, children=[node("sdh5", "part", for_c, "linux_raid_member", pk="sdh", children=[md5])]),
+                  node("sdi", "disk", 2000398934016, model="ST2000VN004-2E4164", serial="W524AB12", tran="sata", rota=True, children=[node("sdi5", "part", for_c, "linux_raid_member", pk="sdi", children=[md5])]),
+                  node("sdj", "disk", 4000787030016, model="WD40EFRX-68N32N0", serial="WD-WCC7K7ABC3", tran="sata", rota=True),
+                  node("sdk", "disk", int(0.93 * TiB), model="My Passport 25E1", serial="WX21A12B3C4D", tran="usb", rota=True, children=[
+                      node("sdk1", "part", int(0.93 * TiB), "ntfs", pk="sdk", label="Backup", uuid="1234567890ABCDEF")]),
+                  node("sdl", "disk", 8001563222016, model="ST8000VN004-2M2101", serial="ZR5X7782", tran="sata", rota=True)]
+    if amd:
+        syno = node("vg1000-lv", "lvm", int(3.1 * TiB), "btrfs", pk="sdh", label="1.42.6-25556", uuid="5d0c4a1e-77b1-4f3b-a2d8-0f1c9e6b7a44", kname="dm-9")
+        extra.append(node("sdh", "disk", int(3.64 * TiB), model="WD40EFRX-68WT0N0", serial="WD-WCC4E0XYZ12", tran="sata", rota=True, children=[syno]))
     lsblk = json.dumps({"blockdevices": [boot] + disks + extra})
 
     def lvm(sec, rows):
@@ -114,6 +148,35 @@ def build_unit(key: str) -> dict:
     ip = json.dumps([{"ifname": "lo", "operstate": "UNKNOWN", "address": "00:00:00:00:00:00", "mtu": 65536, "addr_info": []}] + [
         {"ifname": i, "operstate": st, "address": mac, "mtu": 1500, "link_type": "ether", "flags": [], "addr_info": [
             {"family": f, "local": a, "prefixlen": p, "scope": sc} for f, a, p, sc in ads]} for i, st, mac, ads in ip_ifs])
+    details, sysraw = {}, {}
+    m0 = [(i, "/dev/sd%s1" % c, "active sync") for i, c in enumerate(letters)]
+    m1 = [(i, "/dev/sd%s2" % c, "active sync") for i, c in enumerate(letters)]
+    details["md0"] = md_detail_text("/dev/md0", "raid1", md0_size, md0_size, m0, "0", host)
+    details["md1"] = md_detail_text("/dev/md1", level, md1_size, data_part - 64 * 1024 ** 2, m1, "1", host, state="clean, resyncing" if not amd else "clean",
+                                    extra=([] if amd else ["      Resync Status : 41% complete", ""]))
+    for md_name in ("md0", "md1"):
+        sysraw[md_name] = {"sync_action": "resync" if (md_name == "md1" and not amd) else "idle", "mismatch_cnt": "0", "degraded": "0", "array_state": "clean",
+                           "sync_completed": ("%d / %d" % (md1_size // 1024 * 41 // 100, md1_size // 1024)) if (md_name == "md1" and not amd) else "none",
+                           "sync_speed": "88000" if (md_name == "md1" and not amd) else "0", "sync_speed_min": "1000 (system)", "sync_speed_max": "200000 (system)",
+                           "last_sync_action": "check", "stripe_cache_size": "256"}
+    if not amd:
+        P4g = 3725 * GiB
+        media_md = 2 * P4g - 128 * 1024 ** 2
+        for_md = 1800 * GiB - 64 * 1024 ** 2
+        j = json.loads(vgs); j["report"][0]["vg"].append({"vg_name": "vg_media", "vg_size": str(media_md), "vg_free": "0", "pv_count": "1", "lv_count": "1"})
+        j["report"][0]["vg"].append({"vg_name": "vg1000", "vg_size": str(for_md), "vg_free": "0", "pv_count": "1", "lv_count": "1"}); vgs = json.dumps(j)
+        j = json.loads(lvs); j["report"][0]["lv"] += [{"lv_name": "media", "vg_name": "vg_media", "lv_size": str(media_md), "lv_path": "/dev/vg_media/media", "lv_attr": "-wi-ao----"},
+                                                    {"lv_name": "lv", "vg_name": "vg1000", "lv_size": str(int(1.7 * TiB)), "lv_path": "/dev/vg1000/lv", "lv_attr": "-wi-a-----"}]; lvs = json.dumps(j)
+        j = json.loads(pvs); j["report"][0]["pv"] += [{"pv_name": "/dev/md2", "vg_name": "vg_media", "pv_size": str(media_md), "pv_free": "0"},
+                                                     {"pv_name": "/dev/md5", "vg_name": "vg1000", "pv_size": str(for_md), "pv_free": "0"}]; pvs = json.dumps(j)
+        j = json.loads(findmnt); j["filesystems"][0]["children"].append({"target": "/srv/media", "source": "/dev/mapper/vg_media-media", "fstype": "xfs", "options": "rw,noatime",
+                                                                         "size": media_md, "used": int(media_md * 0.22), "avail": int(media_md * 0.78)}); findmnt = json.dumps(j)
+        mdstat = mdstat.replace("\nunused devices: <none>\n", "\n" + mdline("md2", "raid5", ["sdg1", "sdf1", "sde1"], media_md, "UUU") + "\n" + mdline("md5", "raid1", ["sdi5", "sdh5"], for_md, "UU") + "\nunused devices: <none>\n")
+        details["md2"] = md_detail_text("/dev/md2", "raid5", media_md, P4g, [(0, "/dev/sde1", "active sync"), (1, "/dev/sdf1", "active sync"), (2, "/dev/sdg1", "active sync")], "media_1", host)
+        details["md5"] = md_detail_text("/dev/md5", "raid1", for_md, for_md, [(0, "/dev/sdh5", "active sync"), (1, "/dev/sdi5", "active sync")], "2", host, local=False)
+        for md_name in ("md2", "md5"):
+            sysraw[md_name] = {"sync_action": "idle", "mismatch_cnt": "0", "degraded": "0", "array_state": "clean", "sync_completed": "none", "sync_speed": "0",
+                               "sync_speed_min": "1000 (system)", "sync_speed_max": "200000 (system)", "last_sync_action": "check"}
     cmdline = "BOOT_IMAGE=/vmlinuz root=/dev/mapper/vg_sys-root ro rootdelay=5 panic=60 console=tty0 console=ttyS0,115200n8\n"
     dom = None
     names = [("DEBIAN", True, False), ("DEBIAN_OLD", True, False), ("SYNOLOGY_2", False, True)] + ([("SYNOFURB_BOOT", True, False)] if amd else [])
@@ -133,7 +196,7 @@ def build_unit(key: str) -> dict:
         "ip_ifs": [i[0] for i in ip_ifs], "cmdline": cmdline, "dom": dom, "microcode": ("" if amd else "ii \t3.20250211.1\n"),
         "inspect": "KV|model|%s\nKV|hw_version|%s_1\nKV|dsm_version|%s\nKV|cpu|%s\nKV|uefi|0\n" % (
             ("DS1621+", "DS1621+", "7.2.1-69057", "AMD Ryzen Embedded V1500B") if amd else ("DS918+", "DS918+", "7.1.1-42962", "Intel(R) Celeron(R) CPU J3455")),
-        "smart_note": smart_note, "per_disk_temp": [36, 38, 41, 37, 39, 40], "n": n, "letters": letters,
+        "details": details, "sysraw": sysraw, "smart_note": smart_note, "per_disk_temp": [36, 38, 41, 37, 39, 40], "n": n, "letters": letters,
     }
 
 
@@ -144,6 +207,11 @@ def patched(u: dict):
     saved = (m.read_text, m.read_temps, m.os.getloadavg, m.socket.gethostname, m.os.uname, m.os.statvfs)
     raw = {"/proc/mdstat": u["mdstat"], "/proc/cpuinfo": u["cpuinfo"], "/proc/cmdline": u["cmdline"], "/proc/uptime": "%d 0\n" % u["uptime"],
            "/proc/meminfo": "MemTotal: %d kB\nMemAvailable: %d kB\nSwapTotal: 4194304 kB\nSwapFree: 4190000 kB\n" % (u["mem_total"] // 1024, u["mem_avail"] // 1024)}
+    for md_name, attrs in u["sysraw"].items():
+        for f, v in attrs.items():
+            raw["/sys/block/%s/md/%s" % (md_name, f)] = v + "\n"
+    raw["/proc/sys/dev/raid/speed_limit_min"] = "1000\n"
+    raw["/proc/sys/dev/raid/speed_limit_max"] = "200000\n"
     orig = m.read_text
     m.read_text = lambda p: raw[p] if p in raw else orig(p)
     m.read_temps = lambda: [{"zone": "acpitz", "celsius": u["temp"]}]
@@ -210,7 +278,7 @@ def record(key: str) -> dict:
     runner = m.DryRunRunner(canned={
         "lsblk": u["lsblk"], "ip": u["ip"], "findmnt": u["findmnt"], "vgs": u["vgs"], "lvs": u["lvs"], "pvs": u["pvs"],
         "dpkg-query": u["microcode"] if u["microcode"] else m.CompletedResult(1, "", "dpkg-query: no packages found matching amd64-microcode"),
-        "mdadm": "ARRAY /dev/md/1 metadata=1.2 name=%s:1 UUID=3a5f1c77:0b4e9d21:7c8a2e66:91d0f5b3\n" % u["host"], "smartctl": smart, "ssh-keygen": keygen, "systemctl": systemctl,
+        "mdadm": lambda a: m.CompletedResult(0, u["details"].get(a[-1].replace("/dev/", ""), "") if "--detail" in a and "--scan" not in a else "ARRAY /dev/md/1 metadata=1.2 name=%s:1 UUID=3a5f1c77:0b4e9d21:7c8a2e66:91d0f5b3\n" % u["host"], ""), "smartctl": smart, "ssh-keygen": keygen, "systemctl": systemctl,
         "synofurb-dom": lambda a: m.CompletedResult(0, json.dumps(u["dom"]) if "status" in a else "", ""),
     })
     app = m.App(cfg, runner)
@@ -225,7 +293,7 @@ def record(key: str) -> dict:
     with patched(u):
         data = {k: get(p) for k, p in (("status", "/api/status"), ("smart", "/api/smart"), ("users", "/api/users"), ("network", "/api/network"),
                                        ("volumes", "/api/volumes"), ("mounts", "/api/mounts"), ("services", "/api/services"), ("boot", "/api/boot"),
-                                       ("tls", "/api/tls-fingerprint"), ("me", "/api/me"))}
+                                       ("tls", "/api/tls-fingerprint"), ("me", "/api/me"), ("raid", "/api/raid"))}
         data["activate"] = get("/api/mounts/activate", "POST")
     data["meta"] = {"key": key, "label": u["label"], "host": u["host"], "iface_names": u["ip_ifs"], "uptime": u["uptime"], "per_disk_temp": u["per_disk_temp"]}
     return data

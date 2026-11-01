@@ -9,7 +9,7 @@ use super::icons::{self, role};
 use super::theme::{self, Palette, Tone};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{ActiveTheme, Sizable, h_flex};
+use gpui_kit::component::{ActiveTheme, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App as GpuiApp, Div, ElementId, Entity, FontWeight, IntoElement, SharedString, div, px};
 use synofurb_core::compat::Status;
