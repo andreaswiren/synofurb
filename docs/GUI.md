@@ -4,7 +4,7 @@ The desktop UI follows the owner-approved v2 mockup (`design/mockups-v2/desktop`
 `design/BRIEF-v2.md`). It uses stock `gpui-component` widgets through GPUI Kit 0.8.1, bundled Inter and JetBrains Mono,
 Lucide icons only, themed scrollbars, and at most 60 words of static prose per screen (enforced by tests in `copy.rs`).
 The widget map and the defects of the first UI are in `docs/GUI-COMPONENTS.md`; deviations from the mockup are in
-`design/v2/DESIGN-SYSTEM-V2.md` section 13 (DEV-UI-1 to DEV-UI-19).
+`design/v2/DESIGN-SYSTEM-V2.md` section 13 (DEV-UI-1 to DEV-UI-21).
 
 `synofurb` (no arguments) and `synofurb gui` open the wizard. All decisions (scan, inspect, plan, install, recovery,
 update, compatibility) stay in `synofurb-core`; the UI shows state and forwards clicks.
@@ -136,16 +136,31 @@ dialogs and never cancels an install. Text size (Default, Large, Largest) scales
 
 ## What was and was not verified
 
-Verified (Linux, headless): per-file rustfmt, `cargo clippy -p synofurb --all-targets -- -D warnings`, `cargo test -p
-synofurb` (copy budgets, tokens vs JSON, accent contrast, risk Tag, Way back, recovery rows, Quick setup defaults,
-phrase gate, command-vs-plan, management health and update gate, RAID helpers); every demo screen renders under Xvfb with
-software Vulkan; Enter/Space behaviour of Erase and the Command button checked with injected XTest keys; screenshots in
-light at 960 x 640 for every screen family (`design/screenshots/v2-app-<screen>-light.png`, 20 states), dark for 14 of them, 1180 x 760 for Confirm, Plan, Inventory and Install, and Largest text for Confirm, Plan, Inventory and the agent-did-not-answer page. Not captured: dark and larger text for every family, most dialogs (only Quick setup with mixed disks and Manual recovery), hover, pressed and focus states.
+Verified (Linux, headless): per-file rustfmt, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (copy budgets and
+the tie between the copy and `synofurb_core::timing`, tokens vs JSON, accent contrast, risk Tag, Way back, recovery rows, Quick setup
+defaults and its "Use these" state, phrase gates, command-vs-plan, Manage binding to one unit, per-unit saved images, host-key bridge,
+Find column widths, management health and update gate, RAID helpers). Every demo screen renders under Xvfb with software Vulkan;
+`crates/synofurb/assets/tools/gui-walk.sh` renders them all at a text size and fails when content reaches the page gutter or a
+horizontal scrollbar appears (run at Largest on all 51 screens: clean; the Help sheet is excluded from the gutter test because it
+is a panel over the page). Enter/Space behaviour of Erase and the Command button were checked with injected XTest keys.
 
-Not verified: Windows and macOS, real hardware, real SSH scan/inspect/install, the update download path, screen readers,
-IME and password managers, Largest text on every screen, Popover focus return, Select placement, RadioGroup/ToggleGroup
-roving focus, high-contrast OS modes. UI integration tests with `gpui_kit::test` were not added (the `test-support`
-feature rebuilds the GPUI graph and does not fit the disk here); the gate logic is covered by unit tests.
+Screenshots: `design/screenshots/v2-app-*.png` (about 105): light 960 x 640 for every family, dark for 20, Largest text for 18 (dark
+once), 1180 x 760 for 7, plus the log viewer, the Copy command, Cancel install, Report, Add by IP, host-key and changed-key dialogs,
+Quick setup with mixed disks, Manual recovery (light and dark), Confirm with Erase enabled, in Keep mode and for a twin unit, Find
+empty and scanning, Manage sign-in, a keyboard focus ring, hover and pressed states of the primary button, and the Popover opened by a
+disabled-reason info button. Not captured: hover and pressed for every control class, dark for every family, Largest for dialogs.
+
+**Window controls and the black strip in captures.** With no window manager (Xvfb) GPUI falls back to server-side decorations on X11
+and `TitleBar` then draws no minimise, maximise or close buttons (the window manager is expected to); a window manager supplies them.
+The window also sits 2 px right of its requested origin without one, so the 2 px black strip down the left edge of every capture is
+the X root window, not part of the app (a capture with a larger root shows it outside the window; nothing is drawn at x = 0 and 1
+inside the app). Captures with real window controls need a desktop session; they cannot be produced headless here (a fake
+compositing-manager selection did not make GPUI switch to client decorations).
+
+Not verified: Windows and macOS, real hardware (scan, SSH, recovery actions, Manage update, host-key trust against a real unit), the
+update download path, screen readers, IME and password managers, Popover focus return, Select placement, RadioGroup/ToggleGroup roving
+focus, high-contrast OS modes. UI integration tests with `gpui_kit::test` were not added (the `test-support` feature rebuilds the GPUI
+graph and does not fit the disk here); the logic is covered by unit tests.
 
 ## Decisions for the owner
 
