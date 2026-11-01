@@ -88,6 +88,9 @@ pub enum Firmware {
     Bios,
     /// U-Boot style ARM boards without UEFI (flash-kernel). Experimental.
     UBoot,
+    /// x86 Synology unit that always boots its internal DOM flash module: Debian is added as an extra
+    /// boot entry there (kernel + initrd live on the DOM, everything else on the disks).
+    Dom,
 }
 
 impl Firmware {
@@ -96,7 +99,63 @@ impl Firmware {
             Firmware::Uefi => "UEFI",
             Firmware::Bios => "legacy BIOS",
             Firmware::UBoot => "U-Boot (ARM)",
+            Firmware::Dom => "internal boot flash (DOM)",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CpuVendor {
+    Intel,
+    Amd,
+    Arm,
+    Other,
+}
+
+impl CpuVendor {
+    /// From `/proc/cpuinfo` `vendor_id` (x86) or the architecture.
+    pub fn detect(vendor_id: &str, arch: Arch) -> CpuVendor {
+        match vendor_id.trim() {
+            "GenuineIntel" => CpuVendor::Intel,
+            "AuthenticAMD" | "HygonGenuine" => CpuVendor::Amd,
+            _ if arch.is_arm() => CpuVendor::Arm,
+            _ => CpuVendor::Other,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            CpuVendor::Intel => "Intel",
+            CpuVendor::Amd => "AMD",
+            CpuVendor::Arm => "ARM",
+            CpuVendor::Other => "other",
+        }
+    }
+    /// Debian package with CPU microcode updates (non-free-firmware), if any.
+    pub fn microcode_package(self) -> Option<&'static str> {
+        match self {
+            CpuVendor::Intel => Some("intel-microcode"),
+            CpuVendor::Amd => Some("amd64-microcode"),
+            _ => None,
+        }
+    }
+}
+
+/// The internal boot flash module of x86 Synology units (see `boot/dom`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DomFacts {
+    pub sectors: u64,
+    pub p1_sectors: u64,
+    pub p2_sectors: u64,
+    /// FAT volume id 10EE-589C found on partition 1
+    pub p1_magic: bool,
+    /// ext2 magic + Synology UUID found on partition 2
+    pub p2_magic: bool,
+}
+
+impl DomFacts {
+    /// Both partitions look like Synology's boot loader and are big enough to be edited safely.
+    pub fn is_editable(&self) -> bool {
+        self.p1_magic && self.p2_magic && self.p1_sectors >= 16 * 2048 && self.p2_sectors >= 64 * 2048
     }
 }
 
@@ -206,47 +265,66 @@ pub struct Mount {
     pub used_kib: u64,
 }
 
-/// Serial console parameters, e.g. `ttyS0` at 115200 baud.
+/// Serial console parameters, e.g. `ttyS0` at 115200 baud, or a raw `uart8250,mmio32,0xfedc9000,115200n8`
+/// console (AMD Ryzen/EPYC Synology boards have no legacy I/O-port UART).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SerialConsole {
+    /// Device name for getty (`ttyS0`). Empty for raw consoles: systemd's getty generator finds those.
     pub tty: String,
     pub speed: u32,
+    /// Value after `console=` when it is not a plain tty name.
+    #[serde(default)]
+    pub raw: Option<String>,
 }
 
 impl Default for SerialConsole {
     fn default() -> Self {
-        SerialConsole { tty: "ttyS0".into(), speed: 115_200 }
+        SerialConsole { tty: "ttyS0".into(), speed: 115_200, raw: None }
     }
 }
 
+fn console_speed(rest: &str) -> u32 {
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok().filter(|s| (1200..=4_000_000).contains(s)).unwrap_or(115_200)
+}
+
 impl SerialConsole {
-    /// Parse `console=ttyS0,115200n8` style options out of a kernel command line.
-    /// The *last* serial console wins (that is the kernel's `/dev/console`).
+    /// Parse `console=` options out of a kernel command line. The *last* serial console wins (that is the
+    /// kernel's `/dev/console`). Understands `ttyS0,115200n8` and `uart8250,mmio32,0xADDR,115200n8`.
     pub fn from_cmdline(cmdline: &str) -> Option<SerialConsole> {
         let mut found = None;
         for tok in cmdline.split_whitespace() {
             let Some(v) = tok.strip_prefix("console=") else { continue };
-            let (tty, rest) = v.split_once(',').unwrap_or((v, ""));
-            if !(tty.starts_with("ttyS")
-                || tty.starts_with("ttyAMA")
-                || tty.starts_with("ttyUSB")
-                || tty.starts_with("ttyMV")
-                || tty.starts_with("ttyPS"))
+            let (name, rest) = v.split_once(',').unwrap_or((v, ""));
+            if name.starts_with("uart8250") || name.starts_with("uart") || name.starts_with("earlycon") {
+                let ok = v.chars().all(|c| c.is_ascii_alphanumeric() || ",._-:=".contains(c));
+                if ok && v.contains("0x") {
+                    let speed = v.rsplit(',').next().map(console_speed).unwrap_or(115_200);
+                    found = Some(SerialConsole { tty: String::new(), speed, raw: Some(v.to_string()) });
+                }
+                continue;
+            }
+            if !(name.starts_with("ttyS")
+                || name.starts_with("ttyAMA")
+                || name.starts_with("ttyUSB")
+                || name.starts_with("ttyMV")
+                || name.starts_with("ttyPS"))
             {
                 continue;
             }
-            if !tty.chars().all(|c| c.is_ascii_alphanumeric()) {
+            if !name.chars().all(|c| c.is_ascii_alphanumeric()) {
                 continue;
             }
-            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            let speed = digits.parse().ok().filter(|s| (1200..=4_000_000).contains(s)).unwrap_or(115_200);
-            found = Some(SerialConsole { tty: tty.to_string(), speed });
+            found = Some(SerialConsole { tty: name.to_string(), speed: console_speed(rest), raw: None });
         }
         found
     }
     /// Kernel argument, e.g. `console=ttyS0,115200n8`.
     pub fn kernel_arg(&self) -> String {
-        format!("console={},{}n8", self.tty, self.speed)
+        match &self.raw {
+            Some(r) => format!("console={r}"),
+            None => format!("console={},{}n8", self.tty, self.speed),
+        }
     }
 }
 
@@ -272,6 +350,9 @@ pub struct DeviceFacts {
     pub firmware: Firmware,
     pub kexec: bool,
     pub dt_model: String,
+    pub cpu_vendor: CpuVendor,
+    /// Internal boot flash module, when the unit has one.
+    pub dom: Option<DomFacts>,
     /// Kernel command line of the running DSM (used to find the serial console).
     pub cmdline: String,
     pub is_root: bool,
@@ -350,7 +431,30 @@ mod tests {
         assert_eq!((c.tty.as_str(), c.speed), ("ttyS1", 9600));
         assert!(SerialConsole::from_cmdline("console=tty0 quiet").is_none());
         assert!(SerialConsole::from_cmdline("console=ttyS0;rm,115200").is_none(), "no shell metacharacters");
+        // AMD Ryzen/EPYC boards: MMIO UART, no ttyS name
+        let amd = SerialConsole::from_cmdline("console=tty0 console=uart8250,mmio32,0xfedc9000,115200n8").unwrap();
+        assert_eq!(amd.raw.as_deref(), Some("uart8250,mmio32,0xfedc9000,115200n8"));
+        assert_eq!(amd.kernel_arg(), "console=uart8250,mmio32,0xfedc9000,115200n8");
+        assert_eq!((amd.tty.as_str(), amd.speed), ("", 115_200));
+        assert!(SerialConsole::from_cmdline("console=uart8250,mmio32,0xfe;rm -rf,9600").is_none());
         assert_eq!(SerialConsole::default().tty, "ttyS0");
+    }
+
+    #[test]
+    fn vendors_and_microcode() {
+        assert_eq!(CpuVendor::detect("AuthenticAMD", Arch::X86_64), CpuVendor::Amd);
+        assert_eq!(CpuVendor::detect("GenuineIntel", Arch::X86_64), CpuVendor::Intel);
+        assert_eq!(CpuVendor::detect("", Arch::Armhf), CpuVendor::Arm);
+        assert_eq!(CpuVendor::Amd.microcode_package(), Some("amd64-microcode"));
+        assert_eq!(CpuVendor::Arm.microcode_package(), None);
+    }
+
+    #[test]
+    fn dom_editability() {
+        let d = DomFacts { sectors: 262_144, p1_sectors: 40_000, p2_sectors: 200_000, p1_magic: true, p2_magic: true };
+        assert!(d.is_editable());
+        assert!(!DomFacts { p2_magic: false, ..d.clone() }.is_editable());
+        assert!(!DomFacts { p2_sectors: 100_000, ..d }.is_editable(), "P2 below 64 MiB is refused");
     }
 
     #[test]

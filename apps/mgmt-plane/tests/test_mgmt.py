@@ -893,7 +893,8 @@ class HttpMountTests(HttpTestCase):
         self.logged_in()
         st, obj, _ = self.cl.call("POST", "/api/mounts/mount", {"device": "/dev/sdc1", "mountpoint": "/mnt/usb"})
         self.assertEqual(st, 200, obj)
-        self.assertTrue(self.runner.called("mount", "-t", "ntfs-3g", "-o", "defaults,nofail,uid=1000,gid=1000,umask=0022", "/dev/sdc1", "/mnt/usb"))
+        # an imported (foreign) volume is read-only unless the caller explicitly says ro=false
+        self.assertTrue(self.runner.called("mount", "-t", "ntfs-3g", "-o", "defaults,nofail,uid=1000,gid=1000,umask=0022,ro", "/dev/sdc1", "/mnt/usb"))
         self.assertEqual(self.env.read("/etc/fstab"), "")
 
     def test_mount_rejections(self):
@@ -928,6 +929,60 @@ class HttpMountTests(HttpTestCase):
         self.assertTrue(self.runner.called("vgscan"))
         self.assertTrue(self.runner.called("vgchange", "-ay"))
         self.assertTrue(obj["devices"])
+
+
+class HttpImportedTests(HttpTestCase):
+    """Imported-volumes behaviour: read-only default for foreign volumes, writable default for our own."""
+
+    def setUp(self):
+        super().setUp()
+        ls = json.loads(LSBLK_TEXT)
+        ls["blockdevices"] += [
+            {"name": "vg1000-lv", "kname": "dm-7", "type": "lvm", "size": 5 * 1024 ** 4, "fstype": "btrfs", "uuid": "bbbb-cccc", "label": "1.42.6",
+             "mountpoints": [None], "pkname": None},
+            {"name": "vg_media-media", "kname": "dm-8", "type": "lvm", "size": 1024 ** 4, "fstype": "xfs", "uuid": "dddd-eeee", "label": "media",
+             "mountpoints": [None], "pkname": None},
+            {"name": "sdx1", "kname": "sdx1", "type": "part", "size": 10 ** 10, "fstype": "crypto_LUKS", "uuid": "l", "mountpoints": [None], "pkname": None}]
+        self.runner.on(["lsblk"], json.dumps(ls))
+        self.logged_in()
+
+    def mount_body(self, device, mp, **kw):
+        return dict({"device": device, "mountpoint": mp}, **kw)
+
+    def test_listing_flags_foreign_and_unsupported(self):
+        st, obj, _ = self.cl.call("GET", "/api/mounts")
+        devs = {d["path"]: d for d in obj["devices"]}
+        self.assertTrue(devs["/dev/mapper/vg1000-lv"]["foreign"] and devs["/dev/mapper/vg1000-lv"]["ro_default"])
+        self.assertFalse(devs["/dev/mapper/vg_media-media"]["foreign"])
+        self.assertFalse(devs["/dev/mapper/vg_media-media"]["ro_default"])
+        self.assertIn("/dev/sdx1", {o["path"]: o for o in obj["other"]})
+        self.assertIn("/dev/sdd", {o["path"]: o for o in obj["other"]})              # raid member: told to use Activate
+
+    def test_foreign_defaults_to_read_only(self):
+        st, obj, _ = self.cl.call("POST", "/api/mounts/mount", self.mount_body("/dev/mapper/vg1000-lv", "/mnt/syno"))
+        self.assertEqual(st, 200, obj)
+        self.assertTrue(self.runner.called("mount", "-t", "btrfs", "-o", "defaults,nofail,ro", "/dev/mapper/vg1000-lv", "/mnt/syno"))
+
+    def test_foreign_read_write_only_when_explicit(self):
+        st, _, _ = self.cl.call("POST", "/api/mounts/mount", self.mount_body("/dev/mapper/vg1000-lv", "/mnt/syno", ro=False))
+        self.assertEqual(st, 200)
+        self.assertTrue(self.runner.called("mount", "-t", "btrfs", "-o", "defaults,nofail", "/dev/mapper/vg1000-lv", "/mnt/syno"))
+
+    def test_own_volume_defaults_to_read_write(self):
+        st, _, _ = self.cl.call("POST", "/api/mounts/mount", self.mount_body("/dev/mapper/vg_media-media", "/srv/media"))
+        self.assertEqual(st, 200)
+        self.assertTrue(self.runner.called("mount", "-t", "xfs", "-o", "defaults,nofail", "/dev/mapper/vg_media-media", "/srv/media"))
+
+    def test_persisted_read_only_entry(self):
+        st, _, _ = self.cl.call("POST", "/api/mounts/mount", self.mount_body("/dev/mapper/vg1000-lv", "/mnt/syno", persist=True))
+        self.assertEqual(st, 200)
+        self.assertIn("UUID=bbbb-cccc /mnt/syno btrfs defaults,nofail,ro,x-systemd.device-timeout=30 0 0", self.env.read("/etc/fstab"))
+
+    def test_activate_reports_arrays_and_devices(self):
+        st, obj, _ = self.cl.call("POST", "/api/mounts/activate", {})
+        self.assertEqual(st, 200)
+        for k in ("devices", "other", "md", "lvs", "results"):
+            self.assertIn(k, obj)
 
 
 class HttpUserTests(HttpTestCase):
@@ -1148,6 +1203,258 @@ class HttpSystemTests(HttpTestCase):
         self.runner.avail.discard("smartctl")
         self.logged_in()
         self.assertEqual(self.cl.call("GET", "/api/smart")[1], {"ok": True, "available": False, "disks": []})
+
+
+DOM_STATUS = {
+    "tool": "synofurb-dom", "version": "0.4.1", "device": "/dev/synoboot", "device_bytes": 125829120,
+    "p1": {"dev": "/dev/synoboot1", "bytes": 52428800, "free_bytes": 31457280}, "p2": {"dev": "/dev/synoboot2", "bytes": 73400320, "free_bytes": 9437184},
+    "entries": [{"index": 0, "name": "DEBIAN", "ours": True, "dsm": False}, {"index": 1, "name": "DEBIAN_OLD", "ours": True, "dsm": False},
+                {"index": 2, "name": "SYNOLOGY_2", "ours": False, "dsm": True}],
+    "default": {"raw": "0", "index": 0, "name": "DEBIAN"}, "files": [], "efi_files": [],
+    "backup": {"exists": True, "path": "/srv/data/synofurb/synofurb-dom-first-backup.img"}}
+DOM = "/usr/local/sbin/synofurb-dom"
+
+
+class BootViewTests(unittest.TestCase):
+    def test_entries_mapped_to_stable_ids(self):
+        v = m.boot_view(DOM_STATUS)
+        by = {e["id"]: e for e in v["entries"]}
+        self.assertEqual([e["id"] for e in v["entries"]], ["dsm", "debian", "debian-old", "agent"])
+        self.assertTrue(by["dsm"]["present"] and by["dsm"]["failsafe"] and by["dsm"]["name"] == "SYNOLOGY_2")
+        self.assertTrue(by["debian"]["default"] and not by["dsm"]["default"])
+        self.assertFalse(by["agent"]["present"])
+        self.assertEqual(v["default_id"], "debian")
+        self.assertEqual(v["flash"]["p1"]["free_bytes"], 31457280)
+        self.assertEqual(v["backup"], {"exists": True, "path": "/srv/data/synofurb/synofurb-dom-first-backup.img"})
+        self.assertEqual(v["other_entries"], [])
+        self.assertEqual([e["needs_confirm"] for e in v["entries"]], [True, False, True, True])
+
+    def test_invalid_default_and_foreign_entries(self):
+        st = dict(DOM_STATUS, default={"raw": "9", "index": None, "name": ""}, entries=DOM_STATUS["entries"] + [{"index": 3, "name": "EFI_x", "ours": True, "dsm": False}])
+        v = m.boot_view(st)
+        self.assertFalse(v["default_valid"])
+        self.assertIsNone(v["default_id"])
+        self.assertEqual(v["other_entries"], ["EFI_x"])
+
+
+class HttpBootTests(HttpTestCase):
+    def setUp(self):
+        super().setUp()
+        self.runner.on([DOM, "status", "--json"], json.dumps(DOM_STATUS))
+        self.logged_in()
+
+    def install_tool(self):
+        self.env.write(DOM, "#!/bin/sh\n")
+
+    def test_not_a_boot_flash_unit(self):
+        st, obj, _ = self.cl.call("GET", "/api/boot")
+        self.assertEqual(st, 200)
+        self.assertFalse(obj["available"])
+        self.assertIn("not a boot-flash unit", obj["message"])
+        self.assertFalse(self.runner.called(DOM))
+        self.assertEqual(self.cl.call("POST", "/api/boot/default", {"entry": "dsm", "confirm": "dsm"})[0], 409)
+
+    def test_status_when_tool_present(self):
+        self.install_tool()
+        st, obj, _ = self.cl.call("GET", "/api/boot")
+        self.assertTrue(obj["available"] and obj["default_id"] == "debian")
+        self.assertTrue(self.runner.called(DOM, "status", "--json"))
+        self.assertEqual(self.cl.call("GET", "/api/status")[1]["boot_flash"], True)
+
+    def test_status_errors_are_reported_not_raised(self):
+        self.install_tool()
+        self.runner.on([DOM, "status"], "", rc=1, err="no Synology DOM found")
+        st, obj, _ = self.cl.call("GET", "/api/boot")
+        self.assertEqual(st, 200)
+        self.assertIn("no Synology DOM found", obj["error"])
+        self.runner.on([DOM, "status"], "not json")
+        self.assertIn("unreadable", self.cl.call("GET", "/api/boot")[1]["error"])
+
+    def test_default_needs_typed_name_except_debian(self):
+        self.install_tool()
+        for body in ({"entry": "dsm"}, {"entry": "dsm", "confirm": "debian"}, {"entry": "dsm", "confirm": "DSM"}, {"entry": "debian-old", "confirm": ""}):
+            self.assertEqual(self.cl.call("POST", "/api/boot/default", body)[0], 400, body)
+        self.assertFalse(self.runner.called(DOM, "default"))
+        st, obj, _ = self.cl.call("POST", "/api/boot/default", {"entry": "dsm", "confirm": "dsm"})
+        self.assertEqual(st, 200, obj)
+        self.assertTrue(self.runner.called(DOM, "default", "dsm", "--yes"))
+        st, _, _ = self.cl.call("POST", "/api/boot/default", {"entry": "debian"})           # no confirm needed for the normal system
+        self.assertEqual(st, 200)
+        self.assertTrue(self.runner.called(DOM, "default", "debian", "--yes"))
+
+    def test_rejections(self):
+        self.install_tool()
+        for body in ({"entry": "grub"}, {"entry": "efi:x", "confirm": "efi:x"}, {"entry": "dsm; reboot", "confirm": "dsm; reboot"}, {}):
+            self.assertEqual(self.cl.call("POST", "/api/boot/default", body)[0], 400, body)
+        st, obj, _ = self.cl.call("POST", "/api/boot/default", {"entry": "agent", "confirm": "agent"})       # not installed on this flash
+        self.assertEqual(st, 404)
+        self.assertFalse(self.runner.called(DOM, "default"))
+
+    def test_default_failure_is_an_error(self):
+        self.install_tool()
+        self.runner.on([DOM, "default"], "", rc=1, err="menu entry DEBIAN_OLD does not exist")
+        st, obj, _ = self.cl.call("POST", "/api/boot/default", {"entry": "debian-old", "confirm": "debian-old"})
+        self.assertEqual(st, 500)
+        self.assertIn("does not exist", obj["error"])
+
+    def test_reboot_to_sets_default_then_schedules_reboot(self):
+        self.install_tool()
+        self.assertEqual(self.cl.call("POST", "/api/boot/reboot-to", {"entry": "dsm"})[0], 400)
+        self.assertFalse(self.runner.called("systemd-run"))
+        st, obj, _ = self.cl.call("POST", "/api/boot/reboot-to", {"entry": "dsm", "confirm": "dsm"})
+        self.assertEqual(st, 200, obj)
+        calls = self.runner.calls
+        i_def = calls.index([DOM, "default", "dsm", "--yes"])
+        i_rb = calls.index(["systemd-run", "--on-active=5", "systemctl", "reboot"])
+        self.assertLess(i_def, i_rb)
+        audit = self.env.read("/var/log/synofurb-mgmt/audit.log")
+        self.assertIn("/api/boot/reboot-to", audit)
+
+    def test_no_reboot_when_default_fails(self):
+        self.install_tool()
+        self.runner.on([DOM, "default"], "", rc=1, err="refusing")
+        self.assertEqual(self.cl.call("POST", "/api/boot/reboot-to", {"entry": "debian"})[0], 500)
+        self.assertFalse(self.runner.called("systemd-run"))
+
+    def test_reboot_schedule_failure_reported(self):
+        self.install_tool()
+        self.runner.on(["systemd-run"], "", rc=1, err="no bus")
+        st, obj, _ = self.cl.call("POST", "/api/boot/reboot-to", {"entry": "debian"})
+        self.assertEqual(st, 500)
+        self.assertIn("could not be scheduled", obj["error"])
+
+
+CPUINFO_INTEL = ("processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Celeron(R) CPU J3455 @ 1.50GHz\nmicrocode\t: 0x28\n\n"
+                 "processor\t: 1\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Celeron(R) CPU J3455 @ 1.50GHz\nmicrocode\t: 0x28\n")
+CPUINFO_AMD = "processor : 0\nvendor_id : AuthenticAMD\nmodel name : AMD Ryzen Embedded V1500B\nmicrocode : 0x8101016\n"
+CPUINFO_ARM = "processor : 0\nBogoMIPS : 50.00\nprocessor : 1\nHardware : Marvell Armada 385\n"
+
+
+class StatusInfoTests(unittest.TestCase):
+    def test_cpuinfo_vendor(self):
+        i = m.parse_cpuinfo(CPUINFO_INTEL)
+        self.assertEqual((i["vendor"], i["threads"], i["microcode_revision"]), ("Intel", 2, "0x28"))
+        self.assertIn("J3455", i["model"])
+        self.assertEqual(m.parse_cpuinfo(CPUINFO_AMD)["vendor"], "AMD")
+        a = m.parse_cpuinfo(CPUINFO_ARM)
+        self.assertIsNone(a["vendor"])
+        self.assertEqual((a["model"], a["threads"]), ("Marvell Armada 385", 2))
+        self.assertEqual(m.parse_cpuinfo("")["threads"], None)
+
+    def test_kernel_flag(self):
+        for rel, ge7 in (("6.12.48+deb13-amd64", False), ("6.19.1", False), ("7.0.4-amd64", True), ("7.1", True), ("10.0.0", True), ("garbage", False), ("", False)):
+            self.assertEqual(m.kernel_info(rel)["ge7"], ge7, rel)
+        k = m.kernel_info("7.0.4-amd64")
+        self.assertEqual((k["major"], k["minor"]), (7, 0))
+
+    def test_console_parsing(self):
+        c = m.parse_cmdline_consoles("BOOT_IMAGE=/vmlinuz root=/dev/x ro console=tty0 console=ttyS0,115200n8 quiet")
+        self.assertEqual([x["device"] for x in c], ["tty0", "ttyS0"])
+        self.assertEqual((c[1]["options"], c[1]["serial"], c[0]["serial"]), ("115200n8", True, False))
+        self.assertEqual(m.parse_cmdline_consoles("ro quiet console="), [])
+        self.assertEqual(m.parse_cmdline_consoles("ro quiet"), [])
+
+    def test_dsm_inspect_parsing_whitelists_keys(self):
+        d = m.parse_dsm_inspect("KV|model|DS918+\nKV|serial|SECRET123\nKV|dsm_version|7.1.1-42962\nNIC|eth0|aa:bb\nKV|cpu|Celeron J3455\nKV|hw_version|\njunk\n")
+        self.assertEqual(d, {"model": "DS918+", "dsm_version": "7.1.1-42962", "cpu": "Celeron J3455"})
+        self.assertNotIn("serial", d)
+
+    def test_unit_info_from_inspect_file(self):
+        with tempfile.TemporaryDirectory() as t:
+            cfg = m.Config(root=t)
+            self.assertIsNone(m.unit_info(cfg)["model"])
+            os.makedirs(cfg.p("/var/lib/synofurb"))
+            with open(cfg.p(m.DSM_INSPECT_PATH), "w") as fh:
+                fh.write("KV|hw_version|DS923+_1\nKV|dsm_version|7.2-64570\n")
+            u = m.unit_info(cfg)
+            self.assertEqual((u["model"], u["source"], u["dsm_version"]), ("DS923+_1", "dsm-inspect.txt", "7.2-64570"))
+            with open(cfg.p(m.DSM_INSPECT_PATH), "w") as fh:
+                fh.write("KV|model|DS918+\nKV|hw_version|DS918+_1\n")
+            self.assertEqual(m.unit_info(cfg)["model"], "DS918+")
+
+    def test_microcode_state(self):
+        app = m.App(m.Config(root="/nonexistent-root"), FakeRunner())
+        app.runner.on(["dpkg-query"], "ii \t3.20250211.1\n")
+        intel = m.parse_cpuinfo(CPUINFO_INTEL)
+        mc = m.microcode_info(app, intel, "x86_64")
+        self.assertEqual((mc["package"], mc["installed"], mc["version"], mc["loaded_revision"]), ("intel-microcode", True, "3.20250211.1", "0x28"))
+        self.assertTrue(app.runner.called("dpkg-query", "-W", "-f", "${db:Status-Abbrev}\t${Version}\n", "intel-microcode"))
+        app.runner.on(["dpkg-query"], "", rc=1, err="no packages found")
+        self.assertFalse(m.microcode_info(app, intel, "x86_64")["installed"])
+        app.runner.on(["dpkg-query"], "rc \t3.1\n")                     # removed, config files remain
+        self.assertFalse(m.microcode_info(app, intel, "x86_64")["installed"])
+        self.assertEqual(m.microcode_info(app, m.parse_cpuinfo(CPUINFO_AMD), "x86_64")["package"], "amd64-microcode")
+        arm = m.microcode_info(app, m.parse_cpuinfo(CPUINFO_ARM), "armv7l")
+        self.assertFalse(arm["applicable"])
+
+
+class HttpStatusInfoTests(HttpTestCase):
+    def test_status_includes_cpu_kernel_microcode_console_unit(self):
+        self.runner.on(["dpkg-query"], "ii \t3.1\n")
+        self.env.write(m.DSM_INSPECT_PATH, "KV|model|DS918+\nKV|hw_version|DS918+_1\n")
+        self.logged_in()
+        st, obj, _ = self.cl.call("GET", "/api/status")
+        self.assertEqual(st, 200)
+        for k in ("cpu", "kernel_info", "microcode", "console", "unit", "version", "boot_flash"):
+            self.assertIn(k, obj)
+        self.assertEqual(obj["unit"]["model"], "DS918+")
+        self.assertEqual(obj["version"], m.VERSION)
+        self.assertEqual(obj["kernel_info"]["release"], obj["kernel"])
+        self.assertIn("cmdline_consoles", obj["console"])
+        self.assertFalse(obj["boot_flash"])
+
+
+class VersionAndUiTests(HttpTestCase):
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def test_version_file_is_the_single_source(self):
+        with open(os.path.join(self.ROOT, "VERSION")) as fh:
+            v = fh.read().strip()
+        self.assertRegex(v, r"^\d+\.\d+\.\d+$")
+        self.assertEqual(m.VERSION, v)
+        self.assertEqual(v, "0.2.0")
+
+    def test_version_in_api_and_footer(self):
+        st, obj, _ = self.cl.raw("GET", "/api/tls-fingerprint")
+        self.assertEqual(obj["version"], m.VERSION)
+        st, body, _ = self.cl.raw("GET", "/")
+        self.assertIn("version: '%s'" % m.VERSION, body.decode())                  # shown in the login footer and the sidebar footer
+        self.assertIn("'synofurb-mgmt ' + S.version", body.decode())
+        self.logged_in()
+        self.assertEqual(self.cl.call("GET", "/api/me")[1]["version"], m.VERSION)
+        self.assertEqual(self.cl.call("GET", "/api/services")[1]["version"], m.VERSION)
+
+    def test_default_version_pattern(self):
+        self.assertRegex(m.DEFAULT_VERSION, r"^\d+\.\d+\.\d+$")
+
+    def test_tokens_match_design_tokens_json(self):
+        path = os.path.join(self.ROOT, "..", "..", "design", "mockups", "ui", "tokens.json")
+        if not os.path.exists(path):
+            self.skipTest("design tokens.json not available")
+        with open(path) as fh:
+            tok = json.load(fh)
+        ours = m.theme_tokens()
+        for theme in ("light", "dark"):
+            expect = {k.split(".", 2)[2]: v for k, v in tok.items() if k.startswith("color.%s." % theme)}
+            self.assertEqual(ours[theme], expect, theme)
+
+    def test_theme_css_light_dark_and_toggle(self):
+        css = m.theme_css()
+        self.assertIn("--accent:#7139CB", css)
+        self.assertIn("--accent:#A37BFE", css)
+        self.assertIn("@media (prefers-color-scheme:dark){:root:not([data-theme=light])", css)
+        self.assertIn(":root[data-theme=dark]", css)
+
+    def test_ui_is_self_contained_and_csp_clean(self):
+        html = m.INDEX_HTML
+        self.assertNotRegex(html, r"""\sstyle\s*=""")                        # inline style attributes would be blocked by the nonce CSP
+        self.assertNotRegex(html, r"""<(?:script|link|img|iframe)[^>]+(?:src|href)=["']https?:""")
+        self.assertEqual(sorted(set(m.re.findall(r"https?://[^\s\"'<>)]+", html))), ["http://www.w3.org/2000/svg"])
+        self.assertEqual(html.count("<script nonce=\"__NONCE__\">"), 2)
+        self.assertIn("<style nonce=\"__NONCE__\">", html)
+        for needle in ("Boot manager", "Imported volumes", "Return to DSM", "Plan preview", "Keep these settings", "prefers-reduced-motion", "forced-colors"):
+            self.assertIn(needle, html)
+        self.assertIn("max-width:860px", html)                                 # phone layout
 
 
 class TlsTests(unittest.TestCase):

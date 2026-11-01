@@ -28,28 +28,6 @@ jobs:
         working-directory: .
         env:
           PYTHONPATH: apps/mgmt-plane
-  release-binaries:
-    if: startsWith(github.ref, 'refs/tags/v')
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - os: windows-2022
-            target: x86_64-pc-windows-msvc
-          - os: macos-14
-            target: aarch64-apple-darwin
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - run: cargo build --release --target ${{ matrix.target }} -p synofurb
-      - uses: actions/upload-artifact@v4
-        with:
-          name: synofurb-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/synofurb*
   kexec-static:
     # Builds the static kexec binaries the app uploads to the NAS. Run manually (workflow_dispatch).
     if: github.event_name == 'workflow_dispatch'
@@ -63,3 +41,36 @@ jobs:
         with:
           name: kexec-static
           path: assets/kexec
+  release-tooling:
+    # Tests for the release engineering itself: installers (sh + PowerShell), packaging scripts, the design gate, the
+    # release workflow's syntax. Fast, no Rust toolchain needed.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck minisign rpm
+      - name: shellcheck
+        run: |
+          shellcheck -s sh install.sh apps/mgmt-plane/install.sh
+          shellcheck -x -P SCRIPTDIR scripts/package-*.sh
+          shellcheck -x -e SC2016 tests/install/run-tests.sh tests/install/test-package-scripts.sh
+      - name: PowerShell parser and analyzer (install.ps1)
+        shell: pwsh
+        run: |
+          $e = $null; $t = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$t, [ref]$e)
+          if ($e.Count -gt 0) { $e | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+      - name: Design-gate unit tests
+        run: python3 -m unittest discover -s tests/gate -v
+      - name: Installer tests against a fake release server (install.sh, install.ps1, mgmt-plane/install.sh)
+        run: tests/install/run-tests.sh
+      - name: Packaging script tests
+        run: tests/install/test-package-scripts.sh
+      - name: Workflow syntax (YAML + actionlint)
+        run: |
+          python3 -m pip install --quiet pyyaml==6.0.3
+          python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in ('.github/workflows/ci.yml', '.github/workflows/release.yml')]; print('yaml ok')"
+          docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
+      - name: The design gate must report (not enforce) on every push
+        run: python3 scripts/release-gate.py --dry-run

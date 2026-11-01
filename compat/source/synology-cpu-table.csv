@@ -1,0 +1,296 @@
+# synofurb compatibility source table (input for scripts/gen-compat.py)
+#
+# PRIMARY SOURCE (rows with source=kb.synology.com)
+#   Synology Knowledge Center, "What kind of CPU does my Synology storage system have?"
+#   URL:        https://kb.synology.com/en-global/DSM/tutorial/What_kind_of_CPU_does_my_NAS_have
+#   Fetched:    2026-11-01 (article metadata date: 2026-08-26)
+#   Note: the slug requested in the task (".../What_kind_of_CPU_does_my_Synology_NAS_have") does not exist; it renders an
+#   empty "Knowledge Center" shell. The article body lives at the URL above (it is embedded as JSON in the page, so a plain
+#   HTML-to-text fetch of the page sees nothing). Columns cpu..ram are copied verbatim from Synology's tables, one row per
+#   model name (Synology lists variants such as "RS822+ RS822RP+" in one table cell; they are split here).
+#   `group` is the table heading the row appeared under (xNN Series = model year 20NN; FS/HD/SA/PAS are product lines).
+#   The article covers models up to the x10 series only. Anything older is NOT on this page.
+#
+# SECONDARY SOURCE (rows with source=spksrc-wiki)
+#   SynoCommunity spksrc wiki, "Architecture per Synology model" (self-described as "not complete").
+#   URL:        https://github.com/SynoCommunity/spksrc/wiki/Architecture-per-Synology-model
+#   Fetched:    2026-11-01 (raw: https://raw.githubusercontent.com/wiki/SynoCommunity/spksrc/Architecture-per-Synology-model.md)
+#   Used ONLY for models that are missing from the Synology article (x09 and older, NVR216, EDS14, RS10815xs+).
+#   For these rows only model, group and package_arch (the wiki's platform heading) are known; cpu/cores/threads/fpu/
+#   cpu_arch/ram are left empty on purpose and are not guessed. Routers (RT*), Docker DSM and Virtual DSM were skipped.
+#
+# Lines starting with '#' are comments. Do not hand-edit models.json for hardware facts: edit this file and re-run
+# `python3 scripts/gen-compat.py` (status/evidence/notes already present in models.json are preserved).
+model,group,cpu,cores,threads,fpu,cpu_arch,package_arch,ram,source
+PAS7700,PAS Series,AMD EPYC 7443P,24,48,✓,x86_64,Epyc7003,DDR4 ECC RDIMM 64 GB,kb.synology.com
+FS6420,FS Series,AMD EPYC 7303,16,32,✓,x86_64,Epyc7003,DDR4 ECC RDIMM 64 GB,kb.synology.com
+FS6400,FS Series,Intel Xeon Silver 4110 x 2,8,16,✓,x86_64,Purley,DDR4 ECC RDIMM 32 GB,kb.synology.com
+FS3600,FS Series,Intel Xeon D-1567,12,24,✓,x86_64,Broadwellnk,DDR4 ECC RDIMM 16 GB,kb.synology.com
+FS3420,FS Series,Intel Xeon D-1739,8,16,✓,x86_64,Icelaked,DDR4 ECC RDIMM 32 GB,kb.synology.com
+FS3410,FS Series,Intel Xeon D-1541,8,16,✓,x86_64,Broadwellnkv2,DDR4 ECC RDIMM 16 GB,kb.synology.com
+FS3400,FS Series,Intel Xeon D-1541,8,16,✓,x86_64,Broadwell,DDR4 ECC RDIMM 16 GB,kb.synology.com
+FS3017,FS Series,Intel Xeon E5-2620 v3 x 2,6,12,✓,x86_64,Grantley,DDR4 ECC RDIMM 64 GB,kb.synology.com
+FS2500,FS Series,AMD Ryzen V1780B,4,8,✓,x86_64,V1000,DDR4 ECC UDIMM 8 GB,kb.synology.com
+FS2017,FS Series,Intel Xeon D-1541,8,16,✓,x86_64,Broadwell,DDR4 ECC RDIMM 16 GB,kb.synology.com
+FS1018,FS Series,Intel Pentium D1508,2,4,✓,x86_64,Broadwellnk,DDR4 ECC SODIMM 8 GB,kb.synology.com
+FS200T,FS Series,Intel Celeron J4125,4,4,✓,x86_64,Geminilakenk,DDR4 4GB,kb.synology.com
+HD6500,HD Series,Intel Xeon Silver 4210R x 2,10,20,✓,x86_64,Purley,DDR4 ECC RDIMM 64 GB,kb.synology.com
+SA6400,SA Series,AMD EPYC 7272,12,24,✓,x86_64,Epyc7002,DDR4 ECC RDIMM 32 GB,kb.synology.com
+SA3610,SA Series,Intel Xeon D-1567,12,24,✓,x86_64,Broadwellnkv2,DDR4 ECC RDIMM 16 GB,kb.synology.com
+SA3600,SA Series,Intel Xeon D-1567,12,24,✓,x86_64,Broadwellnk,DDR4 ECC RDIMM 16 GB,kb.synology.com
+SA3410,SA Series,Intel Xeon D-1541,8,16,✓,x86_64,Broadwellnkv2,DDR4 ECC RDIMM 16 GB,kb.synology.com
+SA3400,SA Series,Intel Xeon D-1541,8,16,✓,x86_64,Broadwellnk,DDR4 ECC RDIMM 16 GB,kb.synology.com
+SA3400D,SA Series,Intel Xeon D-1541 x 2,8,16,✓,x86_64,Broadwellntbap,DDR4 ECC UDIMM 8 GB x 2,kb.synology.com
+SA3200D,SA Series,Intel Xeon D-1521 x 2,4,8,✓,x86_64,Broadwellntbap,DDR4 ECC UDIMM 8 GB x 2,kb.synology.com
+RS11626xs+,x26 Series,AMD EPYC 7303,16,32,✓,x86_64,Epyc7003,DDR4 ECC RDIMM 64 GB,kb.synology.com
+RS6426xs+,x26 Series,Intel Xeon D-1739,8,16,✓,x86_64,Icelaked,DDR4 ECC RDIMM 16 GB,kb.synology.com
+RS4826xs+,x26 Series,Intel Xeon D-1739,8,16,✓,x86_64,Icelaked,DDR4 ECC RDIMM 16 GB,kb.synology.com
+RS3626xs,x26 Series,Intel Xeon D-1726,6,12,✓,x86_64,Icelaked,DDR4 ECC UDIMM 8 GB,kb.synology.com
+RS1626xs+,x26 Series,Intel Xeon D-1726,6,12,✓,x86_64,Icelaked,DDR4 ECC RDIMM 16 GB,kb.synology.com
+RS1226+,x26 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000nk,DDR4 ECC SODIMM 4 GB,kb.synology.com
+RS1226RP+,x26 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000nk,DDR4 ECC SODIMM 4 GB,kb.synology.com
+RS826+,x26 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC SODIMM 4 GB,kb.synology.com
+RS826RP+,x26 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC SODIMM 4 GB,kb.synology.com
+RS2825RP+,x25 Series,AMD Ryzen V1780B,4,8,✓,x86_64,V1000nk,DDR4 ECC UDIMM 8 GB,kb.synology.com
+DS1825+,x25 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000nk,DDR4 ECC SODIMM 8 GB,kb.synology.com
+DS1825neo+,x25 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000nk,DDR4 Non-ECC SODIMM 4 GB,kb.synology.com
+DS1525+,x25 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000nk,DDR4 ECC SODIMM 8 GB,kb.synology.com
+DS1525neo+,x25 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000nk,DDR4 Non-ECC SODIMM 4 GB,kb.synology.com
+DS925+,x25 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000nk,DDR4 ECC SODIMM 4 GB,kb.synology.com
+DS925neo+,x25 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000nk,DDR4 Non-ECC SODIMM 4 GB,kb.synology.com
+DS725+,x25 Series,AMD Ryzen R1600,2,4,✓,x86_64,R1000nk,DDR4 ECC SODIMM 4 GB,kb.synology.com
+DS725neo+,x25 Series,AMD Ryzen R1600,2,4,✓,x86_64,R1000nk,DDR4 Non-ECC SODIMM 4 GB,kb.synology.com
+DS425+,x25 Series,Intel Celeron J4125,4,4,✓,x86_64,Geminilakenk,DDR4 2 GB,kb.synology.com
+DS225+,x25 Series,Intel Celeron J4125,4,4,✓,x86_64,Geminilakenk,DDR4 2 GB,kb.synology.com
+DS224+,x24 Series,Intel Celeron J4125,4,4,✓,x86_64,Geminilake,DDR4 2 GB,kb.synology.com
+DS124,x24 Series,Realtek RTD1619B,4,4,✓,armv8,rtd1619b,DDR4 1 GB,kb.synology.com
+RS2423RP+II,x23 Series,AMD Ryzen V1780B,4,8,✓,x86_64,V1000nk,DDR4 ECC UDIMM 8 GB,kb.synology.com
+RS2423RP+,x23 Series,AMD Ryzen V1780B,4,8,✓,x86_64,V1000,DDR4 ECC UDIMM 8 GB,kb.synology.com
+RS2423+,x23 Series,AMD Ryzen V1780B,4,8,✓,x86_64,V1000,DDR4 ECC UDIMM 8 GB,kb.synology.com
+DS1823xs+,x23 Series,AMD Ryzen V1780B,4,8,✓,x86_64,V1000,DDR4 ECC SODIMM 8 GB,kb.synology.com
+DS923+,x23 Series,AMD Ryzen R1600,2,4,✓,x86_64,R1000,DDR4 ECC SODIMM 4 GB,kb.synology.com
+DS723+,x23 Series,AMD Ryzen R1600,2,4,✓,x86_64,R1000,DDR4 ECC SODIMM 2 GB,kb.synology.com
+DS423+,x23 Series,Intel Celeron J4125,4,4,✓,x86_64,Geminilake,DDR4 2 GB,kb.synology.com
+DS423,x23 Series,Realtek RTD1619B,4,4,✓,armv8,rtd1619b,DDR4 2 GB,kb.synology.com
+DS223j,x23 Series,Realtek RTD1619B,4,4,✓,armv8,rtd1619b,DDR4 1 GB,kb.synology.com
+DS223,x23 Series,Realtek RTD1619B,4,4,✓,armv8,rtd1619b,DDR4 2 GB,kb.synology.com
+DVA1622,x22 Series,Intel Celeron J4125,4,4,✓,x86_64,Geminilake,DDR4 6GB,kb.synology.com
+RS822+,x22 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC SODIMM 2 GB,kb.synology.com
+RS822RP+,x22 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC SODIMM 2 GB,kb.synology.com
+RS422+,x22 Series,AMD Ryzen R1600,2,4,✓,x86_64,R1000,DDR4 ECC 2 GB,kb.synology.com
+DS3622xs+,x22 Series,Intel Xeon D-1531,6,12,✓,x86_64,Broadwellnk,DDR4 ECC SODIMM 16 GB,kb.synology.com
+DS2422+,x22 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC SODIMM 4 GB,kb.synology.com
+DS1522+,x22 Series,AMD Ryzen R1600,2,4,✓,x86_64,R1000,DDR4 ECC SODIMM 8 GB,kb.synology.com
+RS4021xs+,x21 Series,Intel Xeon D-1541,8,16,✓,x86_64,Broadwellnk,DDR4 ECC UDIMM 16 GB,kb.synology.com
+RS3621xs+,x21 Series,Intel Xeon D-1541,8,16,✓,x86_64,Broadwellnk,DDR4 ECC UDIMM 8 GB,kb.synology.com
+RS3621RPxs,x21 Series,Intel Xeon D-1531,6,12,✓,x86_64,Broadwellnk,DDR4 ECC UDIMM 8 GB,kb.synology.com
+RS2821RP+,x21 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC UDIMM 4 GB,kb.synology.com
+RS2421+,x21 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC UDIMM 4 GB,kb.synology.com
+RS2421RP+,x21 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC UDIMM 4 GB,kb.synology.com
+RS1221+,x21 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC SODIMM 4 GB,kb.synology.com
+RS1221RP+,x21 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC SODIMM 4 GB,kb.synology.com
+DS1821+,x21 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC SODIMM 4 GB,kb.synology.com
+DS1621xs+,x21 Series,Intel Xeon D-1527,4,8,✓,x86_64,Broadwellnk,DDR4 ECC SODIMM 8 GB,kb.synology.com
+DS1621+,x21 Series,AMD Ryzen V1500B,4,8,✓,x86_64,V1000,DDR4 ECC SODIMM 4 GB,kb.synology.com
+DVA3221,x21 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC SODIMM 8 GB,kb.synology.com
+RS820+,x20 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC 2 GB,kb.synology.com
+RS820RP+,x20 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC 2 GB,kb.synology.com
+DS1520+,x20 Series,Intel Celeron J4125,4,4,✓,x86_64,Geminilake,DDR4 8 GB,kb.synology.com
+DS920+,x20 Series,Intel Celeron J4125,4,4,✓,x86_64,Geminilake,DDR4 4 GB,kb.synology.com
+DS720+,x20 Series,Intel Celeron J4125,4,4,✓,x86_64,Geminilake,DDR4 2 GB,kb.synology.com
+DS620slim,x20 Series,Intel Celeron J3355,2,2,✓,x86_64,Apollolake,DDR3L SODIMM 2 GB,kb.synology.com
+DS420+,x20 Series,Intel Celeron J4025,2,2,✓,x86_64,Geminilake,DDR4 2 GB,kb.synology.com
+DS420j,x20 Series,Realtek RTD1296,4,4,✓,armv8,rtd1296,DDR4 1 GB,kb.synology.com
+DS220+,x20 Series,Intel Celeron J4025,2,2,✓,x86_64,Geminilake,DDR4 2 GB,kb.synology.com
+DS220j,x20 Series,Realtek RTD1296,4,4,✓,armv8,rtd1296,DDR4 512 MB,kb.synology.com
+DS120j,x20 Series,Marvell A3720,2,2,✓,armv8,armada37xx,DDR3 512 MB,kb.synology.com
+RS1619xs+,x19 Series,Intel Xeon D-1527,4,8,✓,x86_64,Broadwellnk,DDR4 ECC UDIMM 8 GB,kb.synology.com
+RS1219+,x19 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+RS819,x19 Series,Realtek RTD1296,4,4,✓,armv8,rtd1296,DDR4 2 GB,kb.synology.com
+DS2419+II,x19 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC SODIMM 4 GB,kb.synology.com
+DS2419+,x19 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC SODIMM 4 GB,kb.synology.com
+DS1819+,x19 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC SODIMM 4 GB,kb.synology.com
+DS1019+,x19 Series,Intel Celeron J3455,4,4,✓,x86_64,Apollolake,DDR3L SODIMM 8 GB,kb.synology.com
+DS419slim,x19 Series,Marvell Armada 385 88F6820,2,2,✓,ARMv7,armada38x,DDR3L 512 MB,kb.synology.com
+DS119j,x19 Series,Marvell A3720,2,2,✓,armv8,armada37xx,DDR3L 256 MB,kb.synology.com
+DVA3219,x19 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC SODIMM 4 GB,kb.synology.com
+RS3618xs,x18 Series,Intel Xeon D-1521,4,8,✓,x86_64,Broadwell,DDR4 ECC UDIMM 8 GB,kb.synology.com
+RS2818RP+,x18 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC UDIMM 4 GB,kb.synology.com
+RS2418+,x18 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC UDIMM 4 GB,kb.synology.com
+RS2418RP+,x18 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC UDIMM 4 GB,kb.synology.com
+RS818+,x18 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+RS818RP+,x18 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+DS3018xs,x18 Series,Intel Pentium D1508,2,4,✓,x86_64,Broadwellnk,DDR4 SODIMM 8 GB,kb.synology.com
+DS1618+,x18 Series,Intel Atom C3538,4,4,✓,x86_64,Denverton,DDR4 Non-ECC SODIMM 4 GB,kb.synology.com
+DS918+,x18 Series,Intel Celeron J3455,4,4,✓,x86_64,Apollolake,DDR3L SODIMM 4 GB,kb.synology.com
+DS718+,x18 Series,Intel Celeron J3455,4,4,✓,x86_64,Apollolake,DDR3L SODIMM 2 GB,kb.synology.com
+DS418,x18 Series,Realtek RTD1296,4,4,✓,armv8,rtd1296,DDR4 2 GB,kb.synology.com
+DS418play,x18 Series,Intel Celeron J3355,2,2,✓,x86_64,Apollolake,DDR3L SODIMM 2 GB,kb.synology.com
+DS418j,x18 Series,Realtek RTD1293,2,2,✓,armv8,rtd1296,DDR4 1 GB,kb.synology.com
+DS218+,x18 Series,Intel Celeron J3355,2,2,✓,x86_64,Apollolake,DDR3L SODIMM 2 GB,kb.synology.com
+DS218,x18 Series,Realtek RTD1296,4,4,✓,armv8,rtd1296,DDR4 2 GB,kb.synology.com
+DS218play,x18 Series,Realtek RTD1296,4,4,✓,armv8,rtd1296,DDR4 1 GB,kb.synology.com
+DS218j,x18 Series,Marvell Armada 385 88F6820,2,2,✓,ARMv7,Armada38x,DDR3 512 MB,kb.synology.com
+DS118,x18 Series,Realtek RTD1296,4,4,✓,armv8,rtd1296,DDR4 1 GB,kb.synology.com
+RS18017xs+,x17 Series,Intel Xeon D-1531,6,12,✓,x86_64,Broadwell,DDR4 ECC RDIMM 16 GB,kb.synology.com
+RS4017xs+,x17 Series,Intel Xeon D-1541,8,16,✓,x86_64,Broadwell,DDR4 ECC UDIMM 8 GB,kb.synology.com
+RS3617xs+,x17 Series,Intel Xeon D-1531,6,12,✓,x86_64,Broadwell,DDR4 ECC UDIMM 8 GB,kb.synology.com
+RS3617RPxs,x17 Series,Intel Xeon D-1521,4,8,✓,x86_64,Broadwell,DDR4 ECC UDIMM 8 GB,kb.synology.com
+RS3617xs,x17 Series,Intel Xeon E3-1230 v2,4,8,✓,x86_64,Bromolow,DDR3 ECC 4 GB,kb.synology.com
+RS217,x17 Series,Marvell Armada 385 88F6820,2,2,✓,ARMv7,Armada38x,DDR3 512 MB,kb.synology.com
+DS3617xsII,x17 Series,Intel Xeon D-1527,4,8,✓,x86_64,Broadwell,DDR4 ECC SODIMM 16 GB,kb.synology.com
+DS3617xs,x17 Series,Intel Xeon D-1527,4,8,✓,x86_64,Broadwell,DDR4 ECC SODIMM 16 GB,kb.synology.com
+DS1817+,x17 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB/8 GB,kb.synology.com
+DS1817,x17 Series,Annapurna Labs Alpine AL-314,4,4,✓,armv7,Alpine,DDR3L 4 GB,kb.synology.com
+DS1517+,x17 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB/8 GB,kb.synology.com
+DS1517,x17 Series,Annapurna Labs Alpine AL-314,4,4,✓,armv7,Alpine,DDR3L 2 GB,kb.synology.com
+RS18016xs+,x16 Series,Intel Xeon E3-1230 v2,4,8,✓,x86_64,Bromolow,DDR3 ECC 8 GB,kb.synology.com
+RS2416+,x16 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+RS2416RP+,x16 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+RS816,x16 Series,Marvell Armada 385 88F6820,2,2,✓,ARMv7,Armada38x,DDR3 1 GB,kb.synology.com
+DS916+,x16 Series,Intel Pentium N3710,4,4,✓,x86_64,Braswell,DDR3 2 GB/8 GB,kb.synology.com
+DS716+II,x16 Series,Intel Celeron N3160,4,4,✓,x86_64,Braswell,DDR3 2 GB,kb.synology.com
+DS716+,x16 Series,Intel Celeron N3150,4,4,✓,x86_64,Braswell,DDR3 2 GB,kb.synology.com
+DS416,x16 Series,Annapurna Labs Alpine AL-212,2,2,✓,armv7,Alpine4k,DDR3 1 GB,kb.synology.com
+DS416play,x16 Series,Intel Celeron N3060,2,2,✓,x86_64,Braswell,DDR3 1 GB,kb.synology.com
+DS416j,x16 Series,Marvell Armada 388 88F6828,2,2,✓,ARMv7,Armada38x,DDR3 512 MB,kb.synology.com
+DS416slim,x16 Series,Marvell Armada 385 88F6820,2,2,✓,ARMv7,Armada38x,DDR3 512 MB,kb.synology.com
+DS216+II,x16 Series,Intel Celeron N3060,2,2,✓,x86_64,Braswell,DDR3 1 GB,kb.synology.com
+DS216+,x16 Series,Intel Celeron N3050,2,2,✓,x86_64,Braswell,DDR3 1 GB,kb.synology.com
+DS216,x16 Series,Marvell Armada 385 88F6820,2,2,✓,ARMv7,Armada38x,DDR3 512 MB,kb.synology.com
+DS216play,x16 Series,STM STiH412,2,2,✓,ARMv7,Monaco,DDR3 1 GB,kb.synology.com
+DS216j,x16 Series,Marvell Armada 385 88F6820,2,2,✓,ARMv7,Armada38x,DDR3 512 MB,kb.synology.com
+DS216se,x16 Series,Marvell Armada 370 88F6707,1,1,✓,ARMv7,Armada370,DDR3 256 MB,kb.synology.com
+DS116,x16 Series,Marvell Armada 385 88F6820,2,2,✓,ARMv7,Armada38x,DDR3 1 GB,kb.synology.com
+RS815+,x15 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+RS815RP+,x15 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+RS815,x15 Series,Marvell Armada XP MV78230,2,2,✓,ARMv7,Armadaxp,DDR3 1 GB,kb.synology.com
+RC18015xs+,x15 Series,Intel Xeon E3-1230 v2,4,8,✓,x86_64,Bromolow,DDR3 ECC 8 GB,kb.synology.com
+DS3615xs,x15 Series,Intel Core i3-4130,2,4,✓,x86_64,Bromolow,DDR3 ECC 4 GB,kb.synology.com
+DS2415+,x15 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+DS2015xs,x15 Series,Annapurna Labs Alpine AL-514,4,4,✓,armv7,Alpine,DDR3 4 GB,kb.synology.com
+DS1815+,x15 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+DS1515+,x15 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+DS1515,x15 Series,Annapurna Labs Alpine AL-314,4,4,✓,armv7,Alpine,DDR3 2 GB,kb.synology.com
+DS715,x15 Series,Annapurna Labs Alpine AL-314,4,4,✓,armv7,Alpine,DDR3 2 GB,kb.synology.com
+DS415+,x15 Series,Intel Atom C2538,4,4,✓,x86_64,Avoton,DDR3 2 GB,kb.synology.com
+DS415play,x15 Series,Intel Atom CE5335,2,4,✓,i686,Evansport,DDR3 1 GB,kb.synology.com
+DS215+,x15 Series,Annapurna Labs Alpine AL-212,2,2,✓,armv7,Alpine4k,DDR3 1 GB,kb.synology.com
+DS215j,x15 Series,Marvell Armada 375 88F6720,2,2,✓,ARMv7,Armada375,DDR3 512 MB,kb.synology.com
+DS115,x15 Series,Marvell Armada 375 88F6720,2,2,✓,ARMv7,Armada375,DDR3 512 MB,kb.synology.com
+DS115j,x15 Series,Marvell Armada 370 88F6707,1,1,✓,ARMv7,Armada370,DDR3 256 MB,kb.synology.com
+RS3614xs+,x14 Series,Intel Xeon E3-1230 v2,4,8,✓,x86_64,Bromolow,DDR3 ECC 8 GB,kb.synology.com
+RS3614xs,x14 Series,Intel Core i3-4130,2,4,✓,x86_64,Bromolow,DDR3 ECC 4 GB,kb.synology.com
+RS3614RPxs,x14 Series,Intel Core i3-4130,2,4,✓,x86_64,Bromolow,DDR3 ECC 4 GB,kb.synology.com
+RS2414+,x14 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 2 GB,kb.synology.com
+RS2414RP+,x14 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 2 GB,kb.synology.com
+RS814+,x14 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 2 GB,kb.synology.com
+RS814RP+,x14 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 2 GB,kb.synology.com
+RS814,x14 Series,Marvell Armada XP MV78230,2,2,✓,ARMv7,Armadaxp,DDR3 1 GB,kb.synology.com
+RS214,x14 Series,Marvell Armada 370 88F6707,1,1,✓,ARMv7,Armada370,DDR3 512 MB,kb.synology.com
+DS414,x14 Series,Marvell Armada XP MV78230,2,2,✓,ARMv7,Armadaxp,DDR3 1 GB,kb.synology.com
+DS414j,x14 Series,Mindspeed Comcerto C2000,2,2,✓,ARMv7,Comcerto2k,DDR3 512 MB,kb.synology.com
+DS414slim,x14 Series,Marvell Armada 370 88F6707,1,1,✓,ARMv7,Armada370,DDR3 512 MB,kb.synology.com
+DS214+,x14 Series,Marvell Armada XP MV78230,2,2,✓,ARMv7,Armadaxp,DDR3 1 GB,kb.synology.com
+DS214,x14 Series,Marvell Armada XP MV78230,2,2,✓,ARMv7,Armadaxp,DDR3 512 MB,kb.synology.com
+DS214play,x14 Series,Intel Atom CE5335,2,4,✓,i686,Evansport,DDR3 1 GB,kb.synology.com
+DS214se,x14 Series,Marvell Armada 370 88F6707,1,1,✓,ARMv7,Armada370,DDR3 256 MB,kb.synology.com
+DS114,x14 Series,Marvell Armada 370 88F6707,1,1,✓,ARMv7,Armada370,DDR3 512 MB,kb.synology.com
+RS10613xs+,x13 Series,Intel Xeon E3-1230 v2,4,8,✓,x86_64,Bromolow,DDR3 ECC 8 GB,kb.synology.com
+RS3413xs+,x13 Series,Intel Xeon E3-1230 v2,4,8,✓,x86_64,Bromolow,DDR3 ECC 8 GB,kb.synology.com
+DS2413+,x13 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 2 GB,kb.synology.com
+DS1813+,x13 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 2 GB,kb.synology.com
+DS1513+,x13 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 2 GB,kb.synology.com
+DS713+,x13 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 1 GB,kb.synology.com
+DS413,x13 Series,Freescale P1022,2,2,✓,ppc,Qoriq,DDR3 1 GB,kb.synology.com
+DS413j,x13 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 512 MB,kb.synology.com
+DS213+,x13 Series,Freescale P1022,2,2,✓,ppc,Qoriq,DDR3 512 MB,kb.synology.com
+DS213,x13 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 512 MB,kb.synology.com
+DS213air,x13 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 256 MB,kb.synology.com
+DS213j,x13 Series,Marvell Armada 370 88F6707,1,1,✓,ARMv7,Armada370,DDR3 512 MB,kb.synology.com
+RS3412xs,x12 Series,Intel Core i3-2100,2,4,✓,x86_64,Bromolow,DDR3 ECC 2 GB,kb.synology.com
+RS3412RPxs,x12 Series,Intel Core i3-2100,2,4,✓,x86_64,Bromolow,DDR3 ECC 2 GB,kb.synology.com
+RS2212+,x12 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 1 GB,kb.synology.com
+RS2212RP+,x12 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 1 GB,kb.synology.com
+RS812+,x12 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 1 GB,kb.synology.com
+RS812RP+,x12 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 1 GB,kb.synology.com
+RS812,x12 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 512 MB,kb.synology.com
+RS212,x12 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 256 MB,kb.synology.com
+DS3612xs,x12 Series,Intel Core i3-2100,2,4,✓,x86_64,Bromolow,DDR3 ECC 2 GB,kb.synology.com
+DS1812+,x12 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 1 GB,kb.synology.com
+DS1512+,x12 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 1 GB,kb.synology.com
+DS712+,x12 Series,Intel Atom D425,1,2,✓,x86_64,X86,DDR3 1 GB,kb.synology.com
+DS412+,x12 Series,Intel Atom D2700,2,4,✓,x86_64,Cedarview,DDR3 1 GB,kb.synology.com
+DS212+,x12 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 512 MB,kb.synology.com
+DS212,x12 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 256 MB,kb.synology.com
+DS212j,x12 Series,Marvell Kirkwood 88F6281,1,1,✗,armv5,88f628x,DDR2 256 MB,kb.synology.com
+DS112+,x12 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 512 MB,kb.synology.com
+DS112,x12 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 256 MB,kb.synology.com
+DS112j,x12 Series,Marvell Kirkwood 88F6702,1,1,✗,armv5,88f628x,DDR2 128 MB,kb.synology.com
+RS3411xs,x11 Series,Intel Core i3-2100,2,4,✓,x86_64,Bromolow,DDR3 ECC 2 GB,kb.synology.com
+RS3411RPxs,x11 Series,Intel Core i3-2100,2,4,✓,x86_64,Bromolow,DDR3 ECC 2 GB,kb.synology.com
+RS2211+,x11 Series,Intel Atom D525,2,4,✓,x86_64,X86,DDR2 1 GB,kb.synology.com
+RS2211RP+,x11 Series,Intel Atom D525,2,4,✓,x86_64,X86,DDR2 1 GB,kb.synology.com
+RS411,x11 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 256 MB,kb.synology.com
+DS3611xs,x11 Series,Intel Core i3-2100,2,4,✓,x86_64,Bromolow,DDR3 ECC 2 GB,kb.synology.com
+DS2411+,x11 Series,Intel Atom D525,2,4,✓,x86_64,X86,DDR2 1 GB,kb.synology.com
+DS1511+,x11 Series,Intel Atom D525,2,4,✓,x86_64,X86,DDR2 1 GB,kb.synology.com
+DS411+II,x11 Series,Intel Atom D525,2,4,✓,x86_64,X86,DDR2 1 GB,kb.synology.com
+DS411+,x11 Series,Intel Atom D510,2,4,✓,x86_64,X86,DDR2 1 GB,kb.synology.com
+DS411,x11 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 512 MB,kb.synology.com
+DS411j,x11 Series,Marvell Kirkwood 88F6281,1,1,✗,armv5,88f628x,DDR2 128 MB,kb.synology.com
+DS411slim,x11 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 256 MB,kb.synology.com
+DS211+,x11 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 512 MB,kb.synology.com
+DS211,x11 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 256 MB,kb.synology.com
+DS211j,x11 Series,Marvell Kirkwood 88F6281,1,1,✗,armv5,88f628x,DDR2 128 MB,kb.synology.com
+DS111,x11 Series,Marvell Kirkwood 88F6282,1,1,✗,armv5,88f628x,DDR3 256 MB,kb.synology.com
+RS810+,x10 Series,Intel Atom D510,2,4,✓,x86_64,X86,DDR2 1 GB,kb.synology.com
+RS810RP+,x10 Series,Intel Atom D510,2,4,✓,x86_64,X86,DDR2 1 GB,kb.synology.com
+DS1010+,x10 Series,Intel Atom D510,2,4,✓,x86_64,X86,DDR2 1 GB,kb.synology.com
+DS710+,x10 Series,Intel Atom D410,1,2,✓,x86_64,X86,DDR2 1 GB,kb.synology.com
+DS410,x10 Series,Freescale MPC8533E,1,1,✓,PowerPC,Ppc853x,DDR 512 MB,kb.synology.com
+DS410j,x10 Series,Marvell Kirkwood 88F6281,1,1,✗,armv5,88f628x,DDR2 128 MB,kb.synology.com
+DS210+,x10 Series,Freescale MPC8533E,1,1,✓,PowerPC,Ppc853x,DDR 512 MB,kb.synology.com
+DS210j,x10 Series,Marvell Kirkwood 88F6281,1,1,✗,armv5,88f628x,DDR2 128 MB,kb.synology.com
+DS110+,x10 Series,Freescale MPC8533E,1,1,✓,PowerPC,Ppc853x,DDR 512 MB,kb.synology.com
+DS110j,x10 Series,Marvell Kirkwood 88F6281,1,1,✗,armv5,88f628x,DDR2 128 MB,kb.synology.com
+NVR216,NVR Series,,,,,,hi3535,,spksrc-wiki
+EDS14,x14 Series,,,,,,armada370,,spksrc-wiki
+RS10815xs+,x15 Series,,,,,,bromolow,,spksrc-wiki
+DS109,x09 Series,,,,,,88f6281,,spksrc-wiki
+DS209,x09 Series,,,,,,88f6281,,spksrc-wiki
+DS409,x09 Series,,,,,,88f6281,,spksrc-wiki
+DS409Slim,x09 Series,,,,,,88f6281,,spksrc-wiki
+RS409,x09 Series,,,,,,88f6281,,spksrc-wiki
+DS109+,x09 Series,,,,,,ppc853x,,spksrc-wiki
+DS209+,x09 Series,,,,,,ppc853x,,spksrc-wiki
+DS209+II,x09 Series,,,,,,ppc853x,,spksrc-wiki
+DS409+,x09 Series,,,,,,ppc853x,,spksrc-wiki
+RS409+,x09 Series,,,,,,ppc853x,,spksrc-wiki
+RS409RP+,x09 Series,,,,,,ppc853x,,spksrc-wiki
+DS509+,x09 Series,,,,,,ppc853x,,spksrc-wiki
+DS109j,x09 Series,,,,,,ppc824x,,spksrc-wiki
+DS209j,x09 Series,,,,,,ppc824x,,spksrc-wiki
+DS108j,x08 Series,,,,,,ppc824x,,spksrc-wiki
+DS107e,x07 Series,,,,,,ppc824x,,spksrc-wiki
+DS107,x07 Series,,,,,,ppc824x,,spksrc-wiki
+DS207,x07 Series,,,,,,ppc824x,,spksrc-wiki
+CS407e,x07 Series,,,,,,ppc824x,,spksrc-wiki
+DS-106e,x06 Series,,,,,,ppc824x,,spksrc-wiki
+DS-106,x06 Series,,,,,,ppc824x,,spksrc-wiki
+DS-106x,x06 Series,,,,,,ppc824x,,spksrc-wiki
+DS-106j,x06 Series,,,,,,ppc824x,,spksrc-wiki
+CS-406e,x06 Series,,,,,,ppc824x,,spksrc-wiki
+CS-406,x06 Series,,,,,,ppc824x,,spksrc-wiki
+RS-406,x06 Series,,,,,,ppc824x,,spksrc-wiki
+DS-101g+,x01 Series,,,,,,ppc824x,,spksrc-wiki
+DS408,x08 Series,,,,,,ppc854x,,spksrc-wiki
+RS408,x08 Series,,,,,,ppc854x,,spksrc-wiki
+RS408RP,x08 Series,,,,,,ppc854x,,spksrc-wiki
+DS508,x08 Series,,,,,,ppc854x,,spksrc-wiki
+DS107+,x07 Series,,,,,,88f5281,,spksrc-wiki
+DS207+,x07 Series,,,,,,88f5281,,spksrc-wiki
+CS407,x07 Series,,,,,,88f5281,,spksrc-wiki
+RS407,x07 Series,,,,,,88f5281,,spksrc-wiki
+DS-101,x01 Series,,,,,,powerpc,,spksrc-wiki
+DS-101j,x01 Series,,,,,,powerpc,,spksrc-wiki

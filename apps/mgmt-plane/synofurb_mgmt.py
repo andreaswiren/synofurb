@@ -44,7 +44,22 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Iterable
 
-VERSION = "1.0.0"
+DEFAULT_VERSION = "0.2.0"
+
+
+def read_version() -> str:
+    """Version from the VERSION file next to this script (packaged by the installer), else the built-in default."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION"), encoding="utf-8") as fh:
+            v = fh.readline().strip()
+        if re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?", v):
+            return v
+    except OSError:
+        pass
+    return DEFAULT_VERSION
+
+
+VERSION = read_version()
 SAFE_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 MAX_BODY = 64 * 1024
 GIB = 1024 ** 3
@@ -1532,7 +1547,8 @@ def run_steps(app: App, steps: list[Step]) -> tuple[bool, list[dict]]:
 
 @route("GET", "/api/tls-fingerprint", auth=False)
 def api_tls_fp(req: Request) -> dict:
-    return {"ok": True, "tls": req.app.cfg.tls, "sha256": req.app.fingerprint}
+    return {"ok": True, "tls": req.app.cfg.tls, "sha256": req.app.fingerprint, "hostname": socket.gethostname(),
+            "version": VERSION}
 
 
 @route("POST", "/api/login", auth=False)
@@ -1605,6 +1621,81 @@ def read_temps() -> list[dict]:
     return res
 
 
+CPU_VENDORS = {"GenuineIntel": "Intel", "AuthenticAMD": "AMD", "HygonGenuine": "Hygon", "CentaurHauls": "Zhaoxin/VIA"}
+MICROCODE_PACKAGES = {"Intel": "intel-microcode", "AMD": "amd64-microcode"}
+DSM_INSPECT_PATH = "/var/lib/synofurb/dsm-inspect.txt"
+DSM_INSPECT_KEYS = ("model", "hw_version", "dsm_version", "cpu", "cpu_vendor", "mem_kib", "uefi", "dt_model", "uname_m")
+
+
+def parse_cpuinfo(text: str) -> dict:
+    """Vendor (Intel/AMD/...), model name, logical CPU count and loaded microcode revision from /proc/cpuinfo."""
+    vendor_id = model = micro = None
+    n = 0
+    for ln in text.splitlines():
+        k, _, v = ln.partition(":")
+        k, v = k.strip(), v.strip()
+        if k == "processor":
+            n += 1
+        elif k == "vendor_id" and vendor_id is None:
+            vendor_id = v
+        elif k in ("model name", "Hardware", "Model") and model is None and v:
+            model = v
+        elif k == "microcode" and micro is None:
+            micro = v
+    return {"vendor": CPU_VENDORS.get(vendor_id or "", vendor_id), "vendor_id": vendor_id, "model": model,
+            "threads": n or None, "microcode_revision": micro}
+
+
+def kernel_info(release: str) -> dict:
+    """Split a kernel release; ``ge7`` flags kernels >= 7 (newer than most NAS vendor drivers were tested on)."""
+    m = re.match(r"(\d+)\.(\d+)", release or "")
+    major, minor = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+    return {"release": release, "major": major, "minor": minor, "ge7": bool(major is not None and major >= 7)}
+
+
+def parse_cmdline_consoles(cmdline: str) -> list[dict]:
+    """``console=ttyS0,115200n8`` entries of the kernel command line (the last one is the primary console)."""
+    res = []
+    for tok in cmdline.split():
+        if tok.startswith("console=") and len(tok) > 8:
+            dev, _, opts = tok[8:].partition(",")
+            res.append({"device": dev, "options": opts or None, "serial": dev.startswith(("ttyS", "ttyAMA", "ttyUSB", "ttymxc", "ttyO"))})
+    return res
+
+
+def parse_dsm_inspect(text: str) -> dict[str, str]:
+    """``KV|key|value`` lines of dsm-inspect.txt (written by the installer before it touched the NAS)."""
+    d = {}
+    for ln in text.splitlines():
+        p = ln.split("|", 2)
+        if len(p) == 3 and p[0] == "KV" and p[1] in DSM_INSPECT_KEYS and p[2].strip():
+            d[p[1]] = p[2].strip()[:120]
+    return d
+
+
+def unit_info(cfg: Config) -> dict:
+    """Model of the NAS: syno_hw_version (only exists on Synology kernels) or the pre-install DSM inspection."""
+    hw = read_text("/proc/sys/kernel/syno_hw_version").strip()[:60]
+    kv = parse_dsm_inspect(read_text(cfg.p(DSM_INSPECT_PATH)))
+    model = hw or kv.get("model") or kv.get("hw_version")
+    return {"model": model or None, "hw_version": hw or kv.get("hw_version"), "dsm_version": kv.get("dsm_version"),
+            "source": "syno_hw_version" if hw else ("dsm-inspect.txt" if kv else None),
+            "cpu_before": kv.get("cpu"), "mem_kib": kv.get("mem_kib"), "uefi": kv.get("uefi")}
+
+
+def microcode_info(app: "App", cpu: dict, arch: str) -> dict:
+    """State of the vendor microcode package (x86 only) and the revision currently loaded."""
+    pkg = MICROCODE_PACKAGES.get(cpu.get("vendor") or "")
+    if arch not in ("x86_64", "i686") or pkg is None:
+        return {"applicable": False, "package": None, "installed": None, "version": None,
+                "loaded_revision": cpu.get("microcode_revision")}
+    r = app.run(["dpkg-query", "-W", "-f", "${db:Status-Abbrev}\t${Version}\n", pkg], timeout=15)
+    abbr, _, ver = r.out.strip().partition("\t")
+    installed = r.ok and abbr.strip().startswith("ii")
+    return {"applicable": True, "package": pkg, "installed": installed, "version": ver.strip() or None if installed else None,
+            "loaded_revision": cpu.get("microcode_revision")}
+
+
 @route("GET", "/api/status")
 def api_status(req: Request) -> dict:
     app = req.app
@@ -1628,9 +1719,14 @@ def api_status(req: Request) -> dict:
     if app.runner.which("mdadm"):
         scan = parse_mdadm_scan(app.run(["mdadm", "--detail", "--scan"], timeout=15).out)
     un = os.uname()
+    cpu = parse_cpuinfo(read_text("/proc/cpuinfo"))
+    cmdline = read_text("/proc/cmdline").strip()
     return {
         "ok": True, "hostname": socket.gethostname(), "os": osr.get("PRETTY_NAME") or osr.get("NAME"),
-        "kernel": un.release, "arch": un.machine, "uptime": uptime, "load": load,
+        "kernel": un.release, "kernel_info": kernel_info(un.release), "arch": un.machine, "uptime": uptime, "load": load,
+        "cpu": cpu, "microcode": microcode_info(app, cpu, un.machine),
+        "console": {"cmdline_consoles": parse_cmdline_consoles(cmdline), "cmdline_has_console": "console=" in cmdline},
+        "unit": unit_info(app.cfg), "version": VERSION, "boot_flash": os.path.isfile(app.cfg.p(DOM_TOOL)),
         "memory": {"total": mem.get("MemTotal"), "available": mem.get("MemAvailable"),
                    "swap_total": mem.get("SwapTotal"), "swap_free": mem.get("SwapFree")},
         "rootfs": rootfs, "temps": read_temps(), "interfaces": parse_ip_addr(r.out) if r.ok else [],
@@ -2209,11 +2305,22 @@ def mountable_devices(app: App) -> list[dict]:
     return res
 
 
+def other_signatures(app: App) -> list[dict]:
+    """Unmounted devices carrying a signature we cannot mount directly (RAID/LVM members, LUKS, ...)."""
+    notes = {"linux_raid_member": "RAID member: use Activate to assemble the array",
+             "LVM2_member": "LVM physical volume: use Activate to bring up its volumes",
+             "crypto_LUKS": "encrypted (LUKS): unlock it manually", "swap": "swap space"}
+    return [{"path": d["path"], "fstype": d["fstype"], "size": d["size"], "type": d["type"], "note": notes.get(d["fstype"], "filesystem not supported here")}
+            for d in app.lsblk() if d["fstype"] and d["fstype"] not in MOUNT_FS and not d["mountpoints"]
+            and d["type"] in ("part", "disk", "lvm", "md", "crypt") and not d["children"]]
+
+
 @route("GET", "/api/mounts")
 def api_mounts(req: Request) -> dict:
     app = req.app
     return {"ok": True, "mounts": [m for m in app.findmnt() if m["real"]],
-            "fstab": fstab_entries(app.read("/etc/fstab")), "devices": mountable_devices(app)}
+            "fstab": fstab_entries(app.read("/etc/fstab")), "devices": mountable_devices(app),
+            "other": other_signatures(app)}
 
 
 @route("POST", "/api/mounts/mount")
@@ -2235,7 +2342,9 @@ def api_mounts_mount(req: Request) -> dict:
     u = app.accounts()[0].get(owner)
     if u is None:
         raise ApiError(400, "unknown owner %s" % owner)
-    ro, persist = as_bool(b.get("ro")), as_bool(b.get("persist"))
+    # Foreign (imported, e.g. Synology) volumes are mounted read-only unless the caller explicitly sends ro=false.
+    ro = as_bool(b["ro"]) if "ro" in b else is_foreign(dev)
+    persist = as_bool(b.get("persist"))
     steps = [Step("Create mountpoint " + mp, kind="mkdir", meta={"path": mp})]
     if persist:
         if not dev["uuid"]:
@@ -2278,7 +2387,8 @@ def api_mounts_activate(req: Request) -> dict:
              Step("Activate logical volumes", ["vgchange", "-ay"], ignore_error=True, timeout=120),
              Step("Wait for device nodes", ["udevadm", "settle", "--timeout=30"], ignore_error=True, timeout=45)]
     _, results = run_steps(app, steps)
-    return {"ok": True, "results": results, "devices": mountable_devices(app)}
+    return {"ok": True, "results": results, "devices": mountable_devices(app), "other": other_signatures(app),
+            "md": parse_mdstat(read_text("/proc/mdstat")), "lvs": app.lvs()}
 
 
 # ============================================================================
@@ -2326,6 +2436,110 @@ def api_system_power(req: Request) -> dict:
     need_confirm(req.body, socket.gethostname())
     app.defer(lambda: app.run(["systemctl", action], timeout=30), app.power_delay)
     return {"ok": True, "message": "%s scheduled" % action}
+
+
+# ============================================================================
+# 16b. Routes: boot manager (units that boot through the internal boot flash / DOM)
+# ============================================================================
+
+DOM_TOOL = "/usr/local/sbin/synofurb-dom"
+BOOT_IDS = ("dsm", "debian", "debian-old", "agent")
+BOOT_NAMES = {"debian": "DEBIAN", "debian-old": "DEBIAN_OLD", "agent": "SYNOFURB_BOOT"}
+BOOT_INFO = {
+    "dsm": {"label": "Synology DSM", "failsafe": True, "risk": "safe",
+            "desc": "The original firmware. It stays on the boot flash untouched and is the fail-safe: it does not depend on Debian, the network or your data volumes."},
+    "debian": {"label": "Debian 13", "failsafe": False, "risk": "safe",
+               "desc": "The installed system on the NAS volumes."},
+    "debian-old": {"label": "Debian 13 (previous kernel)", "failsafe": False, "risk": "safe",
+                   "desc": "Kept automatically before each kernel update. Use it if the newest kernel misbehaves."},
+    "agent": {"label": "synofurb boot agent", "failsafe": False, "risk": "caution",
+              "desc": "RAM-only rescue agent controlled over SSH from your PC. A reinstall erases disks only after you confirm on the PC."},
+}
+
+
+def boot_view(st: dict) -> dict:
+    """Map ``synofurb-dom status --json`` onto our four stable entry ids."""
+    entries = [e for e in (st.get("entries") or []) if isinstance(e, dict)]
+    dname = (st.get("default") or {}).get("name") or None
+    used, out = set(), []
+    for bid in BOOT_IDS:
+        ent = (next((e for e in entries if e.get("dsm")), None) if bid == "dsm"
+               else next((e for e in entries if e.get("name") == BOOT_NAMES[bid]), None))
+        if ent:
+            used.add(ent.get("name"))
+        out.append(dict(BOOT_INFO[bid], id=bid, present=ent is not None, name=ent.get("name") if ent else None,
+                        default=bool(ent and dname and ent.get("name") == dname),
+                        needs_confirm=bid != "debian"))
+    flash = {"device": st.get("device"), "bytes": st.get("device_bytes"),
+             "p1": st.get("p1") or {}, "p2": st.get("p2") or {}}
+    bk = st.get("backup") or {}
+    return {"entries": out, "other_entries": [e.get("name") for e in entries if e.get("name") not in used],
+            "default_id": next((e["id"] for e in out if e["default"]), None), "default_name": dname,
+            "default_valid": dname is not None, "flash": flash,
+            "backup": {"exists": bool(bk.get("exists")), "path": bk.get("path") or None},
+            "tool_version": st.get("version")}
+
+
+def _dom_status(app: App) -> tuple[dict | None, str]:
+    r = app.run([DOM_TOOL, "status", "--json"], timeout=90)
+    if not r.ok:
+        return None, "synofurb-dom status failed: " + (r.err or r.out).strip()[:300]
+    try:
+        st = json.loads(r.out)
+    except ValueError:
+        return None, "synofurb-dom status returned unreadable output"
+    return (st, "") if isinstance(st, dict) else (None, "synofurb-dom status returned unreadable output")
+
+
+@route("GET", "/api/boot")
+def api_boot(req: Request) -> dict:
+    app = req.app
+    if not os.path.isfile(app.cfg.p(DOM_TOOL)):
+        return {"ok": True, "available": False, "message": "not a boot-flash unit (synofurb-dom is not installed)"}
+    st, err = _dom_status(app)
+    if st is None:
+        return {"ok": True, "available": True, "error": err}
+    return dict(boot_view(st), ok=True, available=True)
+
+
+def _boot_entry(req: Request) -> str:
+    """Validate {entry, confirm}: known id, tool present, entry exists on the flash, typed confirm unless debian."""
+    app, b = req.app, req.body
+    entry = b.get("entry")
+    if entry not in BOOT_IDS:
+        raise ApiError(400, "entry must be one of: " + ", ".join(BOOT_IDS))
+    if not os.path.isfile(app.cfg.p(DOM_TOOL)):
+        raise ApiError(409, "not a boot-flash unit (synofurb-dom is not installed)")
+    if entry != "debian":
+        need_confirm(b, entry)
+    st, err = _dom_status(app)
+    if st is None:
+        raise ApiError(500, err)
+    if not next(e for e in boot_view(st)["entries"] if e["id"] == entry)["present"]:
+        raise ApiError(404, "boot entry %s is not present on the boot flash" % entry)
+    return entry
+
+
+@route("POST", "/api/boot/default")
+def api_boot_default(req: Request) -> dict:
+    entry = _boot_entry(req)
+    r = req.app.run([DOM_TOOL, "default", entry, "--yes"], timeout=180)
+    if not r.ok:
+        raise ApiError(500, "synofurb-dom default failed: " + (r.err or r.out).strip()[:300])
+    return {"ok": True, "entry": entry, "output": trunc((r.out + r.err).strip(), 1000)}
+
+
+@route("POST", "/api/boot/reboot-to")
+def api_boot_reboot_to(req: Request) -> dict:
+    app = req.app
+    entry = _boot_entry(req)
+    r = app.run([DOM_TOOL, "default", entry, "--yes"], timeout=180)
+    if not r.ok:
+        raise ApiError(500, "synofurb-dom default failed, not rebooting: " + (r.err or r.out).strip()[:300])
+    sr = app.run(["systemd-run", "--on-active=5", "systemctl", "reboot"], timeout=15)
+    if not sr.ok:
+        raise ApiError(500, "default entry set to %s, but the reboot could not be scheduled: %s" % (entry, sr.err.strip()[:200]))
+    return {"ok": True, "entry": entry, "message": "Default set to %s; rebooting in 5 s." % entry}
 
 
 # ============================================================================
@@ -2647,72 +2861,288 @@ def main(argv: list[str] | None = None) -> int:
 
 
 # ============================================================================
-# 19. Embedded single-page UI (no external resources; CSP nonce is substituted per response)
+# 19. Embedded single-page UI ("ForgeVault family" design: tokens from design/mockups/ui/tokens.json).
+#     No external resources. The CSP nonce is substituted per response.
 # ============================================================================
 
-INDEX_HTML = r"""<!doctype html>
+# name, light hex, dark hex - same names as tokens.json (color.light.* / color.dark.*), '_' becomes '-' in CSS
+_TOKEN_TABLE = """canvas FAFAFA 0A0A0A
+surface FFFFFF 171717
+surface_2 F3F3F3 202020
+surface_3 E9E9E9 2B2B2B
+border E5E5E5 2A2A2A
+border_strong 868686 747474
+fg 0A0A0A FAFAFA
+fg_2 525252 ABABAB
+fg_3 7A7A7A 808080
+sidebar F7F7F7 101010
+overlay 0A0A0A 000000
+accent 7139CB A37BFE
+accent_hover 622CB5 B091FE
+on_accent FFFFFF 0E0C15
+accent_bg F1EDFE 31254D
+accent_fg 5C29AA C3AFFE
+ring 7139CB A37BFE
+danger C60014 E23439
+danger_hover AC0311 F14D4C
+on_danger FFFFFF 0C0403
+ok_solid 03A14A 37BB62
+ok_fg 005725 6ED889
+ok_bg DEF8E2 0F3118
+warn_solid C68206 F0B135
+warn_fg 6F4606 F1C45E
+warn_bg FFF3D3 3D2A02
+err_solid E30117 F4514F
+err_fg A70311 FFA09C
+err_bg FEEFEF 4F1A18
+info_solid 3280DD 539AF2
+info_fg 004B96 91C1FF
+info_bg E7F1FF 132946
+log_bg 121114 060607
+log_fg DEDEDE DEDEDE
+log_dim 9E9E9E 989898
+log_dbg 9DA5B1 979FAB
+log_inf 89C3FE 89C3FE
+log_wrn F7C243 F7C243
+log_err FE8A88 FE8A88"""
+
+
+def theme_tokens() -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {"light": {}, "dark": {}}
+    for ln in _TOKEN_TABLE.splitlines():
+        name, lt, dk = ln.split()
+        out["light"][name], out["dark"][name] = "#" + lt, "#" + dk
+    return out
+
+
+def theme_css() -> str:
+    """Light by default, dark via prefers-color-scheme, both overridable with data-theme on <html>."""
+    t = theme_tokens()
+    var = lambda d: "".join("--%s:%s;" % (k.replace("_", "-"), v) for k, v in d.items())      # noqa: E731
+    return (":root{color-scheme:light;%s}" % var(t["light"])
+            + "@media (prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;%s}}" % var(t["dark"])
+            + ":root[data-theme=dark]{color-scheme:dark;%s}" % var(t["dark"]))
+
+
+_ICON_SPRITE = '''<symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></symbol><symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></symbol><symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z"></path><path d="m9 12 2 2 4-4"></path></symbol><symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"></path></symbol><symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-dasharray="3 3"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"></path></symbol><symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"></path><path d="M12 9v4M12 17h.01"></path></symbol><symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="m4.9 4.9 14.2 14.2"></path></symbol><symbol id="i-octagon-x" viewBox="0 0 24 24"><path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9z"></path><path d="m15 9-6 6M9 9l6 6"></path></symbol><symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></symbol><symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="8" rx="2"></rect><rect x="2" y="13" width="20" height="8" rx="2"></rect><path d="M6 7h.01M6 17h.01"></path></symbol><symbol id="i-disk" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"></rect><circle cx="12" cy="12" r="4"></circle><path d="M12 12h.01M17 7h.01"></path></symbol><symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"></path></symbol><symbol id="i-mem" viewBox="0 0 24 24"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9"></path><path d="M2 15h20M2 7a1 1 0 0 1 1-1h18a1 1 0 0 1 1 1v8H2z"></path></symbol><symbol id="i-network" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"></rect><rect x="2" y="16" width="6" height="6" rx="1"></rect><rect x="9" y="2" width="6" height="6" rx="1"></rect><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"></path></symbol><symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"></path></symbol><symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"></path><path d="M3.3 19a10 10 0 1 1 17.4 0"></path></symbol><symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z"></path><path d="m2 12 10 5 10-5M2 17l10 5 10-5"></path></symbol><symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"></path></symbol><symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></symbol><symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M9.9 4.2A10 10 0 0 1 12 4c6.4 0 10 8 10 8a17 17 0 0 1-2.2 3.2M6.6 6.6A17 17 0 0 0 2 12s3.6 8 10 8a9.7 9.7 0 0 0 5.4-1.6M14.1 14.1a3 3 0 1 1-4.2-4.2M2 2l20 20"></path></symbol><symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></symbol><symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path></symbol><symbol id="i-chev-d" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></symbol><symbol id="i-arrow-r" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"></path></symbol><symbol id="i-arrow-l" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"></path></symbol><symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z"></path></symbol><symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"></path></symbol><symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"></path></symbol><symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></symbol><symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"></path></symbol><symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></symbol><symbol id="i-thermo" viewBox="0 0 24 24"><path d="M14 4v10.5a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0z"></path></symbol><symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></symbol><symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"></path></symbol><symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></symbol><symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"></path></symbol><symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-15-6.7L3 13"></path></symbol><symbol id="i-lifebuoy" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4"></circle><path d="m4.9 4.9 4.3 4.3M14.8 14.8l4.3 4.3M14.8 9.2l4.3-4.3M4.9 19.1l4.3-4.3"></path></symbol><symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 22V4M4 4h13l-2 4 2 4H4"></path></symbol><symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"></path></symbol><symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"></path></symbol><symbol id="i-package" viewBox="0 0 24 24"><path d="m7.5 4.3 9 5.2M21 8v8a2 2 0 0 1-1 1.7l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.7l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"></path><path d="M3.3 7 12 12l8.7-5M12 22V12"></path></symbol><symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></symbol><symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M9 21V9"></path></symbol><symbol id="i-logo" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="8" fill="currentColor"></rect><rect x="7" y="8" width="18" height="4" rx="1.6" fill="var(--on-accent)"></rect><rect x="7" y="14" width="18" height="4" rx="1.6" fill="var(--on-accent)" opacity=".7"></rect><rect x="7" y="20" width="18" height="4" rx="1.6" fill="var(--on-accent)" opacity=".45"></rect><circle cx="22" cy="10" r="1.2" fill="currentColor"></circle></symbol><symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"></path></symbol>'''
+
+_UI_TEMPLATE = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>NAS management</title>
 <style nonce="__NONCE__">
-:root{--bg:#f5f6f8;--fg:#1c2128;--mut:#5d6672;--card:#fff;--bd:#d6dae0;--acc:#1f6feb;--accfg:#fff;--ok:#1a7f37;--warn:#9a6700;--bad:#cf222e;--code:#eef0f3}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1318;--fg:#e4e8ee;--mut:#9aa4b2;--card:#171c23;--bd:#2c343f;--acc:#4c8dff;--accfg:#06101f;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--code:#1e252e}}
+/*__TOKENS__*/
+:root{--font-ui:Inter,ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;--font-mono:"JetBrains Mono",ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+--e1:0 1px 2px rgb(0 0 0/.05);--e2:0 4px 12px -2px rgb(0 0 0/.14),0 1px 3px rgb(0 0 0/.08);--e3:0 24px 60px -12px rgb(0 0 0/.5)}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--canvas);color:var(--fg);font:400 14px/21px var(--font-ui)}
 [hidden]{display:none!important}
-header{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem 1rem;padding:.6rem 1rem;background:var(--card);border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5}
-header h1{font-size:1.05rem;margin:0}
-nav{display:flex;flex-wrap:wrap;gap:.25rem;flex:1}
-nav button{background:none;border:1px solid transparent;color:var(--fg);padding:.35rem .7rem;border-radius:6px;cursor:pointer;font:inherit}
-nav button[aria-current=true]{background:var(--acc);color:var(--accfg)}
-main{max-width:1100px;margin:0 auto;padding:1rem}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:.9rem 1rem;margin-bottom:1rem}
-.card h2{font-size:1rem;margin:0 0 .6rem}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:.2rem .8rem;margin:0}
-.kv dt{color:var(--mut)}.kv dd{margin:0;word-break:break-word}
-.scroll{overflow-x:auto}
-table{border-collapse:collapse;width:100%}
-th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid var(--bd);vertical-align:top;white-space:nowrap}
-th{color:var(--mut);font-weight:600;font-size:.85rem}
-td.wrap{white-space:normal}
-.btn{font:inherit;padding:.35rem .75rem;border-radius:6px;border:1px solid var(--bd);background:var(--card);color:var(--fg);cursor:pointer}
-.btn.primary{background:var(--acc);color:var(--accfg);border-color:var(--acc)}
-.btn.danger{color:var(--bad);border-color:var(--bad)}
-.btn:disabled{opacity:.5;cursor:default}
-.row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.4rem 0}
-.badge{display:inline-block;padding:0 .45rem;border-radius:99px;font-size:.78rem;border:1px solid var(--bd);color:var(--mut)}
-.badge.ok{color:var(--ok);border-color:var(--ok)}.badge.warn{color:var(--warn);border-color:var(--warn)}.badge.bad{color:var(--bad);border-color:var(--bad)}
-pre{background:var(--code);padding:.6rem;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:.4rem 0}
-input,select{font:inherit;padding:.35rem .5rem;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--fg);max-width:100%}
-label{display:block;margin:.5rem 0}label span{display:block;color:var(--mut);font-size:.85rem}
-label.chk{display:flex;gap:.5rem;align-items:center}label.chk span{display:inline;color:var(--fg);font-size:inherit}
-small{color:var(--mut);display:block}
-meter{width:100%;height:.8rem}
-dialog{border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--fg);width:min(480px,94vw);padding:1rem}
-dialog::backdrop{background:rgba(0,0,0,.5)}
-.err{color:var(--bad);margin:.4rem 0;white-space:pre-wrap}
-#banner{position:sticky;top:0;z-index:9;background:var(--warn);color:#111;padding:.6rem 1rem;display:flex;gap:.8rem;flex-wrap:wrap;align-items:center}
-#toasts{position:fixed;right:.8rem;bottom:.8rem;display:flex;flex-direction:column;gap:.4rem;z-index:20;max-width:90vw}
-.toast{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--ok);padding:.5rem .8rem;border-radius:6px}
-.toast.bad{border-left-color:var(--bad)}
-.login{max-width:360px;margin:12vh auto}
-.ind1{padding-left:1rem}.ind2{padding-left:2rem}.ind3{padding-left:3rem}
-.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.88rem}
-footer{color:var(--mut);text-align:center;padding:1rem;font-size:.85rem}
-@media (max-width:600px){main{padding:.6rem}.card{padding:.7rem}}
-</style></head>
+.sprite{position:absolute;width:0;height:0;overflow:hidden}
+.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+.ic.sm{width:14px;height:14px}.ic.lg{width:20px;height:20px}.ic.xl{width:28px;height:28px}
+.mono{font-family:var(--font-mono);font-size:13px;line-height:20px;font-variant-numeric:tabular-nums}
+.num{font-variant-numeric:tabular-nums}
+.muted{color:var(--fg-2)}.faint{color:var(--fg-3)}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.skip{position:absolute;left:-999px;top:0;background:var(--accent);color:var(--on-accent);padding:8px 12px;z-index:100;border-radius:0 0 8px 0}
+.skip:focus{left:0}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+/* shell */
+.shell{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:100vh}
+.side{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:16px 12px;position:sticky;top:0;height:100vh}
+.brand{display:flex;gap:10px;align-items:center;padding:4px 8px 16px}
+.brand .ic{width:36px;height:36px;color:var(--accent);stroke:none}
+.brand b{display:block;font-size:15px;line-height:19px}.brand small{display:block;color:var(--fg-2);font-size:12px;line-height:16px;overflow-wrap:anywhere}
+.grp{font-size:12px;line-height:16px;font-weight:600;color:var(--fg-2);padding:8px 8px 6px}
+.nav{display:flex;flex-direction:column;gap:2px;flex:1;overflow:auto}
+.nav button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;border-radius:8px;padding:0 10px;height:36px;color:var(--fg);font:500 14px var(--font-ui);cursor:pointer;transition:background .12s,color .12s}
+.nav button:hover{background:var(--surface-2)}
+.nav button[aria-current=page]{background:var(--accent-bg);color:var(--accent-fg);font-weight:600}
+.nav .badge{margin-left:auto}
+.me{border-top:1px solid var(--border);padding:12px 8px 0;display:flex;gap:10px;align-items:center}
+.avatar{width:32px;height:32px;border-radius:999px;background:var(--accent-bg);color:var(--accent-fg);border:1px solid var(--border);display:grid;place-items:center;font-weight:650;font-size:12px;flex:none}
+.me small{display:block;color:var(--fg-2);font-size:12px;line-height:16px}
+.ver{color:var(--fg-3);font-size:12px;text-align:center;padding:8px 0 0}
+.mc{min-width:0;display:flex;flex-direction:column}
+.top{height:54px;display:flex;align-items:center;gap:12px;padding:0 24px;border-bottom:1px solid var(--border);background:var(--canvas);position:sticky;top:0;z-index:5}
+.crumb{color:var(--fg-2);font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.crumb b{color:var(--fg);font-weight:600}
+.page{padding:24px;max-width:1280px;width:100%}
+.ph{display:flex;gap:16px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-bottom:16px}
+h1{font-size:24px;line-height:29px;font-weight:650;letter-spacing:-.015em;margin:0}
+.ph p{margin:2px 0 0;color:var(--fg-2);font-size:14px}
+h2,h3{margin:0}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.stack{display:flex;flex-direction:column;gap:16px}
+.cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:16px}
+.btn.burger,.tabbar{display:none}
+/* cards, tiles */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--e1);margin-bottom:16px;min-width:0}
+.cols .card,.stack .card{margin-bottom:0}
+.ch{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.ch h2{font-size:14px;line-height:20px;font-weight:620;flex:1;display:flex;gap:8px;align-items:center;min-width:0}
+.cb{padding:16px}.cb.flush{padding:0}.cb>.row,.cb>.kv+.row,.cb>p+.row{margin-top:12px}
+td .chk{white-space:nowrap;margin:0}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--e1);padding:14px 16px;min-width:0;position:relative}
+.tile .lab{display:flex;justify-content:space-between;align-items:center;color:var(--fg);font-size:13px;font-weight:500}
+.tile .lab .ic{color:var(--fg-2)}
+.tile .val{font-size:28px;line-height:34px;font-weight:650;letter-spacing:-.02em;margin-top:2px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.tile .val small{font-size:13px;font-weight:400;color:var(--fg-2);letter-spacing:0;margin-left:4px}
+.tile .sub{font-size:12px;line-height:16px;color:var(--fg-2);margin-top:2px;overflow-wrap:anywhere}
+.tile.e-ok{box-shadow:inset 3px 0 0 var(--ok-solid),var(--e1)}.tile.e-warn{box-shadow:inset 3px 0 0 var(--warn-solid),var(--e1)}.tile.e-err{box-shadow:inset 3px 0 0 var(--err-solid),var(--e1)}
+.kv{display:grid;grid-template-columns:minmax(90px,max-content) 1fr;gap:6px 16px;margin:0}
+.kv dt{color:var(--fg-2)}.kv dd{margin:0;overflow-wrap:anywhere}
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);color:var(--fg);font:600 13px var(--font-ui);cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}.btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+.btn.danger{background:var(--danger);border-color:var(--danger);color:var(--on-danger)}.btn.danger:hover{background:var(--danger-hover);border-color:var(--danger-hover)}
+.btn.ghost{border-color:transparent;background:none}.btn.ghost:hover{background:var(--surface-2)}
+.btn.sm{height:28px;padding:0 10px}.btn.lg{height:42px;padding:0 18px}
+.btn:disabled{background:var(--surface-2);color:var(--fg-2);border:1px dashed var(--border-strong);cursor:not-allowed}
+.icon-btn{width:36px;padding:0}
+/* forms */
+label.f{display:block;margin:0 0 14px}
+label.f>span{display:block;font-size:13px;font-weight:620;margin-bottom:4px}
+.help{display:block;font-size:12px;line-height:16px;color:var(--fg-2);margin-top:4px}
+input,select{font:400 13px var(--font-ui);height:36px;padding:0 10px;border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);color:var(--fg);width:100%;max-width:100%}
+input.mono,select.mono{font-family:var(--font-mono)}
+input[type=checkbox],input[type=radio]{width:20px;height:20px;padding:0;accent-color:var(--accent);flex:none}
+input[type=range]{padding:0;border:0;height:24px;accent-color:var(--accent);background:none}
+.chk{display:flex;gap:10px;align-items:flex-start;margin:0 0 10px}.chk>span{font-size:13px}
+.seg{margin-bottom:14px;display:inline-flex;border:1px solid var(--border-strong);border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg button{border:0;background:none;color:var(--fg);padding:0 14px;height:34px;font:600 13px var(--font-ui);cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.opt{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border:1px solid var(--border-strong);border-radius:8px;margin-bottom:8px;cursor:pointer;background:var(--surface)}
+.opt.sel{background:var(--accent-bg);border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.opt.off{border-style:dashed;cursor:not-allowed;background:var(--surface-2);color:var(--fg-2)}
+.opt b{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.opt small{display:block;color:var(--fg-2);font-size:13px;line-height:19px;margin-top:2px}
+.opt.sel small{color:var(--fg-2)}
+/* badges, banners */
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:6px;border:1px solid var(--border-strong);background:var(--surface-2);color:var(--fg-2);font:620 12px var(--font-ui);white-space:nowrap;vertical-align:middle}
+.badge.ok{background:var(--ok-bg);color:var(--ok-fg);border-color:color-mix(in srgb,var(--ok-solid) 50%,transparent)}
+.badge.warn{background:var(--warn-bg);color:var(--warn-fg);border-color:color-mix(in srgb,var(--warn-solid) 50%,transparent)}
+.badge.err{background:var(--err-bg);color:var(--err-fg);border-color:color-mix(in srgb,var(--err-solid) 50%,transparent)}
+.badge.info{background:var(--info-bg);color:var(--info-fg);border-color:color-mix(in srgb,var(--info-solid) 50%,transparent)}
+.badge.accent{background:var(--accent-bg);color:var(--accent-fg);border-color:color-mix(in srgb,var(--accent) 50%,transparent)}
+.badge.neutral{border-style:dashed}
+.chip{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--border-strong);border-radius:6px;padding:0 8px;height:22px;font-size:12px;background:var(--surface)}
+.banner{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-radius:8px;border:1px solid;margin-bottom:16px}
+.banner>.ic{width:18px;height:18px;margin-top:2px}
+.banner .bt{flex:1;min-width:0}.banner b{display:block;font-weight:650}.banner p{margin:0}
+.banner .acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.banner.info{background:var(--info-bg);color:var(--info-fg);border-color:color-mix(in srgb,var(--info-solid) 50%,transparent)}
+.banner.ok{background:var(--ok-bg);color:var(--ok-fg);border-color:color-mix(in srgb,var(--ok-solid) 50%,transparent)}
+.banner.warn{background:var(--warn-bg);color:var(--warn-fg);border-color:color-mix(in srgb,var(--warn-solid) 50%,transparent)}
+.banner.err{background:var(--err-bg);color:var(--err-fg);border-color:color-mix(in srgb,var(--err-solid) 50%,transparent);box-shadow:inset 3px 0 0 var(--err-solid)}
+.banner.accent{background:var(--accent-bg);color:var(--accent-fg);border-color:color-mix(in srgb,var(--accent) 50%,transparent)}
+.banner .btn{color:var(--fg)}.banner .btn.primary{color:var(--on-accent)}.banner .btn.danger{color:var(--on-danger)}
+.pend{margin:16px 24px 0;position:sticky;top:62px;z-index:4;margin-bottom:0}
+.ring{width:48px;height:48px;flex:none;position:relative;margin-top:0}
+.ring svg{width:48px;height:48px;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:4}.ring .tr{stroke:color-mix(in srgb,currentColor 25%,transparent)}.ring .fg{stroke:currentColor;stroke-linecap:round}
+.ring b{position:absolute;inset:0;display:grid;place-items:center;font-size:14px;font-weight:650}
+/* tables */
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px;line-height:19px}
+th{background:var(--surface-2);color:var(--fg-2);font:620 12px/16px var(--font-ui);text-align:left;padding:10px 14px;white-space:nowrap}
+td{padding:10px 14px;border-top:1px solid var(--border);vertical-align:middle}
+tr.attn>td:first-child{box-shadow:inset 3px 0 0 var(--warn-solid)}tr.bad>td:first-child{box-shadow:inset 3px 0 0 var(--err-solid)}tr.selrow{background:var(--accent-bg)}
+td.r,th.r{text-align:right}
+.ind1{padding-left:14px}.ind2{padding-left:28px}.ind3{padding-left:42px}
+.empty{padding:20px 16px;color:var(--fg-2);display:flex;gap:10px;align-items:center}
+/* progress */
+progress{appearance:none;-webkit-appearance:none;display:block;width:100%;height:8px;border:0;border-radius:999px;background:var(--surface-3);overflow:hidden}
+progress::-webkit-progress-bar{background:var(--surface-3);border-radius:999px}
+progress::-webkit-progress-value{background:var(--accent);border-radius:999px}
+progress::-moz-progress-bar{background:var(--accent);border-radius:999px}
+progress.warn::-webkit-progress-value{background:var(--warn-solid)}progress.warn::-moz-progress-bar{background:var(--warn-solid)}
+progress.err::-webkit-progress-value{background:var(--err-solid)}progress.err::-moz-progress-bar{background:var(--err-solid)}
+progress.ok::-webkit-progress-value{background:var(--ok-solid)}progress.ok::-moz-progress-bar{background:var(--ok-solid)}
+.pr{display:flex;align-items:center;gap:8px;min-width:120px}.pr progress{min-width:64px}.lc .btn.primary{width:100%}.pr progress{flex:1}.pr span{font-size:12px;color:var(--fg-2);white-space:nowrap}
+/* stepper */
+.steps{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px}
+.steps div{flex:1;display:flex;gap:8px;align-items:center;justify-content:center;padding:0 8px;height:40px;font-size:13px;color:var(--fg-2);border-right:1px solid var(--border);white-space:nowrap}
+.steps div:last-child{border-right:0}
+.steps div i{font-style:normal;display:grid;place-items:center;width:22px;height:22px;border-radius:999px;border:1px solid var(--border-strong);font-size:12px;flex:none}
+.steps .cur{background:var(--accent-bg);color:var(--accent-fg);font-weight:650}.steps .cur i{border:2px solid var(--accent)}
+.steps .done i{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.plan li{display:flex;gap:10px;margin:0 0 10px;list-style:none}.plan ul{margin:0;padding:0}
+.cap{font:620 12px/16px var(--font-ui);color:var(--fg-2);margin:14px 0 6px}
+pre.code{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:0;overflow:auto;font:400 12.5px/1.65 var(--font-mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.log{background:var(--log-bg);color:var(--log-fg);border-radius:8px;padding:8px 0;font:400 12px/20px var(--font-mono);max-height:340px;overflow:auto}
+.log div{display:grid;grid-template-columns:62px 1fr;gap:8px;padding:1px 12px}
+.log .lv{color:var(--log-inf)}.log .e{background:color-mix(in srgb,var(--log-err) 12%,transparent);box-shadow:inset 3px 0 0 var(--log-err)}.log .e .lv{color:var(--log-err)}
+.log .w .lv{color:var(--log-wrn)}.log .m{color:var(--log-dim);padding-left:82px;display:block;grid-column:1/-1;white-space:pre-wrap;overflow-wrap:anywhere}
+/* dialog */
+dialog{border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--fg);width:min(520px,calc(100vw - 24px));padding:0;box-shadow:var(--e3);overflow:hidden}
+dialog::backdrop{background:color-mix(in srgb,var(--overlay) 55%,transparent)}
+.dh{display:flex;gap:12px;align-items:flex-start;padding:20px 20px 0}.dh h3{font-size:16px;line-height:21px;font-weight:620}.dh p{margin:2px 0 0;color:var(--fg-2);font-size:13px}
+.dh>.ic{width:22px;height:22px;margin-top:1px;color:var(--accent-fg)}.dh.bad>.ic{color:var(--err-solid)}
+.db{padding:16px 20px 4px}
+.df{display:flex;gap:8px;justify-content:flex-end;padding:14px 20px;background:var(--surface-2);border-top:1px solid var(--border);margin-top:12px;flex-wrap:wrap}
+.err{color:var(--err-fg);display:flex;gap:6px;margin:0 0 10px;font-size:13px}
+/* login */
+.lw{min-height:100vh;display:grid;place-items:center;padding:16px}
+.lw>div{width:min(400px,100%)}.lc{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--e1);overflow:hidden}
+.lc form{padding:28px 28px 22px}
+.lc .brand2{text-align:center;margin-bottom:18px}.lc .brand2 .ic{width:36px;height:36px;color:var(--accent);stroke:none}
+.lc h1{font-size:20px;line-height:26px;margin-top:6px}
+.lf{background:var(--surface-2);border-top:1px solid var(--border);padding:12px 16px;font-size:12px;color:var(--fg-2);display:flex;gap:8px;align-items:flex-start}
+.lf .mono{font-size:12px;overflow-wrap:anywhere}
+.pw{position:relative}.pw .icon-btn{position:absolute;right:0;top:0;border:0;background:none;height:36px}
+#toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:50;max-width:calc(100vw - 32px)}
+.toast{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--ok-solid);padding:10px 14px;border-radius:8px;box-shadow:var(--e2);display:flex;gap:8px;max-width:420px}
+.toast.bad{border-left-color:var(--err-solid)}
+.sk{color:var(--fg-2);padding:24px 0}
+@media (max-width:1100px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.cols{grid-template-columns:1fr}.steps div span{display:none}.steps .cur span{display:inline}}
+@media (max-width:860px){
+ .shell{display:block}
+ .side{position:fixed;inset:0 auto 0 0;width:min(280px,86vw);z-index:30;transform:translateX(-100%);transition:transform .2s;box-shadow:var(--e3)}
+ .side.open{transform:none}
+ .btn.burger{display:inline-flex}
+ .top{padding:0 12px}.page{padding:16px 16px 84px}.pend{margin:12px 16px 0}
+ .tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--surface);border-top:1px solid var(--border);padding:6px 6px calc(6px + env(safe-area-inset-bottom))}
+ .tabbar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;min-height:44px;border:0;border-radius:8px;background:none;color:var(--fg-2);font:500 11px var(--font-ui);cursor:pointer}
+ .tabbar button[aria-current=page]{background:var(--accent-bg);color:var(--accent-fg);font-weight:650}
+ .btn,input,select{min-height:44px}.btn.sm{min-height:36px}.seg button{height:42px}
+ .scrim{position:fixed;inset:0;background:color-mix(in srgb,var(--overlay) 55%,transparent);z-index:25}
+}
+@media (max-width:600px){
+ .tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.tile{padding:12px}.tile .val{font-size:24px;line-height:30px}
+ .grid2{grid-template-columns:1fr}
+ table.st thead{display:none}
+ table.st,table.st tbody,table.st tr,table.st td{display:block}
+ table.st tr{border-top:1px solid var(--border);padding:8px 0}
+ table.st td{border:0;padding:3px 14px;display:flex;gap:12px;justify-content:space-between;text-align:right}
+ table.st td::before{content:attr(data-l);color:var(--fg-2);font-size:12px;font-weight:620;text-align:left;flex:none}
+ table.st td[data-l=""]::before{content:none}
+ table.st td[data-l=""]{justify-content:flex-start;text-align:left}
+ .steps div{padding:0 4px}.ph h1{font-size:22px}
+ .banner{flex-wrap:wrap}.banner .bt{flex:1 1 calc(100% - 64px)}.banner .acts{flex:1 1 100%}.banner .acts .btn{flex:1}
+ .pend{position:static}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+@media (forced-colors:active){.btn,.badge,.card,.tile,.opt{border:1px solid ButtonText}.opt.sel{outline:2px solid Highlight}}
+</style>
+<script nonce="__NONCE__">
+try{var t=localStorage.getItem('fv-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}
+</script>
+</head>
 <body>
-<div id="banner" hidden></div>
-<header id="top" hidden><h1 id="host">NAS</h1><nav id="nav"></nav><span id="who" class="badge"></span><button class="btn" id="logout">Log out</button></header>
-<main id="app"></main>
-<footer>synofurb-mgmt __VERSION__</footer>
-<div id="toasts"></div>
+<svg class="sprite" aria-hidden="true" focusable="false"><!--__SPRITE__--></svg>
+<a class="skip" href="#main">Skip to content</a>
+<div id="root"></div>
+<div id="toasts" role="status" aria-live="polite"></div>
+<div id="live" class="vh" role="status" aria-live="polite"></div>
 <script nonce="__NONCE__">
 'use strict';
-const state = {csrf: null, user: null, tab: 'status', deadline: 0, tick: null, poll: null};
+const NS = 'http://www.w3.org/2000/svg';
+const S = {csrf: null, user: null, host: '', version: '__VERSION__', page: 'dashboard', pend: null, tick: null, poll: null, st: null};
 const $ = (s, r = document) => r.querySelector(s);
 function h(tag, attrs, ...kids) {
   const e = document.createElement(tag);
@@ -2728,20 +3158,30 @@ function h(tag, attrs, ...kids) {
   }
   return e;
 }
+function ic(name, cls) {
+  const s = document.createElementNS(NS, 'svg');
+  s.setAttribute('class', 'ic ' + (cls || ''));
+  s.setAttribute('aria-hidden', 'true');
+  const u = document.createElementNS(NS, 'use');
+  u.setAttribute('href', '#i-' + name);
+  s.append(u);
+  return s;
+}
 const fmtBytes = n => {
-  if (n == null) return '-';
+  if (n == null || isNaN(n)) return '-';
   const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
   let i = 0, v = Number(n);
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-  return (i ? v.toFixed(v >= 100 ? 0 : 1) : v) + ' ' + u[i];
+  return (i ? v.toFixed(v >= 100 ? 0 : 2) : v) + ' ' + u[i];
 };
 const fmtDur = s => {
   if (s == null) return '-';
   const d = Math.floor(s / 86400), hh = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-  return (d ? d + 'd ' : '') + hh + 'h ' + m + 'm';
+  return (d ? d + ' d ' : '') + hh + ' h ' + m + ' m';
 };
+const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
 function toast(msg, bad) {
-  const t = h('div', {class: 'toast' + (bad ? ' bad' : '')}, msg);
+  const t = h('div', {class: 'toast' + (bad ? ' bad' : '')}, ic(bad ? 'octagon-x' : 'check'), h('span', {}, msg));
   $('#toasts').append(t);
   setTimeout(() => t.remove(), bad ? 9000 : 4000);
 }
@@ -2749,347 +3189,640 @@ async function api(method, path, body) {
   const opt = {method, headers: {}, credentials: 'same-origin'};
   if (method !== 'GET') {
     opt.headers['Content-Type'] = 'application/json';
-    opt.headers['X-CSRF-Token'] = state.csrf || '';
+    opt.headers['X-CSRF-Token'] = S.csrf || '';
     opt.body = JSON.stringify(body || {});
   }
   const r = await fetch(path, opt);
   let j = {};
   try { j = await r.json(); } catch (e) { /* non-JSON */ }
   if (r.status === 401 && path !== '/api/login') { showLogin(); throw new Error('Session expired, please log in again'); }
-  if (!r.ok || j.ok === false) {
-    const e = new Error(j.error || ('HTTP ' + r.status));
-    e.data = j;
-    throw e;
-  }
+  if (!r.ok || j.ok === false) { const e = new Error(j.error || ('HTTP ' + r.status)); e.data = j; throw e; }
   return j;
 }
 async function act(btn, fn) {
   if (btn) btn.disabled = true;
   try { await fn(); } catch (e) { toast(e.message, true); } finally { if (btn) btn.disabled = false; }
 }
-function table(head, rows, empty) {
-  if (!rows.length) return h('p', {class: 'badge'}, empty || 'none');
-  return h('div', {class: 'scroll'}, h('table', {}, h('thead', {}, h('tr', {}, head.map(x => h('th', {}, x)))),
-    h('tbody', {}, rows.map(r => h('tr', {}, r.map(c => h('td', {}, c)))))));
+/* ---------- building blocks ---------- */
+const KIND_ICON = {ok: 'check', warn: 'alert', err: 'ban', info: 'info', neutral: 'help', accent: 'flag'};
+const badge = (kind, text, icon) => h('span', {class: 'badge ' + kind}, ic(icon || KIND_ICON[kind] || 'info', 'sm'), text);
+const chip = (a, b) => h('span', {class: 'chip'}, h('b', {}, a), b ? h('span', {class: 'mono'}, b) : null);
+function banner(kind, title, text, ...acts) {
+  const el = h('div', {class: 'banner ' + kind}, ic(KIND_ICON[kind] === 'help' ? 'info' : KIND_ICON[kind], 'lg'),
+    h('div', {class: 'bt'}, h('b', {}, title), text ? h('p', {}, text) : null),
+    acts.length ? h('div', {class: 'acts'}, acts) : null);
+  if (kind === 'warn' || kind === 'err') el.setAttribute('role', 'alert');
+  return el;
 }
-const badge = (t, cls) => h('span', {class: 'badge ' + (cls || '')}, t);
-const card = (title, ...kids) => h('section', {class: 'card'}, h('h2', {}, title), kids);
-const kv = pairs => h('dl', {class: 'kv'}, pairs.filter(p => p[1] != null && p[1] !== '').map(p => [h('dt', {}, p[0]), h('dd', {}, p[1])]));
-
-function formDialog(title, fields, okLabel, onSubmit, danger, intro) {
-  const dlg = h('dialog', {});
-  const err = h('div', {class: 'err'});
-  const inputs = {};
-  const form = h('form', {method: 'dialog'}, h('h3', {}, title), intro ? h('p', {}, intro) : null);
-  for (const f of fields) {
-    let inp;
-    if (f.type === 'select') {
-      inp = h('select', {name: f.name}, f.options.map(o => h('option', {value: o.v ?? o, selected: (o.v ?? o) === f.value}, o.t ?? o)));
-    } else if (f.type === 'checkbox') {
-      inp = h('input', {type: 'checkbox', name: f.name, checked: !!f.value});
-    } else {
-      inp = h('input', {type: f.type || 'text', name: f.name, value: f.value ?? '', placeholder: f.placeholder || '', autocomplete: 'off'});
-    }
-    inputs[f.name] = inp;
-    form.append(h('label', {class: f.type === 'checkbox' ? 'chk' : ''}, h('span', {}, f.label), inp), f.hint ? h('small', {}, f.hint) : null);
-  }
-  const ok = h('button', {type: 'submit', class: 'btn ' + (danger ? 'danger' : 'primary')}, okLabel);
-  form.append(err, h('div', {class: 'row'}, ok, h('button', {type: 'button', class: 'btn', onclick: () => dlg.close()}, 'Cancel')));
-  form.addEventListener('submit', async ev => {
-    ev.preventDefault();
-    const vals = {};
-    for (const [k, i] of Object.entries(inputs)) vals[k] = i.type === 'checkbox' ? i.checked : i.value;
-    ok.disabled = true; err.textContent = '';
-    try { await onSubmit(vals); dlg.close(); } catch (e) { err.textContent = e.message; }
-    ok.disabled = false;
-  });
-  dlg.append(form);
+const btn = (label, o = {}) => h('button', {type: 'button', class: 'btn ' + (o.kind || '') + ' ' + (o.size || ''), disabled: !!o.disabled, onclick: o.onclick, title: o.title},
+  o.icon ? ic(o.icon) : null, label);
+function card(title, icon, right, ...body) {
+  return h('section', {class: 'card'}, h('div', {class: 'ch'}, h('h2', {}, icon ? ic(icon, 'lg') : null, title), right || null),
+    h('div', {class: 'cb'}, body));
+}
+function cardFlush(title, icon, right, ...body) {
+  return h('section', {class: 'card'}, h('div', {class: 'ch'}, h('h2', {}, icon ? ic(icon, 'lg') : null, title), right || null), h('div', {class: 'cb flush'}, body));
+}
+function tile(label, icon, value, unit, sub, edge) {
+  return h('div', {class: 'tile' + (edge ? ' e-' + edge : '')}, h('div', {class: 'lab'}, label, ic(icon)),
+    h('div', {class: 'val'}, value, unit ? h('small', {}, unit) : null), h('div', {class: 'sub'}, sub || ' '));
+}
+function table(head, rows, empty, o = {}) {
+  if (!rows.length) return h('div', {class: 'empty'}, ic('info'), empty || 'Nothing to show');
+  return h('div', {class: 'tw'}, h('table', {class: 'st'},
+    h('thead', {}, h('tr', {}, head.map((x, i) => h('th', {class: (o.right || []).includes(i) ? 'r' : ''}, x)))),
+    h('tbody', {}, rows.map(r => {
+      const cells = Array.isArray(r) ? r : r.cells;
+      return h('tr', {class: Array.isArray(r) ? '' : (r.cls || '')}, cells.map((c, i) => h('td', {'data-l': head[i] || '', class: (o.right || []).includes(i) ? 'r num' : ''}, c)));
+    }))));
+}
+function pageHead(title, sub, ...actions) {
+  return h('div', {class: 'ph'}, h('div', {}, h('h1', {}, title), sub ? h('p', {}, sub) : null), actions.length ? h('div', {class: 'row'}, actions) : null);
+}
+function bar(value, max, kind) {
+  const p = h('progress', {max: max || 1, value: Math.min(value, max || 1), class: kind || ''});
+  return p;
+}
+function usage(used, total) {
+  const p = pct(used, total), kind = p >= 95 ? 'err' : p >= 85 ? 'warn' : '';
+  return h('div', {class: 'pr'}, bar(used, total, kind), h('span', {class: 'num'}, fmtBytes(used) + ' / ' + fmtBytes(total)));
+}
+function field(label, input, help) { return h('label', {class: 'f'}, h('span', {}, label), input, help ? h('small', {class: 'help'}, help) : null); }
+/* ---------- dialogs (also the confirm-action pattern: simple / typed name) ---------- */
+function dialog(title, o, bodyFn, footerFn) {
+  const dlg = h('dialog', {'aria-labelledby': 'dlg-t'});
+  const close = () => dlg.close();
+  dlg.append(h('div', {class: 'dh' + (o.danger ? ' bad' : '')}, ic(o.icon || (o.danger ? 'octagon-x' : 'info')),
+    h('div', {}, h('h3', {id: 'dlg-t'}, title), o.sub ? h('p', {}, o.sub) : null)));
+  const err = h('div', {class: 'err', role: 'alert', hidden: true});
+  const body = h('div', {class: 'db'}, bodyFn ? bodyFn(close) : null, err);
+  dlg.append(body, h('div', {class: 'df'}, footerFn(close, msg => { err.hidden = !msg; err.replaceChildren(ic('octagon-x'), msg || ''); })));
   dlg.addEventListener('close', () => dlg.remove());
   document.body.append(dlg);
   dlg.showModal();
+  const first = dlg.querySelector('input,select'); if (first) first.focus();
+  return dlg;
 }
-const typedConfirm = (title, expected, extra, onSubmit, intro) =>
-  formDialog(title, [{name: 'confirm', label: 'Type "' + expected + '" to confirm', placeholder: expected}, ...(extra || [])],
-    'Confirm', v => { if (v.confirm !== expected) throw new Error('Confirmation text does not match'); return onSubmit(v); }, true, intro);
-
-/* ---------- login / shell ---------- */
-async function showLogin() {
-  state.user = null; state.csrf = null; clearPending();
-  $('#top').hidden = true;
-  const err = h('div', {class: 'err'});
-  const fp = h('small', {class: 'mono'});
-  const u = h('input', {name: 'username', autocomplete: 'username', autofocus: true});
-  const p = h('input', {name: 'password', type: 'password', autocomplete: 'current-password'});
-  const btn = h('button', {class: 'btn primary', type: 'submit'}, 'Log in');
-  const form = h('form', {class: 'card login'}, h('h2', {}, 'NAS management'),
-    h('label', {}, h('span', {}, 'User (member of group sudo)'), u), h('label', {}, h('span', {}, 'Password'), p), err, btn, fp);
-  form.addEventListener('submit', async ev => {
-    ev.preventDefault(); btn.disabled = true; err.textContent = '';
-    try {
-      const r = await api('POST', '/api/login', {username: u.value, password: p.value});
-      state.csrf = r.csrf; state.user = r.user; p.value = '';
-      await start();
-    } catch (e) { err.textContent = e.message; }
-    btn.disabled = false;
+function formDialog(title, fields, okLabel, onSubmit, o = {}) {
+  const inputs = {};
+  const rows = fields.map(f => {
+    let inp;
+    if (f.type === 'select') inp = h('select', {name: f.name}, f.options.map(x => h('option', {value: x.v ?? x, selected: (x.v ?? x) === f.value}, x.t ?? x)));
+    else if (f.type === 'checkbox') inp = h('input', {type: 'checkbox', name: f.name, checked: !!f.value});
+    else inp = h('input', {type: f.type || 'text', name: f.name, value: f.value ?? '', placeholder: f.placeholder || '', autocomplete: f.type === 'password' ? 'new-password' : 'off', class: f.mono ? 'mono' : ''});
+    inputs[f.name] = inp;
+    return f.type === 'checkbox' ? h('label', {class: 'chk'}, inp, h('span', {}, f.label)) : field(f.label, inp, f.hint);
   });
-  $('#app').replaceChildren(form);
+  return dialog(title, o, () => h('form', {onsubmit: ev => ev.preventDefault()}, rows), (close, setErr) => {
+    const ok = h('button', {type: 'button', class: 'btn ' + (o.danger ? 'danger' : 'primary')}, o.okIcon ? ic(o.okIcon) : null, okLabel);
+    ok.addEventListener('click', async () => {
+      const v = {};
+      for (const [k, i] of Object.entries(inputs)) v[k] = i.type === 'checkbox' ? i.checked : i.value;
+      ok.disabled = true; setErr('');
+      try { await onSubmit(v); close(); } catch (e) { setErr(e.message); ok.disabled = false; }
+    });
+    return [h('button', {type: 'button', class: 'btn', onclick: close}, 'Cancel'), ok];
+  });
+}
+/* typed-name confirm: the action button stays disabled until the text matches exactly */
+function confirmAction(o) {
+  let inp = null, ok = null;
+  return dialog(o.title, {danger: o.danger !== false, sub: o.sub, icon: o.icon}, () => h('div', {},
+    o.body ? (typeof o.body === 'string' ? h('p', {}, o.body) : o.body) : null,
+    o.expected ? field('Type "' + o.expected + '" to confirm', inp = h('input', {class: 'mono', autocomplete: 'off', spellcheck: 'false', 'aria-describedby': 'cnt',
+      oninput: () => { ok.disabled = inp.value !== o.expected; $('#cnt').textContent = inp.value.length + ' / ' + o.expected.length + (inp.value === o.expected ? ' - matches' : ''); }}),
+      null) : null,
+    o.expected ? h('small', {class: 'help', id: 'cnt', role: 'status'}, '0 / ' + o.expected.length) : null,
+    (o.extra || []).map(x => x)), (close, setErr) => {
+      ok = h('button', {type: 'button', class: 'btn ' + (o.danger === false ? 'primary' : 'danger'), disabled: !!o.expected}, o.icon ? ic(o.icon === 'octagon-x' ? 'trash' : o.icon) : (o.danger === false ? null : ic('trash')), o.label || 'Confirm');
+      ok.addEventListener('click', async () => {
+        ok.disabled = true; setErr('');
+        try { await o.onConfirm(inp ? inp.value : ''); close(); } catch (e) { setErr(e.message); ok.disabled = !!o.expected && inp.value !== o.expected; }
+      });
+      return [h('button', {type: 'button', class: 'btn', onclick: close}, 'Cancel'), ok];
+    });
+}
+/* ---------- theme ---------- */
+function effTheme() {
+  const t = document.documentElement.getAttribute('data-theme');
+  return t || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
+}
+function toggleTheme() {
+  const n = effTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', n);
+  try { localStorage.setItem('fv-theme', n); } catch (e) { /* private mode */ }
+}
+const themeBtn = () => h('button', {type: 'button', class: 'btn ghost icon-btn', title: 'Toggle light / dark theme', 'aria-label': 'Toggle light or dark theme', onclick: toggleTheme}, ic('sun', 'lg'));
+/* ---------- login ---------- */
+async function showLogin() {
+  S.user = null; S.csrf = null; clearPending();
+  const err = h('div', {class: 'err', role: 'alert', hidden: true});
+  const u = h('input', {name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', required: true});
+  const p = h('input', {name: 'password', type: 'password', autocomplete: 'current-password', required: true});
+  const eye = h('button', {type: 'button', class: 'btn icon-btn', 'aria-label': 'Show password', onclick: () => { const s = p.type === 'password'; p.type = s ? 'text' : 'password'; eye.replaceChildren(ic(s ? 'eye-off' : 'eye')); }}, ic('eye'));
+  const go = h('button', {class: 'btn primary lg', type: 'submit'}, 'Sign in', ic('arrow-r'));
+  const title = h('h1', {}, 'NAS management');
+  const sub = h('p', {class: 'muted'}, 'Sign in to manage this NAS');
+  const fp = h('span', {class: 'mono'}, 'checking...');
+  const form = h('form', {onsubmit: async ev => {
+    ev.preventDefault(); go.disabled = true; err.hidden = true;
+    try { const r = await api('POST', '/api/login', {username: u.value, password: p.value}); S.csrf = r.csrf; S.user = r.user; p.value = ''; await start(); }
+    catch (e) { err.hidden = false; err.replaceChildren(ic('octagon-x'), e.message); go.disabled = false; }
+  }}, h('div', {class: 'brand2'}, ic('logo'), title, sub),
+    field('Username', u), field('Password', h('div', {class: 'pw'}, p, eye)), err, go,
+    h('p', {class: 'help'}, 'Members of the "sudo" group only. The root account cannot sign in here.'));
+  $('#root').replaceChildren(h('main', {class: 'lw', id: 'main'}, h('div', {}, h('div', {class: 'lc'}, form,
+    h('div', {class: 'lf'}, ic('lock'), h('div', {}, 'Self-signed certificate. Compare the SHA-256 fingerprint with the installer summary: ', fp))),
+    h('div', {class: 'ver'}, 'synofurb-mgmt ' + S.version))));
+  u.focus();
   try {
     const f = await (await fetch('/api/tls-fingerprint')).json();
-    if (f.sha256) fp.textContent = 'Certificate SHA-256: ' + f.sha256;
-  } catch (e) { /* ignore */ }
+    fp.textContent = f.sha256 || 'not available (plain HTTP)';
+    if (f.hostname) title.textContent = f.hostname;
+  } catch (e) { fp.textContent = 'not available'; }
 }
-const TABS = [['status', 'Status'], ['users', 'Users'], ['network', 'Network'], ['volumes', 'Volumes'], ['mounts', 'Mounts'], ['services', 'System']];
+/* ---------- shell ---------- */
+const NAV = [
+  ['dashboard', 'Dashboard', 'gauge'], ['storage', 'Storage', 'database'], ['imported', 'Imported volumes', 'package'],
+  ['network', 'Network', 'network'], ['users', 'Users', 'users'], ['boot', 'Boot manager', 'board'], ['system', 'System', 'settings'],
+];
+const TABBAR = ['dashboard', 'storage', 'network', 'users', 'boot'];
+function buildShell() {
+  const nav = h('nav', {class: 'nav', 'aria-label': 'Main'});
+  const side = h('aside', {class: 'side', id: 'side'}, h('div', {class: 'brand'}, ic('logo'), h('div', {}, h('b', {}, 'synofurb'), h('small', {id: 'sh'}, S.host))),
+    h('div', {class: 'grp'}, 'MANAGE'), nav,
+    h('div', {class: 'me'}, h('div', {class: 'avatar'}, S.user.slice(0, 2).toUpperCase()), h('div', {}, h('b', {}, S.user), h('small', {}, 'Administrator')),
+      h('button', {type: 'button', class: 'btn ghost icon-btn', title: 'Log out', 'aria-label': 'Log out', onclick: async () => { try { await api('POST', '/api/logout'); } catch (e) { /* ignore */ } showLogin(); }}, ic('power'))),
+    h('div', {class: 'ver'}, 'synofurb-mgmt ' + S.version));
+  const scrim = h('div', {class: 'scrim', hidden: true, onclick: () => closeNav()});
+  const top = h('header', {class: 'top'},
+    h('button', {type: 'button', class: 'btn ghost icon-btn burger', 'aria-label': 'Open menu', onclick: () => { side.classList.add('open'); scrim.hidden = false; }}, ic('menu', 'lg')),
+    h('div', {class: 'crumb', id: 'crumb'}), themeBtn());
+  const tabbar = h('nav', {class: 'tabbar', 'aria-label': 'Quick navigation'});
+  const mc = h('div', {class: 'mc'}, top, h('div', {id: 'pend'}), h('main', {class: 'page', id: 'main', tabindex: '-1'}));
+  $('#root').replaceChildren(h('div', {class: 'shell'}, side, mc), scrim, tabbar);
+  S.nav = {nav, tabbar, side, scrim};
+  renderNav();
+}
+function closeNav() { S.nav.side.classList.remove('open'); S.nav.scrim.hidden = true; }
+function renderNav() {
+  const mk = ([id, label, icon], cls) => h('button', {type: 'button', 'aria-current': id === S.page ? 'page' : null, onclick: () => { closeNav(); show(id); }}, ic(icon), h('span', {}, label));
+  S.nav.nav.replaceChildren(...NAV.map(n => {
+    const b = mk(n);
+    if (n[0] === 'storage' && S.alerts && S.alerts.storage) b.append(badge('warn', String(S.alerts.storage), 'alert'));
+    return b;
+  }));
+  S.nav.tabbar.replaceChildren(...NAV.filter(n => TABBAR.includes(n[0])).map(n => { const b = mk(n); b.firstChild.className.baseVal += ' lg'; return b; }));
+  const cur = NAV.find(n => n[0] === S.page);
+  $('#crumb').replaceChildren(S.host + ' / ', h('b', {}, cur ? cur[1] : ''));
+}
 async function start() {
   const me = await api('GET', '/api/me');
-  state.csrf = me.csrf; state.user = me.user;
-  $('#host').textContent = me.hostname + (me.dry_run ? ' (dry-run)' : '');
-  $('#who').textContent = me.user;
-  $('#top').hidden = false;
+  S.csrf = me.csrf; S.user = me.user; S.host = me.hostname; S.version = me.version;
+  document.title = me.hostname + ' - NAS management';
+  buildShell();
   setPending(me.net_pending);
-  show(state.tab);
+  show(S.page);
 }
-function show(tab) {
-  state.tab = tab;
-  $('#nav').replaceChildren(...TABS.map(([k, t]) => h('button', {'aria-current': String(k === tab), onclick: () => show(k)}, t)));
-  const el = h('div', {}, h('p', {class: 'badge'}, 'Loading...'));
-  $('#app').replaceChildren(el);
-  VIEWS[tab](el).catch(e => el.replaceChildren(h('div', {class: 'err'}, e.message)));
+async function show(page) {
+  S.page = page;
+  renderNav();
+  const main = $('#main');
+  main.replaceChildren(h('div', {class: 'sk'}, 'Loading...'));
+  try { main.replaceChildren(await PAGES[page]()); }
+  catch (e) { main.replaceChildren(banner('err', 'Could not load this page', e.message)); }
 }
-$('#logout').addEventListener('click', async () => { try { await api('POST', '/api/logout'); } catch (e) { /* ignore */ } showLogin(); });
-
-/* ---------- network confirm banner ---------- */
+/* ---------- rollback countdown banner (network safe-apply) ---------- */
 function clearPending() {
-  clearInterval(state.tick); clearInterval(state.poll);
-  state.tick = state.poll = null; $('#banner').hidden = true;
+  clearInterval(S.tick); clearInterval(S.poll); S.tick = S.poll = null; S.pend = null;
+  const el = $('#pend'); if (el) el.replaceChildren();
 }
 function setPending(p) {
   clearPending();
-  if (!p) return;
-  state.deadline = Date.now() + p.seconds_left * 1000;
-  const left = h('strong', {});
-  const confirmBtn = h('button', {class: 'btn primary', onclick: () => act(confirmBtn, async () => {
-    await api('POST', '/api/network/confirm'); toast('Network change confirmed'); clearPending(); if (state.tab === 'network') show('network');
-  })}, 'Keep new settings');
-  const rbBtn = h('button', {class: 'btn', onclick: () => act(rbBtn, async () => {
-    await api('POST', '/api/network/rollback'); toast('Rolled back'); clearPending(); show(state.tab);
-  })}, 'Roll back now');
-  $('#banner').replaceChildren(h('span', {}, 'Network change on ' + p.ifname + ' applied. Auto-rollback in '), left, h('span', {}, ' s unless confirmed.'), confirmBtn, rbBtn);
-  $('#banner').hidden = false;
-  const upd = () => { left.textContent = Math.max(0, Math.round((state.deadline - Date.now()) / 1000)); };
-  upd(); state.tick = setInterval(upd, 1000);
-  state.poll = setInterval(async () => {
-    try { const m = await api('GET', '/api/me'); if (!m.net_pending) { clearPending(); } } catch (e) { /* link may be down */ }
-  }, 5000);
-}
-
-/* ---------- views ---------- */
-const VIEWS = {};
-
-VIEWS.status = async el => {
-  const s = await api('GET', '/api/status');
-  const mem = s.memory || {};
-  const parts = [];
-  parts.push(h('div', {class: 'grid'},
-    card('System', kv([['Hostname', s.hostname], ['OS', s.os], ['Kernel', s.kernel], ['Arch', s.arch], ['Uptime', fmtDur(s.uptime)],
-      ['Load', s.load && s.load.map(x => x.toFixed(2)).join(' ')],
-      ['Temperature', s.temps.length ? s.temps.map(t => t.celsius.toFixed(1) + ' C (' + t.zone + ')').join(', ') : null]])),
-    card('Memory & root filesystem',
-      mem.total ? [h('div', {}, 'RAM ' + fmtBytes(mem.total - (mem.available || 0)) + ' / ' + fmtBytes(mem.total)),
-        h('meter', {min: 0, max: mem.total, value: mem.total - (mem.available || 0)})] : null,
-      s.rootfs ? [h('div', {}, 'Root ' + fmtBytes(s.rootfs.total - s.rootfs.free) + ' / ' + fmtBytes(s.rootfs.total)),
-        h('meter', {min: 0, max: s.rootfs.total, value: s.rootfs.total - s.rootfs.free})] : null)));
-  parts.push(card('Network interfaces', table(['Interface', 'State', 'MAC', 'Addresses'],
-    s.interfaces.filter(i => i.ifname !== 'lo').map(i => [i.ifname, i.state, h('span', {class: 'mono'}, i.mac || ''),
-      h('span', {class: 'mono'}, i.addrs.filter(a => a.scope !== 'link').map(a => a.addr + '/' + a.prefix).join('  '))]))));
-  const kids = {};
-  s.disks.forEach(d => { if (d.pkname) (kids[d.pkname] = kids[d.pkname] || []).push(d); });
-  const rows = [];
-  const walk = (d, depth, seen) => {
-    if (seen.has(d.kname)) return;
-    seen.add(d.kname);
-    rows.push([h('span', {class: 'ind' + Math.min(depth, 3)}, d.name), d.type, fmtBytes(d.size), d.fstype || '', d.label || '',
-      d.mountpoints.join(', '), [d.model, d.tran, d.rota ? 'HDD' : (d.type === 'disk' ? 'SSD' : '')].filter(Boolean).join(' ')]);
-    (kids[d.kname] || []).forEach(c => walk(c, depth + 1, seen));
+  if (!p || !$('#pend')) return;
+  S.pend = p;
+  const total = Math.max(p.seconds_left, 1), end = Date.now() + p.seconds_left * 1000;
+  const C = 2 * Math.PI * 18;
+  const fg = document.createElementNS(NS, 'circle');
+  for (const [k, v] of [['class', 'fg'], ['cx', 24], ['cy', 24], ['r', 18], ['stroke-dasharray', C]]) fg.setAttribute(k, v);
+  const tr = document.createElementNS(NS, 'circle');
+  for (const [k, v] of [['class', 'tr'], ['cx', 24], ['cy', 24], ['r', 18]]) tr.setAttribute(k, v);
+  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 48 48'); svg.setAttribute('aria-hidden', 'true'); svg.append(tr, fg);
+  const num = h('b', {});
+  const title = h('b', {});
+  const keep = btn('Keep these settings', {kind: 'primary', icon: 'check', onclick: () => act(keep, async () => { await api('POST', '/api/network/confirm'); toast('Network change confirmed'); clearPending(); if (S.page === 'network') show('network'); })});
+  const rb = btn('Roll back now', {onclick: () => act(rb, async () => { await api('POST', '/api/network/rollback'); toast('Rolled back'); clearPending(); show(S.page); })});
+  const el = h('div', {class: 'banner warn pend', role: 'alert'}, h('div', {class: 'ring'}, svg, num),
+    h('div', {class: 'bt'}, title, h('p', {}, 'Changed ' + p.ifname + '. If you can read this page at the new address, press Keep. Otherwise the previous settings return automatically; no action needed.')),
+    h('div', {class: 'acts'}, rb, keep));
+  $('#pend').replaceChildren(el);
+  const upd = () => {
+    const left = Math.max(0, Math.round((end - Date.now()) / 1000));
+    num.textContent = left; title.textContent = 'Confirm network change - rolling back in ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+    fg.setAttribute('stroke-dashoffset', C * (1 - left / total));
+    if (left === 10 || left === 5) $('#live').textContent = 'Network change rolls back in ' + left + ' seconds';
   };
-  const seen = new Set();
-  s.disks.filter(d => !d.pkname).forEach(d => walk(d, 0, seen));
-  const smartBox = h('div', {});
-  const smartBtn = h('button', {class: 'btn', onclick: () => act(smartBtn, async () => {
+  upd(); S.tick = setInterval(upd, 1000);
+  S.poll = setInterval(async () => { try { const m = await api('GET', '/api/me'); if (!m.net_pending) { clearPending(); toast('Network change is no longer pending'); } } catch (e) { /* link may be down */ } }, 5000);
+}
+const PAGES = {};
+/* ---------- Dashboard ---------- */
+PAGES.dashboard = async () => {
+  const s = await api('GET', '/api/status');
+  S.st = s;
+  const mem = s.memory || {}, md = s.md.arrays, ki = s.kernel_info || {}, cpu = s.cpu || {}, mc = s.microcode || {}, un = s.unit || {};
+  const degraded = md.filter(a => a.degraded), syncing = md.filter(a => a.sync);
+  const dataMount = s.mounts.find(m => m.target === '/srv/data') || s.mounts.find(m => m.target === '/');
+  const hot = s.temps.length ? Math.max(...s.temps.map(t => t.celsius)) : null;
+  const notices = degraded.length + syncing.length + (S.pend ? 1 : 0);
+  S.alerts = {storage: degraded.length + syncing.length};
+  renderNav();
+  const parts = [pageHead('Dashboard', s.hostname + ' - up ' + fmtDur(s.uptime) + ' - ' + (s.os || 'Linux') + ' - kernel ' + s.kernel,
+    btn('Reboot...', {icon: 'power', onclick: () => PAGES_ACTIONS.power('reboot')}))];
+  const tiles = [
+    tile('Health', 'shield-check', degraded.length ? 'Degraded' : 'Healthy', '', degraded.length ? degraded.map(a => a.name).join(', ') + ' needs attention' : (notices ? 'No critical alerts - ' + notices + ' notice' + (notices > 1 ? 's' : '') : 'No alerts'), degraded.length ? 'err' : notices ? 'warn' : 'ok'),
+    dataMount && dataMount.size ? tile('Storage', 'database', pct(dataMount.used, dataMount.size), '% used', fmtBytes(dataMount.used) + ' of ' + fmtBytes(dataMount.size) + ' on ' + dataMount.target, pct(dataMount.used, dataMount.size) >= 90 ? 'warn' : '') : tile('Storage', 'database', '-', '', 'no data volume mounted'),
+    tile('Memory', 'mem', mem.total ? ((mem.total - (mem.available || 0)) / 1073741824).toFixed(1) : '-', 'GiB', 'of ' + fmtBytes(mem.total) + (mem.swap_total ? ' - swap ' + fmtBytes(mem.swap_total - (mem.swap_free || 0)) : '')),
+    tile('Load', 'activity', s.load ? s.load[0].toFixed(2) : '-', '', (cpu.threads || '?') + ' threads - ' + (s.load ? s.load.map(x => x.toFixed(2)).join(' ') : '') + (hot != null ? ' - ' + hot.toFixed(0) + ' °C' : '')),
+    tile('CPU', 'cpu', cpu.vendor || (s.arch.startsWith('a') ? 'ARM' : '-'), '', (cpu.model || s.arch)),
+    tile('Kernel', 'terminal', ki.release || s.kernel, '', ki.ge7 ? 'Linux 7 or newer' : (s.arch || ''), ''),
+    tile('Microcode', 'wrench', mc.applicable ? (mc.installed ? 'Installed' : 'Missing') : 'n/a', '', mc.applicable ? (mc.package + (mc.version ? ' ' + mc.version : '') + (mc.loaded_revision ? ' - rev ' + mc.loaded_revision : '')) : 'x86 CPUs only', mc.applicable && !mc.installed ? 'warn' : ''),
+    tile('Network', 'network', s.interfaces.filter(i => i.ifname !== 'lo' && i.state === 'UP').length, 'up', s.interfaces.filter(i => i.ifname !== 'lo').map(i => i.ifname).join(', ') || 'no interfaces'),
+  ];
+  parts.push(h('div', {class: 'tiles'}, tiles));
+  if (degraded.length) parts.push(banner('err', 'RAID array degraded: ' + degraded.map(a => a.name).join(', '), 'A member is missing or failed. Data is still readable on redundant levels, but replace the disk soon.', btn('Open storage', {size: 'sm', onclick: () => show('storage')})));
+  syncing.forEach(a => parts.push(banner('warn', a.name + ' is ' + a.sync.action + (a.sync.percent != null ? ' (' + a.sync.percent + '%)' : ''), 'Volumes stay usable; performance is reduced' + (a.sync.finish_min ? ' for about ' + Math.round(a.sync.finish_min) + ' min.' : '.'))));
+  if (ki.ge7) parts.push(banner('info', 'Kernel ' + ki.release, 'Linux 7 or newer is running. If a driver for your hardware misbehaves, the boot manager can start the previous kernel or DSM.', btn('Boot manager', {size: 'sm', onclick: () => show('boot')})));
+  if (mc.applicable && !mc.installed) parts.push(banner('warn', 'CPU microcode package is not installed', 'Install ' + mc.package + ' (apt install ' + mc.package + ') to receive CPU security and stability fixes.'));
+  // disks: one row per physical disk with its role; the full device tree is folded away
+  const kids = {}; s.disks.forEach(d => { if (d.pkname) (kids[d.pkname] = kids[d.pkname] || []).push(d); });
+  const below = d => { const o = [], st = [...(kids[d.kname] || [])], seen = new Set(); while (st.length) { const x = st.pop(); if (seen.has(x.kname)) continue; seen.add(x.kname); o.push(x); st.push(...(kids[x.kname] || [])); } return o; };
+  const role = d => {
+    const sub = below(d), mps = d.mountpoints.concat(...sub.map(x => x.mountpoints));
+    if (mps.some(m => ['/', '/boot', '/boot/efi', '[SWAP]'].includes(m))) return badge('info', 'System', 'server');
+    const mdn = sub.filter(x => /^raid|^md/.test(x.type)).map(x => x.name);
+    if (mdn.length) return badge('ok', 'Array ' + [...new Set(mdn)].join(', '), 'layers');
+    if (sub.some(x => x.fstype || x.mountpoints.length) || d.fstype) return badge('neutral', (sub.find(x => x.fstype) || d).fstype || 'In use', 'database');
+    return badge('neutral', 'Unused', 'plus');
+  };
+  const drows = s.disks.filter(d => d.type === 'disk' && !/^(loop|zram|ram|sr|nbd)/.test(d.kname)).map(d => [h('b', {class: 'mono'}, '/dev/' + d.kname), [d.model, d.serial].filter(Boolean).join(' - ') || '-', fmtBytes(d.size),
+    [d.tran ? chip(d.tran) : null, chip(d.rota ? 'HDD' : 'SSD')], role(d)]);
+  const trows = [], tseen = new Set();
+  const walk = (d, depth) => {
+    if (tseen.has(d.kname)) return; tseen.add(d.kname);
+    trows.push([h('span', {class: 'mono ind' + Math.min(depth, 3)}, d.name), d.type, fmtBytes(d.size), d.fstype || '', d.label || '', h('span', {class: 'mono'}, d.mountpoints.join(', '))]);
+    (kids[d.kname] || []).forEach(c => walk(c, depth + 1));
+  };
+  s.disks.filter(d => !d.pkname).forEach(d => walk(d, 0));
+  const smart = h('div', {});
+  const sb = btn('Check SMART health', {icon: 'shield-check', onclick: () => act(sb, async () => {
     const r = await api('GET', '/api/smart');
-    smartBox.replaceChildren(!r.available ? h('p', {class: 'badge'}, 'smartctl is not installed') :
-      table(['Disk', 'Model', 'Health', 'Temp', 'Hours', 'Note'], r.disks.map(d => [d.device, d.model || '',
-        d.passed === true ? badge('PASSED', 'ok') : d.passed === false ? badge('FAILING', 'bad') : badge('unknown', 'warn'),
-        d.temp != null ? d.temp + ' C' : '', d.hours != null ? d.hours : '', d.note || ''])));
-  })}, 'Check SMART health');
-  parts.push(card('Disks', table(['Device', 'Type', 'Size', 'FS', 'Label', 'Mounted', 'Info'], rows), h('div', {class: 'row'}, smartBtn), smartBox));
-  const md = s.md.arrays;
-  if (md.length) parts.push(card('RAID (md)', table(['Array', 'Level', 'State', 'Size', 'Members', 'Health', 'Sync'], md.map(a => [
-    a.name, a.level || '', a.state, fmtBytes(a.size), a.members.map(m => m.name + (m.failed ? '(F)' : m.spare ? '(S)' : '')).join(' '),
-    a.degraded ? badge('DEGRADED ' + (a.health || ''), 'bad') : badge(a.health || 'ok', 'ok'),
-    a.sync ? (a.sync.action + ' ' + (a.sync.percent != null ? a.sync.percent + '%' : a.sync.state || '')) : '']))));
-  const l = s.lvm;
-  if (l.vgs.length) parts.push(card('LVM', table(['VG', 'Size', 'Free', 'PVs', 'LVs'], l.vgs.map(v => [v.vg_name, fmtBytes(v.vg_size), fmtBytes(v.vg_free), v.pv_count, v.lv_count])),
-    table(['LV', 'VG', 'Size', 'Attr'], l.lvs.map(v => [v.lv_name, v.vg_name, fmtBytes(v.lv_size), v.lv_attr]))));
-  parts.push(card('Mounts', table(['Mountpoint', 'Source', 'FS', 'Used', 'Size'], s.mounts.map(m => [m.target, m.source, m.fstype,
-    m.size ? fmtBytes(m.used) : '', m.size ? fmtBytes(m.size) : '']))));
-  el.replaceChildren(...parts);
+    smart.replaceChildren(!r.available ? h('div', {class: 'empty'}, ic('info'), 'smartctl is not installed (apt install smartmontools)') :
+      table(['Disk', 'Model', 'Health', 'Temp', 'Power-on', 'Note'], r.disks.map(d => ({cls: d.passed === false ? 'bad' : d.passed == null ? 'attn' : '', cells: [h('span', {class: 'mono'}, d.device), d.model || '',
+        d.passed === true ? badge('ok', 'SMART OK') : d.passed === false ? badge('err', 'Failing', 'octagon-x') : badge('neutral', 'Unknown'), d.temp != null ? d.temp + ' \u00b0C' : '', d.hours != null ? d.hours + ' h' : '', d.note || '']}))));
+  })});
+  parts.push(cardFlush('Disks', 'disk', sb, table(['Device', 'Model', 'Size', 'Type', 'Role'], drows, 'No disks found', {right: [2]}), smart,
+    h('details', {class: 'cb'}, h('summary', {class: 'muted'}, 'All block devices (' + trows.length + ')'), table(['Device', 'Type', 'Size', 'FS', 'Label', 'Mounted'], trows, '', {right: [2]}))));
+  if (md.length) parts.push(cardFlush('RAID (mdadm)', 'layers', degraded.length ? badge('err', 'Degraded') : badge('ok', 'Clean'),
+    table(['Array', 'Level', 'State', 'Size', 'Members', 'Health', 'Sync'], md.map(a => ({cls: a.degraded ? 'bad' : a.sync ? 'attn' : '', cells: [h('b', {class: 'mono'}, a.name), a.level ? chip(a.level.toUpperCase()) : '', a.state, fmtBytes(a.size),
+      h('span', {class: 'mono'}, a.members.map(m => m.name + (m.failed ? '(F)' : m.spare ? '(S)' : '')).join(' ')), a.degraded ? badge('err', 'Degraded ' + (a.health || '')) : badge('ok', a.health || 'OK'), a.sync ? a.sync.action + ' ' + (a.sync.percent != null ? a.sync.percent + '%' : a.sync.state) : '']})))));
+  if (s.lvm.vgs.length) parts.push(cardFlush('LVM', 'database', null, table(['VG', 'Size', 'Free', 'PVs', 'LVs'], s.lvm.vgs.map(v => [h('span', {class: 'mono'}, v.vg_name), fmtBytes(v.vg_size), fmtBytes(v.vg_free), v.pv_count, v.lv_count]), '', {right: [1, 2]}),
+    table(['LV', 'VG', 'Size', 'Attr'], s.lvm.lvs.map(v => [h('span', {class: 'mono'}, v.lv_name), v.vg_name, fmtBytes(v.lv_size), h('span', {class: 'mono'}, v.lv_attr)]), '', {right: [2]})));
+  parts.push(cardFlush('Network interfaces', 'network', null, table(['Interface', 'State', 'MAC', 'Addresses'], s.interfaces.filter(i => i.ifname !== 'lo').map(i => [h('span', {class: 'mono'}, i.ifname),
+    i.state === 'UP' ? badge('ok', 'Link up') : badge('neutral', i.state || 'down', 'x'), h('span', {class: 'mono'}, i.mac || ''), h('span', {class: 'mono'}, i.addrs.filter(a => a.scope !== 'link').map(a => a.addr + '/' + a.prefix).join('  '))]), 'No interfaces')));
+  const cons = s.console.cmdline_consoles;
+  parts.push(h('div', {class: 'cols'},
+    card('Unit', 'server', un.source ? badge('info', 'from ' + un.source) : badge('neutral', 'not available'), un.model || un.dsm_version ? h('dl', {class: 'kv'},
+      h('dt', {}, 'Model'), h('dd', {}, un.model || '-'), un.hw_version && un.hw_version !== un.model ? [h('dt', {}, 'Hardware'), h('dd', {}, un.hw_version)] : null,
+      un.dsm_version ? [h('dt', {}, 'Previous DSM'), h('dd', {}, un.dsm_version)] : null, un.cpu_before ? [h('dt', {}, 'CPU'), h('dd', {}, un.cpu_before)] : null) :
+      h('p', {class: 'muted'}, 'No model information found (/proc/sys/kernel/syno_hw_version or /var/lib/synofurb/dsm-inspect.txt).')),
+    card('Serial console', 'terminal', cons.length ? badge('ok', 'console= set') : badge('neutral', 'no console= argument'),
+      cons.length ? h('dl', {class: 'kv'}, cons.map(c => [h('dt', {}, c.serial ? 'Serial' : 'Console'), h('dd', {class: 'mono'}, c.device + (c.options ? ' @ ' + c.options : ''))])) :
+        h('p', {class: 'muted'}, 'The kernel command line has no console= argument, so boot messages are not sent to a serial port.'))));
+  return h('div', {}, parts);
 };
-
-VIEWS.users = async el => {
+/* ---------- Storage ---------- */
+const RAID_INFO = {
+  none: ['No RAID (span)', 'One device, or several devices joined end to end. No redundancy.', 1],
+  raid0: ['RAID 0 (stripe)', 'Fastest; losing any device loses everything.', 2],
+  raid1: ['RAID 1 (mirror)', 'Same data on every device; survives all but one failure.', 2],
+  raid5: ['RAID 5', 'One device of parity; survives one failure.', 3],
+  raid6: ['RAID 6', 'Two devices of parity; survives two failures.', 4],
+  raid10: ['RAID 10', 'Mirrored stripes; needs an even number of devices.', 4],
+};
+function usableBytes(level, sizes) {
+  if (!sizes.length) return 0;
+  const m = Math.min(...sizes), n = sizes.length;
+  return {none: sizes.reduce((a, b) => a + b, 0), raid0: m * n, raid1: m, raid5: m * (n - 1), raid6: m * (n - 2), raid10: Math.floor(m * n / 2)}[level];
+}
+function countOk(level, n) {
+  if (level === 'none') return n >= 1;
+  const min = {raid0: 2, raid1: 2, raid5: 3, raid6: 4, raid10: 4}[level];
+  return n >= min && (level !== 'raid10' || n % 2 === 0);
+}
+function logView(results) {
+  return h('div', {class: 'log', role: 'log'}, results.map(r => [
+    h('div', {class: r.rc === 0 ? '' : 'e'}, h('span', {class: 'lv'}, r.rc === 0 ? '● OK' : '✖ ERR'), h('span', {}, r.desc + '  ($ ' + r.cmd + ')')),
+    (r.out || r.err) ? h('span', {class: 'm'}, (r.out + (r.err ? '\n' + r.err : '')).trim()) : null]));
+}
+PAGES.storage = async () => {
+  const [v, m] = await Promise.all([api('GET', '/api/volumes'), api('GET', '/api/mounts')]);
+  const reload = () => show('storage');
+  const mount = {}; m.mounts.forEach(x => { mount[x.target] = x; });
+  const syncing = v.md.filter(a => a.sync), degraded = v.md.filter(a => a.degraded);
+  S.alerts = {storage: degraded.length + syncing.length}; renderNav();
+  const parts = [pageHead('Storage', v.md.length + ' RAID array' + (v.md.length === 1 ? '' : 's') + ' - ' + v.vgs.length + ' volume group' + (v.vgs.length === 1 ? '' : 's') + ' - ' + v.lvs.length + ' volume' + (v.lvs.length === 1 ? '' : 's'),
+    btn('Create volume', {kind: 'primary', icon: 'plus', onclick: () => { wizardHost.hidden = false; wizardHost.scrollIntoView({behavior: 'smooth'}); wizardHost.focus(); }}))];
+  degraded.forEach(a => parts.push(banner('err', a.name + ' is degraded (' + a.health + ')', 'A member is missing or failed. Replace the disk and re-add it with mdadm.')));
+  syncing.forEach(a => parts.push(banner('warn', a.name + ' is ' + a.sync.action + (a.sync.percent != null ? ' (' + a.sync.percent + '%)' : ''), 'Volumes are usable; performance is reduced until it finishes' + (a.sync.finish_min ? ' in about ' + Math.round(a.sync.finish_min) + ' min.' : '.'))));
+  const rows = v.lvs.map(l => {
+    const free = (v.vgs.find(g => g.vg_name === l.vg_name) || {}).vg_free || 0, mp = l.mountpoints[0], mt = mp && mount[mp];
+    const ext = btn('Extend', {size: 'sm', disabled: free <= 0, title: free <= 0 ? 'No free space in ' + l.vg_name : '', onclick: () => formDialog('Extend ' + l.vg_name + '/' + l.lv_name, [
+      {name: 'add_gib', label: 'GiB to add', type: 'number', hint: 'Leave empty to use all ' + fmtBytes(free) + ' free in ' + l.vg_name + '. The filesystem is grown afterwards.'}], 'Extend',
+      async x => { await api('POST', '/api/volumes/extend', {vg: l.vg_name, lv: l.lv_name, add_gib: x.add_gib === '' ? null : Number(x.add_gib)}); toast('Volume extended'); reload(); }, {icon: 'plus', sub: 'Online, no data is touched'})});
+    const del = btn('Delete', {size: 'sm', kind: 'danger', icon: 'trash', onclick: () => confirmAction({title: 'Delete volume ' + l.lv_name, sub: 'This destroys all data on the volume.', expected: l.lv_name, label: 'Delete volume',
+      body: 'It is unmounted, its fstab entry is removed and the logical volume is deleted.',
+      extra: [h('label', {class: 'chk'}, h('input', {type: 'checkbox', id: 'rmvg'}), h('span', {}, 'Also remove the volume group ' + l.vg_name + ' and its physical volumes'))],
+      onConfirm: async () => { await api('POST', '/api/volumes/delete', {vg: l.vg_name, lv: l.lv_name, confirm: l.lv_name, remove_vg: $('#rmvg').checked}); toast('Volume deleted'); reload(); }})});
+    return [h('b', {}, l.lv_name), h('span', {class: 'mono'}, l.vg_name), h('span', {class: 'mono'}, mp || '-'), l.fstype || '-', fmtBytes(l.lv_size),
+      mt && mt.size ? usage(mt.used, mt.size) : '', mp ? badge('ok', 'Mounted') : badge('neutral', 'Not mounted', 'x'), h('div', {class: 'row'}, ext, del)];
+  });
+  parts.push(cardFlush('Volumes', 'database', null, table(['Name', 'Pool', 'Mount', 'FS', 'Size', 'Used', 'State', ''], rows, 'No logical volumes yet'),
+    v.vgs.length ? h('div', {class: 'cb muted'}, v.vgs.map(g => g.vg_name + ': ' + fmtBytes(g.vg_size) + ' total, ' + fmtBytes(g.vg_free) + ' unallocated').join(' - ')) : null));
+  const wizardHost = h('div', {id: 'wiz', tabindex: '-1', hidden: !!v.lvs.length}); parts.push(wizardHost);
+  wizard(wizardHost, v, reload);
+  return h('div', {}, parts);
+};
+function wizard(host, v, reload) {
+  const W = {step: 1, devs: new Set(), level: 'none', name: '', fs: 'xfs', mp: '', size: null, plan: null, planErr: '', timer: null};
+  const preview = h('div', {});
+  const stage = h('div', {});
+  const cand = v.candidates;
+  const sizes = () => cand.filter(c => W.devs.has(c.path)).map(c => c.size);
+  const usable = () => usableBytes(W.level, sizes());
+  const nameOk = () => /^[a-z][a-z0-9_]{0,23}$/.test(W.name) && !['sys', 'data', 'root', 'swap', 'boot', 'efi'].includes(W.name);
+  const body = () => ({name: W.name, level: W.level, fs: W.fs, mountpoint: W.mp || null, size_gib: W.size ? Number(W.size) : null, devices: [...W.devs]});
+  async function refreshPlan() {
+    clearTimeout(W.timer);
+    W.timer = setTimeout(async () => {
+      if (!W.devs.size || !countOk(W.level, W.devs.size) || !nameOk()) { W.plan = null; W.planErr = ''; drawPreview(); return; }
+      try { W.plan = await api('POST', '/api/volumes/plan', body()); W.planErr = ''; } catch (e) { W.plan = null; W.planErr = e.message; }
+      drawPreview(); if (W.step === 4) draw();
+    }, 300);
+  }
+  function drawPreview() {
+    const p = W.plan;
+    preview.replaceChildren(h('section', {class: 'card'}, h('div', {class: 'ch'}, h('h2', {}, ic('eye', 'lg'), 'Plan preview'), badge('ok', 'Nothing written yet', 'shield-check')),
+      h('div', {class: 'cb plan'}, p ? [
+        h('ul', {}, [
+          h('li', {}, ic('plus'), h('span', {}, h('b', {}, 'Create '), (W.level === 'none' ? 'logical volume ' : W.level.toUpperCase() + ' array and logical volume ') + p.name + ' (about ' + fmtBytes(p.usable_bytes) + ' usable) in ' + p.vg)),
+          h('li', {}, ic('plus'), h('span', {}, h('b', {}, 'Format '), 'as ' + p.fs + ', label ' + p.name)),
+          h('li', {}, ic('plus'), h('span', {}, h('b', {}, 'Mount '), 'at ' + p.mountpoint + ' and add it to /etc/fstab (nofail)')),
+          h('li', {}, ic('info'), h('span', {}, h('b', {}, 'Unchanged: '), 'all other volumes and disks'))]),
+        p.warnings.map(w => banner('warn', w, '')),
+        h('div', {class: 'cap'}, 'COMMANDS THAT WILL RUN (AS ROOT)'),
+        h('pre', {class: 'code'}, p.steps.map((s, i) => (i + 1) + '  ' + s.cmd).join('\n'))] :
+        [W.planErr ? banner('err', 'This plan is not valid', W.planErr) : h('p', {class: 'muted'}, 'Pick devices, a layout and a name to see the exact steps and commands here. Nothing is executed until you confirm on the last step.')])));
+  }
+  function nav(canNext, nextLabel, onNext) {
+    return h('div', {class: 'row'}, W.step > 1 ? btn('Back', {icon: 'arrow-l', onclick: () => { W.step--; draw(); }}) : null,
+      btn('Cancel', {onclick: () => { host.hidden = !!v.lvs.length; W.step = 1; W.devs.clear(); draw(); drawPreview(); }}),
+      btn(nextLabel || 'Next', {kind: 'primary', disabled: !canNext, onclick: onNext || (() => { W.step++; draw(); })}));
+  }
+  function draw() {
+    const labels = ['Devices', 'Layout', 'Volume', 'Review'];
+    const steps = h('div', {class: 'steps', role: 'list'}, labels.map((l, i) => h('div', {role: 'listitem', class: i + 1 === W.step ? 'cur' : i + 1 < W.step ? 'done' : '', 'aria-current': i + 1 === W.step ? 'step' : null}, h('i', {}, i + 1 < W.step ? '✓' : String(i + 1)), h('span', {}, l))));
+    let c;
+    if (W.step === 1) {
+      c = [h('p', {class: 'muted'}, 'Select the disks or partitions to use. They will be erased.'),
+        cand.length ? cand.map(d => {
+          const cb = h('input', {type: 'checkbox', checked: W.devs.has(d.path), onchange: () => { cb.checked ? W.devs.add(d.path) : W.devs.delete(d.path); draw(); refreshPlan(); }});
+          return h('label', {class: 'opt' + (W.devs.has(d.path) ? ' sel' : '')}, cb, h('div', {}, h('b', {}, h('span', {class: 'mono'}, d.path), chip(fmtBytes(d.size)), d.tran ? chip(d.tran) : null), h('small', {}, [d.model, d.serial, d.type === 'part' ? 'partition of ' + d.pkname : 'whole disk'].filter(Boolean).join(' - '))));
+        }) : banner('info', 'No free disks or partitions', 'Every device is mounted, formatted, part of an array or holds the system.'),
+        v.excluded.length ? h('details', {}, h('summary', {class: 'muted'}, v.excluded.length + ' devices are not available'), table(['Device', 'Size', 'Why not'], v.excluded.map(d => [h('span', {class: 'mono'}, d.path), fmtBytes(d.size), d.reason]))) : null,
+        nav(W.devs.size > 0)];
+    } else if (W.step === 2) {
+      c = [h('p', {class: 'muted'}, W.devs.size + ' device' + (W.devs.size === 1 ? '' : 's') + ' selected.'),
+        Object.entries(RAID_INFO).map(([k, [t, d, min]]) => {
+          const ok = countOk(k, W.devs.size);
+          const r = h('input', {type: 'radio', name: 'lvl', checked: W.level === k, disabled: !ok, onchange: () => { W.level = k; draw(); refreshPlan(); }});
+          return h('label', {class: 'opt' + (W.level === k ? ' sel' : '') + (ok ? '' : ' off')}, r, h('div', {}, h('b', {}, t, ok ? chip('about ' + fmtBytes(usableBytes(k, sizes())) + ' usable') : badge('neutral', 'needs ' + (k === 'raid10' ? 'an even number, at least 4' : min) + ' devices', 'x')), h('small', {}, d)));
+        }), nav(countOk(W.level, W.devs.size))];
+    } else if (W.step === 3) {
+      const maxGib = Math.max(1, Math.floor(usable() / 1073741824));
+      const nm = h('input', {class: 'mono', value: W.name, placeholder: 'media', autocomplete: 'off', oninput: () => { W.name = nm.value.trim(); upNext(); refreshPlan(); }});
+      const fs = h('select', {onchange: () => { W.fs = fs.value; refreshPlan(); }}, v.filesystems.map(x => h('option', {value: x, selected: x === W.fs}, x)));
+      const mp = h('input', {class: 'mono', value: W.mp, placeholder: '/srv/' + (W.name || '<name>'), autocomplete: 'off', oninput: () => { W.mp = mp.value.trim(); refreshPlan(); }});
+      const num = h('input', {type: 'number', min: 1, max: maxGib, value: W.size || '', placeholder: 'all', oninput: () => { W.size = num.value; rng.value = num.value || maxGib; refreshPlan(); }});
+      const rng = h('input', {type: 'range', min: 1, max: maxGib, value: W.size || maxGib, 'aria-label': 'Size in GiB', oninput: () => { W.size = Number(rng.value) >= maxGib ? '' : rng.value; num.value = W.size; refreshPlan(); }});
+      const nx = btn('Next: Review', {kind: 'primary', disabled: !nameOk(), onclick: () => { W.step = 4; draw(); }});
+      const upNext = () => { nx.disabled = !nameOk(); };
+      c = [h('div', {class: 'grid2'}, field('Name', nm, 'a-z, 0-9 and underscore; creates volume group vg_' + (W.name || '<name>')), field('Filesystem', fs, 'xfs is the default')),
+        field('Mountpoint', mp, 'Below /srv or /mnt'),
+        field('Size in GiB (empty = all, ' + maxGib + ' GiB max)', num), rng,
+        h('div', {class: 'row'}, btn('Back', {icon: 'arrow-l', onclick: () => { W.step = 2; draw(); }}), btn('Cancel', {onclick: () => { host.hidden = !!v.lvs.length; W.step = 1; W.devs.clear(); draw(); drawPreview(); }}), nx)];
+    } else {
+      const go = btn('Erase ' + W.devs.size + ' device' + (W.devs.size === 1 ? '' : 's') + ' and create ' + W.name, {kind: 'danger', icon: 'trash', disabled: !W.plan, onclick: () => confirmAction({
+        title: 'Create volume ' + W.name, sub: 'All data on ' + [...W.devs].join(', ') + ' will be destroyed.', expected: W.name, label: 'Erase and create',
+        body: h('div', {}, W.plan.warnings.map(w => banner('warn', w, '')), h('p', {class: 'muted'}, 'This runs ' + W.plan.steps.length + ' steps as root. It stops at the first failure and does not undo earlier steps.')),
+        onConfirm: async () => {
+          const res = await api('POST', '/api/volumes/create', Object.assign(body(), {confirm: W.name}));
+          toast('Volume created at ' + res.mountpoint); reload();
+        }})});
+      c = [W.plan ? [banner('err', 'Data on the selected devices will be destroyed', W.plan.warnings.slice(1).join(' ')),
+        h('dl', {class: 'kv'}, h('dt', {}, 'Name'), h('dd', {}, W.plan.name), h('dt', {}, 'Layout'), h('dd', {}, RAID_INFO[W.level][0]), h('dt', {}, 'Devices'), h('dd', {class: 'mono'}, [...W.devs].join(', ')),
+          h('dt', {}, 'Filesystem'), h('dd', {}, W.plan.fs), h('dt', {}, 'Mountpoint'), h('dd', {class: 'mono'}, W.plan.mountpoint), h('dt', {}, 'Usable'), h('dd', {}, 'about ' + fmtBytes(W.plan.usable_bytes)))] :
+        banner('err', 'This plan is not valid', W.planErr || 'Check the previous steps.'),
+        h('div', {class: 'row'}, btn('Back to plan', {kind: 'primary', icon: 'arrow-l', onclick: () => { W.step = 3; draw(); }}), btn('Cancel', {onclick: () => { host.hidden = !!v.lvs.length; W.step = 1; W.devs.clear(); draw(); drawPreview(); }}), go)];
+    }
+    stage.replaceChildren(h('section', {class: 'card'}, h('div', {class: 'ch'}, h('h2', {}, ic('plus', 'lg'), 'Create volume')), h('div', {class: 'cb'}, steps, c)));
+  }
+  host.replaceChildren(h('div', {class: 'cols'}, stage, preview));
+  draw(); drawPreview();
+}
+/* ---------- Imported volumes ---------- */
+PAGES.imported = async () => {
+  const r = await api('GET', '/api/mounts');
+  const reload = () => show('imported');
+  const parts = [pageHead('Imported volumes', 'Volumes from another system (for example a migrated Synology RAID) and removable disks.',
+    (() => { const b = btn('Scan RAID and LVM', {icon: 'refresh', onclick: () => act(b, async () => {
+      const res = await api('POST', '/api/mounts/activate'); toast('Scan finished: ' + res.devices.length + ' mountable volume' + (res.devices.length === 1 ? '' : 's')); reload();
+    })}); return b; })())];
+  parts.push(banner('info', 'Read-only by default', 'Imported volumes are mounted read-only so nothing on them can change. Untick "Read-only" only when you are sure; imported Synology volumes may contain features this kernel cannot fully write.'));
+  const rows = r.devices.map(d => {
+    const mp = h('input', {class: 'mono', value: d.suggested, 'aria-label': 'Mountpoint for ' + d.path});
+    const ro = h('input', {type: 'checkbox', checked: d.ro_default, 'aria-label': 'Read-only'});
+    const warn = h('span', {class: 'help', hidden: ro.checked}, 'Writable mount of an imported volume');
+    ro.addEventListener('change', () => { warn.hidden = ro.checked; });
+    const pe = h('input', {type: 'checkbox', 'aria-label': 'Mount at boot'});
+    const go = btn('Mount', {kind: 'primary', size: 'sm', onclick: () => act(go, async () => {
+      await api('POST', '/api/mounts/mount', {device: d.path, mountpoint: mp.value.trim(), ro: ro.checked, persist: pe.checked}); toast('Mounted ' + d.path); reload(); })});
+    return [h('b', {class: 'mono'}, d.path), d.fstype, d.label || '', fmtBytes(d.size),
+      [d.foreign ? badge('warn', 'Imported', 'package') : badge('neutral', 'Local'), d.tran ? chip(d.tran) : null], mp,
+      h('label', {class: 'chk'}, ro, h('span', {}, 'Read-only')), h('label', {class: 'chk'}, pe, h('span', {}, 'At boot')), h('div', {}, go, warn)];
+  });
+  parts.push(cardFlush('Volumes ready to mount', 'package', badge(r.devices.length ? 'info' : 'neutral', r.devices.length + ' found'),
+    table(['Device', 'FS', 'Label', 'Size', 'Origin', 'Mountpoint', 'Mode', 'Persist', ''], rows, 'No unmounted filesystems found. Insert a disk or scan for RAID/LVM volumes.')));
+  if (r.other.length) parts.push(cardFlush('Other signatures', 'help', null, table(['Device', 'Signature', 'Size', 'What to do'], r.other.map(o => [h('span', {class: 'mono'}, o.path), o.fstype, fmtBytes(o.size), o.note]))));
+  const mrows = r.mounts.map(m => [h('span', {class: 'mono'}, m.target), h('span', {class: 'mono'}, m.source), m.fstype, h('span', {class: 'mono'}, m.options || ''), m.size ? usage(m.used, m.size) : '',
+    /^\/(srv|mnt)\//.test(m.target) ? btn('Unmount', {size: 'sm', onclick: () => confirmAction({title: 'Unmount ' + m.target, sub: 'Services using it will lose access.', expected: m.target, label: 'Unmount',
+      extra: [h('label', {class: 'chk'}, h('input', {type: 'checkbox', id: 'rmfs'}), h('span', {}, 'Also remove the managed fstab entry'))],
+      onConfirm: async () => { await api('POST', '/api/mounts/unmount', {mountpoint: m.target, confirm: m.target, remove_fstab: $('#rmfs').checked}); toast('Unmounted'); reload(); }})}) : '']);
+  parts.push(cardFlush('Mounted filesystems', 'disk', null, table(['Mountpoint', 'Source', 'FS', 'Options', 'Used', ''], mrows)));
+  parts.push(cardFlush('fstab', 'board', null, table(['Spec', 'Mountpoint', 'Type', 'Options', 'Managed'], r.fstab.map(e => [h('span', {class: 'mono'}, e.spec), h('span', {class: 'mono'}, e.mountpoint), e.fstype, h('span', {class: 'mono'}, e.options), e.managed ? badge('accent', 'synofurb', 'check') : '']), 'No fstab entries')));
+  return h('div', {}, parts);
+};
+/* ---------- Network ---------- */
+PAGES.network = async () => {
+  const r = await api('GET', '/api/network');
+  const reload = () => show('network');
+  setPending(r.pending);
+  const editHost = h('div', {});
+  const parts = [pageHead('Network', 'Hostname ' + r.hostname + ' - safe apply with automatic rollback after ' + r.rollback_seconds + ' s',
+    btn('Change hostname', {icon: 'wrench', onclick: () => formDialog('Change hostname', [{name: 'hostname', label: 'Hostname', value: r.hostname, mono: true}], 'Change', async v => { await api('POST', '/api/hostname', v); toast('Hostname changed'); reload(); }, {sub: 'Letters, digits and hyphens'}) }))];
+  function edit(i) {
+    const c = i.config || {};
+    const F = {mode: c.mode || 'dhcp'};
+    const inp = (v, ph) => h('input', {class: 'mono', value: v || '', placeholder: ph || '', autocomplete: 'off'});
+    const f4 = inp(c.ipv4, '192.168.1.140/24'), g4 = inp(c.gw4, '192.168.1.1'), f6 = inp(c.ipv6, '2001:db8::10/64'), g6 = inp(c.gw6, 'fe80::1'), dns = inp((c.dns || []).join(', '), '192.168.1.1, 9.9.9.9'), sr = inp((c.search || []).join(', '), 'lan');
+    const sect = h('div', {});
+    const seg = h('div', {class: 'seg', role: 'group', 'aria-label': 'Addressing mode'});
+    const drawMode = () => {
+      seg.replaceChildren(...[['dhcp', 'DHCP'], ['static', 'Static']].map(([k, t]) => h('button', {type: 'button', 'aria-pressed': String(F.mode === k), onclick: () => { F.mode = k; drawMode(); }}, t)));
+      sect.replaceChildren(...(F.mode === 'dhcp' ? [banner('info', 'DHCP with IPv6 autoconfiguration', 'IPv4 and IPv6 addresses come from the router (DHCPv4, DHCPv6 and SLAAC). The DHCP client id is the MAC address.')] :
+        [h('div', {class: 'grid2'}, field('IPv4 address/prefix', f4), field('IPv4 gateway', g4), field('IPv6 address/prefix (optional)', f6, 'Leave empty to keep SLAAC'), field('IPv6 gateway (optional)', g6)),
+          h('div', {class: 'grid2'}, field('DNS servers', dns, 'Comma separated'), field('Search domains', sr))]));
+    };
+    drawMode();
+    const apply = btn('Apply with rollback', {kind: 'primary', icon: 'undo', onclick: () => act(apply, async () => {
+      const res = await api('POST', '/api/network/apply', {ifname: i.ifname, mode: F.mode, ipv4: f4.value.trim(), gateway4: g4.value.trim(), ipv6: f6.value.trim(), gateway6: g6.value.trim(), dns: dns.value, search: sr.value});
+      toast(res.message); setPending(res.pending); editHost.replaceChildren();
+    })});
+    editHost.replaceChildren(card('Edit ' + i.ifname, 'settings', null, seg, sect,
+      banner('info', 'Safe apply is on', 'Changes are applied for ' + r.rollback_seconds + ' s and rolled back unless you confirm from the new address.'),
+      h('div', {class: 'row'}, btn('Discard', {onclick: () => editHost.replaceChildren()}), apply)));
+    editHost.scrollIntoView({behavior: 'smooth'});
+  }
+  const ifs = r.interfaces.map(i => card(i.ifname, 'network', i.state === 'UP' ? badge('ok', 'Link up') : badge('neutral', i.state === 'DOWN' || !i.state ? 'No link' : i.state, 'x'),
+    h('dl', {class: 'kv'}, h('dt', {}, 'Config'), h('dd', {}, i.managed ? (i.config.mode === 'static' ? 'Static (managed here)' : 'DHCP (managed here)') : 'Not managed here'),
+      h('dt', {}, 'Addresses'), h('dd', {class: 'mono'}, i.addrs.filter(a => a.scope !== 'link').map(a => a.addr + '/' + a.prefix).join(', ') || 'none'),
+      h('dt', {}, 'MAC'), h('dd', {class: 'mono'}, i.mac || '-'), h('dt', {}, 'MTU'), h('dd', {}, i.mtu)),
+    i.shadowed_by.length ? banner('warn', 'Other config files take precedence', i.shadowed_by.join(', ') + ' would override this page; they are set aside when you apply.') : null,
+    h('div', {class: 'row'}, btn('Edit', {kind: 'primary', size: 'sm', icon: 'settings', onclick: () => edit(i)}))));
+  parts.push(h('div', {class: 'cols'}, h('div', {class: 'stack'}, ifs.length ? ifs : banner('info', 'No network interfaces found', '')), editHost));
+  return h('div', {}, parts);
+};
+/* ---------- Users ---------- */
+PAGES.users = async () => {
   const r = await api('GET', '/api/users');
   const reload = () => show('users');
-  const createBtn = h('button', {class: 'btn primary', onclick: () => formDialog('Create user', [
-    {name: 'username', label: 'User name'}, {name: 'password', label: 'Password (min 8)', type: 'password'},
-    {name: 'groups', label: 'Extra groups (comma separated)', placeholder: 'users,adm', hint: 'Known: ' + r.groups.join(', ')},
-    {name: 'sudo', label: 'Administrator (group sudo, can log in here)', type: 'checkbox', value: true},
-    {name: 'ssh_key', label: 'SSH public key (optional)'}], 'Create', async v => {
-      await api('POST', '/api/users/create', v); toast('User created'); reload();
-    })}, 'Add user');
+  const parts = [pageHead('Users', 'Local accounts. Members of the sudo group can sign in to this page.',
+    btn('Add user', {kind: 'primary', icon: 'plus', onclick: () => formDialog('Add user', [
+      {name: 'username', label: 'User name', mono: true}, {name: 'password', label: 'Password', type: 'password', hint: 'At least 8 characters'},
+      {name: 'groups', label: 'Extra groups', placeholder: 'users, adm', hint: 'Known: ' + r.groups.join(', ')},
+      {name: 'sudo', label: 'Administrator (group sudo; may sign in here and use sudo)', type: 'checkbox', value: true},
+      {name: 'ssh_key', label: 'SSH public key (optional)', mono: true}], 'Create user', async v => { await api('POST', '/api/users/create', v); toast('User created'); reload(); }, {icon: 'users'}) }))];
   const rows = r.users.map(u => {
-    const btns = [];
+    const acts = [];
     if (!u.root) {
-      btns.push(h('button', {class: 'btn', onclick: () => formDialog('Set password for ' + u.name, [{name: 'password', label: 'New password', type: 'password'}], 'Set',
-        async v => { await api('POST', '/api/users/password', {username: u.name, password: v.password}); toast('Password changed'); })}, 'Password'));
-      btns.push(h('button', {class: 'btn', onclick: () => formDialog('Add SSH key for ' + u.name, [{name: 'ssh_key', label: 'Public key'}], 'Add',
-        async v => { await api('POST', '/api/users/ssh-key', {username: u.name, ssh_key: v.ssh_key}); toast('Key added'); reload(); })}, 'SSH key'));
-      btns.push(h('button', {class: 'btn', onclick: ev => act(ev.target, async () => {
-        await api('POST', u.locked ? '/api/users/unlock' : '/api/users/lock', {username: u.name}); reload();
-      })}, u.locked ? 'Unlock' : 'Lock'));
-      btns.push(h('button', {class: 'btn danger', onclick: () => typedConfirm('Delete user ' + u.name, u.name,
-        [{name: 'remove_home', label: 'Also delete home directory', type: 'checkbox'}],
-        async v => { await api('POST', '/api/users/delete', {username: u.name, confirm: v.confirm, remove_home: v.remove_home}); toast('User deleted'); reload(); })}, 'Delete'));
+      acts.push(btn('Password', {size: 'sm', icon: 'key', onclick: () => formDialog('Set password for ' + u.name, [{name: 'password', label: 'New password', type: 'password'}], 'Set password', async v => { await api('POST', '/api/users/password', {username: u.name, password: v.password}); toast('Password changed'); }, {icon: 'key'})}));
+      acts.push(btn('SSH key', {size: 'sm', onclick: () => formDialog('Add SSH key for ' + u.name, [{name: 'ssh_key', label: 'Public key', mono: true}], 'Add key', async v => { await api('POST', '/api/users/ssh-key', {username: u.name, ssh_key: v.ssh_key}); toast('Key added'); reload(); }, {icon: 'key'})}));
+      const lk = btn(u.locked ? 'Unlock' : 'Lock', {size: 'sm', icon: 'lock', onclick: () => act(lk, async () => { await api('POST', u.locked ? '/api/users/unlock' : '/api/users/lock', {username: u.name}); reload(); })});
+      acts.push(lk);
+      acts.push(btn('Delete', {size: 'sm', kind: 'danger', icon: 'trash', onclick: () => confirmAction({title: 'Delete user ' + u.name, expected: u.name, label: 'Delete user', sub: 'The account is removed immediately.',
+        extra: [h('label', {class: 'chk'}, h('input', {type: 'checkbox', id: 'rmhome'}), h('span', {}, 'Also delete the home directory'))],
+        onConfirm: async () => { await api('POST', '/api/users/delete', {username: u.name, confirm: u.name, remove_home: $('#rmhome').checked}); toast('User deleted'); reload(); }})}));
     }
-    return [u.name + (u.name === r.current ? ' (you)' : ''), u.uid, u.groups.join(', '), u.shell,
-      [u.root ? badge('root', 'warn') : null, u.locked ? badge('locked', 'bad') : !u.has_password ? badge('no password', 'warn') : badge('active', 'ok'),
-       u.sudo ? badge('sudo') : null, u.web_login ? badge('web login') : null], u.ssh_keys, h('div', {class: 'row'}, btns)];
+    return [h('b', {}, u.name + (u.name === r.current ? ' (you)' : '')), u.uid, u.groups.join(', '), h('span', {class: 'mono'}, u.shell),
+      h('div', {class: 'row'}, u.root ? badge('warn', 'root', 'lock') : null, u.locked ? badge('err', 'Locked', 'lock') : !u.has_password ? badge('warn', 'No password') : badge('ok', 'Active'), u.sudo ? badge('accent', 'sudo', 'key') : null, u.web_login ? badge('info', 'Web sign-in', 'check') : null),
+      u.ssh_keys, h('div', {class: 'row'}, acts)];
   });
-  el.replaceChildren(card('Local users', h('div', {class: 'row'}, createBtn),
-    table(['Name', 'UID', 'Groups', 'Shell', 'State', 'Keys', 'Actions'], rows)));
+  parts.push(cardFlush('Local users', 'users', badge('neutral', r.users.length + ' accounts'), table(['Name', 'UID', 'Groups', 'Shell', 'State', 'Keys', ''], rows, 'No users', {right: [1, 5]})));
+  return h('div', {}, parts);
 };
-
-VIEWS.network = async el => {
-  const r = await api('GET', '/api/network');
-  setPending(r.pending);
-  const hostBtn = h('button', {class: 'btn', onclick: () => formDialog('Change hostname', [{name: 'hostname', label: 'Hostname', value: r.hostname}], 'Change',
-    async v => { await api('POST', '/api/hostname', v); toast('Hostname changed'); show('network'); })}, 'Change hostname');
-  const cards = r.interfaces.map(i => {
-    const c = i.config || {};
-    const edit = h('button', {class: 'btn primary', onclick: () => formDialog('Configure ' + i.ifname, [
-      {name: 'mode', label: 'Mode', type: 'select', options: [{v: 'dhcp', t: 'DHCP (IPv4 + IPv6 + SLAAC)'}, {v: 'static', t: 'Static'}], value: c.mode || 'dhcp'},
-      {name: 'ipv4', label: 'IPv4 address/prefix', value: c.ipv4 || '', placeholder: '192.168.1.10/24'},
-      {name: 'gateway4', label: 'IPv4 gateway', value: c.gw4 || ''},
-      {name: 'ipv6', label: 'IPv6 address/prefix (optional)', value: c.ipv6 || '', placeholder: '2001:db8::10/64'},
-      {name: 'gateway6', label: 'IPv6 gateway (optional)', value: c.gw6 || ''},
-      {name: 'dns', label: 'DNS servers (comma separated)', value: (c.dns || []).join(', ')},
-      {name: 'search', label: 'Search domains', value: (c.search || []).join(', ')}],
-      'Apply', async v => {
-        v.ifname = i.ifname;
-        const res = await api('POST', '/api/network/apply', v);
-        toast(res.message); setPending(res.pending);
-      }, false, 'You may lose the connection. Re-open the page on the new address and press "Keep new settings" within the countdown, otherwise the old settings return automatically.')}, 'Edit');
-    return card(i.ifname, kv([['State', i.state], ['MAC', i.mac], ['Config', i.managed ? (c.mode === 'static' ? 'static (managed here)' : 'DHCP (managed here)') : 'not managed here'],
-      ['Addresses', i.addrs.filter(a => a.scope !== 'link').map(a => a.addr + '/' + a.prefix).join(', ')],
-      ['Note', i.shadowed_by.length ? 'Other files take precedence: ' + i.shadowed_by.join(', ') + ' (they are parked on apply)' : null]]),
-      h('div', {class: 'row'}, edit));
-  });
-  el.replaceChildren(card('Host', kv([['Hostname', r.hostname]]), h('div', {class: 'row'}, hostBtn)), ...cards);
-};
-
-VIEWS.volumes = async el => {
-  const r = await api('GET', '/api/volumes');
-  const reload = () => show('volumes');
-  const lvRows = r.lvs.map(v => {
-    const free = (r.vgs.find(g => g.vg_name === v.vg_name) || {}).vg_free || 0;
-    const ext = h('button', {class: 'btn', disabled: free <= 0, onclick: () => formDialog('Extend ' + v.vg_name + '/' + v.lv_name, [
-      {name: 'add_gib', label: 'GiB to add (empty = all ' + fmtBytes(free) + ' free)', type: 'number'}], 'Extend', async x => {
-        const res = await api('POST', '/api/volumes/extend', {vg: v.vg_name, lv: v.lv_name, add_gib: x.add_gib === '' ? null : Number(x.add_gib)});
-        toast('Extended'); reload();
-      })}, 'Extend');
-    const del = h('button', {class: 'btn danger', onclick: () => typedConfirm('Delete volume ' + v.lv_name, v.lv_name,
-      [{name: 'remove_vg', label: 'Also remove the volume group', type: 'checkbox'}],
-      async x => { await api('POST', '/api/volumes/delete', {vg: v.vg_name, lv: v.lv_name, confirm: x.confirm, remove_vg: x.remove_vg}); toast('Deleted'); reload(); },
-      'This destroys all data on the volume.')}, 'Delete');
-    return [v.lv_name, v.vg_name, fmtBytes(v.lv_size), v.fstype || '', v.mountpoints.join(', '), h('div', {class: 'row'}, ext, del)];
-  });
-  const cands = r.candidates.map(d => ({d, box: h('input', {type: 'checkbox', value: d.path})}));
-  const f = {
-    name: h('input', {placeholder: 'media'}), level: h('select', {}, r.raid_levels.map(x => h('option', {value: x}, x))),
-    fs: h('select', {}, r.filesystems.map(x => h('option', {value: x}, x))),
-    mp: h('input', {placeholder: '/srv/<name> (default)'}), size: h('input', {type: 'number', min: 1, placeholder: 'all'}),
+/* ---------- Boot manager ---------- */
+PAGES.boot = async () => {
+  const b = await api('GET', '/api/boot');
+  const parts = [];
+  if (!b.available) {
+    parts.push(pageHead('Boot manager', 'Choose what this NAS starts next time it reboots.'));
+    parts.push(banner('info', 'Not a boot-flash unit', 'This NAS does not boot through an internal boot flash, so there is nothing to switch here. (The synofurb-dom tool is not installed.)'));
+    return h('div', {}, parts);
+  }
+  if (b.error) { parts.push(pageHead('Boot manager', '')); parts.push(banner('err', 'Could not read the boot flash', b.error)); return h('div', {}, parts); }
+  let sel = (b.entries.find(e => e.default) || {}).id || 'debian';
+  const dsm = b.entries.find(e => e.id === 'dsm');
+  const area = h('div', {});
+  const doSet = (id, reboot) => {
+    const e = b.entries.find(x => x.id === id);
+    const run = async () => {
+      const res = await api('POST', reboot ? '/api/boot/reboot-to' : '/api/boot/default', {entry: id, confirm: id});
+      toast(res.message || ('Default boot entry is now ' + e.label)); if (!reboot) show('boot'); else setTimeout(() => show('boot'), 8000);
+    };
+    if (!e.needs_confirm) { return confirmAction({title: (reboot ? 'Reboot into ' : 'Set default to ') + e.label, danger: false, label: reboot ? 'Reboot now' : 'Set as default', icon: reboot ? 'power' : 'check',
+      sub: reboot ? 'The NAS restarts in 5 seconds. Expect about 90 s of downtime.' : 'Takes effect on the next reboot.', onConfirm: run}); }
+    return confirmAction({title: (reboot ? 'Reboot into ' : 'Set default to ') + e.label, expected: id, danger: id === 'agent', label: reboot ? 'Set default and reboot' : 'Set as default', icon: reboot ? 'power' : 'check',
+      sub: id === 'dsm' ? 'The NAS will start the original Synology firmware.' : 'Type the entry name to confirm.',
+      body: id === 'dsm' ? 'Debian stays installed and its data is untouched; DSM may need to be set up again if its system partition was reclaimed.' : (id === 'agent' ? 'The boot agent is a RAM-only rescue system. A reinstall from there erases disks only after you confirm on your PC.' : ''), onConfirm: run});
   };
-  const out = h('div', {});
-  const body = () => ({name: f.name.value.trim(), level: f.level.value, fs: f.fs.value, mountpoint: f.mp.value.trim() || null,
-    size_gib: f.size.value === '' ? null : Number(f.size.value), devices: cands.filter(c => c.box.checked).map(c => c.d.path)});
-  const planBtn = h('button', {class: 'btn', onclick: () => act(planBtn, async () => {
-    const p = await api('POST', '/api/volumes/plan', body());
-    const txt = p.steps.map((s, i) => (i + 1) + '. ' + s.desc + '\n     $ ' + s.cmd).join('\n');
-    const go = h('button', {class: 'btn danger', onclick: () => typedConfirm('Create volume ' + p.name, p.name, [], async x => {
-      const res = await api('POST', '/api/volumes/create', Object.assign(body(), {confirm: x.confirm}));
-      toast('Volume created at ' + res.mountpoint); reload();
-    }, p.warnings.join(' '))}, 'Execute plan...');
-    out.replaceChildren(h('div', {}, p.warnings.map(w => badge(w, 'warn'))), h('p', {}, 'Usable capacity about ' + fmtBytes(p.usable_bytes)), h('pre', {class: 'mono'}, txt), go);
-  })}, 'Preview plan');
-  const createCard = card('Create volume',
-    cands.length ? h('div', {}, cands.map(c => h('label', {class: 'chk'}, c.box, h('span', {}, c.d.path + '  ' + fmtBytes(c.d.size) + '  ' + [c.d.model, c.d.tran].filter(Boolean).join(' '))))) :
-      h('p', {class: 'badge'}, 'No free disks or partitions found'),
-    h('div', {class: 'grid'}, h('label', {}, h('span', {}, 'Name'), f.name), h('label', {}, h('span', {}, 'RAID level'), f.level),
-      h('label', {}, h('span', {}, 'Filesystem'), f.fs), h('label', {}, h('span', {}, 'Mountpoint'), f.mp), h('label', {}, h('span', {}, 'Size GiB (empty = all)'), f.size)),
-    h('div', {class: 'row'}, planBtn), out,
-    r.excluded.length ? h('details', {}, h('summary', {}, r.excluded.length + ' devices not available'),
-      table(['Device', 'Size', 'Reason'], r.excluded.map(d => [d.path, fmtBytes(d.size), d.reason]))) : null);
-  el.replaceChildren(
-    card('Volume groups', table(['VG', 'Size', 'Free', 'PVs', 'LVs'], r.vgs.map(v => [v.vg_name, fmtBytes(v.vg_size), fmtBytes(v.vg_free), v.pv_count, v.lv_count]))),
-    card('Logical volumes', table(['LV', 'VG', 'Size', 'FS', 'Mounted', 'Actions'], lvRows)), createCard);
+  function draw() {
+    const cur = b.entries.find(e => e.id === sel);
+    area.replaceChildren(card('Boot entries', 'board', b.default_valid ? null : badge('err', 'Default is invalid', 'octagon-x'),
+      b.entries.map(e => {
+        const rd = h('input', {type: 'radio', name: 'be', checked: sel === e.id, disabled: !e.present, onchange: () => { sel = e.id; draw(); }});
+        return h('label', {class: 'opt' + (sel === e.id ? ' sel' : '') + (e.present ? '' : ' off')}, rd, h('div', {}, h('b', {}, e.label, e.default ? badge('accent', 'Default', 'flag') : null,
+          e.failsafe ? badge('ok', 'Fail-safe', 'shield-check') : null, !e.present ? badge('neutral', 'Not installed', 'x') : null, e.risk === 'caution' && e.present ? badge('warn', 'Can reinstall') : null),
+          h('small', {}, e.desc + (e.name ? '  [' + e.name + ']' : ''))));
+      }),
+      h('div', {class: 'row'}, btn('Set as default', {disabled: !cur.present || cur.default, icon: 'check', onclick: () => doSet(sel, false)}),
+        btn('Reboot into ' + cur.label, {kind: 'primary', disabled: !cur.present, icon: 'power', onclick: () => doSet(sel, true)}))));
+  }
+  const rt = dsm && dsm.present ? btn('Return to DSM', {kind: 'primary', icon: 'undo', size: 'lg', disabled: false, onclick: () => doSet('dsm', true)}) : null;
+  parts.push(pageHead('Boot manager', 'Choose what this NAS starts next time it reboots.', rt));
+  parts.push(banner('info', 'DSM is your fail-safe', 'The original Synology firmware stays on the boot flash and is never modified by synofurb. If Debian does not come up, power-cycle the NAS and select DSM from the boot menu, or run "synofurb recover" from your PC.'));
+  if (!b.default_valid) parts.push(banner('err', 'The boot flash default points at no entry', 'Pick an entry below and set it as default to repair this.'));
+  if (b.other_entries.length) parts.push(banner('info', 'Other entries on the flash', b.other_entries.join(', ') + ' (not managed on this page)'));
+  parts.push(area); draw();
+  const f = b.flash || {}, p1 = f.p1 || {}, p2 = f.p2 || {};
+  const free = (p) => p.bytes ? usage((p.bytes - (p.free_bytes || 0)), p.bytes) : h('span', {class: 'muted'}, 'unknown');
+  parts.push(h('div', {class: 'cols'},
+    card('Boot flash', 'disk', badge('info', f.device || 'unknown device', 'disk'), h('dl', {class: 'kv'}, h('dt', {}, 'Boot partition'), h('dd', {}, free(p1), p1.free_bytes != null ? h('span', {class: 'help'}, fmtBytes(p1.free_bytes) + ' free') : null),
+      h('dt', {}, 'Data partition'), h('dd', {}, free(p2), p2.free_bytes != null ? h('span', {class: 'help'}, fmtBytes(p2.free_bytes) + ' free') : null), h('dt', {}, 'Total'), h('dd', {}, fmtBytes(f.bytes)))),
+    card('DOM backup', 'download', b.backup.exists ? badge('ok', 'Backup exists') : badge('warn', 'No backup yet'), h('p', {}, b.backup.exists ? 'A full image of the boot flash was taken before the first change.' : 'The automatic backup is created before the first write to the boot flash. Keep a copy off the NAS.'),
+      b.backup.path ? h('p', {class: 'mono'}, b.backup.path) : null, b.tool_version ? h('p', {class: 'help'}, 'synofurb-dom ' + b.tool_version) : null)));
+  return h('div', {}, parts);
 };
-
-VIEWS.mounts = async el => {
-  const r = await api('GET', '/api/mounts');
-  const reload = () => show('mounts');
-  const mrows = r.mounts.map(m => {
-    const un = h('button', {class: 'btn danger', onclick: () => typedConfirm('Unmount ' + m.target, m.target,
-      [{name: 'remove_fstab', label: 'Also remove the managed fstab entry', type: 'checkbox'}],
-      async x => { await api('POST', '/api/mounts/unmount', {mountpoint: m.target, confirm: x.confirm, remove_fstab: x.remove_fstab}); toast('Unmounted'); reload(); })}, 'Unmount');
-    return [m.target, m.source, m.fstype, h('span', {class: 'mono'}, m.options || ''), /^\/(srv|mnt)\//.test(m.target) ? un : ''];
-  });
-  const drows = r.devices.map(d => {
-    const mp = h('input', {value: d.suggested}), ro = h('input', {type: 'checkbox', checked: d.ro_default}), pe = h('input', {type: 'checkbox'});
-    const go = h('button', {class: 'btn primary', onclick: () => act(go, async () => {
-      await api('POST', '/api/mounts/mount', {device: d.path, mountpoint: mp.value.trim(), ro: ro.checked, persist: pe.checked});
-      toast('Mounted'); reload();
-    })}, 'Mount');
-    return [d.path, d.fstype, d.label || '', fmtBytes(d.size), [d.foreign ? badge('imported', 'warn') : null, d.tran ? badge(d.tran) : null],
-      mp, h('label', {class: 'chk'}, ro, h('span', {}, 'ro')), h('label', {class: 'chk'}, pe, h('span', {}, 'persist')), go];
-  });
-  const act2 = h('button', {class: 'btn', onclick: () => act(act2, async () => {
-    const res = await api('POST', '/api/mounts/activate'); toast('Scan finished: ' + res.devices.length + ' mountable device(s)'); reload();
-  })}, 'Activate imported volumes (RAID/LVM scan)');
-  el.replaceChildren(card('Mounted filesystems', table(['Mountpoint', 'Source', 'FS', 'Options', ''], mrows)),
-    card('Available filesystems', h('div', {class: 'row'}, act2),
-      h('small', {}, 'Imported (foreign) volumes default to read-only. Mountpoints must be below /srv or /mnt.'),
-      table(['Device', 'FS', 'Label', 'Size', '', 'Mountpoint', '', '', ''], drows, 'No unmounted filesystems found')),
-    card('fstab (managed entries marked)', table(['Spec', 'Mountpoint', 'Type', 'Options', 'Managed'],
-      r.fstab.map(e => [e.spec, e.mountpoint, e.fstype, h('span', {class: 'mono'}, e.options), e.managed ? badge('synofurb', 'ok') : '']))));
+/* ---------- System ---------- */
+const PAGES_ACTIONS = {
+  power(action) {
+    confirmAction({title: (action === 'reboot' ? 'Reboot' : 'Power off') + ' this NAS', sub: action === 'reboot' ? 'Services stop in order; SMB and NFS clients disconnect.' : 'You will have to press the power button to start it again.',
+      expected: S.host, label: action === 'reboot' ? 'Reboot' : 'Power off', icon: 'power',
+      onConfirm: async v => { await api('POST', '/api/system/power', {action, confirm: v}); toast(action + ' scheduled'); }});
+  }
 };
-
-VIEWS.services = async el => {
-  const r = await api('GET', '/api/services');
-  const restart = r.restartable.map(u => { const b = h('button', {class: 'btn', onclick: () => act(b, async () => {
-    await api('POST', '/api/services/restart', {unit: u}); toast(u + ' restarted'); })}, 'Restart ' + u); return b; });
-  const power = a => h('button', {class: 'btn danger', onclick: async () => {
-    const host = (await api('GET', '/api/me')).hostname;
-    typedConfirm(a + ' this NAS', host, [], async x => { await api('POST', '/api/system/power', {action: a, confirm: x.confirm}); toast(a + ' scheduled'); });
-  }}, a === 'reboot' ? 'Reboot' : 'Power off');
-  el.replaceChildren(
-    card('SSH', kv([['sshd enabled', r.sshd.enabled], ['sshd active', r.sshd.active]]),
-      table(['Type', 'Bits', 'Fingerprint'], r.host_keys.map(k => [k.type, k.bits, h('span', {class: 'mono'}, k.fingerprint)]), 'No host keys found')),
-    card('Serial consoles', table(['Unit', 'Load', 'Active', 'Sub'], r.serial_getty.map(g => [g.unit, g.load, g.active, g.sub]), 'No serial-getty units')),
-    card('Services', h('div', {class: 'row'}, restart)),
-    card('Power', h('div', {class: 'row'}, power('reboot'), power('poweroff'))));
+PAGES.system = async () => {
+  const [r, s] = await Promise.all([api('GET', '/api/services'), S.st ? Promise.resolve(S.st) : api('GET', '/api/status')]);
+  const parts = [pageHead('System', 'Services, host keys and power.')];
+  parts.push(h('div', {class: 'cols'},
+    card('SSH', 'key', r.sshd.active === 'active' ? badge('ok', 'Running') : badge('neutral', r.sshd.active, 'x'), h('dl', {class: 'kv'}, h('dt', {}, 'Enabled'), h('dd', {}, r.sshd.enabled), h('dt', {}, 'Active'), h('dd', {}, r.sshd.active)),
+      h('div', {class: 'cap'}, 'HOST KEY FINGERPRINTS'), r.host_keys.length ? r.host_keys.map(k => h('p', {}, h('b', {}, k.type + ' ' + k.bits), h('br'), h('span', {class: 'mono'}, k.fingerprint))) : h('p', {class: 'muted'}, 'No host keys found')),
+    card('Serial consoles', 'terminal', null, r.serial_getty.length ? table(['Unit', 'Active', 'Sub'], r.serial_getty.map(g => [h('span', {class: 'mono'}, g.unit), g.active === 'active' ? badge('ok', 'active') : badge('neutral', g.active, 'x'), g.sub])) : h('p', {class: 'muted'}, 'No serial-getty units are active.'),
+      s.console.cmdline_consoles.length ? h('p', {class: 'help'}, 'Kernel console: ' + s.console.cmdline_consoles.map(c => c.device + (c.options ? ',' + c.options : '')).join(' ')) : null)));
+  const rs = r.restartable.map(u => { const b = btn('Restart ' + u, {size: 'sm', onclick: () => act(b, async () => { await api('POST', '/api/services/restart', {unit: u}); toast(u + ' restarted'); })}); return b; });
+  parts.push(h('div', {class: 'cols'},
+    card('Restart a service', 'refresh', null, h('p', {class: 'muted'}, 'Only services that are safe to restart while the NAS is in use.'), h('div', {class: 'row'}, rs)),
+    card('Power', 'power', null, h('p', {class: 'muted'}, 'Both actions ask you to type the hostname.'), h('div', {class: 'row'}, btn('Reboot', {icon: 'refresh', onclick: () => PAGES_ACTIONS.power('reboot')}), btn('Power off', {kind: 'danger', icon: 'power', onclick: () => PAGES_ACTIONS.power('poweroff')})))));
+  const un = s.unit || {};
+  parts.push(card('About', 'info', badge('info', 'v' + r.version), h('dl', {class: 'kv'}, h('dt', {}, 'Management plane'), h('dd', {}, 'synofurb-mgmt ' + r.version), h('dt', {}, 'Unit model'), h('dd', {}, un.model || 'unknown'),
+    h('dt', {}, 'Kernel'), h('dd', {}, s.kernel + (s.kernel_info && s.kernel_info.ge7 ? '  (Linux 7+)' : '')), h('dt', {}, 'OS'), h('dd', {}, s.os || '-'), h('dt', {}, 'Architecture'), h('dd', {}, s.arch))));
+  return h('div', {}, parts);
 };
-
-showLogin().then(async () => { try { await start(); } catch (e) { /* not logged in */ } });
+/* ---------- boot ---------- */
+showLogin().then(async () => { try { await start(); } catch (e) { /* not signed in */ } });
 </script></body></html>
 """
+
+INDEX_HTML = _UI_TEMPLATE.replace("/*__TOKENS__*/", theme_css()).replace("<!--__SPRITE__-->", _ICON_SPRITE)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,15 @@
+#!/bin/sh
+# synofurb-dom-update: register the newest installed Debian kernel + initrd on the unit's internal boot flash
+# (DOM) so the unit can boot it. The previous kernel is kept as DEBIAN_OLD by `synofurb-dom install-debian`.
+# Called by the kernel/initramfs hooks installed by synofurb, or by hand. It never changes the DEFAULT entry
+# (that is a deliberate act: `synofurb-dom default debian`), so a failure here can never make the unit unbootable.
+set -eu
+CONF=/etc/synofurb/dom.conf
+[ -r "$CONF" ] || { echo "synofurb-dom-update: $CONF missing" >&2; exit 0; }
+# shellcheck disable=SC1090
+. "$CONF"    # ROOT_UUID, SERIAL_ARG, EXTRA_ARGS
+KVER=$(for f in /boot/vmlinuz-*; do [ -e "$f" ] && echo "${f#/boot/vmlinuz-}"; done | sort -V | tail -n1)
+[ -n "$KVER" ] || { echo "synofurb-dom-update: no kernel in /boot" >&2; exit 0; }
+[ -f "/boot/initrd.img-$KVER" ] || { echo "synofurb-dom-update: initrd for $KVER not built yet" >&2; exit 0; }
+CMDLINE="root=UUID=$ROOT_UUID ${EXTRA_ARGS:-ro} console=tty0 ${SERIAL_ARG:-}"
+exec /usr/local/sbin/synofurb-dom install-debian "/boot/vmlinuz-$KVER" "/boot/initrd.img-$KVER" --cmdline "$CMDLINE" --yes

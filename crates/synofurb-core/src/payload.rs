@@ -25,6 +25,16 @@ macro_rules! mgmt_asset {
     };
 }
 
+/// Boot tooling lives in `boot/` (its own tested project); it is bundled into the payload.
+macro_rules! boot_asset {
+    ($bundle:literal, $file:literal) => {
+        ($bundle, include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../boot/", $file)))
+    };
+}
+
+/// The DOM boot-menu manager script (also placed into the installer initrd and uploaded to DSM).
+pub const DOM_SCRIPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../boot/dom/synofurb-dom"));
+
 /// (path inside the bundle, content, mode)
 const STATIC_FILES: &[(&str, &str)] = &[
     asset!("chroot-setup.sh"),
@@ -38,6 +48,8 @@ const STATIC_FILES: &[(&str, &str)] = &[
     asset!("files/etc/systemd/system/synofurb-firstboot.service"),
     asset!("files/usr/local/sbin/synofurb-firstboot"),
     asset!("files/usr/local/sbin/synofurb-uboot-update"),
+    asset!("files/usr/local/sbin/synofurb-dom-update"),
+    boot_asset!("files/usr/local/sbin/synofurb-dom", "dom/synofurb-dom"),
     mgmt_asset!("mgmt/synofurb_mgmt.py", "synofurb_mgmt.py"),
     mgmt_asset!("mgmt/synofurb-mgmt.service", "synofurb-mgmt.service"),
     mgmt_asset!("mgmt/README.md", "README.md"),
@@ -70,10 +82,16 @@ pub fn render_env(cfg: &InstallConfig, plan: &Plan, facts: &DeviceFacts) -> Stri
             Firmware::Bios => "Bios",
             Firmware::Uefi => "Uefi",
             Firmware::UBoot => "UBoot",
+            Firmware::Dom => "Dom",
         },
     );
     kv("GRUB_EFI_TARGET", plan.arch.grub_efi_target());
     kv("SERIAL_TTY", &cfg.serial.tty);
+    kv("SERIAL_ARG", &cfg.serial.kernel_arg());
+    kv("KERNEL_CHANNEL", if cfg.kernel == crate::config::KernelChannel::Newest { "newest" } else { "stable" });
+    kv("CPU_VENDOR", facts.cpu_vendor.label());
+    kv("MICROCODE_PKG", facts.cpu_vendor.microcode_package().unwrap_or(""));
+    kv("DOM_BOOT", if plan.dom_boot { "1" } else { "0" });
     kv("SERIAL_SPEED", &cfg.serial.speed.to_string());
     kv("ENABLE_MGMT", if cfg.enable_mgmt { "1" } else { "0" });
     kv("EXTRA_PACKAGES", &cfg.extra_packages.join(" "));
@@ -148,7 +166,8 @@ mod tests {
                 e.read_to_string(&mut s).unwrap();
                 assert!(s.contains("NAS_HOSTNAME='nas'"));
                 assert!(s.contains("ARCH='amd64'") && s.contains("FIRMWARE='Bios'"));
-                assert!(s.contains("SERIAL_TTY='ttyS0'"));
+                assert!(s.contains("SERIAL_TTY='ttyS0'") && s.contains("SERIAL_ARG='console=ttyS0,115200n8'"));
+                assert!(s.contains("KERNEL_CHANNEL='newest'") && s.contains("DOM_BOOT='0'"));
                 assert!(!s.contains("password") || s.contains("PASSWORD_HASH='$6$"));
             }
             names.push(n);

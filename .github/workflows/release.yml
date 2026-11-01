@@ -1,0 +1,573 @@
+name: release
+
+# Release pipeline.  Trigger: push of a tag v*  (or manual dispatch).  Full procedure: docs/RELEASING.md.
+#
+#   design-gate  -> meta -> test -> build (6 platforms) + aux (boot agents) + static (mgmt plane, dom, compat)
+#                                   -> checksums (SHA256SUMS + minisign) -> release (GitHub Release)
+#
+# Nothing is built unless the design gate (scripts/release-gate.py) passes: both critics must have approved the exact
+# current design.  Manual runs default to a DRY RUN: the gate only reports, every artifact is built and signed-if-possible,
+# but NO release is created.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: build everything, report the design gate without enforcing it, publish NOTHING"
+        type: boolean
+        default: true
+      tag:
+        description: "Existing tag (vX.Y.Z) to release when dry_run is off. Ignored for dry runs."
+        type: string
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PACKAGER_VERSION: "0.11.8"
+  # what to check out: the requested tag for a real manual release, otherwise the ref that triggered the run
+  RELEASE_REF: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run == false && inputs.tag != '') && inputs.tag || github.ref }}
+  # true = report the gate but do not enforce it, and publish nothing
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+
+jobs:
+  # ------------------------------------------------------------------------------------------------------------------
+  # 1. design approval gate - FIRST; every other job needs it
+  # ------------------------------------------------------------------------------------------------------------------
+  design-gate:
+    name: design gate (UX + UI critics)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      design_hash: ${{ steps.gate.outputs.design_hash }}
+      gate_status: ${{ steps.gate.outputs.gate_status }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+
+      - name: Ask GitHub whether a design OVERRIDE commit is signed (only when design/approvals/OVERRIDE.md exists)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f design/approvals/OVERRIDE.md ]; then
+            echo "::warning title=Design override present::design/approvals/OVERRIDE.md exists; checking the commit signature"
+            sha="$(git rev-parse HEAD)"
+            verified="$(gh api "repos/${GITHUB_REPOSITORY}/commits?sha=${sha}&path=design/approvals/OVERRIDE.md&per_page=1" --jq '.[0].commit.verification.verified' || echo false)"
+            echo "signature verified by GitHub: ${verified}"
+            if [ "${verified}" = "true" ]; then echo "RELEASE_GATE_OVERRIDE_SIGNATURE=verified" >> "$GITHUB_ENV"; fi
+          fi
+
+      - name: Design gate
+        id: gate
+        run: |
+          args=()
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "::warning title=Dry run::the design gate is REPORTED but not enforced, and nothing will be published"
+            args+=(--dry-run)
+          fi
+          python3 scripts/release-gate.py "${args[@]}"
+
+  # ------------------------------------------------------------------------------------------------------------------
+  # 2. versions and release metadata
+  # ------------------------------------------------------------------------------------------------------------------
+  meta:
+    name: version checks
+    needs: [design-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      mgmt_version: ${{ steps.v.outputs.mgmt_version }}
+      publish: ${{ steps.v.outputs.publish }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+
+      - name: Work out version, tag and whether to publish
+        id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cargo_version="$(bash -c '. scripts/package-lib.sh; pkg_version')"
+          mgmt_version="$(bash -c '. scripts/package-lib.sh; pkg_mgmt_version')"
+          publish=false
+          if [ "${EVENT}" = "push" ]; then
+            tag="${REF_NAME}"; publish=true
+          elif [ "${DRY_RUN}" = "true" ]; then
+            tag="v${cargo_version}"
+          else
+            [ -n "${INPUT_TAG}" ] || { echo "::error::dry_run is off: the 'tag' input is required"; exit 1; }
+            tag="${INPUT_TAG}"; publish=true
+          fi
+          printf '%s' "${tag}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$' || { echo "::error::tag '${tag}' is not vMAJOR.MINOR.PATCH[-pre]"; exit 1; }
+          version="${tag#v}"
+          if [ "${version}" != "${cargo_version}" ]; then
+            echo "::error title=Version mismatch::tag ${tag} but [workspace.package] version in Cargo.toml is ${cargo_version}"; exit 1
+          fi
+          prerelease=false; case "${version}" in *-*) prerelease=true ;; esac
+          {
+            echo "version=${version}"; echo "tag=${tag}"; echo "mgmt_version=${mgmt_version}"
+            echo "publish=${publish}"; echo "prerelease=${prerelease}"
+          } >> "$GITHUB_OUTPUT"
+          echo "release ${tag}: app ${version}, management plane ${mgmt_version}, publish=${publish}, prerelease=${prerelease}"
+
+      - name: The management plane reports the version it ships under
+        run: bash scripts/package-mgmt.sh --out "${RUNNER_TEMP}/mgmt-check"
+
+      - name: The installers carry the real minisign public key (required for a real release)
+        if: steps.v.outputs.publish == 'true'
+        run: |
+          fail=0
+          for f in install.sh apps/mgmt-plane/install.sh install.ps1; do
+            if grep -q "REPLACE_WITH_MINISIGN_PUBLIC_KEY" <(grep -E 'MINISIGN_PUBKEY_BUILTIN=|BuiltinKey = ' "$f"); then
+              echo "::error file=${f}::still contains the placeholder minisign public key (docs/RELEASING.md, 'One-time setup')"; fail=1
+            fi
+          done
+          exit "${fail}"
+        shell: bash
+
+  # ------------------------------------------------------------------------------------------------------------------
+  # 3. tests
+  # ------------------------------------------------------------------------------------------------------------------
+  test:
+    name: tests (rust, python, shell, installers, gate)
+    needs: [design-gate, meta]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+        with:
+          key: release-test
+      - name: System packages (GPUI/wgpu build dependencies and the shell/installer test tools)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config clang cmake \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xkb-dev libxcb-randr0-dev \
+            libxcb-icccm4-dev libxcb-image0-dev libxcb-keysyms1-dev libxcb-util-dev libxcb-cursor-dev libxcb-xinerama0-dev \
+            libvulkan-dev libfontconfig-dev libfreetype-dev libasound2-dev libssl-dev libzstd-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libdrm-dev libgbm-dev \
+            parted cpio shellcheck minisign rpm
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: Management plane tests
+        run: python3 -m unittest discover -s apps/mgmt-plane/tests -v
+        env:
+          PYTHONPATH: apps/mgmt-plane
+      - name: shellcheck (payload, installers, packaging scripts, tests)
+        run: |
+          shellcheck -s dash payload/chroot-setup.sh payload/files/usr/local/sbin/*
+          shellcheck -s sh install.sh apps/mgmt-plane/install.sh
+          shellcheck -x -P SCRIPTDIR scripts/package-*.sh
+          shellcheck -x -e SC2016 tests/install/run-tests.sh tests/install/test-package-scripts.sh
+      - name: Design-gate unit tests
+        run: python3 -m unittest discover -s tests/gate -v
+      - name: Installer tests (install.sh, install.ps1, mgmt-plane/install.sh against a fake release server)
+        run: tests/install/run-tests.sh
+      - name: Packaging script tests
+        run: tests/install/test-package-scripts.sh
+
+  # ------------------------------------------------------------------------------------------------------------------
+  # 4. desktop app: build + package per platform
+  # ------------------------------------------------------------------------------------------------------------------
+  build:
+    name: build ${{ matrix.name }}
+    needs: [design-gate, meta, test]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    # a failure of an `experimental` leg is reported but does not stop the release (its assets are optional)
+    continue-on-error: ${{ matrix.experimental }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x86_64, runner: windows-latest, target: x86_64-pc-windows-msvc, formats: "wix,nsis", experimental: false }
+          - { name: windows-aarch64, runner: windows-11-arm, target: aarch64-pc-windows-msvc, formats: "wix,nsis", experimental: true }
+          - { name: macos-aarch64, runner: macos-14, target: aarch64-apple-darwin, formats: "app,dmg", experimental: false }
+          # macos-13 (the last Intel image the plan named) was retired by GitHub; macos-15-intel is its successor
+          - { name: macos-x86_64, runner: macos-15-intel, target: x86_64-apple-darwin, formats: "app,dmg", experimental: false }
+          - { name: linux-x86_64, runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu, formats: "deb,appimage", experimental: false }
+          - { name: linux-aarch64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, formats: "deb,appimage", experimental: false }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Linux build dependencies (GPUI / wgpu / X11 / Wayland / audio / TLS) and packaging tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config clang cmake \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xkb-dev libxcb-randr0-dev \
+            libxcb-icccm4-dev libxcb-image0-dev libxcb-keysyms1-dev libxcb-util-dev libxcb-cursor-dev libxcb-xinerama0-dev \
+            libvulkan-dev libfontconfig-dev libfreetype-dev libasound2-dev libssl-dev libzstd-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libdrm-dev libgbm-dev \
+            rpm desktop-file-utils libfuse2t64 file
+
+      - name: Cache cargo-packager ${{ env.CARGO_PACKAGER_VERSION }}
+        id: cp-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.os == 'Windows' && '~/.cargo/bin/cargo-packager.exe' || '~/.cargo/bin/cargo-packager' }}
+          key: cargo-packager-${{ env.CARGO_PACKAGER_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install cargo-packager
+        if: steps.cp-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-packager --version "${CARGO_PACKAGER_VERSION}" --locked
+
+      - name: Which signing credentials are configured?
+        id: signing
+        env:
+          APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARY: ${{ secrets.APPLE_ID }}
+          WIN_CERT: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+        run: |
+          mac=false; notarize=false; win=false
+          [ -n "${APPLE_CERT}" ] && [ -n "${APPLE_IDENTITY}" ] && mac=true
+          [ -n "${APPLE_NOTARY}" ] && notarize=true
+          [ -n "${WIN_CERT}" ] && win=true
+          { echo "mac=${mac}"; echo "notarize=${notarize}"; echo "win=${win}"; } >> "$GITHUB_OUTPUT"
+          case "${RUNNER_OS}" in
+            macOS)
+              if [ "${mac}" != true ]; then echo "::warning title=Unsigned macOS build::APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY secrets are not set; the app and dmg are NOT code-signed (Gatekeeper will warn)"; fi
+              if [ "${mac}" = true ] && [ "${notarize}" != true ]; then echo "::warning title=Not notarized::APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID secrets are not set; the macOS build is signed but not notarized"; fi ;;
+            Windows)
+              if [ "${win}" != true ]; then echo "::warning title=Unsigned Windows build::WINDOWS_CERTIFICATE_PFX_BASE64 secret is not set; the msi/exe are NOT Authenticode-signed (SmartScreen will warn)"; fi ;;
+          esac
+
+      - name: Import the Windows code-signing certificate
+        if: runner.os == 'Windows' && steps.signing.outputs.win == 'true'
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:PFX_B64))
+          $pw = ConvertTo-SecureString -String $env:PFX_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $path -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+          Remove-Item -Force $path
+          "WINDOWS_CERT_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build (release, locked)
+        run: cargo build --release --locked -p synofurb --target "${{ matrix.target }}"
+
+      - name: Smoke test the binary
+        run: |
+          bin="target/${{ matrix.target }}/release/synofurb"
+          [ -f "${bin}.exe" ] && bin="${bin}.exe"
+          out="$("./${bin}" --version)"
+          echo "${out}"
+          echo "${out}" | grep -q "${{ needs.meta.outputs.version }}"
+
+      - name: Package with cargo-packager (macOS; signs and notarizes when the Apple secrets exist)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/package-cargo-packager.sh --target "${{ matrix.target }}" --formats "${{ matrix.formats }}" --out dist/release
+
+      - name: Package with cargo-packager (Windows / Linux; signs when WINDOWS_CERT_THUMBPRINT is set)
+        if: runner.os != 'macOS'
+        run: bash scripts/package-cargo-packager.sh --target "${{ matrix.target }}" --formats "${{ matrix.formats }}" --out dist/release
+
+      - name: Package the .pkg installer (macOS, optional)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        env:
+          APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/package-macos-pkg.sh --target "${{ matrix.target }}" --out dist/release
+
+      - name: Package the .rpm (Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/package-rpm.sh --target "${{ matrix.target }}" --out dist/release
+
+      - name: Package the portable archive (tar.gz / zip with the bare binary)
+        run: bash scripts/package-portable.sh --target "${{ matrix.target }}" --out dist/release
+
+      - name: Smoke test the Linux packages (install the .deb, run the AppImage, inspect the .rpm)
+        if: runner.os == 'Linux'
+        run: |
+          set -x
+          deb="$(ls dist/release/synofurb-*-linux-*.deb)"
+          appimage="$(ls dist/release/synofurb-*-linux-*.AppImage)"
+          rpm_file="$(ls dist/release/synofurb-*-linux-*.rpm)"
+          sudo apt-get install -y "./${deb}"
+          synofurb --version
+          desktop-file-validate /usr/share/applications/synofurb.desktop
+          APPIMAGE_EXTRACT_AND_RUN=1 "./${appimage}" --version
+          rpm -qpl "${rpm_file}"
+          rpm -qpR "${rpm_file}"
+          sudo apt-get remove -y synofurb
+
+      - name: Smoke test the Windows MSI (silent install, run, uninstall)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist/release -Filter 'synofurb-*-windows-*.msi').FullName
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart', '/L*v', "$env:RUNNER_TEMP\msi-install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\msi-install.log" -Tail 80; throw "msiexec /i exit code $($p.ExitCode)" }
+          $exe = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA -Recurse -Filter synofurb.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw 'synofurb.exe not found after the MSI install' }
+          & $exe.FullName --version
+          if ($LASTEXITCODE -ne 0) { throw "synofurb --version failed ($LASTEXITCODE)" }
+          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /x exit code $($p.ExitCode)" }
+
+      - name: Show what was produced
+        run: ls -l dist/release
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ matrix.name }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # ------------------------------------------------------------------------------------------------------------------
+  # 5. boot agent (kernel + initrd per architecture)
+  # ------------------------------------------------------------------------------------------------------------------
+  agent:
+    name: boot agent ${{ matrix.arch }}
+    needs: [design-gate, meta, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64, armhf]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+      - name: Build tools (curl dpkg-dev xz cpio kmod binutils gawk gnupg + Debian archive keyring + zstd)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl dpkg-dev xz-utils cpio kmod binutils gawk gnupg debian-archive-keyring zstd
+      - run: bash scripts/package-agent.sh --arch "${{ matrix.arch }}" --out dist/release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-agent-${{ matrix.arch }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # ------------------------------------------------------------------------------------------------------------------
+  # 6. architecture-independent assets: management plane, DOM manager, compatibility list
+  # ------------------------------------------------------------------------------------------------------------------
+  static:
+    name: mgmt plane, dom script, compat list
+    needs: [design-gate, meta, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+      - name: Assemble
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          bash scripts/package-mgmt.sh --out dist/release
+          install -m 0755 boot/dom/synofurb-dom dist/release/synofurb-dom
+          python3 -m json.tool compat/models.json > /dev/null
+          install -m 0644 compat/models.json dist/release/compat-models.json
+          ls -l dist/release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-static
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # ------------------------------------------------------------------------------------------------------------------
+  # 7. collect, SHA256SUMS, minisign signature, release notes
+  # ------------------------------------------------------------------------------------------------------------------
+  checksums:
+    name: SHA256SUMS + minisign signature
+    needs: [design-gate, meta, build, agent, static]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # `release` environment: put the signing secrets there and add required reviewers to approve every release
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0 # release notes fall back to the git log
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: dist/release
+          merge-multiple: true
+
+      - name: Validate the asset set against the naming contract and write SHA256SUMS
+        run: |
+          ls -l dist/release
+          bash scripts/package-collect.sh --dir dist/release --version "${{ needs.meta.outputs.version }}" --mgmt-version "${{ needs.meta.outputs.mgmt_version }}"
+          cat dist/release/SHA256SUMS
+
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends minisign
+
+      - name: Sign SHA256SUMS with minisign
+        id: sign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          PUBLISH: ${{ needs.meta.outputs.publish }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY}" ]; then
+            if [ "${PUBLISH}" = "true" ]; then
+              echo "::error title=Cannot sign::secret MINISIGN_SECRET_KEY is not set; a real release must be signed (docs/RELEASING.md)"; exit 1
+            fi
+            echo "::warning title=UNSIGNED dry run::MINISIGN_SECRET_KEY is not set; SHA256SUMS.minisig was NOT produced. Only acceptable for a manual dry run."
+            echo "signed=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          key="${RUNNER_TEMP}/minisign.key"
+          umask 077
+          printf '%s\n' "${MINISIGN_SECRET_KEY}" > "${key}"
+          printf '%s\n' "${MINISIGN_PASSWORD}" | minisign -S -s "${key}" -m dist/release/SHA256SUMS -x dist/release/SHA256SUMS.minisig -t "synofurb ${VERSION}"
+          shred -u "${key}" 2>/dev/null || rm -f "${key}"
+          # the key that signed must be the one that is embedded in the installers and the updater
+          pub="$(sed -n 's/^MINISIGN_PUBKEY_BUILTIN="\(.*\)"$/\1/p' install.sh)"
+          if [ "${pub}" = "REPLACE_WITH_MINISIGN_PUBLIC_KEY" ] || [ -z "${pub}" ]; then
+            if [ "${PUBLISH}" = "true" ]; then echo "::error::install.sh still has the placeholder public key"; exit 1; fi
+            echo "::warning::install.sh has no real public key yet; signature not cross-checked"
+          else
+            minisign -Vm dist/release/SHA256SUMS -x dist/release/SHA256SUMS.minisig -P "${pub}"
+            echo "signature verified against the public key embedded in install.sh"
+          fi
+          echo "signed=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Release notes
+        run: |
+          bash scripts/package-notes.sh --version "${{ needs.meta.outputs.version }}" --tag "${{ needs.meta.outputs.tag }}" \
+            --out dist/notes/RELEASE_NOTES.md --design-hash "${{ needs.design-gate.outputs.design_hash }}" \
+            --gate-status "${{ needs.design-gate.outputs.gate_status }}" --signed "${{ steps.sign.outputs.signed }}"
+          cat dist/notes/RELEASE_NOTES.md
+
+      - name: Summary
+        run: |
+          {
+            echo "### Release assets for ${{ needs.meta.outputs.tag }}"
+            echo
+            echo "- design gate: \`${{ needs.design-gate.outputs.gate_status }}\` (hash \`${{ needs.design-gate.outputs.design_hash }}\`)"
+            echo "- signed: \`${{ steps.sign.outputs.signed }}\`   publish: \`${{ needs.meta.outputs.publish }}\`"
+            echo
+            echo '```'; cat dist/release/SHA256SUMS; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-final
+          path: |
+            dist/release/*
+            dist/notes/RELEASE_NOTES.md
+          if-no-files-found: error
+          retention-days: 30
+
+  # ------------------------------------------------------------------------------------------------------------------
+  # 8. GitHub Release (the only job with write access)
+  # ------------------------------------------------------------------------------------------------------------------
+  release:
+    name: GitHub Release
+    needs: [design-gate, meta, checksums]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Re-check the design gate result (defence in depth)
+        run: |
+          case "${{ needs.design-gate.outputs.gate_status }}" in
+            approved) ;;
+            override) echo "::warning title=DESIGN GATE OVERRIDDEN::releasing without critic approval, by maintainer override" ;;
+            *) echo "::error::design gate status is '${{ needs.design-gate.outputs.gate_status }}': refusing to publish"; exit 1 ;;
+          esac
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-final
+          path: dist/final
+      - name: Layout
+        run: find dist/final -type f | sort
+      - uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: synofurb ${{ needs.meta.outputs.version }}
+          body_path: dist/final/notes/RELEASE_NOTES.md
+          files: dist/final/release/*
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: ${{ needs.meta.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.meta.outputs.prerelease == 'false' }}

@@ -13,3 +13,8 @@ pub mod remote;
 pub mod script;
 pub mod server;
 pub mod session;
+
+pub mod compat;
+pub mod diskbackup;
+pub mod domboot;
+pub mod updater;

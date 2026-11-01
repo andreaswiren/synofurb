@@ -1,0 +1,246 @@
+#!/bin/sh
+# sf-boot - control the synofurb boot agent (busybox ash).
+. /usr/lib/synofurb/lib.sh
+load_conf
+
+die() { echo "sf-boot: $*" >&2; exit 1; }
+
+usage() {
+    cat <<'USAGE'
+sf-boot - synofurb boot agent control
+
+  sf-boot status [--json]      state, watchdog, addresses (key=value lines, or JSON)
+  sf-boot claim [REASON]       cancel the safety watchdog (this unit stays in the agent until told otherwise)
+  sf-boot arm [MINUTES]        (re)start the safety watchdog countdown (default: AGENT_TIMEOUT_MIN)
+  sf-boot kexec KERNEL INITRD [--cmdline STR] [--reuse-console] [--dtb FILE]
+               [--sha256 kernel=HEX,initrd=HEX] [--insecure]
+                               fetch (http/https URL or local file) and LOAD a kernel with kexec; does not jump
+  sf-boot kexec --unload       drop a loaded kexec image
+  sf-boot exec [--delay SEC] [--detach]
+                               sync and jump into the loaded kernel (kexec -e)
+  sf-boot reboot dsm|debian|agent
+                               set the DOM boot default via synofurb-dom, then reboot
+  sf-boot dom ARGS...          pass-through to synofurb-dom
+  sf-boot net                  interfaces, addresses, routes, DNS
+  sf-boot log [-f] [agent|dropbear|autorun|dmesg]
+  sf-boot version
+
+HTTPS note: busybox wget encrypts but does NOT verify server certificates. Downloads must therefore
+carry --sha256 (or be local files already uploaded over SSH); --insecure skips that requirement.
+USAGE
+}
+
+# ---------------------------------------------------------------- status
+wd_state() {
+    if [ -e "$SF_RUN/wd_disabled" ]; then echo disabled
+    elif [ -e "$SF_RUN/claimed" ]; then echo claimed
+    elif [ -e "$SF_RUN/wd_deadline" ]; then echo armed
+    else echo starting; fi
+}
+
+kv_status() {
+    echo "agent=synofurb-agent"
+    awk -F= 'NF >= 2 { print tolower($1) "=" substr($0, length($1) + 2) }' /etc/synofurb-agent-release 2>/dev/null
+    echo "kernel=$(uname -r)"
+    echo "hostname=$(hostname)"
+    echo "uptime_s=$(uptime_s)"
+    st=$(wd_state)
+    echo "state=$st"
+    [ -e "$SF_RUN/claimed" ] && echo "claim_reason=$(cut -d' ' -f1 "$SF_RUN/claimed")"
+    echo "watchdog_timeout_min=$AGENT_TIMEOUT_MIN"
+    if [ "$st" = armed ]; then
+        echo "watchdog_remaining_s=$(( $(cat "$SF_RUN/wd_deadline") - $(uptime_s) ))"
+    fi
+    echo "dom_default=$(cat "$SF_RUN/dom_default" 2>/dev/null || echo unknown)"
+    echo "kexec_loaded=$(cat /sys/kernel/kexec_loaded 2>/dev/null || echo unsupported)"
+    echo "ssh_port=$AGENT_SSH_PORT"
+    for i in $(eth_ifaces); do
+        read -r carrier < "/sys/class/net/$i/carrier" 2>/dev/null
+        echo "net.$i.mac=$(mac_of "$i")"
+        echo "net.$i.carrier=${carrier:-0}"
+        echo "net.$i.ipv4=$(ip -4 -o addr show dev "$i" scope global 2>/dev/null | awk '{printf "%s%s", s, $4; s=","}')"
+        echo "net.$i.ipv6=$(ip -6 -o addr show dev "$i" scope global 2>/dev/null | awk '{printf "%s%s", s, $4; s=","}')"
+    done
+}
+
+cmd_status() {
+    case $1 in
+        --json)
+            kv_status | awk -F= '
+                { k=$1; v=substr($0, length(k)+2); gsub(/\\/, "\\\\", v); gsub(/"/, "\\\"", v)
+                  printf "%s\"%s\": \"%s\"", (n++ ? ",\n  " : "{\n  "), k, v }
+                END { print "\n}" }' ;;
+        ''|--text) kv_status ;;
+        *) die "status: unknown option $1" ;;
+    esac
+}
+
+# ---------------------------------------------------------------- claim / arm
+cmd_claim() {
+    claim_unit "${1:-claim}"
+    echo "claimed"
+}
+
+cmd_arm() {
+    m=${1:-$AGENT_TIMEOUT_MIN}
+    case $m in ''|*[!0-9]*) die "arm: minutes must be a number";; esac
+    [ "$m" -gt 0 ] || die "arm: minutes must be > 0"
+    rm -f "$SF_RUN/claimed" "$SF_RUN/wd_disabled"
+    wd_set_deadline $(( m * 60 ))
+    wd_login_count > "$SF_RUN/wd_baseline"
+    note "watchdog re-armed: ${m} min"
+    echo "armed ${m}min"
+}
+
+# ---------------------------------------------------------------- kexec
+is_url() { case $1 in http://*|https://*|ftp://*) return 0;; esac; return 1; }
+
+# fetch SRC DEST -> prints path to use
+fetch_file() {
+    src=$1; dest=$2
+    if is_url "$src"; then
+        echo "sf-boot: downloading $src" >&2
+        wget -q -T 30 -O "$dest" "$src" || { rm -f "$dest"; die "download failed: $src"; }
+        echo "$dest"
+    else
+        [ -f "$src" ] || die "no such file: $src"
+        echo "$src"
+    fi
+}
+
+check_sha() { # file expected label
+    got=$(sha256sum "$1" | awk '{print $1}')
+    want=$(echo "$2" | tr 'A-F' 'a-f')
+    [ "$got" = "$want" ] || die "$3: SHA-256 mismatch (got $got, expected $want)"
+    echo "sf-boot: $3 sha256 ok" >&2
+}
+
+cmd_kexec() {
+    if [ "$1" = --unload ]; then kexec -u && echo "unloaded"; return; fi
+    [ $# -ge 2 ] || die "usage: sf-boot kexec KERNEL INITRD [options]"
+    kernel_src=$1; initrd_src=$2; shift 2
+    cmdline=; reuse=0; dtb=; sha_k=; sha_i=; insecure=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --cmdline) [ $# -ge 2 ] || die "--cmdline needs a value"; cmdline=$2; shift 2 ;;
+            --reuse-console) reuse=1; shift ;;
+            --dtb) [ $# -ge 2 ] || die "--dtb needs a value"; dtb=$2; shift 2 ;;
+            --insecure) insecure=1; shift ;;
+            --sha256)
+                [ $# -ge 2 ] || die "--sha256 needs a value"
+                oldifs=$IFS; IFS=,
+                n=0
+                for part in $2; do
+                    n=$((n + 1))
+                    case $part in
+                        kernel=*) sha_k=${part#kernel=} ;;
+                        initrd=*) sha_i=${part#initrd=} ;;
+                        *=*) die "--sha256: unknown key in '$part'" ;;
+                        *) if [ $n -eq 1 ]; then sha_k=$part; else sha_i=$part; fi ;;
+                    esac
+                done
+                IFS=$oldifs; shift 2 ;;
+            *) die "kexec: unknown option $1" ;;
+        esac
+    done
+    if [ "$insecure" -eq 0 ]; then
+        is_url "$kernel_src" && [ -z "$sha_k" ] && die "refusing to load a downloaded kernel without --sha256 kernel=HEX (use --insecure to override)"
+        is_url "$initrd_src" && [ -z "$sha_i" ] && die "refusing to load a downloaded initrd without --sha256 initrd=HEX (use --insecure to override)"
+    fi
+    if [ "$reuse" -eq 1 ]; then
+        for tok in $(cat /proc/cmdline); do
+            case $tok in console=*) cmdline="$cmdline $tok";; esac
+        done
+    fi
+    [ -f /sys/kernel/kexec_loaded ] || die "this kernel has no kexec support (/sys/kernel/kexec_loaded missing)"
+
+    work=/tmp/sf-kexec; mkdir -p "$work"
+    kfile=$(fetch_file "$kernel_src" "$work/kernel") || exit 1
+    ifile=$(fetch_file "$initrd_src" "$work/initrd") || exit 1
+    [ -n "$sha_k" ] && check_sha "$kfile" "$sha_k" kernel
+    [ -n "$sha_i" ] && check_sha "$ifile" "$sha_i" initrd
+
+    set -- --initrd="$ifile" --command-line="$cmdline"
+    [ -n "$dtb" ] && set -- "$@" --dtb="$dtb"
+    kexec -u 2>/dev/null
+    if ! kexec -l "$kfile" "$@" >"$work/kexec.log" 2>&1; then
+        cat "$work/kexec.log" >&2
+        echo "sf-boot: kexec -l failed, retrying with kexec_file_load (-s)" >&2
+        kexec -s -l "$kfile" "$@" >"$work/kexec.log" 2>&1 || { cat "$work/kexec.log" >&2; die "kexec load failed"; }
+    fi
+    [ "$(cat /sys/kernel/kexec_loaded)" = 1 ] || die "kexec reported success but nothing is loaded"
+    # the kernel now holds its own copy: free the downloaded files (they live in RAM here)
+    is_url "$kernel_src" && rm -f "$work/kernel"
+    is_url "$initrd_src" && rm -f "$work/initrd"
+    claim_unit kexec
+    log info "kexec loaded: kernel=$kernel_src initrd=$initrd_src cmdline='$cmdline'"
+    echo "loaded: run 'sf-boot exec' to jump"
+}
+
+cmd_exec() {
+    delay=0; detach=0
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --delay) delay=${2:?--delay needs seconds}; shift 2 ;;
+            --detach) detach=1; shift ;;
+            *) die "exec: unknown option $1" ;;
+        esac
+    done
+    [ "$(cat /sys/kernel/kexec_loaded 2>/dev/null)" = 1 ] || die "no kexec image loaded (run 'sf-boot kexec ...' first)"
+    note "kexec: jumping into the loaded kernel in ${delay}s"
+    if [ "$detach" -eq 1 ]; then
+        ( sleep "$delay"; sync; exec kexec -e ) >/dev/null 2>&1 </dev/null &
+        echo "scheduled"
+    else
+        [ "$delay" -gt 0 ] && sleep "$delay"
+        sync
+        exec kexec -e
+    fi
+}
+
+# ---------------------------------------------------------------- reboot / dom
+cmd_reboot() {
+    case $1 in dsm|debian|agent) ;; *) die "reboot: target must be dsm, debian or agent";; esac
+    [ -x /usr/bin/synofurb-dom ] || die "synofurb-dom is not installed"
+    synofurb-dom --yes --skip-auto-backup default "$1" || die "synofurb-dom default $1 failed - NOT rebooting"
+    note "rebooting into '$1' (set via synofurb-dom)"
+    do_reboot
+}
+
+cmd_net() {
+    for i in $(eth_ifaces); do
+        read -r carrier < "/sys/class/net/$i/carrier" 2>/dev/null
+        read -r state < "/sys/class/net/$i/operstate" 2>/dev/null
+        echo "$i  mac=$(mac_of "$i")  state=${state:-?}  carrier=${carrier:-0}  driver=$(basename "$(readlink "/sys/class/net/$i/device/driver" 2>/dev/null)")"
+        ip -o addr show dev "$i" 2>/dev/null | awk '$3 ~ /^inet/ {print "    " $3 " " $4 " " $6 " " $7}'
+    done
+    echo "routes:"; ip route 2>/dev/null | sed 's/^/    /'; ip -6 route 2>/dev/null | sed 's/^/    /'
+    echo "dns:"; sed 's/^/    /' /etc/resolv.conf 2>/dev/null
+}
+
+cmd_log() {
+    follow=0
+    [ "$1" = -f ] && { follow=1; shift; }
+    case ${1:-agent} in
+        agent) f=$SF_LOG ;; dropbear) f=$SF_DROPBEAR_LOG ;; autorun) f=/var/log/autorun.log ;;
+        dmesg) [ $follow -eq 1 ] && exec dmesg -w; exec dmesg ;;
+        *) die "log: unknown log '$1'" ;;
+    esac
+    if [ $follow -eq 1 ]; then exec tail -n 100 -f "$f"; else cat "$f"; fi
+}
+
+cmd=$1; [ $# -gt 0 ] && shift
+case $cmd in
+    status) cmd_status "$@" ;;
+    claim) cmd_claim "$@" ;;
+    arm) cmd_arm "$@" ;;
+    kexec) cmd_kexec "$@" ;;
+    exec) cmd_exec "$@" ;;
+    reboot) cmd_reboot "$@" ;;
+    dom) exec synofurb-dom "$@" ;;
+    net) cmd_net ;;
+    log) cmd_log "$@" ;;
+    version) cat /etc/synofurb-agent-release ;;
+    help|-h|--help|'') usage ;;
+    *) usage >&2; exit 2 ;;
+esac

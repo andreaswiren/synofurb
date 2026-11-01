@@ -10,7 +10,7 @@ use synofurb_core::discovery::{self, ScanOptions};
 use synofurb_core::logs::{Event, Level, Logger};
 use synofurb_core::model::*;
 use synofurb_core::plan::*;
-use synofurb_core::remote::{Auth, SshSession};
+use synofurb_core::remote::{Auth, RemoteShell, SshSession};
 use synofurb_core::session::*;
 
 #[derive(Parser)]
@@ -28,8 +28,9 @@ pub enum Cmd {
         /// load a built-in demo NAS (4-bay DS918+) instead of scanning; nothing touches the network
         #[arg(long)]
         demo: bool,
-        /// with --demo: start on this screen (layout, account, confirm)
-        #[arg(long, default_value = "layout")]
+        /// with --demo: start on this screen (inventory, connect, inspect, goal, plan, system, confirm, install, failed,
+        /// done, update, settings, bootmgr, recover)
+        #[arg(long, default_value = "inventory")]
         screen: String,
     },
     /// Find Synology NAS units on the network
@@ -58,8 +59,17 @@ pub enum Cmd {
         opts: PlanOpts,
         #[command(flatten)]
         acct: Account,
-        #[arg(long, value_enum, default_value = "kexec")]
+        #[arg(long, value_enum, default_value = "auto")]
         method: Method,
+        /// which Linux kernel to install
+        #[arg(long, value_enum, default_value = "newest")]
+        kernel: KernelArg,
+        /// directory with agent-<arch>.vmlinuz/.initrd (default: assets/agent or $SYNOFURB_AGENT_DIR)
+        #[arg(long)]
+        agent_dir: Option<PathBuf>,
+        /// where the boot flash backup is written (default: <data dir>/dom-backups)
+        #[arg(long)]
+        backup_dir: Option<PathBuf>,
         /// static kexec binary for the NAS architecture (see docs/kexec.md)
         #[arg(long)]
         kexec: Option<PathBuf>,
@@ -78,12 +88,60 @@ pub enum Cmd {
         #[arg(long)]
         confirm: Option<String>,
     },
+    /// Boot manager mode: add a small SSH-controllable boot environment to the unit's internal boot flash so you
+    /// can netboot/kexec any OS later, always with DSM as the fail-safe default
+    BootManager {
+        #[command(subcommand)]
+        action: BootManagerAction,
+    },
+    /// Recovery: make the unit boot the original DSM again (from DSM, Debian or the boot agent)
+    Recover {
+        #[command(flatten)]
+        conn: Conn,
+    },
+    /// Check for (and install) a newer synofurb from the GitHub releases; verifies SHA-256 and the minisign signature
+    SelfUpdate {
+        /// only report whether an update exists
+        #[arg(long)]
+        check: bool,
+        /// `stable` (default) or `prerelease`
+        #[arg(long)]
+        channel: Option<String>,
+    },
+    /// Look up a Synology model in the compatibility list (embedded copy; `--refresh` fetches the latest from the repo)
+    Compat {
+        /// model name, e.g. "DS923+" or "RS3618xs"
+        model: Option<String>,
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Download and verify the Debian installer files (kernel/initrd) for an architecture
     FetchInstaller {
         #[arg(value_enum)]
         arch: ArchArg,
         #[arg(long, default_value = "trixie")]
         suite: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum BootManagerAction {
+    /// Back up the boot flash, then install the agent (DSM stays the default unless --arm)
+    Install {
+        #[command(flatten)]
+        conn: Conn,
+        #[arg(long)]
+        agent_dir: Option<PathBuf>,
+        #[arg(long)]
+        backup_dir: Option<PathBuf>,
+        /// boot into the agent on the next reboot (it resets the default to DSM itself)
+        #[arg(long)]
+        arm: bool,
+    },
+    /// Arm the agent for the next boot, reboot DSM, wait for it and print how to use it
+    Enter {
+        #[command(flatten)]
+        conn: Conn,
     },
 }
 
@@ -96,8 +154,22 @@ pub enum ArchArg {
 
 #[derive(Copy, Clone, ValueEnum)]
 pub enum Method {
+    /// choose by hardware: boot flash (DOM) units use `dom`, units with kexec use `kexec`, otherwise `kit`
+    Auto,
+    /// through the internal boot flash and the boot agent (x86 Synology), SSH only
+    Dom,
+    /// upload a static kexec to DSM
     Kexec,
+    /// export an installer kit and boot it yourself (USB/TFTP/U-Boot)
     Kit,
+}
+
+#[derive(Copy, Clone, ValueEnum)]
+pub enum KernelArg {
+    /// Linux 7.x from trixie-backports
+    Newest,
+    /// Debian 13's 6.12 LTS kernel
+    Stable,
 }
 
 #[derive(Args, Clone)]
@@ -334,6 +406,90 @@ pub fn run(cmd: Cmd) -> Result<()> {
             }
             Ok(())
         }
+        Cmd::SelfUpdate { check, channel } => crate::update_cmd::run(check, channel),
+        Cmd::Compat { model, refresh } => {
+            use synofurb_core::compat::CompatDb;
+            let cache = config_dir().join("compat");
+            if refresh {
+                let r = CompatDb::refresh(&cache, "https://raw.githubusercontent.com/andreaswiren/synofurb/main/compat/models.json")?;
+                println!("refresh: {r:?}");
+            }
+            let db = CompatDb::load_best(&cache);
+            match model {
+                Some(m) => match db.lookup(&m) {
+                    Some(e) => println!(
+                        "{} ({}, {}): {}\n  {}\n  platform {} | cpu {} | boot {:?} | evidence items: {}",
+                        e.model,
+                        e.arch.debian(),
+                        e.status.label(),
+                        e.status.explain(),
+                        e.notes.clone().unwrap_or_default(),
+                        e.platform,
+                        e.cpu.clone().unwrap_or_default(),
+                        e.boot,
+                        e.evidence.len()
+                    ),
+                    None => println!("{m}: not in the list. Treated as untested; please file a compatibility report."),
+                },
+                None => {
+                    println!("{} models (list updated {})", db.len(), db.updated());
+                    for (s, n) in db.count_by_status() {
+                        println!("  {:<18} {n}", s.label());
+                    }
+                }
+            }
+            Ok(())
+        }
+        Cmd::Recover { conn } => {
+            let log = cli_logger(true)?;
+            let out = recover_to_dsm(&conn.target()?, &log)?;
+            println!(
+                "{}\nThe unit will boot DSM at its next reboot. If DSM's system partition is gone (a failed install), DSM starts in its recovery mode: open https://find.synology.com and choose to reinstall DSM; Synology keeps data volumes on a reinstall (see https://kb.synology.com).",
+                out.trim()
+            );
+            Ok(())
+        }
+        Cmd::BootManager { action } => {
+            let log = cli_logger(true)?;
+            match action {
+                BootManagerAction::Install { conn, agent_dir, backup_dir, arm } => {
+                    let backup_dir = backup_dir.unwrap_or_else(|| config_dir().join("dom-backups"));
+                    boot_manager_install(&conn.target()?, agent_dir.as_deref(), &backup_dir, "synofurb-agent", arm, &log, &mut |_, _| {})?;
+                    println!("Boot agent installed. Backup of the boot flash: {}", backup_dir.display());
+                    Ok(())
+                }
+                BootManagerAction::Enter { conn } => {
+                    let t = conn.target()?;
+                    let mut ssh = SshSession::connect(&t.host, t.port, &t.user, &t.auth, &log)?;
+                    let fp = ssh.host_key_fingerprint();
+                    let (facts, _) = inspect_remote(&mut ssh, false, t.sudo_password.clone(), &log)?;
+                    let unit = if facts.serial.is_empty() { t.host.clone() } else { facts.serial.clone() };
+                    let key = agent_key_for(&unit, &config_keys_dir())?;
+                    let mut p =
+                        synofurb_core::remote::Privileged { sh: &mut ssh, is_root: facts.is_root, sudo_password: t.sudo_password.clone() };
+                    let r = p.run("synofurb-dom default agent --yes || /usr/local/bin/synofurb-dom default agent --yes")?;
+                    if !r.ok() {
+                        bail!("could not arm the agent (is it installed? run `synofurb boot-manager install` first): {}", r.stdout.trim());
+                    }
+                    let _ = p.run("nohup /bin/sh -c 'sleep 2; sync; reboot' >/dev/null 2>&1 &");
+                    let ip: std::net::IpAddr = t.host.parse().context("host must be an IP address")?;
+                    let (agent, ip) = synofurb_core::domboot::wait_for_agent(
+                        &[ip],
+                        &key.private_openssh,
+                        fp.as_deref(),
+                        std::time::Duration::from_secs(600),
+                        &AtomicBool::new(false),
+                        &log,
+                    )?;
+                    drop(agent);
+                    println!(
+                        "\nBoot agent is running at {ip}. You control the bootloader over SSH:\n  ssh -i {}/agent_{unit}_ed25519 root@{ip}\n  sf-boot status | sf-boot kexec <kernel-url> <initrd-url> --cmdline '...' | sf-boot reboot dsm|debian\nIt returns to DSM by itself if nobody claims it within the timeout.",
+                        config_keys_dir().display()
+                    );
+                    Ok(())
+                }
+            }
+        }
         Cmd::FetchInstaller { arch, suite } => {
             let log = cli_logger(true)?;
             let a = match arch {
@@ -345,7 +501,21 @@ pub fn run(cmd: Cmd) -> Result<()> {
             println!("kernel: {}\ninitrd: {}", f.kernel.display(), f.initrd.display());
             Ok(())
         }
-        Cmd::Install { conn, opts, acct, method, kexec, kit_dir, no_firmware, accept_data_loss, have_backup, confirm } => {
+        Cmd::Install {
+            conn,
+            opts,
+            acct,
+            method,
+            kernel,
+            agent_dir,
+            backup_dir,
+            kexec,
+            kit_dir,
+            no_firmware,
+            accept_data_loss,
+            have_backup,
+            confirm,
+        } => {
             let log = cli_logger(true)?;
             let target = conn.target()?;
             let (facts, _) = inspect_target(&target, &log)?;
@@ -372,6 +542,10 @@ pub fn run(cmd: Cmd) -> Result<()> {
             cfg.timezone = acct.timezone.clone();
             cfg.serial = facts.serial_console();
             cfg.enable_mgmt = !acct.no_mgmt;
+            cfg.kernel = match kernel {
+                KernelArg::Newest => KernelChannel::Newest,
+                KernelArg::Stable => KernelChannel::Stable,
+            };
             cfg.dtb = acct.dtb.clone().or_else(|| synofurb_core::platform::mainline_dtb(&facts.model).map(String::from));
             let mut key_note = String::new();
             match &acct.ssh_pubkey {
@@ -392,14 +566,25 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 }
             }
             cfg.validate()?;
+            let (facts_firmware_is_dom, facts_kexec) = (facts.firmware == Firmware::Dom, facts.kexec);
             let job = InstallJob {
                 target,
                 facts,
                 plan,
                 cfg,
-                method: match method {
-                    Method::Kexec => BootMethod::Kexec { kexec_bin: kexec },
-                    Method::Kit => BootMethod::Kit { dir: kit_dir },
+                method: {
+                    let backup_dir = backup_dir.unwrap_or_else(|| config_dir().join("dom-backups"));
+                    let method = match method {
+                        Method::Auto if facts_firmware_is_dom => Method::Dom,
+                        Method::Auto if facts_kexec => Method::Kexec,
+                        Method::Auto => Method::Kit,
+                        m => m,
+                    };
+                    match method {
+                        Method::Dom => BootMethod::Dom { agent_dir, backup_dir },
+                        Method::Kexec => BootMethod::Kexec { kexec_bin: kexec },
+                        _ => BootMethod::Kit { dir: kit_dir },
+                    }
                 },
                 cache_dir: config_dir().join("cache"),
                 with_firmware: !no_firmware,

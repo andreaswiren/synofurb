@@ -1,0 +1,71 @@
+#!/bin/sh
+# Bring every Ethernet port up and give it addresses: DHCPv4 (udhcpc), DHCPv6 (udhcpc6) and kernel
+# SLAAC (accept_ra=2). Static addressing for one port if AGENT_NET_MODE=static.
+# Runs forever (respawned by init): new ports that appear later (USB NICs, slow drivers) are picked up.
+. /usr/lib/synofurb/lib.sh
+load_conf
+HOST=$(hostname)
+SCRIPT=/usr/lib/synofurb/udhcpc.script
+static_if=
+
+pick_static_iface() {
+    case $AGENT_NET_IFACE in
+        auto|'')
+            for i in $(eth_ifaces); do
+                read -r c < "/sys/class/net/$i/carrier" 2>/dev/null
+                [ "$c" = 1 ] && { echo "$i"; return; }
+            done
+            eth_ifaces | head -n1 ;;
+        eth*|en*) echo "$AGENT_NET_IFACE" ;;
+        *:*:*:*:*:*)
+            for i in $(eth_ifaces); do
+                [ "$(mac_of "$i")" = "$(echo "$AGENT_NET_IFACE" | tr 'A-F' 'a-f')" ] && { echo "$i"; return; }
+            done ;;
+    esac
+}
+
+configure_static() {
+    i=$1
+    log info "static addressing on $i"
+    [ -n "$AGENT_STATIC_ADDRESS" ] && ip addr add "$AGENT_STATIC_ADDRESS" dev "$i"
+    [ -n "$AGENT_STATIC_GATEWAY" ] && ip route add default via "$AGENT_STATIC_GATEWAY" dev "$i" metric 100
+    [ -n "$AGENT_STATIC_ADDRESS6" ] && ip -6 addr add "$AGENT_STATIC_ADDRESS6" dev "$i"
+    [ -n "$AGENT_STATIC_GATEWAY6" ] && ip -6 route add default via "$AGENT_STATIC_GATEWAY6" dev "$i" metric 100
+    : > "$SF_RUN/resolv/$i"
+    for d in $AGENT_STATIC_DNS; do echo "nameserver $d" >> "$SF_RUN/resolv/$i"; done
+    rebuild_resolv
+    /usr/lib/synofurb/announce
+}
+
+configure_iface() {
+    i=$1
+    echo 2 > "/proc/sys/net/ipv6/conf/$i/accept_ra" 2>/dev/null
+    echo 1 > "/proc/sys/net/ipv6/conf/$i/autoconf" 2>/dev/null
+    ip link set dev "$i" up 2>>"$SF_LOG"
+    if [ "$AGENT_NET_MODE" = static ] && [ "$i" = "$static_if" ]; then
+        configure_static "$i"
+    else
+        udhcpc -i "$i" -b -t 5 -T 3 -A 10 -x "hostname:$HOST" -V synofurb-agent \
+            -s "$SCRIPT" -p "$SF_RUN/udhcpc.$i.pid" >>"$SF_LOG" 2>&1
+        SF_DHCP=6 udhcpc6 -i "$i" -b -t 4 -T 3 -A 30 \
+            -s "$SCRIPT" -p "$SF_RUN/udhcpc6.$i.pid" >>"$SF_LOG" 2>&1
+    fi
+    log info "configured $i mac=$(mac_of "$i") driver=$(basename "$(readlink "/sys/class/net/$i/device/driver" 2>/dev/null)")"
+    : > "$SF_RUN/net/$i"
+}
+
+ip link set dev lo up
+n=0
+while :; do
+    [ "$AGENT_NET_MODE" = static ] && [ -z "$static_if" ] && static_if=$(pick_static_iface)
+    for i in $(eth_ifaces); do
+        [ -e "$SF_RUN/net/$i" ] || configure_iface "$i"
+    done
+    # for the first minute keep scanning for late hardware (USB NICs behind xhci, slow PHYs)
+    if [ "$n" -lt 12 ]; then
+        find /sys/devices -name modalias -type f -exec cat {} + 2>/dev/null | sort -u \
+            | xargs modprobe -qba 2>/dev/null
+    fi
+    n=$((n + 1))
+    sleep 5
+done

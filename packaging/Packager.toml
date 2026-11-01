@@ -1,0 +1,88 @@
+# cargo-packager configuration for the synofurb desktop app.   https://github.com/crabnebula-dev/cargo-packager
+#
+# This is a TEMPLATE: scripts/package-cargo-packager.sh copies it to packaging/.Packager.generated.toml and fills in
+#   - the version (from [workspace.package] in Cargo.toml: the single source of truth),
+#   - binaries-dir (absolute path of target/<triple>/release),
+#   - the two "signing" marker comments below, only when APPLE_SIGNING_IDENTITY / WINDOWS_CERT_THUMBPRINT are set,
+# then runs `cargo-packager --config <generated file> --formats ... --target ...`.
+# Paths below are relative to THIS directory (cargo-packager changes into the config's directory).
+# See packaging/README.md.
+
+name = "synofurb"
+product-name = "synofurb"
+version = "@VERSION@"
+identifier = "io.github.andreaswiren.synofurb"
+description = "Reinstall Synology NAS units with plain Debian 13"
+long-description = """\
+synofurb finds Synology NAS units on your network, inspects them over SSH (read-only), shows exactly what an \
+installation of plain Debian 13 on LVM + xfs would destroy and keep, boots the Debian installer on the NAS and \
+streams a detailed log back. Reinstalling repartitions the disks: make a verified backup first."""
+homepage = "https://github.com/andreaswiren/synofurb"
+authors = ["Andreas Wiren"]
+publisher = "Andreas Wiren"
+copyright = "Copyright (c) Andreas Wiren. MIT License."
+license-file = "../LICENSE"
+category = "Utility"
+
+icons = [
+  "icons/32x32.png",
+  "icons/128x128.png",
+  "icons/128x128@2x.png",
+  "icons/512x512.png",
+  "icons/icon.icns",
+  "icons/icon.ico",
+]
+
+# Directory with the freshly built binary (absolute; filled in by the script because cargo-packager 0.11.8 ignores
+# its own --binaries-dir flag). The packager adds .exe on Windows.
+binaries-dir = '@BINARIES_DIR@'
+binaries = [{ path = "synofurb", main = true }]
+
+# ---- Linux: .deb (the .AppImage uses the same config; the .rpm is built by scripts/package-rpm.sh) ----------
+[deb]
+section = "utils"
+priority = "optional"
+# runtime libraries of the GPUI/wgpu stack (Debian 13 / Ubuntu 24.04 package names)
+depends = [
+  "libc6 (>= 2.39)",
+  "libxkbcommon0",
+  "libxkbcommon-x11-0",
+  "libwayland-client0",
+  "libx11-xcb1",
+  "libxcb1",
+  "libvulkan1",
+  "libfontconfig1",
+  "libasound2t64 | libasound2",
+  "libssl3t64 | libssl3",
+  "ca-certificates",
+]
+
+[appimage]
+# The AppImage relies on the host's GPU stack (libvulkan1, libxkbcommon, ...): bundling those breaks drivers.
+# Run it with APPIMAGE_EXTRACT_AND_RUN=1 on systems without FUSE 2.
+
+# ---- Windows: MSI (WiX 3) and NSIS ------------------------------------------------------------------------
+[wix]
+languages = ["en-US"]
+
+[nsis]
+# per-user OR per-machine, chosen by the person installing; /S /CURRENTUSER and /S /ALLUSERS work silently
+installer-mode = "both"
+languages = ["English"]
+display-language-selector = false
+compression = "lzma"
+
+[windows]
+digest-algorithm = "sha256"
+# @WINDOWS_SIGNING@
+
+# ---- macOS: .app inside .dmg ------------------------------------------------------------------------------
+[macos]
+minimum-system-version = "12.0"
+# @MACOS_SIGNING@
+
+[dmg]
+window-size = { width = 660, height = 400 }
+windowPosition = { x = 200, y = 120 }
+app-position = { x = 180, y = 190 }
+application-folder-position = { x = 480, y = 190 }

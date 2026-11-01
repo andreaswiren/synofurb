@@ -1,0 +1,5 @@
+# synofurb boot agent login shell
+export PATH=/usr/bin:/usr/sbin:/bin:/sbin
+export HOME=/root
+export PS1='\u@\h:\w# '
+alias ll='ls -l'

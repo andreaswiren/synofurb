@@ -1,0 +1,44 @@
+#!/bin/sh
+# AGENT_AUTORUN_URL: download a script (the desktop app uses it to chain into the Debian installer) and run it.
+# busybox wget cannot verify TLS certificates, so the script's SHA-256 must be pinned in the overlay
+# (AGENT_AUTORUN_SHA256) unless AGENT_AUTORUN_ALLOW_UNVERIFIED=1.
+. /usr/lib/synofurb/lib.sh
+load_conf
+[ -n "$AGENT_AUTORUN_URL" ] || exit 0
+
+note "autorun: waiting for the network to fetch $AGENT_AUTORUN_URL"
+dest="$SF_RUN/autorun.sh"
+deadline=$(( $(uptime_s) + AGENT_AUTORUN_WAIT_S ))
+got=0
+while [ "$(uptime_s)" -lt "$deadline" ]; do
+    if [ -n "$(ip4_of)" ] || ip -6 -o addr show scope global 2>/dev/null | grep -q .; then
+        if wget -q -T 20 -O "$dest" "$AGENT_AUTORUN_URL" 2>>"$SF_LOG"; then got=1; break; fi
+        log warn "autorun download failed, retrying"
+    fi
+    sleep 5
+done
+[ "$got" = 1 ] || { note "autorun: could not download the script within ${AGENT_AUTORUN_WAIT_S}s - giving up (watchdog stays armed)"; exit 1; }
+
+if [ -n "$AGENT_AUTORUN_SHA256" ]; then
+    sum=$(sha256sum "$dest" | awk '{print $1}')
+    want=$(echo "$AGENT_AUTORUN_SHA256" | tr 'A-F' 'a-f')
+    if [ "$sum" != "$want" ]; then
+        note "autorun: SHA-256 MISMATCH (got $sum) - refusing to run the script"
+        rm -f "$dest"; exit 1
+    fi
+elif [ "$AGENT_AUTORUN_ALLOW_UNVERIFIED" != 1 ]; then
+    note "autorun: refusing an unverified script - set AGENT_AUTORUN_SHA256 in the overlay (or AGENT_AUTORUN_ALLOW_UNVERIFIED=1)"
+    rm -f "$dest"; exit 1
+fi
+
+claim_unit autorun
+note "autorun: running $dest (output: /var/log/autorun.log)"
+sh "$dest" >> /var/log/autorun.log 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    note "autorun: script FAILED (exit $rc) - re-arming the safety watchdog"
+    /usr/bin/sf-boot arm
+    exit "$rc"
+fi
+log info "autorun: script finished OK"
+exit 0

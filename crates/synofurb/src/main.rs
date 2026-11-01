@@ -1,6 +1,7 @@
 //! synofurb - reinstall Synology NAS units with plain Debian 13.
 mod cli;
-mod gui;
+mod ui;
+mod update_cmd;
 
 use clap::Parser;
 
@@ -12,6 +13,7 @@ fn main() {
 }
 
 fn real_main() -> anyhow::Result<()> {
+    update_cmd::finish_previous_update();
     let args = cli::Cli::parse();
     match args.cmd {
         None | Some(cli::Cmd::Gui { .. }) => {
@@ -19,15 +21,7 @@ fn real_main() -> anyhow::Result<()> {
                 Some(cli::Cmd::Gui { demo, screen }) => (demo, screen),
                 _ => (false, String::new()),
             };
-            let opts = eframe::NativeOptions {
-                viewport: eframe::egui::ViewportBuilder::default()
-                    .with_inner_size([1000.0, 760.0])
-                    .with_min_inner_size([760.0, 520.0])
-                    .with_title("synofurb"),
-                ..Default::default()
-            };
-            eframe::run_native("synofurb", opts, Box::new(move |cc| Ok(Box::new(gui::App::new(cc, demo.then_some(screen.as_str()))))))
-                .map_err(|e| anyhow::anyhow!("{e}"))
+            ui::run(demo.then_some(screen.as_str()))
         }
         Some(cmd) => cli::run(cmd),
     }

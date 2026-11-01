@@ -1,0 +1,17 @@
+#!/bin/sh
+# Print where the agent can be reached: agent.log + every kernel console (VGA and all serial ports).
+# Called whenever an address is acquired; identical consecutive summaries are suppressed.
+. /usr/lib/synofurb/lib.sh
+load_conf
+host=$(hostname)
+sum=
+for i in $(eth_ifaces); do
+    a4=$(ip -4 -o addr show dev "$i" scope global 2>/dev/null | awk '{printf "%s ", $4}')
+    a6=$(ip -6 -o addr show dev "$i" scope global 2>/dev/null | awk '{printf "%s ", $4}')
+    [ -n "$a4$a6" ] && sum="$sum ${i}[$(mac_of "$i")]=${a4}${a6}"
+done
+[ -n "$sum" ] || exit 0
+if [ "$(cat "$SF_RUN/announced" 2>/dev/null)" = "$sum" ]; then exit 0; fi
+echo "$sum" > "$SF_RUN/announced"
+ip4=$(ip4_of)
+note "READY $host:$sum -- ssh root@${ip4:-<address>} -p $AGENT_SSH_PORT"

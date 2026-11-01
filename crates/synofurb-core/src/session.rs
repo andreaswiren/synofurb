@@ -34,6 +34,9 @@ pub struct SshTarget {
 pub enum BootMethod {
     /// Upload a static kexec + the installer and jump into it from the running DSM.
     Kexec { kexec_bin: Option<PathBuf> },
+    /// x86 units with an internal boot flash: back it up, add the small boot agent, reboot into it and let it
+    /// `kexec` the installer. Needs only SSH; DSM stays the fail-safe default.
+    Dom { agent_dir: Option<PathBuf>, backup_dir: PathBuf },
     /// Write kernel/initrd/README to a folder; the user boots the NAS from it (USB, TFTP, U-Boot).
     Kit { dir: PathBuf },
 }
@@ -148,9 +151,12 @@ pub fn stage(job: &InstallJob, bind_ip: IpAddr, inspect_raw: &str, log: &Logger,
     debian::build_initrd(&files, &preseed, &initrd)?;
     let cmdline = debian::installer_cmdline(&job.cfg.serial, &bind_ip.to_string(), udp_port, job.verbose_installer, None);
     log.info(format!("installer kernel command line: {cmdline}"));
+    let mut served_files = std::collections::HashMap::new();
+    served_files.insert("installer-kernel".to_string(), files.kernel.clone());
+    served_files.insert("installer-initrd".to_string(), initrd.clone());
     let server = Server::start(
         bind_ip,
-        Served { token, stage2, payload: payload.bytes, preseed: preseed.clone() },
+        Served { files: served_files, token, stage2, payload: payload.bytes, preseed: preseed.clone() },
         log.clone(),
         (http_port, tcp_port, udp_port),
     )?;
@@ -189,6 +195,175 @@ fn follow_installer(rx: &std::sync::mpsc::Receiver<Event>, cancel: &AtomicBool, 
             Err(RecvTimeoutError::Disconnected) => bail!("event channel closed"),
         }
     }
+}
+
+/// Persistent per-unit key for the boot agent (so the agent can be re-entered later from this computer).
+pub fn agent_key_for(unit: &str, dir: &std::path::Path) -> Result<crate::config::SshKeypair> {
+    let safe: String = unit.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    std::fs::create_dir_all(dir)?;
+    let (priv_p, pub_p) = (dir.join(format!("agent_{safe}_ed25519")), dir.join(format!("agent_{safe}_ed25519.pub")));
+    if let (Ok(k), Ok(pubk)) = (std::fs::read_to_string(&priv_p), std::fs::read_to_string(&pub_p)) {
+        return Ok(crate::config::SshKeypair { private_openssh: k, public_openssh: pubk.trim().to_string(), fingerprint: String::new() });
+    }
+    let kp = crate::domboot::agent_session_key(&safe)?;
+    std::fs::write(&priv_p, &kp.private_openssh)?;
+    std::fs::write(&pub_p, format!("{}\n", kp.public_openssh))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&priv_p, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(kp)
+}
+
+/// Console arguments for the agent: whatever DSM uses (ttyS0 or an AMD MMIO UART) plus the VGA console.
+fn agent_cmdline(facts: &DeviceFacts) -> String {
+    format!("console=tty0 {} panic=30", facts.serial_console().kernel_arg())
+}
+
+/// DOM flow up to and including handing control to the Debian installer.
+#[allow(clippy::too_many_arguments)]
+fn dom_install_flow(
+    job: &InstallJob,
+    fresh: &DeviceFacts,
+    ssh: &mut SshSession,
+    agent_dir: Option<&std::path::Path>,
+    backup_dir: &std::path::Path,
+    staged: &Staged,
+    cancel: &AtomicBool,
+    logger: &Logger,
+    progress: &mut dyn FnMut(&str, f32),
+) -> Result<()> {
+    use crate::domboot::*;
+    let dom = fresh
+        .dom
+        .as_ref()
+        .filter(|d| d.is_editable() && fresh.firmware == Firmware::Dom)
+        .context("this unit has no editable internal boot flash (DOM); use the installer kit instead")?;
+    let is_root = fresh.is_root;
+    let pw = job.target.sudo_password.clone();
+    let unit = if fresh.serial.is_empty() { job.target.host.clone() } else { fresh.serial.clone() };
+    let backup = backup_dom(ssh, is_root, pw.clone(), backup_dir, &unit, dom.sectors * SECTOR, logger)?;
+    logger
+        .warn(format!("KEEP THIS FILE: {} is the only way to rebuild the unit's boot flash if it is ever damaged", backup.path.display()));
+    let files = AgentFiles::locate_or_fetch(job.facts.arch, agent_dir, &job.cache_dir, logger, progress)?;
+    let key = agent_key_for(&unit, &crate::session::config_keys_dir())?;
+    let overlay = AgentOverlay {
+        hostname: format!("{}-agent", job.cfg.hostname),
+        timeout_min: 30,
+        authorized_keys: vec![key.public_openssh.clone()],
+    };
+    let dsm_fp = ssh.host_key_fingerprint();
+    let result = (|| -> Result<()> {
+        install_agent(
+            ssh,
+            is_root,
+            pw.clone(),
+            crate::payload::DOM_SCRIPT,
+            &files,
+            &overlay,
+            &agent_cmdline(fresh),
+            true,
+            logger,
+            progress,
+        )?;
+        if cancel.load(Ordering::Relaxed) {
+            bail!("cancelled before the reboot");
+        }
+        logger.phase(Phase::Booting);
+        logger.warn("rebooting DSM into the boot agent now (DSM services stop)");
+        let mut p = Privileged { sh: &mut *ssh, is_root, sudo_password: pw.clone() };
+        let _ = p.run("nohup /bin/sh -c 'sleep 2; sync; reboot' >/dev/null 2>&1 &")?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        // The agent entry may be armed: make sure the next boot is DSM again.
+        let _ = default_to_dsm(ssh, is_root, pw.clone());
+        return Err(e);
+    }
+    let peer: IpAddr = job.target.host.parse().context("host must be an IP address for the DOM flow")?;
+    let (mut agent, _ip) = wait_for_agent(&[peer], &key.private_openssh, dsm_fp.as_deref(), Duration::from_secs(10 * 60), cancel, logger)?;
+    agent.exec("sf-boot claim", None)?;
+    let k = format!("{}/files/installer-kernel", staged.http_base);
+    let i = format!("{}/files/installer-initrd", staged.http_base);
+    let cmd = agent_kexec_command(&k, &i, &staged.cmdline)?;
+    logger.info("handing over to the Debian installer from the boot agent");
+    let r = agent.exec(&cmd, None)?;
+    if !r.ok() {
+        let _ = agent.exec("sf-boot reboot dsm", None);
+        bail!("the boot agent could not start the installer: {} {}", r.stdout.trim(), r.stderr.trim());
+    }
+    Ok(())
+}
+
+/// Per-user data directory of synofurb (logs, backups, caches, keys).
+pub fn data_dir() -> PathBuf {
+    directories::ProjectDirs::from("dev", "synofurb", "synofurb")
+        .map(|d| d.data_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".synofurb"))
+}
+
+/// Directory for SSH keys generated by synofurb.
+pub fn config_keys_dir() -> PathBuf {
+    directories::ProjectDirs::from("dev", "synofurb", "synofurb")
+        .map(|d| d.data_dir().join("keys"))
+        .unwrap_or_else(|| PathBuf::from(".synofurb/keys"))
+}
+
+/// Install the boot agent only (no OS install): the "boot manager" mode.
+pub fn boot_manager_install(
+    target: &SshTarget,
+    agent_dir: Option<&std::path::Path>,
+    backup_dir: &std::path::Path,
+    hostname: &str,
+    arm: bool,
+    logger: &Logger,
+    progress: &mut dyn FnMut(&str, f32),
+) -> Result<()> {
+    use crate::domboot::*;
+    let mut ssh = SshSession::connect(&target.host, target.port, &target.user, &target.auth, logger)?;
+    let (facts, _) = inspect_remote(&mut ssh, false, target.sudo_password.clone(), logger)?;
+    let dom = facts
+        .dom
+        .as_ref()
+        .filter(|d| d.is_editable() && facts.firmware == Firmware::Dom)
+        .context("this unit has no editable internal boot flash (DOM)")?;
+    let unit = if facts.serial.is_empty() { target.host.clone() } else { facts.serial.clone() };
+    backup_dom(&mut ssh, facts.is_root, target.sudo_password.clone(), backup_dir, &unit, dom.sectors * SECTOR, logger)?;
+    let files = AgentFiles::locate_or_fetch(
+        facts.arch,
+        agent_dir,
+        &directories::ProjectDirs::from("dev", "synofurb", "synofurb")
+            .map(|d| d.data_dir().join("cache"))
+            .unwrap_or_else(|| PathBuf::from(".synofurb/cache")),
+        logger,
+        progress,
+    )?;
+    let key = agent_key_for(&unit, &config_keys_dir())?;
+    let overlay = AgentOverlay { hostname: hostname.to_string(), timeout_min: 60, authorized_keys: vec![key.public_openssh] };
+    install_agent(
+        &mut ssh,
+        facts.is_root,
+        target.sudo_password.clone(),
+        crate::payload::DOM_SCRIPT,
+        &files,
+        &overlay,
+        &agent_cmdline(&facts),
+        arm,
+        logger,
+        progress,
+    )?;
+    logger.info("boot agent installed. DSM is still the default; use `synofurb boot-manager enter` to boot into it.");
+    Ok(())
+}
+
+/// Recovery: make the unit boot DSM again (works from DSM, the installed Debian, or the boot agent).
+pub fn recover_to_dsm(target: &SshTarget, logger: &Logger) -> Result<String> {
+    let mut ssh = SshSession::connect(&target.host, target.port, &target.user, &target.auth, logger)?;
+    let id = ssh.exec("id -u", None)?;
+    let out = crate::domboot::default_to_dsm(&mut ssh, id.stdout.trim() == "0", target.sudo_password.clone())?;
+    logger.info("the boot flash default is DSM again; reboot the unit to return to it");
+    Ok(out)
 }
 
 /// After the reboot: find the new system (DHCP may have changed its address) and collect login facts.
@@ -298,6 +473,22 @@ pub fn run_install(job: &InstallJob, logger: &Logger, cancel: Arc<AtomicBool>, p
         bail!("the partition layout of {} changed since the plan was made; re-scan and review again", drift.join(", "));
     }
 
+    // Back up the first/last MiB of every disk the plan touches before anything can change.
+    let touched: Vec<(String, u64)> =
+        job.plan.disks.iter().filter_map(|dp| fresh.disk(&dp.disk).map(|d| (d.name.clone(), d.sectors))).collect();
+    let meta_root = data_dir().join("backups");
+    let unit = if fresh.serial.is_empty() { job.target.host.clone() } else { fresh.serial.clone() };
+    let meta = crate::diskbackup::backup_disk_metadata(
+        &mut ssh,
+        fresh.is_root,
+        job.target.sudo_password.clone(),
+        &touched,
+        &meta_root,
+        &unit,
+        logger,
+    )?;
+    logger.warn(format!("disk metadata backup (partition tables, not your files): {}", meta.display()));
+
     logger.phase(Phase::Staging);
     let staged = stage(job, bind_ip, &raw, logger, progress)?;
 
@@ -323,6 +514,9 @@ pub fn run_install(job: &InstallJob, logger: &Logger, cancel: Arc<AtomicBool>, p
                 }
                 logger.phase(Phase::Booting);
                 kexec::execute(&mut ssh, is_root, job.target.sudo_password.clone(), &stage_dir, logger)?;
+            }
+            BootMethod::Dom { agent_dir, backup_dir } => {
+                dom_install_flow(job, &fresh, &mut ssh, agent_dir.as_deref(), backup_dir, &staged, &cancel, logger, progress)?;
             }
             BootMethod::Kit { dir } => {
                 let serial = job.cfg.serial.clone();

@@ -1,0 +1,14 @@
+#!/bin/sh
+# SSH server. Key login always; password login only when the overlay supplied a hash.
+. /usr/lib/synofurb/lib.sh
+load_conf
+while :; do
+    opts=
+    [ -e "$SF_RUN/password_enabled" ] || opts="-s"
+    # shellcheck disable=SC2086
+    dropbear -F -E -p "$AGENT_SSH_PORT" \
+        -r /etc/dropbear/dropbear_ed25519_host_key -r /etc/dropbear/dropbear_ecdsa_host_key \
+        -K 30 $opts 2>>"$SF_DROPBEAR_LOG"
+    log warn "dropbear exited ($?), restarting"
+    sleep 2
+done

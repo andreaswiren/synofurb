@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=synofurb
+GenericName=Synology to Debian reinstaller
+Comment=Reinstall Synology NAS units with plain Debian 13
+Exec=synofurb
+Icon=synofurb
+Terminal=false
+Categories=System;Utility;Network;
+StartupWMClass=synofurb

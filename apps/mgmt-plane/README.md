@@ -8,16 +8,30 @@ Needs these Debian packages for the features that use them: `openssl` (first-sta
 `iproute2`, `util-linux`, `mdadm`, `lvm2`, `xfsprogs`/`e2fsprogs`/`btrfs-progs`, `ntfs-3g`, `exfatprogs`,
 `smartmontools` (optional), `openssh-server` (optional).
 
+Version: the `VERSION` file next to this README (currently 0.2.0) is the single source; it is packaged with the script, read at start-up,
+shown in the UI (login and sidebar footer) and returned by `GET /api/me`, `/api/status`, `/api/services` and `/api/tls-fingerprint`.
+
 ## What it does
 
-| Tab | Features |
+| Page | Features |
 | --- | --- |
-| Status | host/OS/kernel/arch, uptime, load, memory, root fs, CPU temp, IPv4/IPv6 per interface, disks (lsblk), md arrays (/proc/mdstat), LVM, mounts; SMART health fetched lazily |
+| Dashboard | tiles for health, storage, memory, load, CPU vendor (Intel/AMD), kernel (flagged when >= 7), microcode package state, network; RAID/LVM/mount tables; disks with role, SMART fetched lazily; unit model (from `/proc/sys/kernel/syno_hw_version` or `/var/lib/synofurb/dsm-inspect.txt`); serial console (`console=` on the kernel command line) |
+| Storage | free-device detection, 4-step create-volume wizard (devices, RAID layout, volume, review) with a live plan preview (exact commands, nothing executed), typed-name confirm to execute; extend LV + grow fs; delete |
+| Imported volumes | "Scan RAID and LVM" (mdadm assemble + vgchange), mount unmounted filesystems (xfs/ext4/btrfs/vfat/exfat/ntfs) **read-only by default for foreign volumes**, optional fstab persistence, unmount, fstab view, signatures that need activation or unlocking |
+| Network | per-interface DHCP (v4+v6+SLAAC) or static config written to `/etc/systemd/network/10-synofurb-<if>.network`; safe apply with a 90 s automatic rollback and a countdown banner on every page; hostname |
 | Users | list local accounts (uid>=1000 + root marker), create/delete, set password, lock/unlock, add SSH key |
-| Network | per-interface DHCP (v4+v6+SLAAC) or static config written to `/etc/systemd/network/10-synofurb-<if>.network`; safe apply with a 90 s automatic rollback; hostname |
-| Volumes | free-device detection, plan/create (mdadm RAID -> LVM -> mkfs -> fstab -> mount), extend LV + grow fs, delete |
-| Mounts | mount any unmounted filesystem (xfs/ext4/btrfs/vfat/exfat/ntfs), optional fstab persistence, unmount, "activate imported volumes" (mdadm assemble + vgchange) with read-only default for foreign volumes |
-| System | sshd state and host key fingerprints, serial-getty units, restart of an allow-list of services, reboot/poweroff |
+| Boot manager | units that boot through the internal boot flash (`/usr/local/sbin/synofurb-dom`): entries (DSM, Debian, previous kernel, boot agent), current default, DSM fail-safe note, **Return to DSM**, set default, reboot into an entry, boot-flash free space and DOM backup location. Other units get a "not a boot-flash unit" notice |
+| System | sshd state and host key fingerprints, serial-getty units, restart of an allow-list of services, reboot/poweroff, version and unit info |
+
+## Look and feel
+
+The UI follows the "ForgeVault family" direction from `design/mockups/ui` (Direction 1): left navigation and a 54 px top bar on
+desktop, bottom tab bar plus slide-in menu below 860 px, tables that stack into cards below 600 px, 44 px touch targets on phones.
+Colours are the exact tokens from `design/mockups/ui/tokens.json` (`theme_tokens()` in the code; a test compares them with the JSON),
+as CSS custom properties: light by default, dark via `prefers-color-scheme`, and a toggle in the top bar (stored in `localStorage`).
+Status is never colour alone: every badge and banner has an icon and a word, "off" states use a dashed border, attention rows get a 3 px edge.
+Icons are the inline lucide-style set of the mockups; no external fonts, scripts, images or CDNs. `prefers-reduced-motion` and
+`forced-colors` are honoured. Destructive actions use the typed-name confirm dialog (button stays disabled until the text matches).
 
 ## API
 
@@ -27,11 +41,11 @@ public routes needs the session cookie; every POST also needs `X-CSRF-Token` and
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/` | the single-page UI (public, no data in it) |
-| GET | `/api/tls-fingerprint` | SHA-256 of the server certificate (public) |
+| GET | `/api/tls-fingerprint` | SHA-256 of the server certificate, hostname, version (public) |
 | POST | `/api/login` | `{username,password}` -> sets cookie, returns `csrf` (public) |
 | POST | `/api/logout` | end session |
-| GET | `/api/me` | user, csrf token, hostname, pending network change |
-| GET | `/api/status` | system overview (see above) |
+| GET | `/api/me` | user, csrf token, hostname, **version**, pending network change |
+| GET | `/api/status` | system overview: host, OS, kernel (`kernel_info.ge7`), CPU vendor/model, microcode, console, unit model, memory, disks, md, LVM, mounts, interfaces |
 | GET | `/api/smart` | SMART health per disk (only if `smartctl` exists) |
 | GET | `/api/users` | list users and known groups |
 | POST | `/api/users/create` | `{username,password,groups?,sudo?,ssh_key?}` |
@@ -50,12 +64,15 @@ public routes needs the session cookie; every POST also needs `X-CSRF-Token` and
 | POST | `/api/volumes/extend` | `{vg,lv,add_gib?}` (empty = all free space) |
 | POST | `/api/volumes/delete` | `{vg,lv,confirm=lv,remove_vg?}` |
 | GET | `/api/mounts` | mounts, fstab entries, mountable unmounted filesystems |
-| POST | `/api/mounts/mount` | `{device,mountpoint,ro?,persist?,owner?}` |
+| POST | `/api/mounts/mount` | `{device,mountpoint,ro?,persist?,owner?}`; `ro` defaults to true for imported (non-`vg_*`) volumes |
 | POST | `/api/mounts/unmount` | `{mountpoint,confirm=mountpoint,remove_fstab?}` |
 | POST | `/api/mounts/activate` | mdadm assemble + vgscan + vgchange -ay, then list devices |
 | GET | `/api/services` | sshd state, host key fingerprints, serial-getty units |
 | POST | `/api/services/restart` | `{unit}` from an allow-list (ssh, systemd-resolved, systemd-timesyncd, cron) |
 | POST | `/api/system/power` | `{action:reboot\|poweroff,confirm=<hostname>}` |
+| GET | `/api/boot` | boot-flash status via `synofurb-dom status --json`, or `{available:false}` on units without the tool |
+| POST | `/api/boot/default` | `{entry:dsm\|debian\|debian-old\|agent,confirm=<entry>}` runs `synofurb-dom default <entry> --yes`; `confirm` is not needed for `debian` |
+| POST | `/api/boot/reboot-to` | same body; sets the default, then `systemd-run --on-active=5 systemctl reboot` |
 
 ## Security model
 

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/andreaswiren/synofurb/main/compat/schema.json",
+  "title": "synofurb model compatibility list",
+  "type": "object",
+  "required": ["schema_version", "updated", "models"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "updated": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "hardware_source": { "type": "string", "format": "uri" },
+    "models": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/model" } }
+  },
+  "$defs": {
+    "model": {
+      "type": "object",
+      "required": ["model", "series", "platform", "vendor", "cpu_vendor", "arch", "boot", "status", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "model": { "type": "string", "minLength": 2, "description": "Marketing model name as DSM reports it, e.g. DS918+. Unique in the file." },
+        "series": { "type": "string", "pattern": "^[A-Z]+$", "description": "Model prefix: DS, RS, FS, SA, DVA, HD, PAS, RC, EDS, NVR, CS, UC, ..." },
+        "year": { "type": ["integer", "null"], "minimum": 2000, "maximum": 2100, "description": "Model year from Synology's 'xNN Series' heading; null for FS/HD/SA/PAS lines." },
+        "platform": { "type": "string", "pattern": "^[a-z0-9]+$", "description": "Synology platform / package-arch codename, lower case (apollolake, rtd1296, ...)." },
+        "cpu": { "type": ["string", "null"], "description": "CPU marketing name as printed by Synology; null if the source does not list it." },
+        "vendor": { "type": "string", "minLength": 1 },
+        "cpu_vendor": { "enum": ["intel", "amd", "arm", "other"], "description": "Filter bucket." },
+        "arch": { "enum": ["amd64", "arm64", "armhf", "armel", "ppc", "i386"] },
+        "boot": { "enum": ["dom", "uboot", "unknown"], "description": "How DSM boots on this platform. Generalised per platform, not verified per unit." },
+        "ram": { "type": ["string", "null"], "description": "Stock RAM text as printed by Synology." },
+        "ram_mb_stock": { "type": ["integer", "null"], "minimum": 64 },
+        "cores": { "type": ["integer", "null"], "minimum": 1 },
+        "threads": { "type": ["integer", "null"], "minimum": 1 },
+        "status": { "enum": ["verified", "community", "untested", "known-issues", "unsupported"] },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "notes": { "type": ["string", "null"] },
+        "source": { "enum": ["kb.synology.com", "spksrc-wiki"], "description": "Where the hardware facts came from." }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "verified" } } },
+          "then": { "properties": { "evidence": { "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "status": { "enum": ["community", "known-issues"] } } },
+          "then": { "properties": { "evidence": { "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "untested" } } },
+          "then": { "properties": { "evidence": { "maxItems": 0 } } }
+        }
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["date", "reporter", "kind", "synofurb_version", "dsm_version", "result", "notes", "log_url"],
+      "additionalProperties": false,
+      "properties": {
+        "date": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}(-\\d{2})?$", "description": "YYYY-MM-DD (or YYYY-MM). null only for kind=third-party when the date is not known." },
+        "reporter": { "type": "string", "minLength": 1, "description": "GitHub handle or project name." },
+        "kind": { "enum": ["synofurb", "third-party"], "description": "third-party = somebody else's tool booted Debian on this model; it does not count towards verified." },
+        "synofurb_version": { "type": ["string", "null"], "description": "Required (non-null) for kind=synofurb." },
+        "dsm_version": { "type": ["string", "null"] },
+        "result": { "enum": ["success", "partial", "fail"] },
+        "notes": { "type": "string" },
+        "log_url": { "type": ["string", "null"], "pattern": "^https://", "description": "Required for kind=synofurb on a verified model." },
+        "maintainer": { "type": "boolean", "description": "True if the reporter is a project maintainer (one maintainer run is enough for verified)." }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "synofurb" } } },
+          "then": {
+            "properties": {
+              "synofurb_version": { "type": "string", "minLength": 1 },
+              "date": { "type": "string" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,4 @@
+#!/bin/sh
+. /usr/lib/synofurb/lib.sh
+log info "shutting down"
+sync

@@ -1,0 +1,14 @@
+#!/bin/sh
+# A root shell on a console (VGA / serial). Respawned by init.
+. /usr/lib/synofurb/lib.sh
+export HOME=/root TERM="${TERM:-linux}" ENV=
+cd /root 2>/dev/null || true
+echo
+echo "=== synofurb boot agent $(sf-boot version 2>/dev/null | sed -n 's/^AGENT_VERSION=//p') ($(uname -r)) ==="
+sf-boot status 2>/dev/null | head -n 12
+echo "(root shell; 'sf-boot help' lists the agent commands)"
+start=$(uptime_s)
+/bin/sh -l
+# stdin at EOF (nothing attached to the port)? do not spin.
+[ $(( $(uptime_s) - start )) -lt 3 ] && sleep 30
+exit 0

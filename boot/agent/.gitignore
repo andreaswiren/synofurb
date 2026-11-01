@@ -1,0 +1,5 @@
+# build products and caches (the release workflow uploads dist/ as artifacts)
+/dist/
+/work/
+/cache/
+/test/work/

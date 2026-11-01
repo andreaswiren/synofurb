@@ -328,7 +328,11 @@ pub fn cpio_gz(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
 /// Concatenate `initrd.gz` + preseed cpio (+ firmware cpio): the kernel unpacks all of them.
 pub fn build_initrd(files: &InstallerFiles, preseed: &str, out: &Path) -> Result<()> {
     let mut data = std::fs::read(&files.initrd)?;
-    data.extend(cpio_gz(&[("preseed.cfg", preseed.as_bytes(), 0o100600)]));
+    // The DOM manager rides along so the installer can fall back to DSM on failure and register Debian on success.
+    data.extend(cpio_gz(&[
+        ("preseed.cfg", preseed.as_bytes(), 0o100600),
+        ("usr/local/sbin/synofurb-dom", crate::payload::DOM_SCRIPT.as_bytes(), 0o100755),
+    ]));
     if let Some(fw) = &files.firmware {
         data.extend(std::fs::read(fw)?);
     }

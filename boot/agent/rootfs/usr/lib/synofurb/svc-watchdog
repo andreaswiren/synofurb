@@ -1,0 +1,44 @@
+#!/bin/sh
+# Safety watchdog. If nobody logs in over SSH (AGENT_WATCHDOG_MODE=login) and nobody runs
+# `sf-boot claim` within AGENT_TIMEOUT_MIN minutes, point the DOM default at DSM again and reboot.
+# Also revokes a one-time password after its first successful use.
+. /usr/lib/synofurb/lib.sh
+load_conf
+
+if [ "$AGENT_TIMEOUT_MIN" -eq 0 ]; then
+    touch "$SF_RUN/wd_disabled"
+    note "WARNING: watchdog disabled (AGENT_TIMEOUT_MIN=0) - this unit will not reboot by itself"
+    while :; do sleep 3600; done
+fi
+
+if [ ! -e "$SF_RUN/wd_deadline" ]; then
+    wd_set_deadline $(( AGENT_TIMEOUT_MIN * 60 ))
+    echo "$(wd_login_count)" > "$SF_RUN/wd_baseline"
+    note "watchdog armed: reboot to DSM in $AGENT_TIMEOUT_MIN min unless someone logs in or runs 'sf-boot claim'"
+fi
+
+lock_password() {
+    sed -i 's/^root:[^:]*:/root:!:/' /etc/shadow
+    rm -f "$SF_RUN/password_onetime"
+    note "one-time password was used - password login is now disabled"
+}
+
+while :; do
+    if [ -e "$SF_RUN/password_onetime" ] && grep -q 'Password auth succeeded' "$SF_DROPBEAR_LOG" 2>/dev/null; then
+        lock_password
+    fi
+    if [ ! -e "$SF_RUN/claimed" ]; then
+        if [ "$AGENT_WATCHDOG_MODE" = login ]; then
+            cur=$(wd_login_count); base=$(cat "$SF_RUN/wd_baseline" 2>/dev/null)
+            if [ "${cur:-0}" -gt "${base:-0}" ]; then
+                claim_unit ssh-login
+            fi
+        fi
+        if [ ! -e "$SF_RUN/claimed" ] && [ "$(uptime_s)" -ge "$(cat "$SF_RUN/wd_deadline")" ]; then
+            note "WATCHDOG EXPIRED: no SSH login and no claim within $AGENT_TIMEOUT_MIN min - rebooting (boot default: DSM)"
+            dom_set_default dsm
+            do_reboot
+        fi
+    fi
+    sleep 3
+done

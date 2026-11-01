@@ -1,0 +1,57 @@
+# GitHub Actions snippet for the synofurb boot agent - paste into the release workflow.
+# Builds agent-<arch>.vmlinuz / agent-<arch>.initrd for amd64, arm64 and armhf (plain HTTPS downloads of Debian
+# packages, nothing foreign is executed) and uploads them as artifacts. The amd64 agent is additionally
+# booted in QEMU (TCG) by test/smoke.sh.
+#
+# Paths are relative to the repository root; the agent lives in boot/agent.
+# The build fails if kernel + initrd exceed the 24 MiB DOM budget.
+
+  boot-agent:
+    name: boot agent (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64, armhf]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl ca-certificates dpkg-dev xz-utils cpio kmod binutils gawk gnupg gpgv debian-archive-keyring zstd
+
+      - name: Cache downloaded Debian packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/synofurb-agent
+          key: boot-agent-${{ matrix.arch }}-${{ hashFiles('boot/agent/build.sh') }}
+          restore-keys: boot-agent-${{ matrix.arch }}-
+
+      - name: Build agent (kernel + initramfs)
+        working-directory: boot/agent
+        run: |
+          # --strict-pgp: refuse to build unless the InRelease signatures verify against debian-archive-keyring
+          ./build.sh ${{ matrix.arch }} --strict-pgp --out "$PWD/dist"
+          cat dist/SHA256SUMS
+          ls -l dist
+
+      - name: Smoke test in QEMU (amd64 only)
+        if: matrix.arch == 'amd64'
+        working-directory: boot/agent
+        run: |
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 openssh-client python3 openssl
+          test/smoke.sh --dist "$PWD/dist"
+
+      - name: Upload agent artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: synofurb-boot-agent-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            boot/agent/dist/agent-${{ matrix.arch }}.vmlinuz
+            boot/agent/dist/agent-${{ matrix.arch }}.initrd
+            boot/agent/dist/MANIFEST-${{ matrix.arch }}.json
+            boot/agent/dist/initrd-${{ matrix.arch }}.lst
+            boot/agent/dist/SHA256SUMS

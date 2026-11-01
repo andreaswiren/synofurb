@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 pub struct Served {
+    /// Large files (installer kernel/initrd) served at `/<token>/files/<name>`, streamed from disk.
+    pub files: std::collections::HashMap<String, std::path::PathBuf>,
     pub token: String,
     pub stage2: String,
     pub payload: Vec<u8>,
@@ -62,6 +64,19 @@ impl Server {
                     let url = req.url().to_string();
                     let peer = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_default();
                     let prefix = format!("/{}/", served.token);
+                    if let Some(name) = url.strip_prefix(&format!("{prefix}files/")) {
+                        match served.files.get(name).and_then(|p| std::fs::File::open(p).ok()) {
+                            Some(f) => {
+                                log.info(format!("HTTP {peer} GET files/{name}"));
+                                let _ = req.respond(tiny_http::Response::from_file(f));
+                            }
+                            None => {
+                                log.warn(format!("HTTP {peer} rejected request for unknown file '{name}'"));
+                                let _ = req.respond(tiny_http::Response::from_string("not found").with_status_code(404));
+                            }
+                        }
+                        continue;
+                    }
                     let resp = match url.strip_prefix(&prefix) {
                         Some("stage2.sh") => Some((served.stage2.clone().into_bytes(), "text/x-shellscript")),
                         Some("preseed.cfg") => Some((served.preseed.clone().into_bytes(), "text/plain")),
@@ -168,10 +183,18 @@ mod tests {
     fn serves_only_under_the_token_and_receives_logs() {
         let (tx, rx) = channel();
         let log = Logger::memory(Some(tx));
-        let served = Served { token: "abc123".into(), stage2: "echo stage2".into(), payload: vec![1, 2, 3], preseed: "d-i x".into() };
+        let big = std::env::temp_dir().join(format!("sf-served-{}.bin", std::process::id()));
+        std::fs::write(&big, vec![7u8; 300_000]).unwrap();
+        let mut files = std::collections::HashMap::new();
+        files.insert("installer-initrd".to_string(), big.clone());
+        let served =
+            Served { files, token: "abc123".into(), stage2: "echo stage2".into(), payload: vec![1, 2, 3], preseed: "d-i x".into() };
         let srv = Server::start("127.0.0.1".parse().unwrap(), served, log, (0, 0, 0)).unwrap();
         assert_eq!(get(srv.http_port, "/abc123/stage2.sh"), (200, b"echo stage2".to_vec()));
         assert_eq!(get(srv.http_port, "/abc123/payload.tar.gz").1, vec![1, 2, 3]);
+        assert_eq!(get(srv.http_port, "/abc123/files/installer-initrd").1.len(), 300_000);
+        assert_eq!(get(srv.http_port, "/abc123/files/../stage2.sh").0, 404, "only registered names are served");
+        assert_eq!(get(srv.http_port, "/abc123/files/nope").0, 404);
         assert_eq!(get(srv.http_port, "/wrong/stage2.sh").0, 404);
         assert_eq!(get(srv.http_port, "/abc123/../etc/passwd").0, 404);
         assert_eq!(get(srv.http_port, "/stage2.sh").0, 404);

@@ -1,0 +1,61 @@
+#!/bin/sh
+# busybox udhcpc / udhcpc6 event script. Environment: interface ip mask router dns domain ... (v4)
+# or interface ipv6 dns ... (v6, from udhcpc6).
+. /usr/lib/synofurb/lib.sh
+
+[ -n "$interface" ] || exit 0
+idx=$(cat "/sys/class/net/$interface/ifindex" 2>/dev/null)
+metric=$(( 100 + ${idx:-0} ))
+
+# svc-net starts udhcpc6 with SF_DHCP=6 in its environment (udhcpc6 passes no marker of its own on deconfig)
+V=${SF_DHCP:-4}
+
+write_dns() {
+    f="$SF_RUN/resolv/$interface.$V"
+    : > "$f"
+    for d in $dns; do echo "nameserver $d" >> "$f"; done
+    [ -n "$domain" ] && echo "search $domain" >> "$f"
+    [ -n "$search" ] && echo "search $search" >> "$f"
+    rebuild_resolv
+}
+
+case "$1" in
+deconfig)
+    if [ "$V" = 4 ]; then
+        ip -4 addr flush dev "$interface" 2>/dev/null
+        ip link set dev "$interface" up
+    fi
+    rm -f "$SF_RUN/resolv/$interface.$V"; rebuild_resolv
+    ;;
+leasefail|nak)
+    log info "dhcp$V $interface: $1"
+    ;;
+renew|bound)
+    if [ "$V" = 4 ]; then
+        cur=$(ip -4 -o addr show dev "$interface" scope global 2>/dev/null | awk '{print $4}')
+        if [ "$cur" != "$ip/$mask" ]; then
+            ip -4 addr flush dev "$interface" 2>/dev/null
+            ip addr add "$ip/$mask" ${broadcast:+broadcast "$broadcast"} dev "$interface"
+        fi
+        if [ -n "$router" ]; then
+            for r in $router; do
+                ip route replace default via "$r" dev "$interface" metric "$metric" 2>/dev/null \
+                    || { ip route del default dev "$interface" 2>/dev/null; ip route add default via "$r" dev "$interface" metric "$metric"; }
+                break
+            done
+        fi
+        ip route replace 224.0.0.0/4 dev "$interface" 2>/dev/null
+        write_dns
+        log info "dhcp4 $interface $1: $ip/$mask gw=$router dns=$dns"
+    else
+        if [ -n "$ipv6" ]; then
+            ip -6 addr show dev "$interface" 2>/dev/null | grep -q "$ipv6/" \
+                || ip -6 addr add "$ipv6/128" dev "$interface" 2>>"$SF_LOG"
+        fi
+        write_dns
+        log info "dhcp6 $interface $1: ${ipv6:-no-address} dns=$dns"
+    fi
+    /usr/lib/synofurb/announce &
+    ;;
+esac
+exit 0

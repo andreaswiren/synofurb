@@ -1,0 +1,37 @@
+#!/bin/sh
+# synofurb boot agent - /init (stage 1, runs as PID 1 under the kernel's /init lookup)
+#
+# Stage 1 only does what must happen before busybox init can take over:
+#   * mount the pseudo filesystems and give ourselves a console
+#   * generate /etc/inittab (the set of consoles depends on the kernel cmdline)
+#   * exec busybox init, which becomes the real PID 1 (zombie reaping, reboot/poweroff signals)
+# Everything else (modules, DOM safety default, network, SSH, watchdog) is in
+# /usr/lib/synofurb/boot.sh, started by init as ::sysinit:.
+
+export PATH=/usr/bin:/usr/sbin:/bin:/sbin
+export HOME=/root TERM=linux
+
+mount -t proc -o nosuid,nodev,noexec proc /proc
+mount -t sysfs -o nosuid,nodev,noexec sysfs /sys
+mount -t devtmpfs -o mode=0755,nosuid devtmpfs /dev 2>/dev/null || {
+    # no devtmpfs: fall back to a tmpfs with the two nodes we cannot live without
+    mount -t tmpfs -o mode=0755 tmpfs /dev
+    mknod -m 600 /dev/console c 5 1
+    mknod -m 666 /dev/null c 1 3
+}
+mkdir -p /dev/pts /dev/shm
+mount -t devpts -o gid=5,mode=620,ptmxmode=666 devpts /dev/pts
+mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /tmp
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+mkdir -p /run/synofurb /var/log /var/run
+ln -sf /proc/mounts /etc/mtab
+
+# make kernel-initiated module loads (request_module) work, let userspace write /dev/kmsg freely
+echo /sbin/modprobe > /proc/sys/kernel/modprobe 2>/dev/null
+echo on > /proc/sys/kernel/printk_devkmsg 2>/dev/null
+echo 1 > /proc/sys/kernel/sysrq 2>/dev/null
+
+exec </dev/console >/dev/console 2>&1
+
+/usr/lib/synofurb/mkinittab
+exec /sbin/init

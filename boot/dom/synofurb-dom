@@ -1,0 +1,2008 @@
+#!/bin/sh
+# synofurb-dom - safe boot-menu manager for the internal boot flash module
+# ("DOM") of Synology x86 NAS units.
+#
+# SPDX-License-Identifier: MIT
+#
+# shellcheck disable=SC2015
+# (SC2015: 'A && B || die' is used on purpose; die never returns.)
+#
+# Written from a behavioural description for synofurb; it contains no code
+# from any other boot-menu tool.  POSIX sh: runs under dash and busybox ash.
+# Needs root.  Runs on DSM, in an installed Debian, and in a small initramfs
+# (busybox + e2fsprogs + dosfstools).
+#
+# Principle: the live DOM partitions are never edited in place.  Each one is
+# read twice (hashes must agree), copied to a temporary image, edited there
+# through a loop mount (or mtools), checked with fsck, re-verified, and only
+# then written back with dd, read back and compared.  Any failure after the
+# first byte was written restores the original partition images.
+
+PROG=synofurb-dom
+VERSION=0.1.0
+
+MIB=1048576
+SECT=512
+
+DSM_ENTRY=SYNOLOGY_2
+BEGIN_MARK='### synofurb begin (managed by synofurb-dom)'
+END_MARK='### synofurb end'
+FAT_ID_HEX=9c58ee10
+FAT_VOLID=10EE-589C
+EXT_UUID=45e5b07d-4783-4867-a369-f99c0cd1e610
+EXT_UUID_HEX=45e5b07d47834867a369f99c0cd1e610
+CONF_REL=EFI/boot/SynoBootLoader.conf
+EFI_DIR=EFI/synofurb
+OURDIR=synofurb
+P1_MIN=$((16 * MIB))
+P2_MIN=$((64 * MIB))
+PART_MAX=$((1024 * MIB))
+
+TMPBASE=${SYNOFURB_TMP:-/tmp}
+STATE=${SYNOFURB_STATE:-/var/lib/synofurb}
+LOCKDIR=${SYNOFURB_LOCK:-/tmp/synofurb-dom.lock}
+
+YES=0
+JSON=0
+DRYRUN=0
+IGNORE_FSCK=0
+SKIP_AUTOBACKUP=0
+ARM=0
+CMDLINE=
+CMDLINE_SET=0
+
+W=
+M1=
+M2=
+FATIMG=
+FAT_MODE=
+M1_MOUNTED=0
+M2_MOUNTED=0
+UMOUNT_FAILED=0
+WRITE_STARTED=0
+COMMITTED=0
+KEEP_W=0
+LOCKED=0
+P1_CHANGED=0
+P2_CHANGED=0
+WRITE_ORDER="p2 p1"
+CHANGES=
+DOM=
+DOMBYTES=0
+P1DEV=
+P2DEV=
+P1OFF=0
+P2OFF=0
+P1SEC=0
+P2SEC=0
+PROBE_ERR=
+DD_BS=
+DD_SKIP=
+DD_COUNT=
+CHECK_FAILS=0
+CHECK_QUIET=1
+FSCK_BAD=0
+RESOLVE_LENIENT=0
+FAT_NOTE_DONE=0
+OLD_CL_VALID=0
+
+NL='
+'
+TAB=$(printf '\t')
+
+# awk helpers shared by the conf editing code.  "sq" is a single quote that
+# is passed in with -v so that no quoting tricks are needed.
+AWK_COMMON='
+function chomp(s) {
+  if (substr(s, length(s), 1) == "\r") return substr(s, 1, length(s) - 1)
+  return s
+}
+function entname(s,   c, n) {
+  sub(/^[ \t]*menuentry[ \t]+/, "", s)
+  c = substr(s, 1, 1)
+  if (c == "\"" || c == sq) {
+    s = substr(s, 2)
+    n = index(s, c)
+    if (n > 0) return substr(s, 1, n - 1)
+    return s
+  }
+  n = match(s, /[ \t{]/)
+  if (n > 0) return substr(s, 1, n - 1)
+  return s
+}
+'
+
+# ---------------------------------------------------------------- messages
+
+msg() { printf '%s\n' "$*"; }
+warn() { printf '%s: warning: %s\n' "$PROG" "$*" >&2; }
+err() { printf '%s: error: %s\n' "$PROG" "$*" >&2; }
+die() { err "$*"; exit 1; }
+info() {
+  if [ "$JSON" = 1 ]; then printf '%s\n' "$*" >&2; else printf '%s\n' "$*"; fi
+}
+note_change() { CHANGES="$CHANGES  - $*$NL"; }
+
+usage() {
+  cat <<EOF
+$PROG $VERSION - safe boot-menu manager for the Synology x86 DOM
+
+Usage: $PROG [options] COMMAND [args]
+
+Commands:
+  status [--json]                  show device, menu, default, our files
+  backup [DIR]                     dump the whole DOM to DIR/synofurb-dom-backup-*.img
+  restore FILE                     write a backup image back (needs --yes)
+  install-agent KERNEL INITRD [--cmdline STR] [--arm]
+  install-debian KERNEL INITRD --cmdline STR
+  install-efi NAME FILE.efi        (unverified, UEFI mode only)
+  default dsm|agent|debian|debian-old|efi:NAME
+  remove                           remove everything synofurb added
+  verify                           read-only consistency checks
+
+Options:
+  -y, --yes            do not ask for confirmation
+  --dry-run            do all the work on temporary copies, write nothing
+  --ignore-fsck        continue although fsck of the ORIGINAL copy complains
+  --skip-auto-backup   do not create the one-time automatic backup
+  --json               machine readable output (status)
+  -V, --version, -h, --help
+
+Environment (mainly for tests): SYNOFURB_DOM, SYNOFURB_DOM1, SYNOFURB_DOM2,
+SYNOFURB_TMP, SYNOFURB_STATE, SYNOFURB_FAT_BACKEND=mount|mtools.
+EOF
+}
+
+# --------------------------------------------------------------- utilities
+
+human() {
+  _hb=$1
+  _ht=$((_hb * 10 / MIB))
+  printf '%s.%s MiB' $((_ht / 10)) $((_ht % 10))
+}
+
+safe_path() {
+  case $1 in
+    '' | *[!A-Za-z0-9/._+-]*) return 1 ;;
+  esac
+  return 0
+}
+
+canon() {
+  readlink -f "$1" 2>/dev/null || printf '%s\n' "$1"
+}
+
+need_root() {
+  [ "$(id -u)" = 0 ] || die "must be run as root"
+}
+
+# size in bytes of a block device or regular file
+devsize() {
+  _dp=$1
+  if [ -b "$_dp" ]; then
+    _ds=$(blockdev --getsize64 "$_dp" 2>/dev/null)
+    case $_ds in
+      '' | *[!0-9]*) ;;
+      *) printf '%s\n' "$_ds"; return 0 ;;
+    esac
+    _dr=$(canon "$_dp")
+    _dn=${_dr##*/}
+    if [ -r "/sys/class/block/$_dn/size" ]; then
+      read -r _ds < "/sys/class/block/$_dn/size"
+      printf '%s\n' $((_ds * SECT))
+      return 0
+    fi
+    return 1
+  elif [ -f "$_dp" ]; then
+    _ds=$(wc -c < "$_dp")
+    printf '%s\n' $((_ds))
+    return 0
+  fi
+  return 1
+}
+
+# hexat DEV ABSOLUTE-BYTE-OFFSET LENGTH  ->  lowercase hex, no separators
+hexat() {
+  dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | od -An -tx1 -v | tr -d ' \n'
+}
+
+# little-endian hex string -> decimal number
+le() {
+  _lh=$1
+  _lr=
+  while [ -n "$_lh" ]; do
+    _lr=$_lr${_lh#"${_lh%??}"}
+    _lh=${_lh%??}
+  done
+  printf '%s\n' "$((0x$_lr))"
+}
+
+# choose a dd block size that divides both offset and length (in sectors)
+set_ddargs() {
+  _db=$MIB
+  while [ "$_db" -gt "$SECT" ]; do
+    if [ $(($1 * SECT % _db)) -eq 0 ] && [ $(($2 * SECT % _db)) -eq 0 ]; then
+      break
+    fi
+    _db=$((_db / 2))
+  done
+  DD_BS=$_db
+  DD_SKIP=$(($1 * SECT / _db))
+  DD_COUNT=$(($2 * SECT / _db))
+}
+
+# make the next read of a block device come from the medium, not the page cache
+drop_dev_cache() {
+  sync
+  for _dc in "$@"; do
+    if [ -n "$_dc" ] && [ -b "$_dc" ]; then
+      blockdev --flushbufs "$_dc" 2>/dev/null || true
+    fi
+  done
+}
+
+sha_file() {
+  sha256sum "$1" | cut -d' ' -f1
+}
+
+# part_hash DEV OFF-SECTORS LEN-SECTORS
+part_hash() {
+  set_ddargs "$2" "$3"
+  dd if="$1" bs="$DD_BS" skip="$DD_SKIP" count="$DD_COUNT" 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
+# part_to_file DEV OFF LEN OUT
+part_to_file() {
+  set_ddargs "$2" "$3"
+  dd if="$1" of="$4" bs="$DD_BS" skip="$DD_SKIP" count="$DD_COUNT" 2>"$W/dd.err"
+}
+
+# part_write IMG DEV OFF LEN
+part_write() {
+  set_ddargs "$3" "$4"
+  dd if="$1" of="$2" bs="$DD_BS" seek="$DD_SKIP" count="$DD_COUNT" conv=notrunc,fsync 2>"$W/dd.err"
+}
+
+free_kb_of() {
+  df -P -k "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'
+}
+
+# free bytes of a mounted filesystem, counting reserved blocks (root can use them)
+free_bytes() {
+  df -P -k "$1" 2>/dev/null | awk 'NR == 2 { printf "%d\n", ($2 - $3) * 1024 }'
+}
+
+total_bytes() {
+  df -P -k "$1" 2>/dev/null | awk 'NR == 2 { printf "%d\n", $2 * 1024 }'
+}
+
+is_mountpoint() {
+  awk -v m="$1" '$2 == m { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null
+}
+
+json_str() {
+  printf '"%s"' "$(printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+# ------------------------------------------------------- cleanup / locking
+
+take_lock() {
+  _lp=
+  if mkdir "$LOCKDIR" 2>/dev/null; then
+    :
+  else
+    _lp=$(cat "$LOCKDIR/pid" 2>/dev/null)
+    if [ -n "$_lp" ] && kill -0 "$_lp" 2>/dev/null; then
+      die "another $PROG is running (pid $_lp)"
+    fi
+    rm -rf "$LOCKDIR"
+    mkdir "$LOCKDIR" 2>/dev/null || die "cannot create lock $LOCKDIR"
+  fi
+  printf '%s\n' "$$" > "$LOCKDIR/pid"
+  LOCKED=1
+}
+
+umount_one() {
+  [ -n "$1" ] || return 0
+  is_mountpoint "$1" || return 0
+  sync
+  umount "$1" 2>/dev/null && return 0
+  sleep 1
+  umount "$1" 2>/dev/null && return 0
+  UMOUNT_FAILED=1
+  return 1
+}
+
+fat_close() {
+  if [ "$M1_MOUNTED" = 1 ]; then
+    umount_one "$M1" && M1_MOUNTED=0
+  fi
+}
+
+ext_close() {
+  if [ "$M2_MOUNTED" = 1 ]; then
+    umount_one "$M2" && M2_MOUNTED=0
+  fi
+}
+
+cleanup() {
+  _rc=$?
+  trap '' HUP INT TERM PIPE
+  if [ "$WRITE_STARTED" = 1 ] && [ "$COMMITTED" != 1 ]; then
+    rollback_all
+    [ "$_rc" -eq 0 ] && _rc=1
+  fi
+  fat_close
+  ext_close
+  if [ -n "$W" ] && [ -d "$W" ]; then
+    if [ "$UMOUNT_FAILED" = 1 ] || is_mountpoint "$M1" || is_mountpoint "$M2"; then
+      warn "could not unmount temporary copies; leaving $W in place"
+    elif [ "$KEEP_W" = 1 ]; then
+      warn "temporary files kept in $W"
+    else
+      rm -rf "$W"
+    fi
+  fi
+  if [ "$LOCKED" = 1 ]; then
+    rm -rf "$LOCKDIR"
+  fi
+  exit "$_rc"
+}
+
+# ----------------------------------------------- DOM discovery and checks
+
+# ptable_locate DEV  ->  sets P1OFF P1SEC P2OFF P2SEC (sectors) from MBR/GPT
+ptable_locate() {
+  _pd=$1
+  _sig=$(hexat "$_pd" 510 2)
+  if [ "$_sig" != 55aa ]; then
+    PROBE_ERR="no partition table (missing 55aa signature)"
+    return 1
+  fi
+  _mbr=$(hexat "$_pd" 446 64)
+  _e0=$(printf '%s' "$_mbr" | cut -c1-32)
+  _t0=$(printf '%s' "$_e0" | cut -c9-10)
+  if [ "$_t0" = ee ]; then
+    _hdr=$(hexat "$_pd" 512 92)
+    if [ "$(printf '%s' "$_hdr" | cut -c1-16)" != 4546492050415254 ]; then
+      PROBE_ERR="protective MBR without a valid GPT header"
+      return 1
+    fi
+    _elba=$(le "$(printf '%s' "$_hdr" | cut -c145-160)")
+    _esz=$(le "$(printf '%s' "$_hdr" | cut -c169-176)")
+    _ecnt=$(le "$(printf '%s' "$_hdr" | cut -c161-168)")
+    if [ "$_ecnt" -lt 2 ] || [ "$_esz" -lt 128 ] || [ "$_esz" -gt 4096 ]; then
+      PROBE_ERR="implausible GPT (entries=$_ecnt size=$_esz)"
+      return 1
+    fi
+    _i=0
+    while [ "$_i" -lt 2 ]; do
+      _ent=$(hexat "$_pd" $((_elba * SECT + _i * _esz)) 48)
+      if [ "$(printf '%s' "$_ent" | cut -c1-32)" = 00000000000000000000000000000000 ]; then
+        PROBE_ERR="GPT partition $((_i + 1)) is empty"
+        return 1
+      fi
+      _first=$(le "$(printf '%s' "$_ent" | cut -c65-80)")
+      _last=$(le "$(printf '%s' "$_ent" | cut -c81-96)")
+      if [ "$_i" -eq 0 ]; then
+        P1OFF=$_first
+        P1SEC=$((_last - _first + 1))
+      else
+        P2OFF=$_first
+        P2SEC=$((_last - _first + 1))
+      fi
+      _i=$((_i + 1))
+    done
+  else
+    _i=0
+    while [ "$_i" -lt 2 ]; do
+      _e=$(printf '%s' "$_mbr" | cut -c$((_i * 32 + 1))-$((_i * 32 + 32)))
+      _ty=$(printf '%s' "$_e" | cut -c9-10)
+      if [ "$_ty" = 00 ]; then
+        PROBE_ERR="MBR partition $((_i + 1)) is empty"
+        return 1
+      fi
+      _first=$(le "$(printf '%s' "$_e" | cut -c17-24)")
+      _cnt=$(le "$(printf '%s' "$_e" | cut -c25-32)")
+      if [ "$_i" -eq 0 ]; then
+        P1OFF=$_first
+        P1SEC=$_cnt
+      else
+        P2OFF=$_first
+        P2SEC=$_cnt
+      fi
+      _i=$((_i + 1))
+    done
+  fi
+  P1DEV=$_pd
+  P2DEV=$_pd
+  if [ $(((P1OFF + P1SEC) * SECT)) -gt "$DOMBYTES" ] || [ $(((P2OFF + P2SEC) * SECT)) -gt "$DOMBYTES" ]; then
+    PROBE_ERR="partition table points beyond the end of the device"
+    return 1
+  fi
+  return 0
+}
+
+# check_parts: both partitions must carry the Synology magics and be large enough
+check_parts() {
+  PROBE_ERR=
+  _b1=$((P1SEC * SECT))
+  _b2=$((P2SEC * SECT))
+  if [ "$_b1" -lt "$P1_MIN" ]; then
+    PROBE_ERR="partition 1 is $(human "$_b1"), minimum is $(human "$P1_MIN")"
+    return 1
+  fi
+  if [ "$_b2" -lt "$P2_MIN" ]; then
+    PROBE_ERR="partition 2 is $(human "$_b2"), minimum is $(human "$P2_MIN")"
+    return 1
+  fi
+  if [ "$_b1" -gt "$PART_MAX" ] || [ "$_b2" -gt "$PART_MAX" ]; then
+    PROBE_ERR="partition larger than $(human "$PART_MAX"): not a DOM"
+    return 1
+  fi
+  _m39=$(hexat "$P1DEV" $((P1OFF * SECT + 39)) 4)
+  _m67=$(hexat "$P1DEV" $((P1OFF * SECT + 67)) 4)
+  if [ "$_m39" != "$FAT_ID_HEX" ] && [ "$_m67" != "$FAT_ID_HEX" ]; then
+    PROBE_ERR="partition 1 does not carry FAT volume id $FAT_VOLID"
+    return 1
+  fi
+  _em=$(hexat "$P2DEV" $((P2OFF * SECT + 1080)) 2)
+  _eu=$(hexat "$P2DEV" $((P2OFF * SECT + 1128)) 16)
+  if [ "$_em" != 53ef ]; then
+    PROBE_ERR="partition 2 is not ext2/3/4 (magic 53ef missing)"
+    return 1
+  fi
+  if [ "$_eu" != "$EXT_UUID_HEX" ]; then
+    PROBE_ERR="partition 2 does not carry filesystem UUID $EXT_UUID"
+    return 1
+  fi
+  P1BYTES=$_b1
+  P2BYTES=$_b2
+  return 0
+}
+
+# probe_dom DEV: locate and check partitions 1/2 of a whole device or image
+probe_dom() {
+  _pd=$1
+  PROBE_ERR=
+  P1DEV=
+  P2DEV=
+  P1OFF=0
+  P2OFF=0
+  P1SEC=0
+  P2SEC=0
+  if [ ! -e "$_pd" ]; then
+    PROBE_ERR="$_pd does not exist"
+    return 1
+  fi
+  if ! DOMBYTES=$(devsize "$_pd"); then
+    PROBE_ERR="cannot determine size of $_pd"
+    return 1
+  fi
+  if [ $((DOMBYTES % SECT)) -ne 0 ]; then
+    PROBE_ERR="size of $_pd is not a multiple of 512"
+    return 1
+  fi
+  if [ -b "$_pd" ]; then
+    _rn=$(canon "$_pd")
+    _rn=${_rn##*/}
+    if [ -r "/sys/block/$_rn/queue/logical_block_size" ]; then
+      read -r _lbs < "/sys/block/$_rn/queue/logical_block_size"
+      if [ "$_lbs" != 512 ]; then
+        PROBE_ERR="logical sector size $_lbs is not supported"
+        return 1
+      fi
+    fi
+  fi
+  _nodes=
+  if [ -b "$_pd" ]; then
+    for _sfx in "" p; do
+      if [ -b "${_pd}${_sfx}1" ] && [ -b "${_pd}${_sfx}2" ]; then
+        _nodes=$_sfx
+        P1DEV=${_pd}${_sfx}1
+        P2DEV=${_pd}${_sfx}2
+        break
+      fi
+    done
+  fi
+  if [ -n "$P1DEV" ]; then
+    _s1=$(devsize "$P1DEV") || { PROBE_ERR="cannot size $P1DEV"; return 1; }
+    _s2=$(devsize "$P2DEV") || { PROBE_ERR="cannot size $P2DEV"; return 1; }
+    P1SEC=$((_s1 / SECT))
+    P2SEC=$((_s2 / SECT))
+  else
+    ptable_locate "$_pd" || return 1
+  fi
+  check_parts
+}
+
+scan_for_dom() {
+  SC_FOUND=
+  SC_CNT=0
+  for SC_SD in /sys/block/*; do
+    [ -e "$SC_SD" ] || continue
+    SC_N=${SC_SD##*/}
+    if [ "${SYNOFURB_SCAN_ALL:-0}" != 1 ]; then
+      case $SC_N in
+        loop* | ram* | zram* | nbd* | dm-* | md* | sr* | fd*) continue ;;
+      esac
+    fi
+    [ -b "/dev/$SC_N" ] || continue
+    if probe_dom "/dev/$SC_N"; then
+      SC_CNT=$((SC_CNT + 1))
+      SC_FOUND="$SC_FOUND /dev/$SC_N"
+    fi
+  done
+  if [ "$SC_CNT" -eq 0 ]; then
+    die "no Synology DOM found (no /dev/synoboot and no block device whose partitions 1+2 match). Set SYNOFURB_DOM to override."
+  fi
+  if [ "$SC_CNT" -gt 1 ]; then
+    die "more than one device looks like a Synology DOM:$SC_FOUND - set SYNOFURB_DOM"
+  fi
+  DOM=${SC_FOUND# }
+  probe_dom "$DOM" || die "$DOM: $PROBE_ERR"
+}
+
+resolve_dom() {
+  DOM=
+  if [ -n "${SYNOFURB_DOM1:-}" ] || [ -n "${SYNOFURB_DOM2:-}" ]; then
+    [ -n "${SYNOFURB_DOM1:-}" ] && [ -n "${SYNOFURB_DOM2:-}" ] || die "SYNOFURB_DOM1 and SYNOFURB_DOM2 must be set together"
+    safe_path "$SYNOFURB_DOM1" || die "unsafe characters in SYNOFURB_DOM1"
+    safe_path "$SYNOFURB_DOM2" || die "unsafe characters in SYNOFURB_DOM2"
+    DOM=${SYNOFURB_DOM:-}
+    if [ -n "$DOM" ]; then
+      safe_path "$DOM" || die "unsafe characters in SYNOFURB_DOM"
+    fi
+    P1DEV=$SYNOFURB_DOM1
+    P2DEV=$SYNOFURB_DOM2
+    P1OFF=0
+    P2OFF=0
+    _s1=$(devsize "$P1DEV") || die "cannot size $P1DEV"
+    _s2=$(devsize "$P2DEV") || die "cannot size $P2DEV"
+    [ $((_s1 % SECT)) -eq 0 ] && [ $((_s2 % SECT)) -eq 0 ] || die "partition sizes must be multiples of 512"
+    P1SEC=$((_s1 / SECT))
+    P2SEC=$((_s2 / SECT))
+    check_parts || die "$PROBE_ERR"
+    if [ -n "$DOM" ]; then
+      DOMBYTES=$(devsize "$DOM") || die "cannot size $DOM"
+    fi
+  elif [ -n "${SYNOFURB_DOM:-}" ]; then
+    DOM=$SYNOFURB_DOM
+    safe_path "$DOM" || die "unsafe characters in SYNOFURB_DOM"
+    if ! probe_dom "$DOM"; then
+      if [ "$RESOLVE_LENIENT" = 1 ] && [ -e "$DOM" ]; then
+        warn "$DOM does not currently look like a Synology DOM ($PROBE_ERR); continuing because restore was asked to overwrite exactly this device"
+        DOMBYTES=$(devsize "$DOM") || die "cannot size $DOM"
+        P1DEV=$DOM
+        P2DEV=$DOM
+      else
+        die "$DOM is not a recognised Synology DOM: $PROBE_ERR"
+      fi
+    fi
+  elif [ -e /dev/synoboot ]; then
+    DOM=/dev/synoboot
+    probe_dom "$DOM" || die "$DOM does not look like a supported Synology DOM: $PROBE_ERR"
+  else
+    scan_for_dom
+  fi
+  safe_path "$P1DEV" || die "unsafe device path $P1DEV"
+  safe_path "$P2DEV" || die "unsafe device path $P2DEV"
+  P1BYTES=$((P1SEC * SECT))
+  P2BYTES=$((P2SEC * SECT))
+}
+
+# loop devices backed by a regular file (util-linux "(file)" and busybox "OFS file" formats)
+loops_of_file() {
+  losetup -a 2>/dev/null | awk -F: -v f="$1" '
+    index($0, "(" f ")") > 0 || (length($0) > length(f) && substr($0, length($0) - length(f)) == " " f) { print $1 }'
+}
+
+# refuse to continue if any DOM partition (or the DOM) is mounted
+guard_unmounted() {
+  _items="$P1DEV $P2DEV $DOM"
+  _whole=$DOM
+  for _x in "$P1DEV" "$P2DEV" "$DOM"; do
+    if [ -n "$_x" ] && [ -f "$_x" ] && command -v losetup >/dev/null 2>&1; then
+      for _l in $(loops_of_file "$_x"); do
+        _items="$_items $_l"
+        [ "$_x" = "$DOM" ] && _whole="$_whole $_l"
+      done
+    fi
+  done
+  _bad=
+  # shellcheck disable=SC2013
+  for _src in $(awk '$1 ~ /^\// { print $1 }' /proc/mounts 2>/dev/null); do
+    _cs=$(canon "$_src")
+    for _it in $_items; do
+      [ -n "$_it" ] || continue
+      _ci=$(canon "$_it")
+      [ "$_cs" = "$_ci" ] && _bad="$_bad $_src"
+    done
+    for _it in $_whole; do
+      [ -n "$_it" ] || continue
+      _ci=$(canon "$_it")
+      [ -b "$_ci" ] || continue
+      case $_ci in
+        *[0-9]) case $_cs in "$_ci"p[0-9] | "$_ci"p[0-9][0-9]) _bad="$_bad $_src" ;; esac ;;
+        *) case $_cs in "$_ci"[0-9] | "$_ci"[0-9][0-9]) _bad="$_bad $_src" ;; esac ;;
+      esac
+    done
+  done
+  if [ -n "$_bad" ]; then
+    if [ "$1" = ro ]; then
+      warn "DOM partition(s) are mounted:$_bad - data read may be inconsistent"
+    else
+      die "refusing to continue: DOM partition(s) are mounted:$_bad"
+    fi
+  fi
+}
+
+# --------------------------------------------------------- work directory
+
+mkwork() { # bytes needed
+  mkdir -p "$TMPBASE" || die "cannot create $TMPBASE"
+  safe_path "$TMPBASE" || die "SYNOFURB_TMP contains unsafe characters"
+  _fk=$(free_kb_of "$TMPBASE")
+  case $_fk in '' | *[!0-9]*) die "cannot determine free space in $TMPBASE" ;; esac
+  if [ $((_fk * 1024)) -lt "$1" ]; then
+    die "not enough free space in $TMPBASE: need $(human "$1"), have $(human $((_fk * 1024))). Set SYNOFURB_TMP to a bigger location."
+  fi
+  W=$(mktemp -d "$TMPBASE/synofurb-dom.XXXXXX") || die "cannot create a temporary directory in $TMPBASE"
+  W=$(canon "$W")
+  chmod 700 "$W"
+  M1=$W/m1
+  M2=$W/m2
+  mkdir "$M1" "$M2" "$W/blk"
+}
+
+mount_img() { # img mnt mode type...
+  _mi=$1
+  _mm=$2
+  _mo=$3
+  shift 3
+  for _mt in "$@"; do
+    case $_mt in
+      vfat)
+        mount -t vfat -o "loop,$_mo,shortname=mixed" "$_mi" "$_mm" 2>"$W/mount.err" && return 0
+        mount -t vfat -o "loop,$_mo" "$_mi" "$_mm" 2>>"$W/mount.err" && return 0
+        ;;
+      *)
+        mount -t "$_mt" -o "loop,$_mo" "$_mi" "$_mm" 2>>"$W/mount.err" && return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+ext_open() { # img mode
+  mount_img "$1" "$M2" "$2" ext2 ext4 ext3 || {
+    err "cannot loop-mount the ext2 copy (is the loop driver available?)"
+    sed 's/^/    /' "$W/mount.err" >&2
+    return 1
+  }
+  M2_MOUNTED=1
+}
+
+# ------------------------------------------------------ FAT access layer
+# Primary: loop-mount the FAT copy.  Fallback: mtools on the image copy
+# (used where the kernel lacks vfat support).
+
+fat_open() { # img mode
+  FATIMG=$1
+  _fm=${SYNOFURB_FAT_BACKEND:-}
+  if [ -z "$_fm" ] || [ "$_fm" = mount ]; then
+    if mount_img "$1" "$M1" "$2" vfat; then
+      FAT_MODE=mount
+      M1_MOUNTED=1
+      return 0
+    fi
+    if [ "$_fm" = mount ]; then
+      err "cannot loop-mount the FAT copy"
+      sed 's/^/    /' "$W/mount.err" >&2
+      return 1
+    fi
+  fi
+  if command -v mcopy >/dev/null 2>&1 && command -v mdir >/dev/null 2>&1; then
+    FAT_MODE=mtools
+    MTOOLS_SKIP_CHECK=1
+    export MTOOLS_SKIP_CHECK
+    if [ "$FAT_NOTE_DONE" != 1 ]; then
+      warn "no vfat mount support here - using mtools on the FAT copy"
+      FAT_NOTE_DONE=1
+    fi
+    return 0
+  fi
+  err "cannot access the FAT partition: no vfat mount support and no mtools"
+  return 1
+}
+fat_cat() { # path
+  if [ "$FAT_MODE" = mount ]; then
+    cat "$M1/$1"
+  else
+    mcopy -i "$FATIMG" "::$1" - 2>/dev/null
+  fi
+}
+
+fat_exists() {
+  if [ "$FAT_MODE" = mount ]; then
+    [ -e "$M1/$1" ]
+  else
+    mdir -i "$FATIMG" "::$1" >/dev/null 2>&1
+  fi
+}
+
+fat_put() { # localfile path
+  if [ "$FAT_MODE" = mount ]; then
+    cat "$1" > "$M1/$2"
+  else
+    mcopy -n -o -i "$FATIMG" "$1" "::$2" >/dev/null 2>&1
+  fi
+}
+
+fat_mkdir_p() { # dir (no leading slash)
+  if [ "$FAT_MODE" = mount ]; then
+    mkdir -p "$M1/$1"
+  else
+    _acc=
+    _rest=$1
+    while [ -n "$_rest" ]; do
+      _part=${_rest%%/*}
+      if [ "$_part" = "$_rest" ]; then _rest=; else _rest=${_rest#*/}; fi
+      _acc=${_acc:+$_acc/}$_part
+      fat_exists "$_acc" || mmd -i "$FATIMG" "::$_acc" >/dev/null 2>&1 || return 1
+    done
+  fi
+}
+
+fat_ls() { # dir -> one name per line
+  if [ "$FAT_MODE" = mount ]; then
+    [ -d "$M1/$1" ] && ls -1 "$M1/$1"
+  else
+    mdir -b -i "$FATIMG" "::$1" 2>/dev/null | sed 's|.*/||'
+  fi
+}
+
+fat_rm() { # path
+  if [ "$FAT_MODE" = mount ]; then
+    rm -f "$M1/$1"
+  else
+    mdel -i "$FATIMG" "::$1" >/dev/null 2>&1
+  fi
+}
+
+fat_rmdir() { # path (only if empty)
+  if [ "$FAT_MODE" = mount ]; then
+    rmdir "$M1/$1" 2>/dev/null
+  else
+    if [ -z "$(fat_ls "$1")" ]; then
+      mrd -i "$FATIMG" "::$1" >/dev/null 2>&1
+    fi
+  fi
+}
+
+fat_free() {
+  if [ "$FAT_MODE" = mount ]; then
+    free_bytes "$M1"
+  else
+    mdir -i "$FATIMG" :: 2>/dev/null | awk '/bytes free/ { sub(/bytes free.*/, ""); gsub(/[^0-9]/, ""); print; exit }'
+  fi
+}
+
+fat_total() {
+  if [ "$FAT_MODE" = mount ]; then
+    total_bytes "$M1"
+  else
+    printf '%s\n' "$P1BYTES"
+  fi
+}
+
+# ------------------------------------------------------------ fsck helpers
+
+FSCK_VFAT=
+for _c in fsck.vfat fsck.fat dosfsck; do
+  if command -v "$_c" >/dev/null 2>&1; then
+    FSCK_VFAT=$_c
+    break
+  fi
+done
+
+# fsck_img KIND IMG  -> 0 clean, 1 problems, 2 not checked (tool missing)
+fsck_img() {
+  case $1 in
+    ext)
+      if ! command -v e2fsck >/dev/null 2>&1; then
+        return 2
+      fi
+      e2fsck -fn "$2" > "$W/fsck.out" 2>&1
+      ;;
+    fat)
+      if [ -z "$FSCK_VFAT" ]; then
+        return 2
+      fi
+      "$FSCK_VFAT" -n "$2" > "$W/fsck.out" 2>&1
+      ;;
+  esac
+}
+
+# fsck_pair SUFFIX MODE : check $W/p1.SUFFIX and $W/p2.SUFFIX
+#   MODE 1      = before writing: e2fsck required, problems refuse (unless --ignore-fsck)
+#   MODE 0      = read-only command: problems are reported, not fatal
+#   MODE always = after editing: any problem is fatal
+fsck_pair() {
+  _suffix=$1
+  _fmode=$2
+  for _fk in 1 2; do
+    if [ "$_fk" = 1 ]; then _kind=fat; else _kind=ext; fi
+    fsck_img "$_kind" "$W/p$_fk.$_suffix"
+    _fr=$?
+    case $_fr in
+      0) info "  fsck ($_kind, partition $_fk, $_suffix copy): clean" ;;
+      2)
+        if [ "$_kind" = ext ] && [ "$_fmode" != 0 ]; then
+          die "e2fsck is not available; refusing to write without a filesystem check"
+        fi
+        warn "no fsck tool for the $_kind partition: skipped (unchecked)"
+        ;;
+      *)
+        sed 's/^/    | /' "$W/fsck.out" >&2
+        FSCK_BAD=1
+        if [ "$_fmode" = always ]; then
+          die "fsck reports problems in the $_kind copy after editing; nothing written"
+        elif [ "$_fmode" = 0 ] || [ "$IGNORE_FSCK" = 1 ]; then
+          warn "fsck reports problems in partition $_fk of the DOM"
+        else
+          die "fsck reports problems in partition $_fk of the DOM (original). Refusing to write; see output above. --ignore-fsck overrides (not recommended)."
+        fi
+        ;;
+    esac
+  done
+}
+
+# ----------------------------------------------------------- conf handling
+
+conf_marks_ok() { # file
+  awk -v begin="$BEGIN_MARK" -v end="$END_MARK" "$AWK_COMMON"'
+    { line = chomp($0) }
+    line == begin { if (inb) bad = 1; inb = 1; next }
+    line == end { if (!inb) bad = 1; inb = 0; next }
+    END { if (inb) bad = 1; exit (bad ? 1 : 0) }
+  ' "$1"
+}
+
+# conf_entries FILE -> "index<TAB>name<TAB>ours(0|1)"
+conf_entries() {
+  awk -v begin="$BEGIN_MARK" -v end="$END_MARK" -v sq="'" "$AWK_COMMON"'
+    BEGIN { idx = 0; inb = 0 }
+    { line = chomp($0) }
+    line == begin { inb = 1; next }
+    line == end { inb = 0; next }
+    line ~ /^[ \t]*menuentry[ \t]/ { printf "%d\t%s\t%d\n", idx, entname(line), inb; idx++ }
+  ' "$1"
+}
+
+# conf_default_raw FILE -> value of the first "set default=" (quotes removed); rc 1 if none
+conf_default_raw() {
+  awk -v sq="'" "$AWK_COMMON"'
+    { line = chomp($0) }
+    !found && match(line, /^[ \t]*set[ \t]+default=/) {
+      rest = substr(line, RLENGTH + 1)
+      c = substr(rest, 1, 1)
+      if (c == "\"" || c == sq) {
+        rest = substr(rest, 2)
+        n = index(rest, c)
+        if (n > 0) rest = substr(rest, 1, n - 1)
+      } else {
+        n = match(rest, /[ \t;#]/)
+        if (n > 0) rest = substr(rest, 1, n - 1)
+      }
+      print rest
+      found = 1
+    }
+    END { exit (found ? 0 : 1) }
+  ' "$1"
+}
+
+# conf_set_default FILE INDEX -> rewritten conf on stdout (quote style kept)
+conf_set_default() {
+  awk -v val="$2" -v sq="'" "$AWK_COMMON"'
+    {
+      line = chomp($0)
+      cr = (line == $0) ? "" : "\r"
+      if (!done && match(line, /^[ \t]*set[ \t]+default=/)) {
+        pre = substr(line, 1, RLENGTH)
+        rest = substr(line, RLENGTH + 1)
+        c = substr(rest, 1, 1)
+        if (c == "\"" || c == sq) {
+          r2 = substr(rest, 2)
+          n = index(r2, c)
+          tail = (n > 0) ? substr(r2, n + 1) : ""
+          print pre c val c tail cr
+        } else {
+          n = match(rest, /[ \t;#]/)
+          tail = (n > 0) ? substr(rest, n) : ""
+          print pre val tail cr
+        }
+        done = 1
+        next
+      }
+      print $0
+    }
+  ' "$1"
+}
+
+# blk_split FILE : write each entry of our block to $W/blk/ent.NAME; print names
+blk_split() {
+  awk -v begin="$BEGIN_MARK" -v end="$END_MARK" -v dir="$W/blk" -v sq="'" "$AWK_COMMON"'
+    { line = chomp($0) }
+    line == begin { inb = 1; next }
+    line == end { inb = 0; next }
+    !inb { next }
+    line ~ /^[ \t]*menuentry[ \t]/ {
+      name = entname(line)
+      if (name !~ /^[A-Za-z0-9_-]+$/ || (name in seen)) { print "!BAD:" name; next }
+      seen[name] = 1
+      cur = dir "/ent." name
+      open = 1
+      print name
+    }
+    open {
+      print line > cur
+      if (line ~ /^[ \t]*}[ \t]*$/) { close(cur); open = 0 }
+    }
+  ' "$1"
+}
+
+# entries of our block in canonical order
+blk_names() {
+  for _bn in SYNOFURB_BOOT DEBIAN DEBIAN_OLD; do
+    [ -f "$W/blk/ent.$_bn" ] && printf '%s\n' "$_bn"
+  done
+  for _bf in "$W"/blk/ent.*; do
+    [ -f "$_bf" ] || continue
+    _bn=${_bf##*/ent.}
+    case $_bn in SYNOFURB_BOOT | DEBIAN | DEBIAN_OLD) continue ;; esac
+    printf '%s\n' "$_bn"
+  done
+}
+
+blk_compose() {
+  _names=$(blk_names)
+  [ -n "$_names" ] || return 0
+  printf '%s\n' "$BEGIN_MARK"
+  for _bn in $_names; do
+    cat "$W/blk/ent.$_bn"
+  done
+  printf '%s\n' "$END_MARK"
+}
+
+# conf_replace_block ORIG BLOCKFILE : block replaced in place / appended / removed
+conf_replace_block() {
+  awk -v begin="$BEGIN_MARK" -v end="$END_MARK" -v blockfile="$2" "$AWK_COMMON"'
+    function emit(   l) {
+      while ((getline l < blockfile) > 0) printf "%s%s\n", l, (crlf ? "\r" : "")
+      close(blockfile)
+    }
+    NR == 1 { crlf = (substr($0, length($0), 1) == "\r") }
+    { line = chomp($0) }
+    skipping { if (line == end) skipping = 0; next }
+    line == begin { if (!done) { emit(); done = 1 } skipping = 1; next }
+    { print $0 }
+    END { if (!done) emit() }
+  ' "$1"
+}
+
+# lines outside our block, without the (first) default line
+conf_outside() {
+  awk -v begin="$BEGIN_MARK" -v end="$END_MARK" "$AWK_COMMON"'
+    { line = chomp($0) }
+    skipping { if (line == end) skipping = 0; next }
+    line == begin { skipping = 1; next }
+    !dd && line ~ /^[ \t]*set[ \t]+default=/ { dd = 1; next }
+    { print line }
+  ' "$1"
+}
+
+# references (linux/initrd/chainloader) of entries inside our block: "part path"
+blk_refs() {
+  awk -v begin="$BEGIN_MARK" -v end="$END_MARK" "$AWK_COMMON"'
+    { line = chomp($0); $0 = line }
+    line == begin { inb = 1; next }
+    line == end { inb = 0; next }
+    inb && ($1 == "linux" || $1 == "initrd") && substr($2, 1, 1) == "/" { print "2 " $2 }
+    inb && $1 == "chainloader" && substr($2, 1, 1) == "/" { print "1 " $2 }
+  ' "$1"
+}
+
+# same for a single entry file
+ent_refs() {
+  awk '
+    ($1 == "linux" || $1 == "initrd") && substr($2, 1, 1) == "/" { print "2 " $2 }
+    $1 == "chainloader" && substr($2, 1, 1) == "/" { print "1 " $2 }
+  ' "$1"
+}
+
+# If the original had no final newline and the result does not end with our
+# marker, drop the newline awk added so untouched bytes stay identical.
+conf_fix_eof() { # orig new
+  _fsz=$(wc -c < "$1")
+  [ $((_fsz)) -gt 0 ] || return 0
+  _last=$(tail -c 1 "$1" | od -An -tx1 | tr -d ' \n')
+  [ "$_last" = 0a ] && return 0
+  _tl=$(tail -n 1 "$2" | tr -d '\r\n')
+  [ "$_tl" = "$END_MARK" ] && return 0
+  _nsz=$(wc -c < "$2")
+  dd if="$2" of="$2.t" bs=1 count=$((_nsz - 1)) 2>/dev/null
+  mv "$2.t" "$2"
+}
+
+# index (or empty) of the first entry with NAME in entries file
+entry_index() { # entries-file name
+  awk -F'\t' -v n="$2" '$2 == n { print $1; exit }' "$1"
+}
+
+entry_name_at() { # entries-file index
+  awk -F'\t' -v i="$2" '$1 == i { print $2; exit }' "$1"
+}
+
+entry_count() {
+  awk 'END { print NR }' "$1"
+}
+
+# resolve a raw "set default" value to an index ('' if it matches nothing)
+default_to_index() { # entries-file raw
+  case $2 in
+    '') printf '0\n' ;;
+    *[!0-9]*) entry_index "$1" "$2" ;;
+    *)
+      if [ "$2" -lt "$(entry_count "$1")" ]; then printf '%s\n' "$2"; fi
+      ;;
+  esac
+}
+
+# Load the conf from the (open) FAT copy and prepare the editing state.
+conf_load() {
+  fat_cat "$CONF_REL" > "$W/conf.orig" || die "cannot read $CONF_REL on partition 1"
+  [ -s "$W/conf.orig" ] || die "$CONF_REL is empty or missing"
+  conf_marks_ok "$W/conf.orig" || die "$CONF_REL has an unbalanced synofurb block; refusing to edit"
+  rm -f "$W"/blk/ent.*
+  _nm=$(blk_split "$W/conf.orig")
+  case $_nm in
+    *'!BAD:'*) die "our block contains an entry with an unexpected or duplicate name; refusing to edit" ;;
+  esac
+  conf_entries "$W/conf.orig" > "$W/entries.orig"
+  DEF_HAS=1
+  DEF_RAW=$(conf_default_raw "$W/conf.orig") || { DEF_HAS=0; DEF_RAW=; }
+  DEF_IDX=$(default_to_index "$W/entries.orig" "$DEF_RAW")
+  DEF_NAME_BEFORE=
+  [ -n "$DEF_IDX" ] && DEF_NAME_BEFORE=$(entry_name_at "$W/entries.orig" "$DEF_IDX")
+  awk -F'\t' -v n="$DSM_ENTRY" '$2 == n && $3 == 0 { f = 1 } END { exit !f }' "$W/entries.orig" ||
+    die "the DSM entry $DSM_ENTRY is not present in $CONF_REL; this DOM is not supported"
+}
+
+# conf_apply WANT : WANT is '' (keep default by name), an entry name, or "@dsm"
+conf_apply() {
+  _want=$1
+  blk_compose > "$W/block.txt"
+  conf_replace_block "$W/conf.orig" "$W/block.txt" > "$W/conf.n1"
+  conf_entries "$W/conf.n1" > "$W/entries.n1"
+  if [ -n "$(cut -f2 "$W/entries.n1" | sort | uniq -d)" ]; then
+    die "this change would create a duplicate menu entry name: $(cut -f2 "$W/entries.n1" | sort | uniq -d | tr '\n' ' ')"
+  fi
+  awk -F'\t' -v n="$DSM_ENTRY" '$2 == n && $3 == 0 { f = 1 } END { exit !f }' "$W/entries.n1" ||
+    die "internal error: DSM entry lost while editing"
+  _tgt=
+  if [ "$_want" = "@dsm" ]; then
+    _tgt=$DSM_ENTRY
+  elif [ -n "$_want" ]; then
+    _tgt=$_want
+    [ -n "$(entry_index "$W/entries.n1" "$_tgt")" ] || die "menu entry $_tgt does not exist (install it first)"
+  elif [ -n "$DEF_NAME_BEFORE" ] && [ -n "$(entry_index "$W/entries.n1" "$DEF_NAME_BEFORE")" ]; then
+    _tgt=$DEF_NAME_BEFORE
+  elif [ -n "$DEF_NAME_BEFORE" ]; then
+    _tgt=$DSM_ENTRY
+    note_change "default entry $DEF_NAME_BEFORE no longer exists: default set to $DSM_ENTRY"
+  elif [ -z "$DEF_IDX" ]; then
+    _tgt=$DSM_ENTRY
+    warn "the current default '$DEF_RAW' points to no entry: resetting to $DSM_ENTRY"
+  fi
+  cp "$W/conf.n1" "$W/conf.n2"
+  if [ -n "$_tgt" ]; then
+    _ti=$(entry_index "$W/entries.n1" "$_tgt")
+    _cur=$(conf_default_raw "$W/conf.n1")
+    _curi=$(default_to_index "$W/entries.n1" "$_cur")
+    if [ "$DEF_HAS" = 0 ] && [ "$_ti" = 0 ]; then
+      :
+    elif [ "$_curi" != "$_ti" ]; then
+      if [ "$DEF_HAS" = 0 ]; then
+        _cr=
+        [ "$(head -n 1 "$W/conf.n1" | tail -c 2 | od -An -tx1 | tr -d ' \n')" = 0d0a ] && _cr=$(printf '\r')
+        { printf "set default='%s'%s\n" "$_ti" "$_cr"; cat "$W/conf.n1"; } > "$W/conf.n2"
+      else
+        conf_set_default "$W/conf.n1" "$_ti" > "$W/conf.n2"
+      fi
+      note_change "boot menu default -> $_tgt (index $_ti)"
+    fi
+  fi
+  conf_fix_eof "$W/conf.orig" "$W/conf.n2"
+  # nothing outside our block may differ (apart from the default value itself)
+  conf_outside "$W/conf.orig" > "$W/out.orig"
+  conf_outside "$W/conf.n2" > "$W/out.new"
+  cmp -s "$W/out.orig" "$W/out.new" || die "internal error: edit would alter lines outside the synofurb block; nothing written"
+  if ! cmp -s "$W/conf.orig" "$W/conf.n2"; then
+    fat_put "$W/conf.n2" "$CONF_REL" || die "cannot write $CONF_REL into the FAT copy"
+    P1_CHANGED=1
+  fi
+}
+
+# ------------------------------------------------------- entry generators
+
+gen_entry() { # name kernel-file initrd-file cmdline
+  printf 'menuentry "%s" {\n' "$1"
+  printf '\tsearch --fs-uuid --no-floppy --set=root %s\n' "$EXT_UUID"
+  if [ -n "$4" ]; then
+    printf '\tlinux /%s/%s %s\n' "$OURDIR" "$2" "$4"
+  else
+    printf '\tlinux /%s/%s\n' "$OURDIR" "$2"
+  fi
+  printf '\tinitrd /%s/%s\n' "$OURDIR" "$3"
+  printf '}\n'
+}
+
+gen_efi_entry() { # name
+  printf 'menuentry "EFI_%s" {\n' "$1"
+  printf '\tsearch --fs-uuid --no-floppy --set=root %s\n' "$FAT_VOLID"
+  printf '\tchainloader /%s/%s.efi\n' "$EFI_DIR" "$1"
+  printf '}\n'
+}
+
+# cmdline of an existing entry file (text after the kernel path)
+entry_cmdline() {
+  [ -f "$1" ] || return 0
+  sed -n 's/^[ \t]*linux[ \t][ \t]*[^ \t]*[ \t]*//p' "$1" | head -n 1 | tr -d '\r'
+}
+
+valid_cmdline() {
+  case $1 in
+    *"$NL"*) return 1 ;;
+    *';'* | *'{'* | *'}'* | *'`'*) return 1 ;;
+  esac
+  if printf '%s' "$1" | LC_ALL=C grep -q '[^ -~]'; then
+    return 1
+  fi
+  return 0
+}
+
+valid_name() {
+  case $1 in
+    '' | *[!A-Za-z0-9_-]*) return 1 ;;
+  esac
+  [ "${#1}" -le 32 ]
+}
+
+# --------------------------------------------------------- manifest & state
+
+OURFILES="agent.vmlinuz agent.initrd vmlinuz initrd.img vmlinuz.old initrd.img.old"
+
+manifest_update() { # M2 must be mounted rw
+  _old=$M2/$OURDIR/MANIFEST
+  _new=$W/manifest.new
+  : > "$_new"
+  _today=$(date +%Y-%m-%d)
+  for _f in $OURFILES; do
+    [ -f "$M2/$OURDIR/$_f" ] || continue
+    _sha=$(sha_file "$M2/$OURDIR/$_f")
+    _sz=$(wc -c < "$M2/$OURDIR/$_f")
+    _inst=$_today
+    if [ -f "$_old" ]; then
+      _prev=$(awk -F'\t' -v n="$_f" -v s="$_sha" '$1 == n && $2 == s { print $4; exit }' "$_old")
+      [ -n "$_prev" ] && _inst=$_prev
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$_f" "$_sha" $((_sz)) "$_inst" >> "$_new"
+  done
+  if [ -s "$_new" ]; then
+    if ! { [ -f "$_old" ] && cmp -s "$_new" "$_old"; }; then
+      cat "$_new" > "$_old"
+      P2_CHANGED=1
+    fi
+  elif [ -f "$_old" ]; then
+    rm -f "$_old"
+    P2_CHANGED=1
+  fi
+  # remove our directory if nothing is left in it
+  rmdir "$M2/$OURDIR" 2>/dev/null
+  return 0
+}
+
+# check_state: consistency checks on the opened copies (M2 mounted, FAT open)
+chk_ok() { [ "$CHECK_QUIET" = 1 ] || msg "  ok    $*"; }
+chk_bad() {
+  CHECK_FAILS=$((CHECK_FAILS + 1))
+  printf '  FAIL  %s\n' "$*" >> "$W/chk.fail"
+  [ "$CHECK_QUIET" = 1 ] || printf '  FAIL  %s\n' "$*"
+}
+
+check_state() {
+  CHECK_FAILS=0
+  : > "$W/chk.fail"
+  if ! fat_cat "$CONF_REL" > "$W/chk.conf" || [ ! -s "$W/chk.conf" ]; then
+    chk_bad "cannot read $CONF_REL from partition 1"
+    return 1
+  fi
+  chk_ok "$CONF_REL readable"
+  if conf_marks_ok "$W/chk.conf"; then chk_ok "synofurb block markers balanced"; else chk_bad "unbalanced synofurb block markers"; fi
+  conf_entries "$W/chk.conf" > "$W/chk.entries"
+  if awk -F'\t' -v n="$DSM_ENTRY" '$2 == n && $3 == 0 { f = 1 } END { exit !f }' "$W/chk.entries"; then
+    chk_ok "DSM entry $DSM_ENTRY present"
+  else
+    chk_bad "DSM entry $DSM_ENTRY missing"
+  fi
+  for _f in zImage rd.gz; do
+    if [ -s "$M2/$_f" ]; then chk_ok "DSM file /$_f present"; else chk_bad "DSM file /$_f missing or empty"; fi
+  done
+  _raw=$(conf_default_raw "$W/chk.conf") || _raw=
+  _di=$(default_to_index "$W/chk.entries" "$_raw")
+  if [ -n "$_di" ]; then
+    chk_ok "default '$_raw' points to entry $_di ($(entry_name_at "$W/chk.entries" "$_di"))"
+  else
+    chk_bad "default '$_raw' does not point to an existing entry"
+  fi
+  _dups=$(cut -f2 "$W/chk.entries" | sort | uniq -d | tr '\n' ' ')
+  if [ -z "$_dups" ]; then chk_ok "no duplicate entry names"; else chk_bad "duplicate entry names: $_dups"; fi
+  blk_refs "$W/chk.conf" > "$W/chk.refs"
+  _nref=0
+  while read -r _part _path; do
+    _nref=$((_nref + 1))
+    if [ "$_part" = 2 ]; then
+      if [ -s "$M2$_path" ]; then chk_ok "referenced file $_path exists"; else chk_bad "entry references missing file $_path (partition 2)"; fi
+    else
+      if fat_exists "${_path#/}"; then chk_ok "referenced file $_path exists"; else chk_bad "entry references missing file $_path (partition 1)"; fi
+    fi
+  done < "$W/chk.refs"
+  if [ -f "$M2/$OURDIR/MANIFEST" ]; then
+    while IFS=$TAB read -r _n _s _z _d; do
+      if [ ! -f "$M2/$OURDIR/$_n" ]; then
+        chk_bad "manifest lists $_n but the file is missing"
+      elif [ "$(sha_file "$M2/$OURDIR/$_n")" != "$_s" ]; then
+        chk_bad "$_n does not match its manifest checksum"
+      else
+        chk_ok "$_n matches manifest"
+      fi
+    done < "$M2/$OURDIR/MANIFEST"
+  fi
+  [ "$CHECK_FAILS" -eq 0 ]
+}
+
+# ------------------------------------------------------ transaction engine
+
+# txn_open ro|rw BYTES-NEEDED
+txn_open() {
+  _mode=$1
+  need_root
+  resolve_dom
+  take_lock
+  guard_unmounted "$_mode"
+  if [ "$_mode" = rw ]; then
+    mkwork $(((P1BYTES + P2BYTES) * 2 + 16 * MIB))
+  else
+    mkwork $((P1BYTES + P2BYTES + 16 * MIB))
+  fi
+  info "Using DOM ${DOM:-(partitions $P1DEV, $P2DEV)}: partition 1 $(human "$P1BYTES"), partition 2 $(human "$P2BYTES")"
+  info "Reading partitions into $W ..."
+  part_to_file "$P1DEV" "$P1OFF" "$P1SEC" "$W/p1.orig" || die "cannot read partition 1: $(cat "$W/dd.err")"
+  part_to_file "$P2DEV" "$P2OFF" "$P2SEC" "$W/p2.orig" || die "cannot read partition 2: $(cat "$W/dd.err")"
+  H1=$(sha_file "$W/p1.orig")
+  H2=$(sha_file "$W/p2.orig")
+  if [ "$_mode" = rw ]; then
+    _r1=$(part_hash "$P1DEV" "$P1OFF" "$P1SEC")
+    _r2=$(part_hash "$P2DEV" "$P2OFF" "$P2SEC")
+    if [ "$_r1" != "$H1" ] || [ "$_r2" != "$H2" ]; then
+      die "the DOM changed while it was being read (two reads differ); nothing written. Is something else using it?"
+    fi
+    info "  read twice, checksums agree"
+  fi
+  if [ "$_mode" = rw ]; then
+    fsck_pair orig 1
+    cp "$W/p1.orig" "$W/p1.work" && cp "$W/p2.orig" "$W/p2.work" || die "cannot create working copies"
+    fat_open "$W/p1.work" rw || die "cannot open the FAT copy"
+    ext_open "$W/p2.work" rw || die "cannot open the ext2 copy"
+  else
+    fsck_pair orig 0
+    fat_open "$W/p1.orig" ro || die "cannot open the FAT copy"
+    ext_open "$W/p2.orig" ro || die "cannot open the ext2 copy"
+  fi
+  if [ "$_mode" = rw ]; then
+    [ -s "$M2/zImage" ] && [ -s "$M2/rd.gz" ] || die "the DSM files /zImage and /rd.gz are missing on partition 2: refusing to touch this DOM"
+    DSM_SUM_BEFORE="$(sha_file "$M2/zImage") $(sha_file "$M2/rd.gz")"
+    conf_load
+    if ! check_state; then
+      warn "the DOM already has problems (they are not caused by this run):"
+      cat "$W/chk.fail" >&2
+    fi
+    cp "$W/chk.fail" "$W/pre.fail"
+  fi
+}
+
+# txn_commit: verify the edited copies and write them back
+txn_commit() {
+  if [ "$P1_CHANGED" != 1 ] && [ "$P2_CHANGED" != 1 ]; then
+    msg "Nothing to change: the DOM is already in the requested state (device left untouched)."
+    return 0
+  fi
+  fat_close
+  ext_close
+  [ "$M1_MOUNTED" = 0 ] && [ "$M2_MOUNTED" = 0 ] || die "cannot unmount the working copies"
+  fsck_pair work always
+  fat_open "$W/p1.work" ro || die "cannot re-open the edited FAT copy"
+  ext_open "$W/p2.work" ro || die "cannot re-open the edited ext2 copy"
+  CHECK_QUIET=1
+  if ! check_state; then
+    _newfail=$(grep -vxFf "$W/pre.fail" "$W/chk.fail")
+    if [ -n "$_newfail" ]; then
+      printf '%s\n' "$_newfail" >&2
+      die "post-edit verification failed (see FAIL lines above); nothing written"
+    fi
+    warn "pre-existing problems remain (unchanged by this run)"
+  fi
+  _after="$(sha_file "$M2/zImage") $(sha_file "$M2/rd.gz")"
+  [ "$_after" = "$DSM_SUM_BEFORE" ] || die "DSM files changed during editing (internal error); nothing written"
+  msg "  verified edited copies: DSM entry and DSM files intact, no new problems"
+  fat_close
+  ext_close
+  msg "Planned changes:"
+  printf '%s' "$CHANGES"
+  [ "$P1_CHANGED" = 1 ] && msg "  (partition 1 / FAT will be rewritten)"
+  [ "$P2_CHANGED" = 1 ] && msg "  (partition 2 / ext2 will be rewritten)"
+  if [ "$DRYRUN" = 1 ]; then
+    msg "Dry run: nothing was written to the DOM."
+    return 0
+  fi
+  confirm "Write these changes to the DOM now?"
+  : > "$W/units"
+  for _u in $WRITE_ORDER; do
+    case $_u in
+      p1) [ "$P1_CHANGED" = 1 ] && printf 'P1 %s %s %s %s %s %s %s\n' "$P1DEV" "$P1OFF" "$P1SEC" "$W/p1.orig" "$W/p1.work" "$H1" "$(sha_file "$W/p1.work")" >> "$W/units" ;;
+      p2) [ "$P2_CHANGED" = 1 ] && printf 'P2 %s %s %s %s %s %s %s\n' "$P2DEV" "$P2OFF" "$P2SEC" "$W/p2.orig" "$W/p2.work" "$H2" "$(sha_file "$W/p2.work")" >> "$W/units" ;;
+    esac
+  done
+  ensure_first_backup
+  commit_units
+  msg "Done. The DOM now contains the changes listed above."
+}
+
+confirm() {
+  [ "$YES" = 1 ] && return 0
+  if [ ! -t 0 ]; then
+    die "$1 - not confirmed: not a terminal, pass --yes to proceed"
+  fi
+  printf '%s [y/N] ' "$1"
+  read -r _ans
+  case $_ans in
+    y | Y | yes | YES) return 0 ;;
+  esac
+  die "aborted by user; nothing written"
+}
+
+# commit_units: recheck, write, read back; automatic rollback on any failure
+commit_units() {
+  if [ "${SYNOFURB_TEST_TAMPER:-0}" = 1 ]; then
+    # test hook: simulate a concurrent change of the device
+    printf '\377' | dd of="$P2DEV" bs=1 seek=$(((P2OFF + P2SEC) * SECT - 1)) conv=notrunc 2>/dev/null
+  fi
+  while read -r _n _dev _off _len _orig _new _oh _nh; do
+    _cur=$(part_hash "$_dev" "$_off" "$_len")
+    if [ "$_cur" != "$_oh" ]; then
+      die "$_n changed on the device after it was read (concurrent modification); nothing written"
+    fi
+  done < "$W/units"
+  : > "$W/touched"
+  msg "Writing ..."
+  trap '' HUP INT TERM PIPE
+  WRITE_STARTED=1
+  _count=0
+  while read -r _n _dev _off _len _orig _new _oh _nh; do
+    printf '%s\n' "$_n" >> "$W/touched"
+    part_write "$_new" "$_dev" "$_off" "$_len" || die "dd failed writing $_n: $(cat "$W/dd.err")"
+    _count=$((_count + 1))
+    if [ "${SYNOFURB_TEST_FAIL_AFTER_WRITE:-}" = "$_count" ]; then
+      die "injected failure after write $_count (test hook)"
+    fi
+    drop_dev_cache "$_dev" "$DOM"
+    _rb=$(part_hash "$_dev" "$_off" "$_len")
+    if [ "$_rb" != "$_nh" ]; then
+      die "read-back of $_n does not match what was written"
+    fi
+    msg "  $_n written and verified (sha256 ${_nh%"${_nh#????????????}"}...)"
+  done < "$W/units"
+  COMMITTED=1
+  sync
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 141' PIPE
+}
+
+rollback_all() {
+  err "write failed - restoring the original partition contents automatically"
+  _rbok=1
+  if [ -f "$W/touched" ]; then
+    while read -r _t; do
+      _line=$(awk -v n="$_t" '$1 == n { print; exit }' "$W/units")
+      # shellcheck disable=SC2086
+      set -- $_line
+      _n=$1 _dev=$2 _off=$3 _len=$4 _orig=$5 _oh=$7
+      if part_write "$_orig" "$_dev" "$_off" "$_len" && drop_dev_cache "$_dev" "$DOM" && [ "$(part_hash "$_dev" "$_off" "$_len")" = "$_oh" ]; then
+        msg "  $_n restored to its original contents (verified)"
+      else
+        err "  $_n could NOT be restored automatically"
+        _rbok=0
+      fi
+    done < "$W/touched"
+  fi
+  if [ "$_rbok" = 1 ]; then
+    msg "ROLLBACK OK: the DOM has its original contents again."
+  else
+    KEEP_W=1
+    err "ROLLBACK FAILED. Original partition images are kept in $W (p1.orig, p2.orig)."
+    err "Restore them with dd, or use the first-backup file in $STATE. See README 'Manual recovery'."
+  fi
+}
+
+# one-time automatic backup of the whole DOM before the very first write
+ensure_first_backup() {
+  [ "$SKIP_AUTOBACKUP" = 1 ] && { warn "--skip-auto-backup: no automatic backup is made"; return 0; }
+  for _d in "$STATE" /tmp; do
+    for _f in "$_d"/synofurb-dom-first-backup.img "$_d"/synofurb-dom-first-backup.p1.img; do
+      [ -e "$_f" ] && { msg "  automatic first backup already exists: $_f"; return 0; }
+    done
+  done
+  if [ -n "$DOM" ]; then
+    _need=$((DOMBYTES + MIB))
+  else
+    _need=$((P1BYTES + P2BYTES + MIB))
+  fi
+  _dir=
+  for _d in "$STATE" /tmp; do
+    mkdir -p "$_d" 2>/dev/null || continue
+    chmod 700 "$_d" 2>/dev/null
+    : > "$_d/.synofurb-w.$$" 2>/dev/null || continue
+    rm -f "$_d/.synofurb-w.$$"
+    _fk=$(free_kb_of "$_d")
+    case $_fk in '' | *[!0-9]*) continue ;; esac
+    if [ $((_fk * 1024)) -ge "$_need" ]; then
+      _dir=$_d
+      break
+    fi
+  done
+  [ -n "$_dir" ] || die "cannot store the one-time automatic backup: no writable location with $(human "$_need") free. Set SYNOFURB_STATE to a data-volume directory, run '$PROG backup DIR' first, or pass --skip-auto-backup."
+  [ "$_dir" = "$STATE" ] || warn "using $_dir for the automatic backup (it may not survive a reboot); set SYNOFURB_STATE to keep it on a volume"
+  if [ -n "$DOM" ]; then
+    write_backup_file "$_dir/synofurb-dom-first-backup.img"
+  else
+    (umask 077; cp "$W/p1.orig" "$_dir/synofurb-dom-first-backup.p1.img" && cp "$W/p2.orig" "$_dir/synofurb-dom-first-backup.p2.img") || die "cannot write the automatic backup"
+    printf '%s  synofurb-dom-first-backup.p1.img\n%s  synofurb-dom-first-backup.p2.img\n' "$H1" "$H2" > "$_dir/synofurb-dom-first-backup.sha256"
+    msg "  automatic first backup (partition images): $_dir/synofurb-dom-first-backup.p[12].img"
+  fi
+}
+
+# write_backup_file FILE: dd the whole DOM, verify by re-reading, write sidecar
+write_backup_file() {
+  _bf=$1
+  _sec=$((DOMBYTES / SECT))
+  (umask 077; part_to_file "$DOM" 0 "$_sec" "$_bf") || { rm -f "$_bf"; die "backup: dd failed: $(cat "$W/dd.err")"; }
+  chmod 600 "$_bf"
+  _bh=$(sha_file "$_bf")
+  drop_dev_cache "$DOM"
+  _dh=$(part_hash "$DOM" 0 "$_sec")
+  if [ "$_bh" != "$_dh" ]; then
+    rm -f "$_bf"
+    die "backup verification failed (file and device checksums differ); backup removed"
+  fi
+  (umask 077; printf '%s  %s\n' "$_bh" "${_bf##*/}" > "$_bf.sha256")
+  msg "  backup written and verified: $_bf (sha256 $_bh)"
+}
+
+# --------------------------------------------------------------- commands
+
+backup_exists_info() {
+  _bi=
+  for _d in "$STATE" /tmp; do
+    for _f in "$_d"/synofurb-dom-first-backup.img "$_d"/synofurb-dom-first-backup.p1.img; do
+      [ -e "$_f" ] && _bi=$_f
+    done
+  done
+  printf '%s\n' "$_bi"
+}
+
+cmd_status() {
+  txn_open ro
+  conf_entries_file=$W/status.entries
+  if ! fat_cat "$CONF_REL" > "$W/status.conf" || [ ! -s "$W/status.conf" ]; then
+    die "cannot read $CONF_REL"
+  fi
+  conf_entries "$W/status.conf" > "$conf_entries_file"
+  _hasdef=1
+  _raw=$(conf_default_raw "$W/status.conf") || { _hasdef=0; _raw=; }
+  _di=$(default_to_index "$conf_entries_file" "$_raw")
+  _dn=
+  [ -n "$_di" ] && _dn=$(entry_name_at "$conf_entries_file" "$_di")
+  _bk=$(backup_exists_info)
+  _f1=$(fat_free)
+  _t1=$(fat_total)
+  _f2=$(free_bytes "$M2")
+  _t2=$(total_bytes "$M2")
+  fat_ls "$EFI_DIR" > "$W/status.efi" 2>/dev/null
+  if [ "$JSON" = 1 ]; then
+    printf '{"tool":"%s","version":"%s","device":%s,"device_bytes":%s,' "$PROG" "$VERSION" "$(json_str "${DOM:-}")" "${DOMBYTES:-0}"
+    printf '"p1":{"dev":%s,"bytes":%s,"free_bytes":%s,"fat_volume_id":"%s"},' "$(json_str "$P1DEV")" "$P1BYTES" "${_f1:-0}" "$FAT_VOLID"
+    printf '"p2":{"dev":%s,"bytes":%s,"free_bytes":%s,"uuid":"%s"},' "$(json_str "$P2DEV")" "$P2BYTES" "${_f2:-0}" "$EXT_UUID"
+    printf '"entries":['
+    _first=1
+    while IFS=$TAB read -r _i _n _o; do
+      [ "$_first" = 1 ] || printf ','
+      _first=0
+      _dsm=false
+      case $_n in SYNOLOGY_*) _dsm=true ;; esac
+      _ours=false
+      [ "$_o" = 1 ] && _ours=true
+      printf '{"index":%s,"name":%s,"ours":%s,"dsm":%s}' "$_i" "$(json_str "$_n")" "$_ours" "$_dsm"
+    done < "$conf_entries_file"
+    printf '],"default":{"raw":%s,"index":%s,"name":%s},' "$(json_str "$_raw")" "${_di:-null}" "$(json_str "$_dn")"
+    printf '"files":['
+    _first=1
+    if [ -f "$M2/$OURDIR/MANIFEST" ]; then
+      while IFS=$TAB read -r _n _s _z _d; do
+        [ "$_first" = 1 ] || printf ','
+        _first=0
+        printf '{"name":%s,"size":%s,"sha256":"%s","installed":"%s"}' "$(json_str "$_n")" "$_z" "$_s" "$_d"
+      done < "$M2/$OURDIR/MANIFEST"
+    fi
+    printf '],"efi_files":['
+    _first=1
+    while read -r _n; do
+      [ -n "$_n" ] || continue
+      [ "$_first" = 1 ] || printf ','
+      _first=0
+      json_str "$_n"
+    done < "$W/status.efi"
+    printf '],"backup":{"exists":%s,"path":%s}}\n' "$([ -n "$_bk" ] && echo true || echo false)" "$(json_str "$_bk")"
+    return 0
+  fi
+  msg "$PROG $VERSION"
+  msg "Device:      ${DOM:-(partition overrides)}  ($(human "${DOMBYTES:-0}"))"
+  msg "Partition 1: $P1DEV  FAT $FAT_VOLID  $(human "$P1BYTES"), free $(human "${_f1:-0}")"
+  msg "Partition 2: $P2DEV  ext2 $EXT_UUID  $(human "$P2BYTES"), free $(human "${_f2:-0}")"
+  msg ""
+  msg "Boot menu entries ($CONF_REL):"
+  while IFS=$TAB read -r _i _n _o; do
+    _tag=
+    case $_n in SYNOLOGY_*) _tag=" [DSM]" ;; esac
+    [ "$_o" = 1 ] && _tag=" [synofurb]"
+    _mark=
+    [ "$_i" = "$_di" ] && _mark="   <- default"
+    msg "  $_i  $_n$_tag$_mark"
+  done < "$conf_entries_file"
+  if [ -n "$_di" ]; then
+    msg "Default:     $_dn (index $_di)"
+  else
+    msg "Default:     INVALID (set default='$_raw' matches no entry)"
+  fi
+  [ "$_hasdef" = 0 ] && msg "              (no 'set default' line: boot loader falls back to entry 0)"
+  msg ""
+  if [ -f "$M2/$OURDIR/MANIFEST" ]; then
+    msg "synofurb files on partition 2 (/$OURDIR):"
+    while IFS=$TAB read -r _n _s _z _d; do
+      msg "  $_n  $(human "$_z")  sha256 $(printf '%s' "$_s" | cut -c1-12)...  installed $_d"
+    done < "$M2/$OURDIR/MANIFEST"
+  else
+    msg "synofurb files on partition 2: none"
+  fi
+  if [ -s "$W/status.efi" ]; then
+    msg "EFI applications on partition 1 ($EFI_DIR): $(tr '\n' ' ' < "$W/status.efi")"
+  fi
+  if [ -n "$_bk" ]; then
+    msg "Automatic first backup: $_bk"
+  else
+    msg "Automatic first backup: none yet (created before the first write)"
+  fi
+}
+
+cmd_backup() {
+  need_root
+  resolve_dom
+  [ -n "$DOM" ] || die "backup needs the whole device: set SYNOFURB_DOM"
+  take_lock
+  guard_unmounted ro
+  _dir=${1:-.}
+  [ -d "$_dir" ] || mkdir -p "$_dir" || die "cannot create $_dir"
+  _fk=$(free_kb_of "$_dir")
+  [ $((_fk * 1024)) -ge $((DOMBYTES + MIB)) ] || die "not enough free space in $_dir for $(human "$DOMBYTES")"
+  mkwork 1048576
+  _name=synofurb-dom-backup-$(date +%Y%m%d-%H%M%S).img
+  _dir=$(cd "$_dir" && pwd)
+  write_backup_file "$_dir/$_name"
+  msg "$_dir/$_name"
+}
+
+cmd_restore() {
+  [ $# -eq 1 ] || die "usage: restore FILE"
+  A_IMG=$1
+  need_root
+  [ "$YES" = 1 ] || die "restore overwrites the whole DOM: pass --yes to confirm"
+  [ -f "$A_IMG" ] || die "$A_IMG: no such file"
+  safe_path "$A_IMG" || die "image path contains unsafe characters (allowed: A-Z a-z 0-9 / . _ + -)"
+  RESOLVE_LENIENT=1
+  resolve_dom
+  [ -n "$DOM" ] || die "restore needs the whole device: set SYNOFURB_DOM"
+  take_lock
+  guard_unmounted rw
+  R_ISZ=$(devsize "$A_IMG")
+  [ "$R_ISZ" = "$DOMBYTES" ] || die "image size ($R_ISZ bytes) differs from the DOM size ($DOMBYTES bytes); refusing"
+  # the image itself must look like a Synology DOM (partition table + magics)
+  R_DOM=$DOM
+  R_BYTES=$DOMBYTES
+  mkwork $((R_BYTES + 16 * MIB))
+  probe_dom "$A_IMG" || die "image is not a valid Synology DOM image: $PROBE_ERR"
+  DOM=$R_DOM
+  DOMBYTES=$R_BYTES
+  info "  image has a partition table, FAT id $FAT_VOLID and ext UUID $EXT_UUID"
+  if [ -f "$A_IMG.sha256" ]; then
+    read -r R_WANT _ < "$A_IMG.sha256"
+    R_HAVE=$(sha_file "$A_IMG")
+    [ "$R_WANT" = "$R_HAVE" ] || die "sha256 of $A_IMG does not match $A_IMG.sha256"
+    info "  sha256 sidecar matches"
+  else
+    warn "no $A_IMG.sha256 sidecar: checksum not verified beforehand"
+  fi
+  R_SEC=$((DOMBYTES / SECT))
+  info "Snapshotting the current DOM for automatic rollback ..."
+  part_to_file "$DOM" 0 "$R_SEC" "$W/dom.orig" || die "cannot snapshot the DOM: $(cat "$W/dd.err")"
+  R_OH=$(sha_file "$W/dom.orig")
+  R_NH=$(sha_file "$A_IMG")
+  [ "$(part_hash "$DOM" 0 "$R_SEC")" = "$R_OH" ] || die "the DOM changed while reading it; nothing written"
+  P1DEV=$DOM
+  P2DEV=$DOM
+  P1OFF=0
+  P2OFF=0
+  P1SEC=$R_SEC
+  P2SEC=$R_SEC
+  P1BYTES=$DOMBYTES
+  P2BYTES=$DOMBYTES
+  H1=$R_OH
+  H2=$R_OH
+  printf 'DOM %s 0 %s %s %s %s %s\n' "$DOM" "$R_SEC" "$W/dom.orig" "$A_IMG" "$R_OH" "$R_NH" > "$W/units"
+  if [ "$DRYRUN" = 1 ]; then
+    msg "Dry run: image validated, nothing written."
+    return 0
+  fi
+  ensure_first_backup
+  commit_units
+  if [ -b "$DOM" ] && command -v blockdev >/dev/null 2>&1; then
+    blockdev --rereadpt "$DOM" 2>/dev/null || true
+  fi
+  msg "Restored $A_IMG to $DOM and verified by read-back."
+}
+
+cmd_install_agent() {
+  [ $# -eq 2 ] || die "usage: install-agent KERNEL INITRD [--cmdline STR] [--arm]"
+  A_KERNEL=$1
+  A_INITRD=$2
+  [ -f "$A_KERNEL" ] && [ -s "$A_KERNEL" ] || die "$A_KERNEL: not a readable non-empty file"
+  [ -f "$A_INITRD" ] && [ -s "$A_INITRD" ] || die "$A_INITRD: not a readable non-empty file"
+  if [ "$CMDLINE_SET" = 1 ]; then
+    valid_cmdline "$CMDLINE" || die "--cmdline contains characters that are not allowed (control chars, ; { } backtick)"
+  fi
+  WRITE_ORDER="p2 p1"
+  txn_open rw
+  D_OUR=${M2:?}/$OURDIR
+  mkdir -p "$D_OUR" || die "cannot create /$OURDIR on partition 2"
+  A_KS=$(wc -c < "$A_KERNEL")
+  A_IS=$(wc -c < "$A_INITRD")
+  # replaced files give their space back first
+  if [ -f "$D_OUR/agent.vmlinuz" ] && ! cmp -s "$A_KERNEL" "$D_OUR/agent.vmlinuz"; then
+    rm -f "${D_OUR:?}/agent.vmlinuz"
+    P2_CHANGED=1
+  fi
+  if [ -f "$D_OUR/agent.initrd" ] && ! cmp -s "$A_INITRD" "$D_OUR/agent.initrd"; then
+    rm -f "${D_OUR:?}/agent.initrd"
+    P2_CHANGED=1
+  fi
+  A_NEED=0
+  [ -f "$D_OUR/agent.vmlinuz" ] || A_NEED=$((A_NEED + A_KS))
+  [ -f "$D_OUR/agent.initrd" ] || A_NEED=$((A_NEED + A_IS))
+  if [ "$A_NEED" -gt 0 ]; then
+    A_FREE=$(free_bytes "$M2")
+    if [ "$A_FREE" -lt $((A_NEED + MIB)) ]; then
+      die "not enough space on partition 2: need $(human $((A_NEED + MIB))) (files + 1 MiB), have $(human "$A_FREE"). Nothing was written."
+    fi
+  fi
+  put_file "$A_KERNEL" "$D_OUR/agent.vmlinuz" && note_change "agent kernel /$OURDIR/agent.vmlinuz ($(human "$A_KS"))"
+  put_file "$A_INITRD" "$D_OUR/agent.initrd" && note_change "agent initrd /$OURDIR/agent.initrd ($(human "$A_IS"))"
+  if [ "$CMDLINE_SET" = 1 ]; then
+    A_CL=$CMDLINE
+  else
+    A_CL=$(entry_cmdline "$W/blk/ent.SYNOFURB_BOOT")
+  fi
+  gen_entry SYNOFURB_BOOT agent.vmlinuz agent.initrd "$A_CL" > "$W/blk/ent.SYNOFURB_BOOT.new"
+  if ! cmp -s "$W/blk/ent.SYNOFURB_BOOT.new" "$W/blk/ent.SYNOFURB_BOOT" 2>/dev/null; then
+    note_change "menu entry SYNOFURB_BOOT"
+  fi
+  mv "$W/blk/ent.SYNOFURB_BOOT.new" "$W/blk/ent.SYNOFURB_BOOT"
+  manifest_update
+  A_WANT=
+  if [ "$ARM" = 1 ]; then
+    A_WANT=SYNOFURB_BOOT
+  fi
+  conf_apply "$A_WANT"
+  txn_commit
+}
+
+# put_file SRC DST : copy unless identical; returns 0 when it copied
+put_file() {
+  if [ -f "$2" ] && cmp -s "$1" "$2"; then
+    return 1
+  fi
+  cp "$1" "$2" || die "copy to partition 2 failed (out of space?): $2"
+  cmp -s "$1" "$2" || die "copy verification failed: $2"
+  P2_CHANGED=1
+  return 0
+}
+
+cmd_install_debian() {
+  [ $# -eq 2 ] || die "usage: install-debian KERNEL INITRD --cmdline STR"
+  A_KERNEL=$1
+  A_INITRD=$2
+  [ -f "$A_KERNEL" ] && [ -s "$A_KERNEL" ] || die "$A_KERNEL: not a readable non-empty file"
+  [ -f "$A_INITRD" ] && [ -s "$A_INITRD" ] || die "$A_INITRD: not a readable non-empty file"
+  [ "$CMDLINE_SET" = 1 ] || die "install-debian needs --cmdline STR"
+  valid_cmdline "$CMDLINE" || die "--cmdline contains characters that are not allowed (control chars, ; { } backtick)"
+  WRITE_ORDER="p2 p1"
+  txn_open rw
+  D_OUR=${M2:?}/$OURDIR
+  mkdir -p "$D_OUR" || die "cannot create /$OURDIR on partition 2"
+  A_KS=$(wc -c < "$A_KERNEL")
+  A_IS=$(wc -c < "$A_INITRD")
+  A_NEWSZ=$((A_KS + A_IS))
+  A_NEED=$((A_NEWSZ + MIB))
+  D_PREVCL=$(entry_cmdline "$W/blk/ent.DEBIAN")
+  D_SAME=0
+  if [ -f "$D_OUR/vmlinuz" ] && [ -f "$D_OUR/initrd.img" ] && cmp -s "$A_KERNEL" "$D_OUR/vmlinuz" && cmp -s "$A_INITRD" "$D_OUR/initrd.img"; then
+    D_SAME=1
+  fi
+  if [ "$D_SAME" = 0 ]; then
+    if [ -f "$D_OUR/vmlinuz" ] && [ -f "$D_OUR/initrd.img" ]; then
+      # rotate: the previous kernel becomes the fallback
+      rm -f "${D_OUR:?}/vmlinuz.old" "${D_OUR:?}/initrd.img.old"
+      mv "$D_OUR/vmlinuz" "$D_OUR/vmlinuz.old"
+      mv "$D_OUR/initrd.img" "$D_OUR/initrd.img.old"
+      printf '%s\n' "$D_PREVCL" > "$W/old.cl"
+      OLD_CL_VALID=1
+      note_change "previous Debian kernel kept as fallback (vmlinuz.old / initrd.img.old)"
+    else
+      rm -f "${D_OUR:?}/vmlinuz" "${D_OUR:?}/initrd.img"
+    fi
+    A_FREE=$(free_bytes "$M2")
+    if [ "$A_FREE" -lt "$A_NEED" ] && { [ -f "$D_OUR/vmlinuz.old" ] || [ -f "$D_OUR/initrd.img.old" ]; }; then
+      warn "only $(human "$A_FREE") free, need $(human "$A_NEED"): deleting the .old fallback files first"
+      rm -f "${D_OUR:?}/vmlinuz.old" "${D_OUR:?}/initrd.img.old"
+      OLD_CL_VALID=0
+      note_change "fallback kernel (.old files) deleted to make room"
+      A_FREE=$(free_bytes "$M2")
+    fi
+    if [ "$A_FREE" -lt "$A_NEED" ]; then
+      die "not enough space on partition 2: need $(human "$A_NEED") (new kernel+initrd $(human "$A_NEWSZ") + 1 MiB), have $(human "$A_FREE") even after dropping .old files. Nothing was written; DSM files untouched."
+    fi
+    put_file "$A_KERNEL" "$D_OUR/vmlinuz" || true
+    put_file "$A_INITRD" "$D_OUR/initrd.img" || true
+    P2_CHANGED=1
+    note_change "Debian kernel /$OURDIR/vmlinuz ($(human "$A_KS")), initrd /$OURDIR/initrd.img ($(human "$A_IS"))"
+  fi
+  gen_entry DEBIAN vmlinuz initrd.img "$CMDLINE" > "$W/blk/ent.DEBIAN.new"
+  if ! cmp -s "$W/blk/ent.DEBIAN.new" "$W/blk/ent.DEBIAN" 2>/dev/null; then
+    note_change "menu entry DEBIAN"
+  fi
+  mv "$W/blk/ent.DEBIAN.new" "$W/blk/ent.DEBIAN"
+  if [ -f "$D_OUR/vmlinuz.old" ] && [ -f "$D_OUR/initrd.img.old" ]; then
+    if [ "$OLD_CL_VALID" = 1 ]; then
+      D_OCL=$(cat "$W/old.cl")
+    elif [ -f "$W/blk/ent.DEBIAN_OLD" ]; then
+      D_OCL=$(entry_cmdline "$W/blk/ent.DEBIAN_OLD")
+    else
+      D_OCL=$CMDLINE
+    fi
+    gen_entry DEBIAN_OLD vmlinuz.old initrd.img.old "$D_OCL" > "$W/blk/ent.DEBIAN_OLD.new"
+    if ! cmp -s "$W/blk/ent.DEBIAN_OLD.new" "$W/blk/ent.DEBIAN_OLD" 2>/dev/null; then
+      note_change "menu entry DEBIAN_OLD"
+    fi
+    mv "$W/blk/ent.DEBIAN_OLD.new" "$W/blk/ent.DEBIAN_OLD"
+  else
+    if [ -f "$W/blk/ent.DEBIAN_OLD" ]; then
+      note_change "menu entry DEBIAN_OLD removed (no fallback files)"
+    fi
+    rm -f "${W:?}/blk/ent.DEBIAN_OLD"
+  fi
+  manifest_update
+  conf_apply ""
+  txn_commit
+}
+
+cmd_install_efi() {
+  [ $# -eq 2 ] || die "usage: install-efi NAME FILE.efi"
+  A_NAME=$1
+  A_EFI=$2
+  valid_name "$A_NAME" || die "NAME must be 1-32 characters of A-Z a-z 0-9 _ -"
+  [ -f "$A_EFI" ] && [ -s "$A_EFI" ] || die "$A_EFI: not a readable non-empty file"
+  [ "$(hexat "$A_EFI" 0 2)" = 4d5a ] || die "$A_EFI does not look like an EFI application (no MZ header)"
+  WRITE_ORDER="p1 p2"
+  txn_open rw
+  E_TGT=$EFI_DIR/$A_NAME.efi
+  E_SZ=$(wc -c < "$A_EFI")
+  fat_mkdir_p "$EFI_DIR" || die "cannot create $EFI_DIR on the FAT partition"
+  fat_cat "$E_TGT" > "$W/efi.cur" 2>/dev/null
+  if [ -s "$W/efi.cur" ] && cmp -s "$W/efi.cur" "$A_EFI"; then
+    :
+  else
+    E_FREE=$(fat_free)
+    E_OLD=0
+    [ -s "$W/efi.cur" ] && E_OLD=$(wc -c < "$W/efi.cur")
+    E_FREE=$((E_FREE + E_OLD))
+    if [ "$E_FREE" -lt $((E_SZ + MIB)) ]; then
+      die "not enough space on partition 1: need $(human $((E_SZ + MIB))), have $(human "$E_FREE"). Nothing written."
+    fi
+    fat_put "$A_EFI" "$E_TGT" || die "cannot copy $A_EFI into the FAT copy"
+    fat_cat "$E_TGT" | cmp -s - "$A_EFI" || die "EFI copy verification failed"
+    P1_CHANGED=1
+    note_change "EFI application /$E_TGT ($(human "$E_SZ"))"
+  fi
+  gen_efi_entry "$A_NAME" > "$W/blk/ent.EFI_$A_NAME.new"
+  if ! cmp -s "$W/blk/ent.EFI_$A_NAME.new" "$W/blk/ent.EFI_$A_NAME" 2>/dev/null; then
+    note_change "menu entry EFI_$A_NAME (UNVERIFIED: only meaningful if the unit boots in UEFI mode)"
+  fi
+  mv "$W/blk/ent.EFI_$A_NAME.new" "$W/blk/ent.EFI_$A_NAME"
+  conf_apply ""
+  txn_commit
+}
+
+cmd_default() {
+  [ $# -eq 1 ] || die "usage: default dsm|agent|debian|debian-old|efi:NAME"
+  case $1 in
+    dsm) A_TARGET=$DSM_ENTRY ;;
+    agent) A_TARGET=SYNOFURB_BOOT ;;
+    debian) A_TARGET=DEBIAN ;;
+    debian-old) A_TARGET=DEBIAN_OLD ;;
+    efi:*)
+      valid_name "${1#efi:}" || die "invalid EFI name"
+      A_TARGET=EFI_${1#efi:}
+      ;;
+    *) die "unknown target '$1' (dsm|agent|debian|debian-old|efi:NAME)" ;;
+  esac
+  WRITE_ORDER="p1 p2"
+  txn_open rw
+  [ -n "$(entry_index "$W/entries.orig" "$A_TARGET")" ] || die "menu entry $A_TARGET does not exist; nothing to select"
+  if [ -f "$W/blk/ent.$A_TARGET" ]; then
+    ent_refs "$W/blk/ent.$A_TARGET" > "$W/target.refs"
+    while read -r T_PART T_PATH; do
+      if [ "$T_PART" = 2 ]; then
+        [ -s "$M2$T_PATH" ] || die "entry $A_TARGET references $T_PATH which is missing on partition 2; refusing to make it the default"
+      else
+        fat_exists "${T_PATH#/}" || die "entry $A_TARGET references $T_PATH which is missing on partition 1; refusing to make it the default"
+      fi
+    done < "$W/target.refs"
+  fi
+  conf_apply "$A_TARGET"
+  txn_commit
+}
+
+cmd_remove() {
+  WRITE_ORDER="p1 p2"
+  txn_open rw
+  if awk -F'\t' '$3 == 1 { f = 1 } END { exit !f }' "$W/entries.orig"; then
+    note_change "synofurb block removed from $CONF_REL"
+  fi
+  rm -f "${W:?}"/blk/ent.*
+  D_OUR=${M2:?}/$OURDIR
+  if [ -d "$D_OUR" ]; then
+    for R_F in $OURFILES MANIFEST; do
+      if [ -e "$D_OUR/$R_F" ]; then
+        rm -f "${D_OUR:?}/${R_F:?}"
+        P2_CHANGED=1
+        note_change "removed /$OURDIR/$R_F"
+      fi
+    done
+    if rmdir "$D_OUR" 2>/dev/null; then
+      P2_CHANGED=1
+    else
+      warn "/$OURDIR still contains files that are not ours; directory left in place"
+    fi
+  fi
+  if fat_exists "$EFI_DIR"; then
+    for R_E in $(fat_ls "$EFI_DIR"); do
+      case $R_E in
+        . | ..) continue ;;
+      esac
+      fat_rm "$EFI_DIR/$R_E"
+      P1_CHANGED=1
+      note_change "removed EFI application $EFI_DIR/$R_E"
+    done
+    fat_rmdir "$EFI_DIR"
+  fi
+  conf_apply "@dsm"
+  [ -s "$M2/zImage" ] && [ -s "$M2/rd.gz" ] || die "DSM files missing after removal (internal error); nothing written"
+  txn_commit
+}
+
+cmd_verify() {
+  txn_open ro
+  CHECK_QUIET=0
+  msg "Checking the DOM (read-only, on temporary copies):"
+  check_state
+  _rc=$?
+  if [ "$FSCK_BAD" = 1 ]; then
+    _rc=1
+    CHECK_FAILS=$((CHECK_FAILS + 1))
+    printf '  FAIL  fsck reported problems in the copies (see above)\n'
+  fi
+  if [ "$_rc" -eq 0 ]; then
+    msg "verify: all checks passed"
+    return 0
+  fi
+  err "verify: $CHECK_FAILS check(s) failed"
+  return 1
+}
+
+# ------------------------------------------------------------------- main
+
+main() {
+  _n=$#
+  while [ "$_n" -gt 0 ]; do
+    _a=$1
+    shift
+    _n=$((_n - 1))
+    case $_a in
+      -y | --yes) YES=1 ;;
+      --json) JSON=1 ;;
+      --dry-run) DRYRUN=1 ;;
+      --ignore-fsck) IGNORE_FSCK=1 ;;
+      --skip-auto-backup) SKIP_AUTOBACKUP=1 ;;
+      --arm) ARM=1 ;;
+      --cmdline)
+        [ "$_n" -gt 0 ] || die "--cmdline needs a value"
+        CMDLINE=$1
+        CMDLINE_SET=1
+        shift
+        _n=$((_n - 1))
+        ;;
+      --cmdline=*) CMDLINE=${_a#--cmdline=}; CMDLINE_SET=1 ;;
+      -h | --help) usage; exit 0 ;;
+      -V | --version) printf '%s %s\n' "$PROG" "$VERSION"; exit 0 ;;
+      --) ;;
+      -*) usage >&2; die "unknown option $_a" ;;
+      *) set -- "$@" "$_a" ;;
+    esac
+  done
+  [ $# -ge 1 ] || { usage >&2; exit 2; }
+  _cmd=$1
+  shift
+
+  trap cleanup EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 141' PIPE
+  umask 022
+
+  case $_cmd in
+    status) cmd_status ;;
+    backup) cmd_backup "$@" ;;
+    restore) cmd_restore "$@" ;;
+    install-agent) cmd_install_agent "$@" ;;
+    install-debian) cmd_install_debian "$@" ;;
+    install-efi) cmd_install_efi "$@" ;;
+    default) cmd_default "$@" ;;
+    remove) cmd_remove "$@" ;;
+    verify) cmd_verify "$@" ;;
+    help) usage ;;
+    *) usage >&2; die "unknown command '$_cmd'" ;;
+  esac
+}
+
+main "$@"

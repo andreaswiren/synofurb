@@ -44,6 +44,8 @@ pub const ANNA_PACKAGES: &[&str] = &[
     "scsi-modules",
     "sata-modules",
     "crc-modules",
+    "usb-storage-modules",
+    "usb-modules",
 ];
 
 const PREAMBLE: &str = r#"#!/bin/sh
@@ -83,10 +85,28 @@ diag() {
   } >> "$LOG" 2>&1
 }
 
+PONR=0
+DOM_BOOT=@@DOM@@
 fail() {
   emit "ERROR $*"
   emit "@@FAIL $*"
   diag
+  if [ "$DOM_BOOT" = 1 ] && command -v synofurb-dom >/dev/null 2>&1; then
+    # FAIL-SAFE: this unit boots from its internal flash. Point the default back at DSM and reboot, so a
+    # failed or abandoned install never leaves the NAS unreachable.
+    emit "FALLBACK: switching the boot flash default back to DSM"
+    [ "$DRY" = 1 ] || synofurb-dom default dsm --yes >> "$LOG" 2>&1 || emit "WARN  could not reset the default boot entry; power-cycle the NAS and pick DSM"
+    if [ "$PONR" = 0 ]; then
+      emit "No disk was changed. The NAS reboots into DSM in 60 seconds. Full log: $LOG"
+      _w=60
+    else
+      emit "Disks were already modified. The NAS reboots in 15 minutes into the DSM loader (recovery / reinstall DSM keeps data volumes). Full log: $LOG"
+      _w=900
+    fi
+    [ "$DRY" = 1 ] && exit 1
+    sleep "$_w"
+    reboot -f 2>/dev/null || reboot
+  fi
   emit "Installation HALTED. No further changes will be made. Full log: $LOG"
   sleep 5
   while :; do sleep 3600; done
@@ -240,6 +260,7 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
         &PREAMBLE
             .replace("@@TOTAL@@", &TOTAL_STEPS.to_string())
             .replace("@@DRY@@", if p.dry_run { "1" } else { "0" })
+            .replace("@@DOM@@", if plan.dom_boot { "1" } else { "0" })
             .replace("@@DISK_SERIAL_FN@@", DISK_SERIAL_FN),
     );
     let w = &mut s;
@@ -312,6 +333,7 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     // -- 3. point of no return ----------------------------------------------
     writeln!(w, "\nstep 3 \"POINT OF NO RETURN: releasing existing RAID/LVM and wiping reclaimed areas\"")?;
     writeln!(w, "emit \"@@POINT_OF_NO_RETURN\"")?;
+    writeln!(w, "PONR=1")?;
     for d in &plan.destroyed {
         writeln!(w, "log {}", sh_quote(&format!("DESTROYING: {d}")))?;
     }
@@ -552,6 +574,10 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
 
     // -- 12. finalize ------------------------------------------------------------------------------------------
     writeln!(w, "\nstep 12 \"Finishing: saving logs, unmounting, rebooting\"")?;
+    if plan.dom_boot {
+        writeln!(w, "log \"making Debian the default entry of the boot flash (DSM stays selectable)\"")?;
+        writeln!(w, "run synofurb-dom default debian --yes")?;
+    }
     writeln!(w, "run mkdir -p /target/var/log/synofurb")?;
     writeln!(w, "try cp \"$LOG\" /target/var/log/synofurb/install.log")?;
     writeln!(w, "try cp /tmp/synofurb-stage2.sh /target/var/log/synofurb/stage2.sh")?;
@@ -720,6 +746,40 @@ mod tests {
         assert!(text.contains("dry=1") && text.contains("@@DONE"), "{text}");
     }
 
+    fn dom_amd_facts() -> DeviceFacts {
+        let mut s = fixtures::ds_4bay();
+        s = s
+            .replace("KV|unique|synology_apollolake_918+", "KV|unique|synology_v1000_1621+")
+            .replace("KV|model|DS918+", "KV|model|DS1621+");
+        s = s
+            .replace("KV|uefi|0\n", "KV|uefi|1\nKV|cpu_vendor|AuthenticAMD\n")
+            .replace("NIC|eth0", "DOM|262144|65536|196608|1|1\nNIC|eth0");
+        parse_inspect(&s).unwrap()
+    }
+
+    #[test]
+    fn dom_unit_has_no_boot_partitions_a_failsafe_and_switches_default_last() {
+        let facts = dom_amd_facts();
+        let plan = build_plan(&facts, &PlanRequest::default());
+        assert!(plan.is_ok(), "{:?}", plan.errors);
+        assert!(plan.dom_boot && plan.boot.is_none() && plan.esp.is_none());
+        let roles: Vec<PartRole> = plan.disks[0].create.iter().map(|c| c.role).collect();
+        assert!(!roles.iter().any(|r| matches!(r, PartRole::Boot | PartRole::Esp | PartRole::BiosGrub)), "{roles:?}");
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let s = render_stage2(&params(&plan, &facts, &cfg)).unwrap();
+        sh_syntax_ok(&s);
+        assert!(s.contains("DOM_BOOT=1") && s.contains("synofurb-dom default dsm --yes"));
+        let ponr = s.find("PONR=1").unwrap();
+        let fallback = s.find("FALLBACK").unwrap();
+        assert!(fallback < ponr, "the fallback handler is defined before the point of no return");
+        let default_debian = s.find("run synofurb-dom default debian --yes").unwrap();
+        assert!(
+            s.find("run chroot /target").unwrap() < default_debian && default_debian < s.rfind("reboot -f").unwrap(),
+            "default switches only after a successful configuration"
+        );
+        assert!(!render(StorageMode::WipeAll).0.contains("synofurb-dom default debian"), "non-DOM units are untouched");
+    }
+
     #[test]
     fn uboot_commands_are_printed_before_the_reboot() {
         let mut facts = parse_inspect(&fixtures::ds_4bay()).unwrap();
@@ -733,7 +793,7 @@ mod tests {
         let s = render_stage2(&params(&plan, &facts, &cfg)).unwrap();
         let chroot = s.find("run chroot /target").unwrap();
         let recipe = s.find("uboot-env|").unwrap();
-        let reboot = s.find("reboot -f").unwrap();
+        let reboot = s.rfind("reboot -f").unwrap();
         assert!(chroot < recipe && recipe < reboot, "recipe must be printed after configuration and before the reboot");
         let (_, x86_plan) = render(StorageMode::WipeAll);
         assert!(x86_plan.raw_boot.is_none());

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Discovery beacon: every 5 s one UDP broadcast per IPv4-configured port:
+#     synofurb-agent <hostname> <mac> <ip>
+# to 255.255.255.255:AGENT_BEACON_PORT (default 9988). busybox nc has no UDP, hence nc.traditional (-b = SO_BROADCAST).
+. /usr/lib/synofurb/lib.sh
+load_conf
+while :; do
+    host=$(hostname)
+    for i in $(eth_ifaces); do
+        ip=$(ip4_of "$i")
+        [ -n "$ip" ] || continue
+        printf 'synofurb-agent %s %s %s\n' "$host" "$(mac_of "$i")" "$ip" \
+            | timeout 3 nc.traditional -b -u -w1 -s "$ip" 255.255.255.255 "$AGENT_BEACON_PORT" >/dev/null 2>&1
+    done
+    sleep 5
+done

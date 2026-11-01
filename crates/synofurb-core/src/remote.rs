@@ -26,6 +26,8 @@ impl ExecResult {
 pub trait RemoteShell {
     /// Run a command; optional stdin is written then closed.
     fn exec(&mut self, cmd: &str, stdin: Option<&[u8]>) -> Result<ExecResult>;
+    /// Run a command and stream its raw stdout (binary safe) into `out`; returns (exit code, stderr).
+    fn exec_to(&mut self, cmd: &str, stdin: Option<&[u8]>, out: &mut dyn std::io::Write) -> Result<(u32, String)>;
     /// Stream `size` bytes to `remote_path` (mode applied afterwards).
     fn upload(&mut self, remote_path: &str, data: &mut dyn Read, size: u64, mode: u32, progress: &mut dyn FnMut(u64)) -> Result<()>;
     fn host_key_fingerprint(&self) -> Option<String>;
@@ -156,6 +158,30 @@ impl RemoteShell for SshSession {
         Ok(res)
     }
 
+    fn exec_to(&mut self, cmd: &str, stdin: Option<&[u8]>, out: &mut dyn std::io::Write) -> Result<(u32, String)> {
+        self.log.log(Level::Debug, Source::Remote, &format!("$ {} (binary stream)", cmd.lines().next().unwrap_or("")));
+        let (code, err) = self.rt.block_on(async {
+            let mut ch = self.handle.channel_open_session().await?;
+            ch.exec(true, cmd).await?;
+            if let Some(data) = stdin {
+                ch.data(data).await?;
+            }
+            ch.eof().await?;
+            let (mut err, mut code) = (Vec::new(), None);
+            while let Some(msg) = ch.wait().await {
+                match msg {
+                    ChannelMsg::Data { data } => out.write_all(&data)?,
+                    ChannelMsg::ExtendedData { data, .. } => err.extend_from_slice(&data),
+                    ChannelMsg::ExitStatus { exit_status } => code = Some(exit_status),
+                    _ => {}
+                }
+            }
+            Ok::<_, anyhow::Error>((code.unwrap_or(255), String::from_utf8_lossy(&err).to_string()))
+        })?;
+        out.flush()?;
+        Ok((code, err))
+    }
+
     fn upload(&mut self, remote_path: &str, data: &mut dyn Read, size: u64, mode: u32, progress: &mut dyn FnMut(u64)) -> Result<()> {
         if remote_path.contains(['\'', '\n']) {
             bail!("unsafe remote path");
@@ -219,6 +245,16 @@ impl Privileged<'_> {
         r
     }
 
+    /// Like [`run`](Self::run) but streams binary stdout into `out`.
+    pub fn run_to(&mut self, cmd: &str, out: &mut dyn std::io::Write) -> Result<(u32, String)> {
+        if self.is_root {
+            return self.sh.exec_to(cmd, None, out);
+        }
+        let pw = self.sudo_password.clone().ok_or_else(|| anyhow!("not root and no sudo password available"))?;
+        let wrapped = format!("sudo -S -p '' /bin/sh -c {}", crate::config::sh_quote(cmd));
+        self.sh.exec_to(&wrapped, Some(format!("{pw}\n").as_bytes()), out)
+    }
+
     /// Run one command line as root.
     pub fn run(&mut self, cmd: &str) -> Result<ExecResult> {
         if self.is_root {
@@ -255,6 +291,13 @@ pub mod mock {
             self.commands.push(cmd.to_string());
             self.stdins.push(stdin.map(|s| s.to_vec()));
             Ok(self.results.pop_front().unwrap_or(ExecResult { code: 0, stdout: String::new(), stderr: String::new() }))
+        }
+        fn exec_to(&mut self, cmd: &str, stdin: Option<&[u8]>, out: &mut dyn std::io::Write) -> Result<(u32, String)> {
+            self.commands.push(cmd.to_string());
+            self.stdins.push(stdin.map(|s| s.to_vec()));
+            let r = self.results.pop_front().unwrap_or(ExecResult { code: 0, stdout: String::new(), stderr: String::new() });
+            out.write_all(r.stdout.as_bytes())?;
+            Ok((r.code, r.stderr))
         }
         fn upload(&mut self, p: &str, d: &mut dyn Read, _size: u64, mode: u32, progress: &mut dyn FnMut(u64)) -> Result<()> {
             let mut v = vec![];

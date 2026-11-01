@@ -198,7 +198,7 @@ pub fn render_kit_readme(p: &KitParams) -> String {
         ip = p.desktop_ip
     );
     match f.firmware {
-        Firmware::Bios | Firmware::Uefi => {
+        Firmware::Bios | Firmware::Uefi | Firmware::Dom => {
             s.push_str(&format!(
                 "x86 / UEFI boot options\n-----------------------\n\
                  A) GRUB (USB stick with GRUB, or any existing GRUB menu):\n\n\

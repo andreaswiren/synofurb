@@ -251,6 +251,9 @@ pub struct Plan {
     pub boot: Option<BlockRef>,
     pub esp: Option<BlockRef>,
     pub raw_boot: Option<RawBoot>,
+    /// Debian boots through an entry on the unit's internal boot flash (DOM), see `boot/dom`.
+    #[serde(default)]
+    pub dom_boot: bool,
     pub preserved: Vec<Preserved>,
     /// Names of the preserved md arrays (DSM names, e.g. `md2`).
     pub kept_arrays: Vec<String>,
@@ -363,7 +366,8 @@ fn fw_overhead_mib(fw: Firmware) -> u64 {
         Firmware::Bios => BIOS_GRUB_MIB + BOOT_MIB,
         Firmware::Uefi => ESP_MIB + BOOT_MIB,
         // The reserved raw area is handled by `layout_start`, not as overhead.
-        Firmware::UBoot => 0,
+        // DOM units keep kernel + initrd on the internal flash module, not on the disks.
+        Firmware::UBoot | Firmware::Dom => 0,
     }
 }
 
@@ -437,6 +441,7 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         boot: None,
         esp: None,
         raw_boot: None,
+        dom_boot: false,
         preserved: vec![],
         kept_arrays: vec![],
         destroyed: vec![],
@@ -612,9 +617,9 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
                     let n = add(&mut dp, ESP_MIB * SECTORS_PER_MIB, PartRole::Esp, &mut cursor);
                     esp_members.push((d.name.clone(), n));
                 }
-                Firmware::UBoot => {}
+                Firmware::UBoot | Firmware::Dom => {}
             }
-            if fw != Firmware::UBoot {
+            if !matches!(fw, Firmware::UBoot | Firmware::Dom) {
                 let n = add(&mut dp, BOOT_MIB * SECTORS_PER_MIB, PartRole::Boot, &mut cursor);
                 boot_members.push((d.name.clone(), n));
             }
@@ -649,7 +654,9 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         let r = mdref(&esp_members, "esp", "1", "1.0", &mut plan);
         plan.esp = Some(r);
     }
-    if fw == Firmware::UBoot {
+    if fw == Firmware::Dom {
+        plan.dom_boot = true;
+    } else if fw == Firmware::UBoot {
         plan.raw_boot = Some(RawBoot { kernel_mib: UBOOT_KERNEL_MIB, initrd_mib: UBOOT_INITRD_MIB, reserved_mib: UBOOT_RESERVED_MIB });
     } else {
         plan.boot = Some(mdref(&boot_members, "boot", "1", "1.0", &mut plan));
@@ -931,6 +938,9 @@ impl Plan {
                 if matches!(self.esp, Some(BlockRef::Md(_))) { "mirrored ESP + " } else { "ESP + " },
                 if matches!(self.boot, Some(BlockRef::Md(_))) { "on md RAID1" } else { "on a plain partition" }
             )),
+            Firmware::Dom => v.push(
+                "Boot: Debian gets its own entry in the unit's internal boot flash (DOM); DSM's entry stays and is the fail-safe default for every failed or cancelled step".into(),
+            ),
             Firmware::UBoot => v.push(format!(
                 "Boot: U-Boot raw sectors (kernel @ {} MiB, initrd @ {} MiB, first {} MiB reserved) on every system disk - needs a serial console to point U-Boot at the disk",
                 UBOOT_KERNEL_MIB, UBOOT_INITRD_MIB, UBOOT_RESERVED_MIB
@@ -1211,6 +1221,22 @@ mod tests {
         let k = build_plan(&f, &PlanRequest { mode: StorageMode::KeepVolumes, ..Default::default() });
         assert!(k.preserved.iter().any(|d| d.what == "DSM volumes" && d.detail.contains("/volume1")));
         assert!(!k.destroyed.iter().any(|d| d.contains("/volume1")));
+    }
+
+    #[test]
+    fn amd_dom_unit_plan_and_summary() {
+        let mut raw = fixtures::ds_4bay();
+        raw = raw
+            .replace("KV|uefi|0\n", "KV|uefi|1\nKV|cpu_vendor|AuthenticAMD\n")
+            .replace("NIC|eth0", "DOM|262144|65536|196608|1|1\nNIC|eth0");
+        let f = parse_inspect(&raw).unwrap();
+        assert_eq!((f.firmware, f.cpu_vendor), (Firmware::Dom, CpuVendor::Amd));
+        let p = build_plan(&f, &PlanRequest { mode: StorageMode::KeepVolumes, ..Default::default() });
+        assert!(p.is_ok(), "{:?}", p.errors);
+        // no boot partitions at all: the whole reclaimed area is available for the system PV
+        assert!(p.sizes.max_system_mib > 9 * 1024, "{}", p.sizes.max_system_mib);
+        assert!(p.summary().iter().any(|l| l.contains("boot flash")));
+        p.validate(&f).unwrap();
     }
 
     #[test]

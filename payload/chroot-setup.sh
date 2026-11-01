@@ -41,6 +41,17 @@ Suites: $SUITE-security
 Components: main contrib non-free-firmware
 Signed-By: $KR
 EOF
+if [ "$KERNEL_CHANNEL" = newest ]; then
+  say "enabling $SUITE-backports for the newest kernel"
+  cat >> /etc/apt/sources.list.d/debian.sources <<EOF
+
+Types: deb
+URIs: http://$MIRROR_HOST$MIRROR_DIR
+Suites: $SUITE-backports
+Components: main contrib non-free-firmware
+Signed-By: $KR
+EOF
+fi
 apt-get update
 apt_install debian-archive-keyring tzdata
 ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
@@ -79,6 +90,34 @@ case "$ARCH" in
   armhf) KERNEL=linux-image-armmp ;;
   *) say "unsupported architecture $ARCH"; exit 1 ;;
 esac
+
+# initramfs policy BEFORE any kernel is installed. Units that boot from their internal flash (DOM) have only
+# ~20-30 MiB there, so the initramfs must be small: an explicit module list + xz instead of "most".
+mkdir -p /etc/initramfs-tools/conf.d
+if [ "$DOM_BOOT" = 1 ]; then
+  printf 'MODULES=list\nCOMPRESS=xz\n' > /etc/initramfs-tools/conf.d/synofurb-size
+else
+  printf 'MODULES=most\n' > /etc/initramfs-tools/conf.d/synofurb-size
+fi
+{
+  echo "# Managed by synofurb: early USB keyboards, SATA/NVMe/SAS disks, md RAID, device-mapper, filesystems"
+  for m in xhci_pci xhci_hcd ehci_pci ohci_pci uhci_hcd usbhid hid_generic atkbd i8042 \
+           libata ahci libahci ata_piix ata_generic sd_mod scsi_mod nvme nvme_core mpt3sas megaraid_sas \
+           raid0 raid1 raid10 raid456 md_mod dm_mod dm_mirror dm_snapshot dm_thin_pool \
+           xfs ext4 vfat crc32c_generic; do echo "$m"; done
+} >> /etc/initramfs-tools/modules
+apt_install initramfs-tools
+
+say "installing the kernel ($KERNEL_CHANNEL)"
+if [ "$KERNEL_CHANNEL" = newest ]; then
+  if ! apt-get install -y --no-install-recommends -t "$SUITE-backports" "$KERNEL"; then
+    say "WARNING: kernel from $SUITE-backports could not be installed; falling back to the stable kernel"
+    apt_install "$KERNEL"
+  fi
+else
+  apt_install "$KERNEL"
+fi
+say "kernel installed: $(find /boot -maxdepth 1 -name 'vmlinuz*' | tr '\n' ' ')"
 BOOTPKG=""
 case "$FIRMWARE" in
   Bios) BOOTPKG="grub-pc" ;;
@@ -89,13 +128,14 @@ case "$FIRMWARE" in
       armhf) BOOTPKG="grub-efi-arm efibootmgr" ;;
     esac ;;
   UBoot) BOOTPKG="u-boot-tools" ;;
+  Dom) BOOTPKG="" ;;     # kernel + initrd go to the internal boot flash, no bootloader package
 esac
 EXTRA=""
 [ "$ARCH" = armhf ] && EXTRA="haveged"      # low-entropy ARM boards can hang sshd at boot (Debian wiki)
 
 say "installing kernel, storage stack, filesystems, tools"
 # shellcheck disable=SC2086
-apt_install $KERNEL initramfs-tools $BOOTPKG \
+apt_install $BOOTPKG $MICROCODE_PKG lm-sensors \
   mdadm lvm2 xfsprogs btrfs-progs e2fsprogs dosfstools exfatprogs ntfs-3g parted gdisk \
   smartmontools nvme-cli hdparm \
   sudo openssh-server openssh-client \
@@ -107,13 +147,6 @@ apt_install $KERNEL initramfs-tools $BOOTPKG \
   $EXTRA $EXTRA_PACKAGES
 
 # --- storage config ---------------------------------------------------------------------------------
-say "initramfs: make sure USB keyboards, RAID and LVM are available early"
-{
-  echo "# Managed by synofurb"
-  for m in xhci_pci ehci_pci ohci_pci uhci_hcd usbhid hid_generic atkbd i8042 raid1 raid456 raid10 dm_mod; do echo "$m"; done
-} >> /etc/initramfs-tools/modules
-sed -i 's/^MODULES=.*/MODULES=most/' /etc/initramfs-tools/initramfs.conf
-
 # --- users --------------------------------------------------------------------------------------------
 say "creating user $USERNAME (sudo) and locking root"
 useradd -m -s /bin/bash -G sudo,adm,users,dialout "$USERNAME" 2>/dev/null || \
@@ -151,7 +184,9 @@ systemctl enable ssh || true
 
 # --- serial console, VGA console, USB input ---------------------------------------------------------------------------------
 say "serial console on $SERIAL_TTY at $SERIAL_SPEED baud + USB serial adapters, VGA console, USB keyboard/mouse"
-systemctl enable "serial-getty@$SERIAL_TTY.service" || true
+# A named port gets an explicit getty. MMIO consoles (AMD boards: uart8250,mmio32,0x...) have no fixed name:
+# systemd's getty generator starts a login on every active kernel serial console by itself.
+if [ -n "$SERIAL_TTY" ]; then systemctl enable "serial-getty@$SERIAL_TTY.service" || true; fi
 systemctl enable getty@tty1.service || true
 systemctl enable gpm || true
 cat > /etc/default/console-setup <<EOF
@@ -168,7 +203,6 @@ XKBVARIANT=""
 XKBOPTIONS=""
 BACKSPACE="guess"
 EOF
-SERIAL_ARG="console=$SERIAL_TTY,${SERIAL_SPEED}n8"
 
 # --- management plane ---------------------------------------------------------------------------------------------------------
 if [ "$ENABLE_MGMT" = 1 ]; then
@@ -227,6 +261,22 @@ case "$FIRMWARE" in
     update-grub
     # --removable puts the loader at EFI/BOOT/BOOT*.EFI on the (mirrored) ESP, which every firmware finds.
     grub-install --target="$GRUB_EFI_TARGET" --efi-directory=/boot/efi --removable --no-nvram
+    ;;
+  Dom)
+    update-initramfs -u -k all
+    install -d /etc/synofurb /etc/kernel/postinst.d /etc/initramfs/post-update.d
+    cat > /etc/synofurb/dom.conf <<EOF
+ROOT_UUID="$ROOT_UUID"
+SERIAL_ARG="$SERIAL_ARG"
+EXTRA_ARGS="ro rootdelay=5 panic=60"
+EOF
+    for hook in /etc/kernel/postinst.d/zz-synofurb-dom /etc/initramfs/post-update.d/zz-synofurb-dom; do
+      printf '#!/bin/sh\nexec /usr/local/sbin/synofurb-dom-update\n' > "$hook"
+      chmod 755 "$hook"
+    done
+    # Register kernel + initrd on the boot flash. Stage 2 switches the DEFAULT entry only after everything
+    # succeeded, so a failure here leaves the unit booting DSM.
+    /usr/local/sbin/synofurb-dom-update || { say "ERROR: could not add Debian to the boot flash"; exit 1; }
     ;;
   UBoot)
     update-initramfs -u -k all

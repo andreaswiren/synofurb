@@ -1,189 +1,139 @@
 # synofurb
 
-A desktop tool (Rust, Windows / macOS / Linux) that finds Synology NAS units on your network and reinstalls
-them with **plain Debian 13 "trixie"** on **LVM + xfs**, with software RAID (mdadm), SSH, a serial console and a
-small web management plane.
+Reinstall Synology NAS units with **plain Debian 13 "trixie"** (Linux 7.x available), on **LVM + xfs** with mdadm RAID,
+SSH, a serial console and a small web management plane. Intel, **AMD**, arm64 and ARMv7 units. A native desktop app for
+**Windows, macOS and Linux** (Rust, GPUI Kit) finds the unit, shows what will happen, and does it. For x86 units you
+need **SSH access to the NAS and nothing else**.
 
 > **Read this first.** Reinstalling a NAS repartitions its disks. **There is no guarantee that any data on the NAS
-> survives**, including volumes the tool marks as "preserved". Make a complete, verified backup somewhere else
-> before you start. The tool makes you confirm this (two checkboxes and a typed phrase) before it changes anything.
+> survives**, including volumes the tool marks as "preserved". Make a complete, verified backup somewhere else before you
+> start. The app makes you confirm this (two checkboxes and a typed phrase) before it changes anything.
 >
-> **Hardware status.** Everything here was developed and tested without a Synology unit. What *was* verified for
-> real is listed under [What is verified](#what-is-verified). The first install on your hardware is the real test:
-> have a serial console ready and keep your backup.
+> **Hardware status.** Nothing has been run on a real Synology yet. The compatibility list marks **every model
+> "Untested"** except the DS923+, which another project (synodeb) reports working with the same boot technique. See
+> [What is verified](#what-is-verified) for what *was* tested, and [docs/RECOVERY.md](docs/RECOVERY.md) for what happens when something fails.
+
+## Install the app
+
+```sh
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.sh | sh
+```
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.ps1 | iex
+```
+Both verify the SHA-256 and the minisign signature of the release. Windows also gets an MSI and an installer `.exe`, macOS a `.dmg`,
+Linux `.deb`, `.rpm`, AppImage and a portable archive, all on the [Releases](https://github.com/andreaswiren/synofurb/releases) page
+(no release exists until the owner completes the checklist at the end). More one-liners (headless conversion, the management plane on
+an existing Debian box): [docs/INSTALL.md](docs/INSTALL.md). The app updates itself from the releases (`synofurb self-update`, or the prompt in the app).
 
 ## What it does
 
-1. **Scans** the network the way Synology's own tools do (see [Discovery](#discovery)) and keeps an inventory.
-2. **Inspects** the chosen NAS over SSH, read-only (disks, partitions, md arrays, LVM, mounts, RAM, firmware, CPU).
-3. **Plans** the new storage layout and shows exactly what will be destroyed and what will be kept.
-4. **Boots the Debian installer** on the NAS (automatically with `kexec`, or from an installer kit you boot yourself).
-5. **Installs** Debian with a generated, reviewable shell script, streaming a detailed debug log back to you.
-6. **Reports** the result: addresses, logins, SSH host key fingerprint, management URL.
+1. **Finds** Synology units the way Synology's tools do (Assistant broadcast, mDNS, UPnP, the DSM web API, MAC prefixes, subnet sweep).
+2. **Looks the model up** in the repository's [compatibility list](compat/models.json) (272 models) and shows its status.
+3. **Inspects** the unit over SSH, read-only: disks, RAID, LVM, volumes, RAM, CPU vendor, firmware, boot flash, serial console.
+4. **Plans** the layout and lists exactly what will be destroyed and what is kept.
+5. **Backs up** what can be backed up first: the unit's boot flash and the partition tables of every disk it will touch.
+6. **Boots the installer**, installs, streams a detailed debug log, then shows the logins.
+
+You can also stop after the boot-flash step in **boot manager mode**: an SSH-controlled boot environment on the unit lets you netboot and try
+other Linux systems by hand, while DSM stays one reboot away ([docs/BOOT.md](docs/BOOT.md)).
 
 ```
-synofurb gui                 # wizard (default); `synofurb gui --demo` shows it with a built-in sample NAS
-synofurb scan                # discovery only
-synofurb plan    --host 192.168.1.20 --user admin      # read-only: show the plan
-synofurb install --host ... --mode keep ...            # headless install; needs --have-backup --accept-data-loss --confirm
-synofurb fetch-installer amd64|arm64|armhf             # download + verify the Debian installer files
+synofurb                      # the desktop app (add `gui --demo` to try it with a built-in sample NAS)
+synofurb scan                 # discovery only
+synofurb compat DS923+        # look a model up in the compatibility list
+synofurb plan   --host 192.168.1.20 --user admin           # read-only
+synofurb install --host ... --mode keep|wipe ...           # needs --have-backup --accept-data-loss --confirm "ERASE <MODEL>"
+synofurb boot-manager install|enter --host ...             # remote-controllable boot environment
+synofurb recover --host ...                                # make the unit boot DSM again
+synofurb self-update [--check]
 ```
 
 ## The resulting system
 
 | | |
 |---|---|
-| OS | Debian 13 trixie, `amd64`, `arm64` or `armhf` (ARMv7) |
-| System | **LVM** `vg_sys` on md RAID1 (swap + **xfs** root). Size selectable; recommended 32 GiB (16 / 8 GiB on small disks) |
-| Redundancy | With **more than two disks** the system is *always* mirrored (default 3 copies). With two disks it is mirrored by default; one disk = no mirror |
-| Boot | BIOS: GRUB on every system disk (`bios_grub`); UEFI: mirrored ESP (md metadata 1.0) with `--removable` GRUB; ARM/U-Boot: raw sectors, see [docs/ARM.md](docs/ARM.md) |
-| Data | md RAID (auto: none / 1 / 5 / 6, or choose 0/1/5/6/10) -> LVM `vg_data` -> **xfs** `/srv/data`; 20 % of the VG is left free by default for new volumes and snapshots |
-| Filesystems | xfs, btrfs, ext4, exFAT, FAT32, NTFS (ntfs-3g, full read/write + `mkntfs`/`ntfsfix`) and mdadm tools |
-| Default user | your choice of name, generated strong password; in `sudo`. Root login is locked, and SSH root login is off |
-| SSH | enabled. Key login preferred (a key pair is generated for you, or paste yours); password login stays on |
-| Network | systemd-networkd: **DHCPv4 + DHCPv6 + SLAAC** on all Ethernet ports, MAC-based DHCP client id, mDNS (`<host>.local`) |
-| Serial console | kernel + GRUB + login on the port DSM used (from its kernel command line, default `ttyS0` 115200 8N1) **and** on any USB serial adapter the moment it is plugged in (udev -> `serial-getty`) |
-| Local console | VGA/HDMI text console, USB keyboard/mouse (USB HID + xHCI in the initramfs, `gpm` for the mouse) |
-| Management plane | `https://<ip>:8443`, see [apps/mgmt-plane/README.md](apps/mgmt-plane/README.md) |
-| Updates | `unattended-upgrades` for Debian security fixes (never reboots on its own) |
+| OS | Debian 13 trixie for `amd64`, `arm64`, `armhf`. Kernel: **Newest** (Linux 7.x from `trixie-backports`, default) or **Stable** (6.12 LTS) |
+| System | LVM `vg_sys` on md RAID1 (swap + **xfs** root). Selectable size, recommended 32 GiB. **With more than two disks the system is always mirrored** (default 3 copies) |
+| Boot | x86 with a boot flash: entries on the unit's internal flash ([docs/BOOT.md](docs/BOOT.md)). Other x86: GRUB (BIOS/UEFI, mirrored ESP). ARM: U-Boot raw sectors ([docs/ARM.md](docs/ARM.md)) |
+| Data | md RAID (auto none/1/5/6, or choose 0/1/5/6/10) -> LVM `vg_data` -> **xfs** `/srv/data`; 20 % of the group left free by default |
+| Filesystems | xfs, btrfs, ext4, exFAT, FAT32, NTFS (ntfs-3g), mdadm, LVM |
+| CPU support | microcode for Intel **and AMD** (`intel-microcode` / `amd64-microcode`), AMD memory-mapped serial consoles |
+| User | your name, generated strong password, `sudo`; root locked, SSH root login off |
+| SSH | enabled; key login preferred (generated or yours), password login allowed |
+| Network | systemd-networkd: DHCPv4 + DHCPv6 + **SLAAC**, mDNS `<host>.local` |
+| Consoles | serial on the port DSM used (incl. AMD `uart8250,mmio32,...`) **and** on any USB serial adapter when plugged in; VGA/HDMI, USB keyboard and mouse |
+| Management plane | `https://<ip>:8443`: status, users, network (safe apply with auto-rollback), volumes, mounts, imported DSM volumes, boot manager. Its own project: [apps/mgmt-plane](apps/mgmt-plane/README.md) |
 
-### Management plane
+## If it fails
 
-A single-file Python 3 service (standard library only, so identical on x86 and ARM) that runs as a systemd unit:
-system status (CPU/RAM/temperature/disks/SMART/RAID/LVM/mounts), **users** (create/delete/password/lock/SSH keys),
-**network** (DHCP or static v4/v6, DNS; applied with an automatic rollback timer so a wrong address can't lock you
-out), **volumes** (create md RAID + LVM + xfs/ext4/btrfs, extend, delete), **mounts** (xfs/ext4/btrfs/exFAT/FAT32/NTFS,
-fstab entries by UUID), and **import** of volumes preserved from the old DSM (assembled and mounted read-only by
-default). HTTPS with a self-signed certificate (fingerprint printed at first start and shown in the final summary),
-session cookies + CSRF tokens, login throttling and an audit log. 83 unit/HTTP tests.
-
-## Backups, data loss and "keep my volumes"
-
-* **Wipe everything**: every disk gets a new GPT. Everything on it is gone.
-* **Keep existing volumes**: only DSM's *system* (partition 1) and *swap* (partition 2) areas, which DSM mirrors across
-  all disks, are reclaimed (plus any array you explicitly release). Debian goes there. Data partitions (DSM's `md2`,
-  `md3`, ... usually an LVM volume group with btrfs or ext4) are never part of any command: the planner refuses to
-  generate one, and after the install the script re-reads the RAID superblocks of every preserved partition and
-  **halts** if one changed. Because DSM's system area is only ~10 GiB (DSM 6: ~4.4 GiB), the system LV is limited to
-  what fits (minimum 8 GiB); the planner tells you when it cannot fit.
-* Preserved volumes are **not** mounted automatically. DSM-specific features (shared folders, users, packages,
-  Hyper Backup tasks) do not carry over; only the files do. Btrfs/ext4 volumes from DSM mount read-only by default.
-* Even in "keep" mode there is no guarantee. A failing disk, a power cut during repartitioning, or a bug can destroy data.
-
-## Discovery
-
-Same mechanisms Synology uses, merged into one inventory (`discovery/`):
-
-* **Synology Assistant broadcast**: UDP 9999 query with TLV replies (hostname, MAC, DSM build, model, serial, ports).
-  The packet format is **not published by Synology**; it comes from third-party reimplementations and is
-  *unverified* here. It is best effort.
-* **Bonjour/mDNS** (`_diskstation._tcp`; and `_synofurb._tcp` for NAS units this tool installed),
-* **UPnP/SSDP** (`M-SEARCH`, device description with manufacturer *Synology*),
-* **DSM Web API fingerprint** (unauthenticated `SYNO.API.Info` on port 5000) plus a `/24` port sweep for networks that
-  block multicast,
-* **MAC OUI** (`00:11:32`, `90:09:d0`) from the ARP cache.
+DSM stays the default boot entry and every failure path points back to it: a reboot into DSM after 60 s if no disk was changed, and into the DSM
+loader after 15 minutes if disks were. Before the first write the boot flash is imaged to your computer and the partition tables of every touched
+disk are saved. What this can and cannot give back is written down in [docs/RECOVERY.md](docs/RECOVERY.md), including what is **not** recoverable.
 
 ## Supported hardware
 
-| Platform | Status | Notes |
-|---|---|---|
-| x86-64 (Apollo Lake, Gemini Lake, Denverton, Ryzen V1000/R1000, Broadwell-DE, Atom, ...) | supported | boots standard Debian; BIOS or UEFI is detected. The internal Synology flash module may take boot precedence: check the BIOS boot order |
-| ARMv7 / `armhf` (Marvell Armada 370, 38x, XP) | supported through the documented U-Boot raw-sector method | needs a serial adapter. See [docs/ARM.md](docs/ARM.md) |
-| ARM64 (Realtek RTD1296/1619B, Annapurna Alpine v2, Armada 37xx) | experimental | installer + system install work generically; booting from disk through U-Boot is not automated |
-| PowerPC, 32-bit x86 (Evansport), ARMv5 (Kirkwood), Comcerto, Hi3535 | **refused** | Debian 13 cannot run on them |
+[compat/models.json](compat/models.json) lists 272 models (Synology's CPU table plus older ones) with architecture, CPU vendor, boot type and status:
+**Verified** (none yet), **Community-reported** (DS923+ only), **Untested**, **Known issues**, **Unsupported**. The app shows the status; `synofurb compat`
+and a refresh from this repository keep it current ([docs/COMPAT.md](docs/COMPAT.md)). Please report your result with the issue template: that is how a model becomes Verified.
 
-## How the install works
+| Platform | Notes |
+|---|---|
+| x86-64 Intel and **AMD** (Ryzen V1000/R1000/R1600, EPYC, Atom, Celeron, Xeon-D, ...) | SSH only |
+| ARMv7 / `armhf` (Armada 370/38x/XP) | Debian wiki method; needs a serial adapter ([docs/ARM.md](docs/ARM.md)) |
+| arm64 (RTD1296/1619B, Armada 37xx) | experimental: installs, U-Boot boot not automated |
+| PowerPC, 32-bit x86, ARMv5/armel, Comcerto, Hi3535 | refused: Debian 13 cannot run on them |
 
-```
-desktop                                       NAS (DSM)                       NAS (Debian installer, in RAM)
--------                                       ---------                       ------------------------------
-inspect  --- ssh (read-only script) --------> reads sysfs/mdstat/lvm
-plan, you confirm
-download netboot kernel+initrd, verified:
-  InRelease -> SHA256SUMS -> files
-initrd += preseed (+ non-free firmware)
-start local server (token-protected HTTP,
-  TCP log sink, UDP syslog sink)
-upload static kexec + kernel + initrd -----> kexec -l ; sync ; remount ro ; kexec -e
-                                                                              boots, DHCP, fetches stage2.sh
-                                              <------ HTTP (token) ---------- runs it:
-log stream (live, saved to file)  <----------- TCP + syslog ------------------  preflight (disks match? payload hash? keyring?)
-                                                                                 ---- point of no return ----
-                                                                                 mdadm stop, wipe reclaimed areas
-                                                                                 parted, mdadm, LVM, mkfs
-                                                                                 debootstrap trixie, chroot-setup.sh
-                                                                                 verify preserved arrays, reboot
-wait for the new system (mDNS / SSH / :8443), print logins
-```
+## Repository layout (monorepo)
 
-`stage2.sh` is **generated, straight-line shell** (every command visible, no JSON parsing in the installer); a copy is
-saved next to the debug log before anything runs, and `SYNOFURB_DRY=1` turns every mutating command into a log line.
-Before the point of no return it checks that each disk's serial/model/size and its complete partition table still match
-what you confirmed.
+| Path | What |
+|---|---|
+| `crates/synofurb-core` | engine: discovery, inspection, planner, installer script generator, boot-flash/agent orchestration, updater, compatibility lookup |
+| `crates/synofurb` | the desktop app (GPUI Kit UI in `src/ui`) and the CLI |
+| `apps/mgmt-plane` | the NAS web UI (Python 3, standard library only), versioned separately |
+| `boot/dom` | `synofurb-dom`: safe boot-menu manager for the internal boot flash (POSIX sh, with tests) |
+| `boot/agent` | the boot agent builder: kernel + tiny initramfs with SSH and kexec |
+| `payload/` | files copied to the NAS during install |
+| `compat/` | the model compatibility list, schema and sources |
+| `design/` | mockups, critic reviews, screenshots, approvals ([docs/DESIGN-GATE.md](docs/DESIGN-GATE.md)) |
+| `scripts/`, `packaging/`, `.github/` | release engineering |
 
-### Boot methods
+## Releases need design approval
 
-* **kexec over SSH** (automatic): needs a static `kexec` binary for the NAS CPU (`scripts/build-kexec.sh`, see
-  [docs/kexec.md](docs/kexec.md)) and `CONFIG_KEXEC` in the DSM kernel (checked at inspection time).
-* **Installer kit** (manual): writes `vmlinuz`, `initrd-synofurb.gz`, `preseed.cfg`, the exact kernel command line and a
-  README for USB/GRUB, PXE or the U-Boot serial console. Everything else (stage 2, log streaming) is identical.
-
-## Debug logging
-
-* `~/.local/share/synofurb/logs/synofurb-<time>.log` (Linux; the platform data dir elsewhere), mode 0600, **secrets
-  redacted**. Contains every SSH command and its output, every installer line, the generated `stage2.sh` and
-  `plan-<id>.json` are saved beside it.
-* The installer runs with `DEBCONF_DEBUG=5 BOOT_DEBUG=2` (switchable), `log_host=` syslog forwarding, and a TCP stream of
-  stage 2's own log (`@@STEP n/12`, `@@FAIL`, ... markers drive the progress bar). On failure the installer **halts**
-  after dumping `/proc/mdstat`, partitions, mounts, LVM state and `dmesg`; it never guesses.
-* The NAS keeps `/var/log/synofurb/install.log`, `stage2.sh`, and `/var/lib/synofurb/{plan.json,dsm-inspect.txt}`.
+Two independent critics, a UX critic and a UI critic (`.claude/agents/`), must approve the design before any release build runs; approval is
+bound to a hash of the design files ([docs/DESIGN-GATE.md](docs/DESIGN-GATE.md), [docs/RELEASING.md](docs/RELEASING.md)). `python3 scripts/release-gate.py`
+reports the current state (today: not approved, on purpose).
 
 ## What is verified
 
-Done for real in the development environment (no Synology hardware available):
+Done for real in the development sandbox (no Synology available):
 
-* 82 Rust unit tests (planner, parsers, script rendering, payload, preseed, logging, discovery packets, kexec flow with a mock)
-  and 83 Python tests for the management plane; `clippy -D warnings`, `rustfmt`, `shellcheck` clean.
-* Generated partition commands executed with real `parted` on a loop device laid out like DSM: preserved partition 5
-  stayed byte-identical (same start/end/type) while the reclaimed area was rebuilt; wipe mode gave the planned table.
-* The SSH layer against a real `sshd` (exit codes, stderr, stdin, 40 MiB streamed upload with matching SHA-256, mode bits,
-  host fingerprint, wrong password).
-* The inspection script on a real Linux host and through the real parser.
-* **`debootstrap` of Debian trixie and the real `chroot-setup.sh`**: all packages resolve on amd64/arm64/armhf; user,
-  `sudo`, SSH config (`sshd -t`), networkd DHCP file, serial getty, USB-serial udev rule, GRUB serial config, USB HID/xHCI/RAID/
-  device-mapper in the initramfs, management plane install. The new password hash was checked against glibc `crypt()`.
-* Live download + hash-chain verification of the amd64 and armhf installers from the Debian mirrors; `cpio` reads the
-  initrd addition.
-* The GUI starts and renders (software OpenGL under Xvfb).
+* Rust unit tests for the planner, parsers, script generator, payload, preseed, logging, discovery packets, the boot-flash flow with a mock shell, the
+  compatibility database and the updater; Python tests for the management plane (113), the install scripts and the release gate; `clippy -D warnings`,
+  `rustfmt`, `shellcheck`, `actionlint` clean.
+* The generated partition commands run with real `parted` on a loop device laid out like DSM (a preserved partition stayed identical).
+* The SSH layer against a real `sshd`; the inspection script on a real Linux host.
+* A real `debootstrap` of trixie and the real `chroot-setup.sh` (packages on amd64/arm64/armhf, users, SSH config, network, serial, initramfs content, password hash against glibc `crypt()`).
+* Live download of the Debian installer with the Release -> SHA256SUMS -> file hash chain.
+* `synofurb-dom` and the boot agent against **synthetic** boot-flash images and (agent) QEMU: see [boot/dom](boot/dom/README.md) and [boot/agent](boot/agent/README.md).
+* The installers against a local fake release server with real minisign signatures; PowerShell 7 on Linux.
+* The GPUI Kit app builds and renders on Linux (software Vulkan); screenshots in `design/screenshots/`.
 
-**Not verified** (be honest with yourself about these):
+**Not verified:**
 
-* Any run on a real Synology; `kexec` on a DSM kernel; Debian installer behaviour with the generated preseed
-  (`partman/early_command` hook, availability of busybox tools such as `nc`/`sha256sum` in the installer).
-* md RAID, LVM and `mkfs` steps (the sandbox kernel has no md/dm) and `grub-install` to real disks.
-* Synology UDP 9999 discovery against real DSM; mDNS TXT field names.
-* U-Boot boot recipes on real boards; `scripts/build-kexec.sh` (never run).
-* PGP verification of the Debian release file happens only when `gpgv` and a recent `debian-archive-keyring` are installed
-  on the desktop; otherwise the chain is HTTPS + SHA-256 only.
+* Any run on a real Synology; `kexec` on a DSM kernel; the Debian installer's behaviour with the generated preseed on real hardware.
+* md RAID, LVM and `mkfs` steps and `grub-install` to real disks (the sandbox kernel has no md/dm).
+* Windows and macOS builds, MSI/NSIS/DMG packaging, signing and notarisation, the release workflow on GitHub, the updater against a real release.
+* Screen-reader behaviour of the native app; real users (the test plan is in `design/mockups/ux/RECOMMENDATION.md`).
+* Synology's UDP 9999 discovery format (from third-party sources) and mDNS field names.
+* U-Boot recipes on real boards; `scripts/build-kexec.sh` (never run; the sandbox blocks compiling downloaded sources).
 
-## Build
+## Before the first release (owner's checklist)
 
-```
-cargo build --release          # Rust 1.85+; Linux needs the usual X11/Wayland + OpenGL runtime libs
-cargo test --workspace
-python3 -m unittest discover -s apps/mgmt-plane/tests
-```
-
-Layout: `crates/synofurb-core` (engine, no GUI), `crates/synofurb` (GUI + CLI), `apps/mgmt-plane` (the NAS web UI, its own project), `payload/` (files copied to the NAS),
-`scripts/`, `docs/`.
-
-## Roadmap / known gaps
-
-* Built-in TFTP/DHCP-proxy (PXE) so the installer kit needs no extra server.
-* Pre-built static `kexec` binaries published from CI (workflow exists: `kexec-static`, run manually).
-* Verify and document per-model DTBs and U-Boot environments for common ARM boards; ARM64 raw-boot.
-* LUKS option; email/webhook alerts from the management plane.
-* Relation to ForgeVault: the installed system is plain Debian 13, the OS ForgeVault targets, so ForgeVault can be installed on
-  top of it. That integration is not part of this repository.
+1. Approve the designs (or ask for changes); then run the two critics and commit their verdicts ([docs/DESIGN-GATE.md](docs/DESIGN-GATE.md)).
+2. `minisign -G`, paste the public key where [docs/RELEASING.md](docs/RELEASING.md) lists it, add the GitHub secrets, run the workflow once with `dry_run`.
+3. Decide the synodeb licence question ([docs/BOOT.md](docs/BOOT.md#licence-note-on-synodeb)).
 
 License: MIT.

@@ -1,0 +1,54 @@
+<!doctype html><html lang="en" class="d1"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>synofurb UI directions</title>
+<style>:root{color-scheme:light;--canvas:#FAFAFA;--surface:#FFFFFF;--surface2:#F3F3F3;--surface3:#E9E9E9;--border:#E5E5E5;--border-strong:#868686;--fg:#0A0A0A;--fg2:#525252;--fg3:#7A7A7A;--sidebar:#F7F7F7;--overlay:#0A0A0A;--accent:#7139CB;--accent-hover:#622CB5;--on-accent:#FFFFFF;--accent-bg:#F1EDFE;--accent-fg:#5C29AA;--ring:#7139CB;--danger:#C60014;--danger-hover:#AC0311;--on-danger:#FFFFFF;--ok-solid:#03A14A;--ok-fg:#005725;--ok-bg:#DEF8E2;--warn-solid:#C68206;--warn-fg:#6F4606;--warn-bg:#FFF3D3;--err-solid:#E30117;--err-fg:#A70311;--err-bg:#FEEFEF;--info-solid:#3280DD;--info-fg:#004B96;--info-bg:#E7F1FF;--log-bg:#121114;--log-fg:#DEDEDE;--log-dim:#9E9E9E;--log-dbg:#9DA5B1;--log-inf:#89C3FE;--log-wrn:#F7C243;--log-err:#FE8A88;}@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--canvas:#0A0A0A;--surface:#171717;--surface2:#202020;--surface3:#2B2B2B;--border:#2A2A2A;--border-strong:#747474;--fg:#FAFAFA;--fg2:#ABABAB;--fg3:#808080;--sidebar:#101010;--overlay:#000000;--accent:#A37BFE;--accent-hover:#B091FE;--on-accent:#0E0C15;--accent-bg:#31254D;--accent-fg:#C3AFFE;--ring:#A37BFE;--danger:#E23439;--danger-hover:#F14D4C;--on-danger:#0C0403;--ok-solid:#37BB62;--ok-fg:#6ED889;--ok-bg:#0F3118;--warn-solid:#F0B135;--warn-fg:#F1C45E;--warn-bg:#3D2A02;--err-solid:#F4514F;--err-fg:#FFA09C;--err-bg:#4F1A18;--info-solid:#539AF2;--info-fg:#91C1FF;--info-bg:#132946;--log-bg:#060607;--log-fg:#DEDEDE;--log-dim:#989898;--log-dbg:#979FAB;--log-inf:#89C3FE;--log-wrn:#F7C243;--log-err:#FE8A88;}}:root[data-theme="dark"]{color-scheme:dark;--canvas:#0A0A0A;--surface:#171717;--surface2:#202020;--surface3:#2B2B2B;--border:#2A2A2A;--border-strong:#747474;--fg:#FAFAFA;--fg2:#ABABAB;--fg3:#808080;--sidebar:#101010;--overlay:#000000;--accent:#A37BFE;--accent-hover:#B091FE;--on-accent:#0E0C15;--accent-bg:#31254D;--accent-fg:#C3AFFE;--ring:#A37BFE;--danger:#E23439;--danger-hover:#F14D4C;--on-danger:#0C0403;--ok-solid:#37BB62;--ok-fg:#6ED889;--ok-bg:#0F3118;--warn-solid:#F0B135;--warn-fg:#F1C45E;--warn-bg:#3D2A02;--err-solid:#F4514F;--err-fg:#FFA09C;--err-bg:#4F1A18;--info-solid:#539AF2;--info-fg:#91C1FF;--info-bg:#132946;--log-bg:#060607;--log-fg:#DEDEDE;--log-dim:#989898;--log-dbg:#979FAB;--log-inf:#89C3FE;--log-wrn:#F7C243;--log-err:#FE8A88;}
+body{margin:0;background:var(--canvas);color:var(--fg);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent-fg)}
+header.h{padding:20px 24px 8px;max-width:1500px;margin:0 auto}
+h1{font-size:24px;letter-spacing:-.015em;margin:0 0 4px}
+.sub{color:var(--fg2);max-width:80ch}
+.bar{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--canvas) 92%,transparent);border-bottom:1px solid var(--border);padding:8px 24px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:8px;padding:2px;gap:2px;background:var(--surface)}
+.seg button{height:28px;padding:0 12px;border:0;border-radius:6px;background:transparent;color:var(--fg2);font:600 12.5px inherit;font-family:inherit;cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
+.grid{display:flex;gap:16px;padding:16px 24px 8px;max-width:1500px;margin:0 auto;align-items:flex-start;flex-wrap:wrap}
+.col{display:flex;flex-direction:column;gap:8px}
+.col h2{min-height:30px;font-size:16px;margin:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tag{font-size:12px;font-weight:650;padding:2px 8px;border-radius:99px;border:1px solid var(--border-strong);color:var(--fg2)}
+.tag.rec{background:var(--ok-bg);color:var(--ok-fg);border-color:var(--ok-solid)}
+.fr{border:1px solid var(--border-strong);border-radius:12px;overflow:hidden;background:var(--surface3);box-shadow:0 8px 24px -12px rgb(0 0 0/.35)}
+.fr iframe{border:0;display:block;width:1204px;transform-origin:0 0;background:transparent}
+.col p{margin:0;color:var(--fg2);font-size:13px;min-height:60px}
+.links{display:flex;gap:8px;flex-wrap:wrap;font-size:13px}
+.links a{padding:3px 10px;border:1px solid var(--border-strong);border-radius:8px;text-decoration:none;color:var(--fg);background:var(--surface)}
+.links a:hover{background:var(--surface2)}
+section.m{max-width:1500px;margin:0 auto;padding:12px 24px 40px}
+table{border-collapse:collapse;width:100%;font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:8px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:top}th{background:var(--surface2);color:var(--fg2);font-size:12px}
+h3{font-size:16px;margin:20px 0 8px}
+</style></head><body>
+<header class="h"><h1>synofurb UI: three visual directions</h1><p class="sub">The same screen in each direction: the <b>Confirm data loss</b> gate of the desktop installer (DS918+, 4 x WD40EFRX, RAID 5 + LVM + xfs). Each direction has 17 hi-fi screens for both surfaces (GPUI desktop app and the NAS web UI), in light and dark.</p></header>
+<div class="bar"><span class="seg" role="group" aria-label="Theme"><button data-t="light">Light</button><button data-t="dark">Dark</button></span>
+<span class="seg" role="group" aria-label="Layout"><button data-m="side" aria-pressed="true">Side by side</button><button data-m="stack" aria-pressed="false">Stacked, full size</button></span>
+<span style="flex:1"></span><a href="DESIGN-SYSTEM.md">DESIGN-SYSTEM.md</a> <a href="tokens.json">tokens.json</a> <a href="RECOMMENDATION.md">RECOMMENDATION.md</a></div>
+<div class="grid" id="grid"><div class="col" id="c1"><h2>Direction 1: ForgeVault family <span class=tag rec>Recommended base</span></h2><p><b>Calm, neutral, dependable.</b> One violet accent on a neutral ramp, hairline cards, shadcn-like. Danger is red only where data dies. Contrast: 66/66 pairs pass per theme (min text 4.63:1).</p><div class="fr" id="f1"><iframe id="i1" title="Direction 1 ForgeVault family: Confirm data loss screen" scrolling="no" src="direction-1/index.html?embed=1&screen=confirm&id=1"></iframe></div><div class="links"><a href="direction-1/index.html#confirm">Open prototype (17 screens)</a><a href="direction-1/README.md">README</a></div></div><div class="col" id="c2"><h2>Direction 2: Ops console </h2><p><b>Dense, technical, status-forward.</b> Mono labels, grid lines, 30 px controls, left status bars. Fastest to scan for experts. Contrast: 66/66 pairs pass per theme (min text 5.05:1).</p><div class="fr" id="f2"><iframe id="i2" title="Direction 2 Ops console: Confirm data loss screen" scrolling="no" src="direction-2/index.html?embed=1&screen=confirm&id=2"></iframe></div><div class="links"><a href="direction-2/index.html#confirm">Open prototype (17 screens)</a><a href="direction-2/README.md">README</a></div></div><div class="col" id="c3"><h2>Direction 3: Friendly appliance </h2><p><b>Warm, roomy, reassuring.</b> Cream and deep teal, 16 px base, 44 px controls, horizontal stepper, spot illustrations. Contrast: 66/66 pairs pass per theme (min text 5.51:1).</p><div class="fr" id="f3"><iframe id="i3" title="Direction 3 Friendly appliance: Confirm data loss screen" scrolling="no" src="direction-3/index.html?embed=1&screen=confirm&id=3"></iframe></div><div class="links"><a href="direction-3/index.html#confirm">Open prototype (17 screens)</a><a href="direction-3/README.md">README</a></div></div></div>
+<section class="m"><h3>At a glance</h3><table><thead><tr><th></th><th>1 ForgeVault family</th><th>2 Ops console</th><th>3 Friendly appliance</th></tr></thead><tbody>
+<tr><th>Base size / control height</th><td>14 px / 36 px</td><td>13 px / 30 px</td><td>16 px / 44 px</td></tr>
+<tr><th>Radius</th><td>8 / 12 px</td><td>3 / 4 px</td><td>12 / 20 px</td></tr>
+<tr><th>Accent (light)</th><td>Violet #7139CB</td><td>Cyan-blue #06658E</td><td>Deep teal #086C68</td></tr>
+<tr><th>Wizard navigation</th><td>Left step rail</td><td>Left step rail, numbered mono</td><td>Horizontal stepper on top</td></tr>
+<tr><th>Voice</th><td>Plain and factual</td><td>Terse, technical</td><td>Conversational, reassuring</td></tr>
+<tr><th>Risk to watch</th><td>Can look generic; red must stay rare</td><td>Intimidating, small targets, accent close to info blue</td><td>More scrolling at 640 px height, accent close to ok green, tone vs. data-loss gravity</td></tr>
+</tbody></table><p class="sub" style="margin-top:12px">Mockups are static HTML, system fonts and inline SVG only; they open from disk. In each prototype use the screen selector (or the left and right arrow keys), the Light / Dark switch, and on the install and failure screens the log-level buttons.</p></section>
+<script>
+(function(){var R=document.documentElement,H={},W=1204,mode='side';
+function eff(){return R.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')}
+function press(){document.querySelectorAll('[data-t]').forEach(function(b){b.setAttribute('aria-pressed',b.getAttribute('data-t')===eff())})}
+function lay(){var g=document.getElementById('grid'),avail=Math.min(innerWidth,1500)-48,cols=mode==='stack'?1:(innerWidth<1000?1:3),gap=16,sc=Math.min(1,(avail-gap*(cols-1))/cols/W);
+[1,2,3].forEach(function(d){var f=document.getElementById('f'+d),i=document.getElementById('i'+d),h=H[d]||1000;i.style.height=h+'px';i.style.transform='scale('+sc+')';f.style.width=Math.floor(W*sc)+'px';document.getElementById('c'+d).style.width=f.style.width;f.style.height=Math.ceil(h*sc)+'px'})}
+function setT(t){R.setAttribute('data-theme',t);press();[1,2,3].forEach(function(d){var w=document.getElementById('i'+d).contentWindow;if(w)w.postMessage({sfTheme:t},'*')});}
+document.querySelectorAll('[data-t]').forEach(function(b){b.onclick=function(){setT(b.getAttribute('data-t'))}});
+document.querySelectorAll('[data-m]').forEach(function(b){b.onclick=function(){mode=b.getAttribute('data-m');document.querySelectorAll('[data-m]').forEach(function(x){x.setAttribute('aria-pressed',x===b)});lay()}});
+addEventListener('message',function(e){if(e.data&&e.data.sfH){H[e.data.sfId]=e.data.sfH;lay()}});addEventListener('resize',lay);
+press();lay();
+var t0=eff();[1,2,3].forEach(function(d){document.getElementById('i'+d).addEventListener('load',function(){this.contentWindow.postMessage({sfTheme:eff()},'*')})});
+})();
+</script></body></html>

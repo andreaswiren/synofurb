@@ -74,6 +74,24 @@ pub fn generate_ssh_keypair(comment: &str) -> Result<SshKeypair> {
     })
 }
 
+/// Which Linux kernel to install.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KernelChannel {
+    /// Debian 13's own kernel (6.12 LTS).
+    Stable,
+    /// Newest kernel Debian packages for trixie (trixie-backports; Linux 7.x at the time of writing).
+    Newest,
+}
+
+impl KernelChannel {
+    pub fn label(self) -> &'static str {
+        match self {
+            KernelChannel::Stable => "Stable (Debian 13 LTS kernel, 6.12)",
+            KernelChannel::Newest => "Newest (Linux 7.x from trixie-backports)",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallConfig {
     pub hostname: String,
@@ -88,11 +106,17 @@ pub struct InstallConfig {
     pub mirror_dir: String,
     pub suite: String,
     pub serial: SerialConsole,
+    #[serde(default = "default_kernel")]
+    pub kernel: KernelChannel,
     pub enable_mgmt: bool,
     /// Extra Debian packages to install.
     pub extra_packages: Vec<String>,
     /// U-Boot boards: DTB file name to append to the kernel (e.g. `armada-385-synology-ds116.dtb`).
     pub dtb: Option<String>,
+}
+
+fn default_kernel() -> KernelChannel {
+    KernelChannel::Newest
 }
 
 impl InstallConfig {
@@ -109,6 +133,7 @@ impl InstallConfig {
             mirror_dir: "/debian".into(),
             suite: "trixie".into(),
             serial: SerialConsole::default(),
+            kernel: KernelChannel::Newest,
             enable_mgmt: true,
             extra_packages: vec![],
             dtb: None,
@@ -142,7 +167,12 @@ impl InstallConfig {
         if !self.suite.chars().all(|c| c.is_ascii_lowercase() || c == '-') || self.suite.is_empty() {
             bail!("invalid suite");
         }
-        if !self.serial.tty.chars().all(|c| c.is_ascii_alphanumeric()) || self.serial.tty.is_empty() {
+        let raw_ok = self
+            .serial
+            .raw
+            .as_ref()
+            .is_some_and(|r| r.contains("0x") && r.chars().all(|c| c.is_ascii_alphanumeric() || ",._-:=".contains(c)));
+        if !self.serial.tty.chars().all(|c| c.is_ascii_alphanumeric()) || (self.serial.tty.is_empty() && !raw_ok) {
             bail!("invalid serial console");
         }
         for p in &self.extra_packages {

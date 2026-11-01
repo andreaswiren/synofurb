@@ -1,0 +1,96 @@
+name: Compatibility report
+description: Tell us what happened when you ran synofurb on your Synology model (success, partial or failure).
+title: "[compat] <model>: <result>"
+labels: ["compat-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. Reports, including failures, are how models move from "untested" to "community" or "verified"
+        in [`compat/models.json`](https://github.com/andreaswiren/synofurb/blob/main/compat/models.json). The rules are in
+        [`compat/README.md`](https://github.com/andreaswiren/synofurb/blob/main/compat/README.md).
+        **Do not paste serial numbers, MAC addresses, public IP addresses or passwords.** Redact them in logs too.
+  - type: input
+    id: model
+    attributes:
+      label: Synology model
+      description: Exactly as DSM shows it, for example `DS918+` or `RS3618xs`.
+      placeholder: DS918+
+    validations:
+      required: true
+  - type: input
+    id: dsm_version
+    attributes:
+      label: DSM version before the install
+      description: Control Panel > Info Center, for example `7.2.2-72806`.
+      placeholder: 7.2.2-72806
+    validations:
+      required: true
+  - type: input
+    id: synofurb_version
+    attributes:
+      label: synofurb version
+      description: Shown in the app title bar, or run `synofurb --version`.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      description: success = Debian installed, booted from the intended disks, and NICs and disks worked after a reboot.
+      options:
+        - success
+        - partial (installed or booted, but something important did not work)
+        - fail (did not install or did not boot)
+    validations:
+      required: true
+  - type: dropdown
+    id: boot_method
+    attributes:
+      label: Boot method used
+      options:
+        - x86 - Synology internal flash (DOM) boot entries edited by synofurb
+        - x86 - booted from the data disks directly (UEFI or BIOS)
+        - ARM - U-Boot commands entered over the serial console
+        - Other (explain below)
+    validations:
+      required: true
+  - type: textarea
+    id: worked
+    attributes:
+      label: What worked
+      description: Boot, network, disks and RAID/LVM, fans and temperatures, LEDs, power button, WoL, anything else you checked.
+    validations:
+      required: true
+  - type: textarea
+    id: failed
+    attributes:
+      label: What did not work (or was surprising)
+      description: Leave empty if nothing.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Installer log
+      description: |
+        Drag the saved installer log file into this box to attach it (use the "Save log" button in the app, or copy it
+        from the `logs` folder it names). A report without a log cannot count towards "verified".
+        If it is too long, attach the file instead of pasting.
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware changes (optional)
+      description: RAM upgrades, extra NVMe cache, replaced disks, expansion units, anything non-stock that may matter.
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed serial numbers, MAC addresses, public IP addresses and passwords from everything I attached.
+          required: true
+        - label: I ran synofurb itself on this model (not another tool).
+          required: true
+        - label: I agree that a maintainer may copy the result and the log link into the public compatibility list.
+          required: true

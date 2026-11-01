@@ -1,0 +1,1165 @@
+//! The root view: all UI state, the message pump from the worker threads, and the actions screens trigger.
+//! Rendering lives in `render.rs` (chrome) and `screens/` (one module per screen).
+
+use super::demo::{self, DemoUnit, Script};
+use super::settings::{UiSettings, now_unix};
+use super::state::*;
+use super::theme::{self, ThemeChoice};
+use super::worker::{self, Msg, Tx};
+use crate::cli::config_dir;
+use futures::StreamExt;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::select::{SelectEvent, SelectState};
+use gpui_kit::component::slider::{SliderEvent, SliderState};
+use gpui_kit::component::{IndexPath, WindowExt};
+use gpui_kit::{AppContext, ClipboardItem, Context, Entity, FocusHandle, PathPromptOptions, SharedString, Subscription, Window};
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use synofurb_core::compat::{CompatDb, Status};
+use synofurb_core::config::{InstallConfig, KernelChannel, SshKeypair, generate_password, generate_ssh_keypair, hash_password};
+use synofurb_core::discovery::{Found, Inventory, ScanOptions};
+use synofurb_core::logs::Event;
+use synofurb_core::model::DeviceFacts;
+use synofurb_core::plan::{DataRaid, Plan, PlanRequest, StorageMode, build_plan, default_system_copies};
+use synofurb_core::platform::{self, Support};
+use synofurb_core::remote::Auth;
+use synofurb_core::session::{BootMethod, InstallJob, Outcome, SshTarget, confirm_phrase};
+use synofurb_core::updater::{Channel, Progress, UpdateInfo, VerifiedDownload};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Goal {
+    Install,
+    BootManager,
+    Recover,
+}
+
+/// A background job with a result.
+pub enum Job<T> {
+    Idle,
+    Running,
+    Done(Result<T, String>),
+}
+
+impl<T> Job<T> {
+    pub fn running(&self) -> bool {
+        matches!(self, Job::Running)
+    }
+}
+
+#[derive(Default)]
+pub struct ScanState {
+    pub running: bool,
+    pub methods: Vec<(&'static str, Result<usize, String>)>,
+    /// A scan has finished at least once in this session.
+    pub finished_once: bool,
+}
+
+/// Compatibility information for display, independent of where it came from (live verdict, list, or demo data).
+#[derive(Clone, Debug)]
+pub struct CompatInfo {
+    pub status: Status,
+    pub headline: String,
+    pub details: Vec<String>,
+    pub blocking: bool,
+}
+
+pub enum UpdateState {
+    /// Nothing known (never checked, or checking disabled).
+    Unknown,
+    Checking,
+    UpToDate,
+    CheckFailed(String),
+    Available(Box<UpdateInfo>),
+    Downloading(Box<UpdateInfo>, Progress),
+    Verified(Box<UpdateInfo>, Box<VerifiedDownload>),
+    Failed(Box<UpdateInfo>, String),
+}
+
+pub struct Inputs {
+    pub manual_ip: Entity<InputState>,
+    pub host: Entity<InputState>,
+    pub port: Entity<InputState>,
+    pub user: Entity<InputState>,
+    pub password: Entity<InputState>,
+    pub sudo: Entity<InputState>,
+    pub key_path: Entity<InputState>,
+    pub hostname: Entity<InputState>,
+    pub username: Entity<InputState>,
+    pub new_password: Entity<InputState>,
+    pub pubkey: Entity<InputState>,
+    pub timezone: Entity<InputState>,
+    pub mirror: Entity<InputState>,
+    pub serial_text: Entity<InputState>,
+    pub serial_speed: Entity<InputState>,
+    pub dtb: Entity<InputState>,
+    pub kexec_path: Entity<InputState>,
+    pub kit_dir: Entity<InputState>,
+    pub typed: Entity<InputState>,
+    pub log_search: Entity<InputState>,
+}
+
+pub struct PlanForm {
+    pub req: PlanRequest,
+    pub keep: BTreeSet<String>,
+    pub copies_auto: bool,
+    pub copies: usize,
+    pub system_gib: f32,
+    pub kernel: KernelChannel,
+    pub plan: Option<Plan>,
+    pub system_slider: Entity<SliderState>,
+    pub system_range: (f32, f32),
+    pub copies_slider: Entity<SliderState>,
+    pub free_slider: Entity<SliderState>,
+    pub raid_select: Entity<SelectState<Vec<SharedString>>>,
+}
+
+pub struct SysForm {
+    pub key_mode: KeyMode,
+    pub show_password: bool,
+    pub enable_mgmt: bool,
+    pub with_firmware: bool,
+    pub verbose: bool,
+    pub boot: BootChoice,
+    pub generated_key: Option<(SshKeypair, PathBuf)>,
+}
+
+pub struct App {
+    pub screen: Screen,
+    pub return_to: Screen,
+    pub settings: UiSettings,
+    pub cfg_dir: PathBuf,
+    pub demo: Option<DemoUnit>,
+    pub tx: Tx,
+    pub focus: FocusHandle,
+    pub log_focus: FocusHandle,
+    pub subs: Vec<Subscription>,
+    pub error: Option<String>,
+
+    pub inv: Inventory,
+    pub selected_ip: Option<String>,
+    pub scan: ScanState,
+    pub compat: CompatDb,
+    pub compat_refreshing: bool,
+    pub compat_note: Option<(String, bool)>,
+
+    pub inp: Inputs,
+    pub use_key: bool,
+    pub same_sudo: bool,
+    pub inspecting: bool,
+
+    pub facts: Option<DeviceFacts>,
+    pub inspect_raw: String,
+    pub goal: Goal,
+    pub form: PlanForm,
+    pub sys: SysForm,
+    pub ack_backup: bool,
+    pub ack_loss: bool,
+
+    pub install: InstallView,
+    pub install_started: bool,
+    pub cancel: Arc<AtomicBool>,
+    pub logger_path: Option<PathBuf>,
+    pub result: Option<Result<Outcome, String>>,
+    pub reveal_password: bool,
+    pub log_follow: bool,
+    pub log_selected_all: bool,
+    pub log_scroll: gpui_kit::UniformListScrollHandle,
+    pub recover: Job<String>,
+    pub bootmgr: Job<()>,
+    pub update: UpdateState,
+    pub page_scroll: gpui_kit::ScrollHandle,
+}
+
+pub fn version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+impl App {
+    pub fn new(demo: Option<DemoTarget>, window: &mut Window, cx: &mut Context<App>) -> App {
+        let cfg_dir = config_dir();
+        let settings = if demo.is_some() { UiSettings::for_demo() } else { UiSettings::load(&UiSettings::path(&cfg_dir)) };
+        let (tx, rx) = futures::channel::mpsc::unbounded::<Msg>();
+        let is_demo = demo.is_some();
+        let unit = DemoUnit::from_env();
+
+        let mut subs: Vec<Subscription> = vec![];
+        let mut input = |placeholder: &str, value: &str, masked: bool, subs: &mut Vec<Subscription>, cx: &mut Context<App>| {
+            let st = cx.new(|cx| {
+                let s = InputState::new(window, cx).placeholder(placeholder.to_string()).default_value(value.to_string());
+                if masked { s.masked(true) } else { s }
+            });
+            subs.push(cx.observe(&st, |_, _, cx| cx.notify()));
+            st
+        };
+        let inp = Inputs {
+            manual_ip: input("192.168.1.20", "", false, &mut subs, cx),
+            host: input("192.168.1.20 or nas.local", "", false, &mut subs, cx),
+            port: input("22", "22", false, &mut subs, cx),
+            user: input("admin", "admin", false, &mut subs, cx),
+            password: input("SSH password", "", true, &mut subs, cx),
+            sudo: input("empty = same as the SSH password", "", true, &mut subs, cx),
+            key_path: input("path to an OpenSSH private key", "", false, &mut subs, cx),
+            hostname: input("nas", "nas", false, &mut subs, cx),
+            username: input("nasadmin", "nasadmin", false, &mut subs, cx),
+            new_password: input("password", &generate_password(20), true, &mut subs, cx),
+            pubkey: input("ssh-ed25519 AAAA... me@laptop", "", false, &mut subs, cx),
+            timezone: input("UTC", "UTC", false, &mut subs, cx),
+            mirror: input("deb.debian.org", "deb.debian.org", false, &mut subs, cx),
+            serial_text: input("ttyS0", "ttyS0", false, &mut subs, cx),
+            serial_speed: input("115200", "115200", false, &mut subs, cx),
+            dtb: input("armada-385-synology-ds116.dtb", "", false, &mut subs, cx),
+            kexec_path: input("assets/kexec/<arch>/kexec (auto-detected)", "", false, &mut subs, cx),
+            kit_dir: input("folder for the installer kit", &cfg_dir.join("kit").display().to_string(), false, &mut subs, cx),
+            typed: input("", "", false, &mut subs, cx),
+            log_search: input("Search the log", "", false, &mut subs, cx),
+        };
+        // Enter in the connection fields starts the inspection (the primary action of that screen).
+        for st in [&inp.host, &inp.port, &inp.user, &inp.password, &inp.sudo, &inp.key_path] {
+            subs.push(cx.subscribe_in(st, window, |this: &mut App, _, ev: &InputEvent, window, cx| {
+                if matches!(ev, InputEvent::PressEnter { .. }) && this.screen == Screen::Connect {
+                    this.start_inspect(window, cx);
+                }
+            }));
+        }
+        subs.push(cx.subscribe_in(&inp.manual_ip, window, |this: &mut App, _, ev: &InputEvent, window, cx| {
+            if matches!(ev, InputEvent::PressEnter { .. }) {
+                this.use_manual_address(window, cx);
+            }
+        }));
+        subs.push(cx.subscribe(&inp.log_search, |this: &mut App, st, ev: &InputEvent, cx| {
+            if matches!(ev, InputEvent::Change) {
+                let text = st.read(cx).value().to_string();
+                this.install.log.set_text(&text);
+                this.log_selected_all = false;
+                cx.notify();
+            }
+        }));
+
+        // Follow the operating system's light/dark setting while the choice is "follow system".
+        subs.push(cx.observe_window_appearance(window, |this: &mut App, _window, cx| {
+            if this.settings.theme == ThemeChoice::System {
+                theme::apply(theme::Palette::for_mode(theme::os_is_dark(cx)), cx);
+            }
+        }));
+
+        // Plan form widgets.
+        let raid_items: Vec<SharedString> = DataRaid::ALL.iter().map(|r| SharedString::from(r.label())).collect();
+        let raid_select = cx.new(|cx| SelectState::new(raid_items, Some(IndexPath::default().row(0)), window, cx));
+        subs.push(cx.subscribe(&raid_select, |this: &mut App, _, ev: &SelectEvent<Vec<SharedString>>, cx| {
+            let SelectEvent::Confirm(Some(v)) = ev else { return };
+            if let Some(r) = DataRaid::ALL.iter().find(|r| r.label() == v.as_ref()) {
+                this.form.req.data_raid = *r;
+                this.rebuild_plan();
+                cx.notify();
+            }
+        }));
+        let free_slider = cx.new(|_| SliderState::new().min(0.0).max(90.0).step(5.0).default_value(20.0));
+        subs.push(cx.subscribe(&free_slider, |this: &mut App, _, ev: &SliderEvent, cx| {
+            if let SliderEvent::Change(v) = ev {
+                this.form.req.data_free_percent = v.start().round().clamp(0.0, 90.0) as u8;
+                this.rebuild_plan();
+                cx.notify();
+            }
+        }));
+        let copies_slider = cx.new(|_| SliderState::new().min(1.0).max(2.0).step(1.0).default_value(2.0));
+        subs.push(cx.subscribe(&copies_slider, |this: &mut App, _, ev: &SliderEvent, cx| {
+            if let SliderEvent::Change(v) = ev {
+                this.form.copies = v.start().round().max(1.0) as usize;
+                this.rebuild_plan();
+                cx.notify();
+            }
+        }));
+        let system_slider = cx.new(|_| SliderState::new().min(8.0).max(64.0).step(1.0).default_value(16.0));
+
+        let form = PlanForm {
+            req: PlanRequest::default(),
+            keep: BTreeSet::new(),
+            copies_auto: true,
+            copies: 2,
+            system_gib: 0.0,
+            kernel: KernelChannel::Newest,
+            plan: None,
+            system_slider,
+            system_range: (0.0, 0.0),
+            copies_slider,
+            free_slider,
+            raid_select,
+        };
+
+        let (inv, compat) = if is_demo {
+            (demo::inventory(), CompatDb::embedded())
+        } else {
+            (Inventory::load(&cfg_dir.join("inventory.json")), CompatDb::load_best(&cfg_dir))
+        };
+
+        let mut app = App {
+            screen: Screen::Inventory,
+            return_to: Screen::Inventory,
+            settings,
+            cfg_dir,
+            demo: is_demo.then_some(unit),
+            tx: tx.clone(),
+            focus: cx.focus_handle(),
+            log_focus: cx.focus_handle(),
+            subs,
+            error: None,
+            inv,
+            selected_ip: None,
+            scan: ScanState::default(),
+            compat,
+            compat_refreshing: false,
+            compat_note: None,
+            inp,
+            use_key: false,
+            same_sudo: true,
+            inspecting: false,
+            facts: None,
+            inspect_raw: String::new(),
+            goal: Goal::Install,
+            form,
+            sys: SysForm {
+                key_mode: KeyMode::Generate,
+                show_password: false,
+                enable_mgmt: true,
+                with_firmware: true,
+                verbose: true,
+                boot: BootChoice::Auto,
+                generated_key: None,
+            },
+            ack_backup: false,
+            ack_loss: false,
+            install: InstallView::default(),
+            install_started: false,
+            cancel: Arc::new(AtomicBool::new(false)),
+            logger_path: None,
+            result: None,
+            reveal_password: false,
+            log_follow: true,
+            log_selected_all: false,
+            log_scroll: gpui_kit::UniformListScrollHandle::new(),
+            recover: Job::Idle,
+            bootmgr: Job::Idle,
+            update: UpdateState::Unknown,
+            page_scroll: gpui_kit::ScrollHandle::new(),
+        };
+
+        // Message pump: workers send on `tx`; this task applies the messages on the UI thread.
+        let mut rx = rx;
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(m) = rx.next().await {
+                if this.update_in(cx, |this, window, cx| this.on_msg(m, window, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        match demo {
+            Some(t) => app.start_demo(t, unit, window, cx),
+            None => {
+                app.start_scan(cx);
+                app.maybe_check_updates();
+            }
+        }
+        app
+    }
+
+    // ------------------------------------------------------------------------------------------ navigation
+
+    pub fn go(&mut self, screen: Screen, window: &mut Window, cx: &mut Context<App>) {
+        if screen == Screen::Settings && self.screen != Screen::Settings {
+            self.return_to = self.screen;
+        }
+        self.screen = screen;
+        self.error = None;
+        window.focus(&self.focus, cx);
+        self.page_scroll.set_offset(gpui_kit::point(gpui_kit::px(0.0), gpui_kit::px(0.0)));
+        cx.notify();
+    }
+
+    pub fn current_step(&self) -> Step {
+        self.screen.step().or(self.return_to.step()).unwrap_or(Step::Find)
+    }
+
+    pub fn set_theme(&mut self, choice: ThemeChoice, cx: &mut Context<App>) {
+        self.settings.theme = choice;
+        self.save_settings();
+        let dark = choice.is_dark(theme::os_is_dark(cx));
+        theme::apply(theme::Palette::for_mode(dark), cx);
+        cx.notify();
+    }
+
+    pub fn save_settings(&self) {
+        if self.demo.is_none() {
+            let _ = self.settings.save(&UiSettings::path(&self.cfg_dir));
+        }
+    }
+
+    pub fn toast(&self, window: &mut Window, cx: &mut gpui_kit::App, msg: &str, ok: bool) {
+        use gpui_kit::component::notification::Notification;
+        let n = if ok { Notification::success(msg.to_string()) } else { Notification::error(msg.to_string()) };
+        window.push_notification(n, cx);
+    }
+
+    pub fn copy_text(&self, text: String, what: &str, window: &mut Window, cx: &mut gpui_kit::App) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.toast(window, cx, &format!("{what} copied"), true);
+    }
+
+    // ------------------------------------------------------------------------------------------ demo
+
+    fn start_demo(&mut self, t: DemoTarget, unit: DemoUnit, window: &mut Window, cx: &mut Context<App>) {
+        self.selected_ip = Some(unit.address().to_string());
+        self.set_input(&self.inp.host.clone(), &format!("{} (demo)", unit.address()), window, cx);
+        self.set_input(&self.inp.password.clone(), "demo-not-a-real-password", window, cx);
+        let beyond_inventory = !matches!(t.screen, Screen::Inventory | Screen::Connect | Screen::Settings) || t.update_dialog;
+        let past_inspect = !matches!(t.screen, Screen::Inventory | Screen::Connect | Screen::Settings);
+        if past_inspect {
+            let raw = unit.raw();
+            let facts = unit.facts();
+            self.on_inspected(facts, raw, false, window, cx);
+        }
+        let _ = beyond_inventory;
+        match t.screen {
+            Screen::Confirm => {
+                self.ack_backup = true;
+                let partial: String = self.phrase().chars().take(9).collect();
+                self.set_input(&self.inp.typed.clone(), &partial, window, cx);
+            }
+            Screen::Install | Screen::Failed | Screen::Done => {
+                self.ack_backup = true;
+                self.ack_loss = true;
+                let model = self.facts.as_ref().map(|f| f.model.clone()).unwrap_or_default();
+                let script = match t.screen {
+                    Screen::Install => Script::Running,
+                    Screen::Failed => Script::Fails,
+                    _ => Script::Succeeds,
+                };
+                self.install_started = true;
+                self.screen = Screen::Install;
+                if script == Script::Succeeds {
+                    // Done needs a generated key as the real flow would have produced.
+                    if let Ok(kp) = generate_ssh_keypair("synofurb-demo") {
+                        self.sys.generated_key = Some((kp, self.cfg_dir.join("keys").join("nas_ed25519")));
+                    }
+                }
+                let out = demo::outcome(unit, "nas", "nasadmin");
+                demo::spawn_script(self.tx.clone(), script, unit, model, Some(out));
+            }
+            Screen::BootMgr => self.goal = Goal::BootManager,
+            Screen::Recover => self.goal = Goal::Recover,
+            _ => {}
+        }
+        if t.screen != Screen::Install {
+            self.screen = t.screen;
+        }
+        if matches!(t.screen, Screen::Inventory) {
+            self.start_scan(cx);
+        }
+        if t.screen == Screen::Settings {
+            self.return_to = Screen::Inventory;
+        }
+        if t.update_dialog {
+            let info = demo::update_info();
+            self.update = UpdateState::Available(Box::new(info));
+            cx.defer_in(window, |this, window, cx| this.open_update_dialog(window, cx));
+        }
+        if t.screen == Screen::Confirm && std::env::var("SYNOFURB_DEMO_SCROLL").as_deref() == Ok("bottom") {
+            // Screenshots of the gate: scroll to the confirmation fields once the page has been laid out.
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.page_scroll.scroll_to_bottom();
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    pub fn set_input(&self, st: &Entity<InputState>, value: &str, window: &mut Window, cx: &mut Context<App>) {
+        let v = value.to_string();
+        st.update(cx, |s, cx| s.set_value(v, window, cx));
+    }
+
+    pub fn input_value(&self, st: &Entity<InputState>, cx: &gpui_kit::App) -> String {
+        st.read(cx).value().to_string()
+    }
+
+    // ------------------------------------------------------------------------------------------ messages
+
+    pub fn on_msg(&mut self, m: Msg, window: &mut Window, cx: &mut Context<App>) {
+        match m {
+            Msg::ScanMethod { name, result } => {
+                self.scan.methods.push((name, result));
+            }
+            Msg::ScanPartial(inv) => self.inv = inv,
+            Msg::ScanDone(inv) => {
+                if self.demo.is_none() {
+                    let _ = inv.save(&self.cfg_dir.join("inventory.json"));
+                }
+                self.inv = inv;
+                self.scan.running = false;
+                self.scan.finished_once = true;
+            }
+            Msg::Inspected(r) => {
+                self.inspecting = false;
+                match r {
+                    Ok((f, raw)) => self.on_inspected(*f, raw, true, window, cx),
+                    Err(e) => self.error = Some(e),
+                }
+            }
+            Msg::Ev(e) => {
+                if matches!(e, Event::PointOfNoReturn) && !self.install.past_no_return {
+                    // The first time only: announce it for assistive technology and the user.
+                    self.toast(window, cx, "Point of no return passed. The disks are being changed.", false);
+                }
+                self.install.apply(e);
+                if self.log_follow {
+                    self.scroll_log_to_end();
+                }
+            }
+            Msg::Finished(r) => {
+                let ok = r.is_ok();
+                self.result = Some(r);
+                self.screen = if ok { Screen::Done } else { Screen::Failed };
+                window.focus(&self.focus, cx);
+            }
+            Msg::Recovered(r) => self.recover = Job::Done(r),
+            Msg::BootManagerDone(r) => self.bootmgr = Job::Done(r),
+            Msg::CompatRefreshed(r) => {
+                self.compat_refreshing = false;
+                self.compat = r.db;
+                self.compat_note = Some((r.summary, r.ok));
+            }
+            Msg::UpdateChecked(r) => match r {
+                Ok(info) if info.update_available => {
+                    if self.settings.should_announce(&info.latest, now_unix()) {
+                        self.update = UpdateState::Available(info);
+                    } else {
+                        self.update = UpdateState::UpToDate;
+                    }
+                }
+                Ok(_) => self.update = UpdateState::UpToDate,
+                Err(e) => self.update = UpdateState::CheckFailed(e),
+            },
+            Msg::UpdateProgress(p) => {
+                if let UpdateState::Downloading(info, _) = &self.update {
+                    self.update = UpdateState::Downloading(info.clone(), p);
+                }
+            }
+            Msg::UpdateDownloaded(r) => {
+                let info = match std::mem::replace(&mut self.update, UpdateState::Unknown) {
+                    UpdateState::Downloading(i, _)
+                    | UpdateState::Available(i)
+                    | UpdateState::Failed(i, _)
+                    | UpdateState::Verified(i, _) => i,
+                    other => {
+                        self.update = other;
+                        return;
+                    }
+                };
+                self.update = match r {
+                    Ok(vd) => UpdateState::Verified(info, vd),
+                    Err(e) => UpdateState::Failed(info, e),
+                };
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn scroll_log_to_end(&self) {
+        let n = self.install.log.visible_len();
+        if n > 0 {
+            self.log_scroll.scroll_to_item(n - 1, gpui_kit::ScrollStrategy::Bottom);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------ discovery
+
+    pub fn start_scan(&mut self, cx: &mut Context<App>) {
+        if self.scan.running {
+            return;
+        }
+        self.scan = ScanState { running: true, methods: vec![], finished_once: self.scan.finished_once };
+        if self.demo.is_some() {
+            // Replay the demo inventory as if it were streaming in.
+            let tx = self.tx.clone();
+            let full = demo::inventory();
+            std::thread::spawn(move || {
+                let mut inv = Inventory::default();
+                for (i, name) in
+                    ["Synology Assistant broadcast", "Bonjour/mDNS", "UPnP/SSDP", "Subnet sweep (DSM ports)"].iter().enumerate()
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(350));
+                    for d in full.devices.iter().skip(i * 2).take(2) {
+                        inv.merge(d.clone());
+                    }
+                    let _ = tx.unbounded_send(Msg::ScanPartial(inv.clone()));
+                    let _ = tx.unbounded_send(Msg::ScanMethod { name, result: Ok(2) });
+                }
+                let _ = tx.unbounded_send(Msg::ScanDone(full));
+            });
+            self.inv = Inventory::default();
+        } else {
+            worker::spawn_scan(self.tx.clone(), ScanOptions::default(), self.inv.clone());
+        }
+        cx.notify();
+    }
+
+    pub fn use_manual_address(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        let ip = self.input_value(&self.inp.manual_ip, cx).trim().to_string();
+        if ip.is_empty() {
+            return;
+        }
+        self.select_host(&ip, window, cx);
+    }
+
+    pub fn select_host(&mut self, host: &str, window: &mut Window, cx: &mut Context<App>) {
+        self.selected_ip = Some(host.to_string());
+        self.set_input(&self.inp.host.clone(), host, window, cx);
+        self.go(Screen::Connect, window, cx);
+    }
+
+    /// Compatibility status for a discovered unit (before inspection): the list entry, or Untested.
+    pub fn compat_for_found(&self, d: &Found) -> (Status, Option<String>) {
+        if self.demo.is_some()
+            && let Some(s) = demo::status_override(&d.model)
+        {
+            return (s, demo::status_reason(&d.model).map(String::from));
+        }
+        match self.compat.lookup(&d.model) {
+            Some(e) => {
+                let reason = match e.status {
+                    Status::Verified => None,
+                    Status::Unsupported => e.notes.clone(),
+                    _ => e.notes.clone(),
+                };
+                (e.status, reason.map(|r| r.chars().take(110).collect::<String>()))
+            }
+            None => (Status::Untested, Some("model not in the compatibility list".into())),
+        }
+    }
+
+    /// Compatibility information for the inspected unit.
+    pub fn compat_for_facts(&self, f: &DeviceFacts) -> CompatInfo {
+        let v = self.compat.status_for(f);
+        let mut info = CompatInfo { status: v.status, headline: v.headline, details: v.details, blocking: v.blocking };
+        if self.demo.is_some()
+            && !info.blocking
+            && let Some(s) = demo::status_override(&f.model)
+        {
+            info.status = s;
+            info.headline = format!("{}: {} (demo data)", f.model, s.label().to_lowercase());
+        }
+        info
+    }
+
+    // ------------------------------------------------------------------------------------------ connect / inspect
+
+    pub fn target(&self, cx: &gpui_kit::App) -> Result<SshTarget, String> {
+        let password = self.input_value(&self.inp.password, cx);
+        let auth = if self.use_key {
+            let p = self.input_value(&self.inp.key_path, cx);
+            Auth::Key(std::fs::read_to_string(p.trim()).map_err(|e| format!("cannot read the key file: {e}"))?)
+        } else {
+            Auth::Password(password.clone())
+        };
+        let sudo_typed = self.input_value(&self.inp.sudo, cx);
+        let sudo = if self.same_sudo || sudo_typed.is_empty() { password } else { sudo_typed };
+        let host = super::format::display_host(&self.input_value(&self.inp.host, cx));
+        if host.is_empty() {
+            return Err("Enter the address of the NAS.".into());
+        }
+        Ok(SshTarget {
+            host,
+            port: self.input_value(&self.inp.port, cx).trim().parse().map_err(|_| "The SSH port must be a number.".to_string())?,
+            user: self.input_value(&self.inp.user, cx).trim().to_string(),
+            auth,
+            sudo_password: Some(sudo).filter(|s| !s.is_empty()),
+        })
+    }
+
+    pub fn start_inspect(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        if self.inspecting {
+            return;
+        }
+        if self.demo.is_some() {
+            let (raw, facts) = (self.demo.unwrap().raw(), self.demo.unwrap().facts());
+            self.on_inspected(facts, raw, true, window, cx);
+            return;
+        }
+        match self.target(cx) {
+            Ok(t) => {
+                self.error = None;
+                self.inspecting = true;
+                worker::spawn_inspect(self.tx.clone(), t);
+            }
+            Err(e) => self.error = Some(e),
+        }
+        cx.notify();
+    }
+
+    pub fn on_inspected(&mut self, f: DeviceFacts, raw: String, navigate: bool, window: &mut Window, cx: &mut Context<App>) {
+        self.error = None;
+        self.form.req = PlanRequest::default();
+        self.form.keep = f.data_arrays().iter().map(|a| a.name.clone()).collect();
+        let n = f.candidate_disks().len();
+        self.form.copies = default_system_copies(n, n).max(1);
+        self.form.copies_auto = true;
+        self.form.system_gib = 0.0;
+        self.form.kernel = KernelChannel::Newest;
+        let serial = f.serial_console();
+        self.set_input(&self.inp.serial_text.clone(), &serial_field_text(&serial), window, cx);
+        self.set_input(&self.inp.serial_speed.clone(), &serial.speed.to_string(), window, cx);
+        let dtb = platform::mainline_dtb(&f.model).or_else(|| platform::mainline_dtb(&f.unique)).unwrap_or("");
+        self.set_input(&self.inp.dtb.clone(), dtb, window, cx);
+        self.sys.boot = BootChoice::Auto;
+        self.goal = Goal::Install;
+        let phrase = confirm_phrase(&f);
+        self.inp.typed.update(cx, |s, cx| s.set_placeholder(phrase, window, cx));
+        self.facts = Some(f);
+        self.inspect_raw = raw;
+        self.rebuild_plan();
+        if let Some(plan) = &self.form.plan {
+            let max_copies = self.facts.as_ref().map(|f| f.candidate_disks().len()).unwrap_or(1).max(1);
+            let _ = (plan, max_copies);
+        }
+        self.reset_copies_slider(window, cx);
+        if navigate {
+            self.go(Screen::Inspect, window, cx);
+        }
+    }
+
+    fn reset_copies_slider(&mut self, _window: &mut Window, cx: &mut Context<App>) {
+        let n = self.facts.as_ref().map(|f| f.candidate_disks().len()).unwrap_or(1).max(2) as f32;
+        let v = self.form.copies as f32;
+        let sl = cx.new(|_| SliderState::new().min(1.0).max(n).step(1.0).default_value(v));
+        self.subs.push(cx.subscribe(&sl, |this: &mut App, _, ev: &SliderEvent, cx| {
+            if let SliderEvent::Change(v) = ev {
+                this.form.copies = v.start().round().max(1.0) as usize;
+                this.rebuild_plan();
+                cx.notify();
+            }
+        }));
+        self.form.copies_slider = sl;
+    }
+
+    // ------------------------------------------------------------------------------------------ plan
+
+    /// Recompute the plan from the current form (cheap; runs on every change).
+    pub fn rebuild_plan(&mut self) {
+        let Some(f) = &self.facts else { return };
+        let form = &mut self.form;
+        form.req.system_size_mib = (form.system_gib.max(0.0) as u64) * 1024;
+        form.req.system_copies = if form.copies_auto { None } else { Some(form.copies) };
+        form.req.keep_arrays = if form.req.mode == StorageMode::KeepVolumes { Some(form.keep.iter().cloned().collect()) } else { None };
+        form.plan = Some(build_plan(f, &form.req));
+    }
+
+    /// Bring the system-size slider's range in line with the plan (the range depends on mode and copies).
+    pub fn sync_system_slider(&mut self, cx: &mut Context<App>) {
+        let Some(plan) = &self.form.plan else { return };
+        let (min, max, rec) = (
+            (plan.sizes.min_system_mib as f32 / 1024.0).ceil(),
+            (plan.sizes.max_system_mib as f32 / 1024.0).floor(),
+            (plan.sizes.recommended_system_mib as f32 / 1024.0).round(),
+        );
+        if max < min || (min, max) == self.form.system_range {
+            return;
+        }
+        if self.form.system_gib == 0.0 {
+            self.form.system_gib = rec;
+        }
+        self.form.system_gib = self.form.system_gib.clamp(min, max);
+        let v = self.form.system_gib;
+        let sl = cx.new(|_| SliderState::new().min(min).max(max).step(1.0).default_value(v));
+        self.subs.push(cx.subscribe(&sl, |this: &mut App, _, ev: &SliderEvent, cx| {
+            if let SliderEvent::Change(v) = ev {
+                this.form.system_gib = v.start().round();
+                this.rebuild_plan();
+                cx.notify();
+            }
+        }));
+        self.form.system_slider = sl;
+        self.form.system_range = (min, max);
+        self.rebuild_plan();
+    }
+
+    pub fn set_system_gib(&mut self, gib: f32, window: &mut Window, cx: &mut Context<App>) {
+        self.form.system_gib = gib;
+        let sl = self.form.system_slider.clone();
+        sl.update(cx, |s, cx| s.set_value(gib, window, cx));
+        self.rebuild_plan();
+        cx.notify();
+    }
+
+    pub fn plan_ok(&self) -> bool {
+        let Some(f) = &self.facts else { return false };
+        let supported = platform::classify(&f.unique, &f.uname_m).support != Support::Unsupported;
+        self.form.plan.as_ref().is_some_and(|p| p.is_ok()) && supported
+    }
+
+    // ------------------------------------------------------------------------------------------ system / install
+
+    pub fn phrase(&self) -> String {
+        self.facts.as_ref().map(confirm_phrase).unwrap_or_default()
+    }
+
+    pub fn gate<'a>(&'a self, typed: &'a str, phrase: &'a str) -> ConfirmGate<'a> {
+        ConfirmGate { phrase, typed, ack_backup: self.ack_backup, ack_loss: self.ack_loss, plan_ok: self.plan_ok() }
+    }
+
+    pub fn build_job(&mut self, cx: &gpui_kit::App) -> Result<InstallJob, String> {
+        let facts = self.facts.clone().ok_or("No NAS has been inspected.")?;
+        let plan = self.form.plan.clone().ok_or("There is no plan.")?;
+        let password = self.input_value(&self.inp.new_password, cx);
+        let hash = hash_password(&password).map_err(|e| e.to_string())?;
+        let mut cfg =
+            InstallConfig::new(self.input_value(&self.inp.hostname, cx).trim(), self.input_value(&self.inp.username, cx).trim(), hash);
+        cfg.timezone = self.input_value(&self.inp.timezone, cx).trim().to_string();
+        cfg.mirror_host = self.input_value(&self.inp.mirror, cx).trim().to_string();
+        cfg.enable_mgmt = self.sys.enable_mgmt;
+        cfg.kernel = self.form.kernel;
+        cfg.serial = serial_from_input(&self.input_value(&self.inp.serial_text, cx), &self.input_value(&self.inp.serial_speed, cx))
+            .ok_or("The serial console setting is not valid (for example ttyS0 and 115200).")?;
+        let dtb = self.input_value(&self.inp.dtb, cx);
+        cfg.dtb = Some(dtb.trim().to_string()).filter(|d| !d.is_empty());
+        match self.sys.key_mode {
+            KeyMode::Generate => {
+                let kp = generate_ssh_keypair(&format!("synofurb-{}", cfg.hostname)).map_err(|e| e.to_string())?;
+                let dir = self.cfg_dir.join("keys");
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let path = dir.join(format!("{}_ed25519", cfg.hostname));
+                std::fs::write(&path, &kp.private_openssh).map_err(|e| e.to_string())?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+                }
+                cfg.ssh_authorized_keys.push(kp.public_openssh.clone());
+                self.sys.generated_key = Some((kp, path));
+            }
+            KeyMode::Paste => cfg.ssh_authorized_keys.push(self.input_value(&self.inp.pubkey, cx).trim().to_string()),
+            KeyMode::None => {}
+        }
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup_dir = self.cfg_dir.join("dom-backups");
+        let method = match self.sys.boot.resolve(&facts) {
+            BootChoice::Dom => BootMethod::Dom { agent_dir: None, backup_dir },
+            BootChoice::Kexec => {
+                let k = self.input_value(&self.inp.kexec_path, cx);
+                BootMethod::Kexec { kexec_bin: Some(k.trim()).filter(|s| !s.is_empty()).map(PathBuf::from) }
+            }
+            _ => BootMethod::Kit { dir: PathBuf::from(self.input_value(&self.inp.kit_dir, cx).trim()) },
+        };
+        Ok(InstallJob {
+            target: self.target(cx)?,
+            facts,
+            plan,
+            cfg,
+            method,
+            cache_dir: self.cfg_dir.join("cache"),
+            with_firmware: self.sys.with_firmware,
+            verbose_installer: self.sys.verbose,
+            display_password: password,
+        })
+    }
+
+    /// Start the installation. Only reachable through the confirm gate; re-checks the gate itself.
+    pub fn start_install(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        let typed = self.input_value(&self.inp.typed, cx);
+        let phrase = self.phrase();
+        if !self.gate(&typed, &phrase).is_open() {
+            self.error = Some("The confirmation is not complete.".into());
+            cx.notify();
+            return;
+        }
+        if self.demo.is_some() {
+            self.install.reset();
+            self.install_started = true;
+            self.result = None;
+            self.go(Screen::Install, window, cx);
+            let unit = self.demo.unwrap();
+            let model = self.facts.as_ref().map(|f| f.model.clone()).unwrap_or_default();
+            demo::spawn_script(self.tx.clone(), Script::Succeeds, unit, model, Some(demo::outcome(unit, "nas", "nasadmin")));
+            return;
+        }
+        let job = match self.build_job(cx) {
+            Ok(j) => j,
+            Err(e) => {
+                self.error = Some(e);
+                cx.notify();
+                return;
+            }
+        };
+        self.error = None;
+        self.install.reset();
+        self.result = None;
+        self.cancel = Arc::new(AtomicBool::new(false));
+        match worker::spawn_install(self.tx.clone(), job, &self.cfg_dir.join("logs"), self.cancel.clone()) {
+            Ok(logger) => {
+                self.logger_path = logger.path().map(|p| p.to_path_buf());
+                self.install_started = true;
+                self.go(Screen::Install, window, cx);
+            }
+            Err(e) => self.error = Some(e),
+        }
+        cx.notify();
+    }
+
+    pub fn cancel_install(&mut self, cx: &mut Context<App>) {
+        if self.install.can_cancel() {
+            self.cancel.store(true, Ordering::Relaxed);
+            self.install.log.push(synofurb_core::logs::LogLine {
+                ts: String::new(),
+                level: synofurb_core::logs::Level::Warn,
+                source: synofurb_core::logs::Source::App,
+                msg: "Cancel requested: the installer stops at the next safe point.".into(),
+            });
+            cx.notify();
+        }
+    }
+
+    pub fn start_over(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        self.result = None;
+        self.install.reset();
+        self.install_started = false;
+        self.ack_backup = false;
+        self.ack_loss = false;
+        self.sys.generated_key = None;
+        self.reveal_password = false;
+        self.recover = Job::Idle;
+        self.bootmgr = Job::Idle;
+        self.set_input(&self.inp.typed.clone(), "", window, cx);
+        self.set_input(&self.inp.new_password.clone(), &generate_password(20), window, cx);
+        self.go(Screen::Inventory, window, cx);
+        self.start_scan(cx);
+    }
+
+    pub fn start_recover(&mut self, cx: &mut Context<App>) {
+        if self.recover.running() {
+            return;
+        }
+        if self.demo.is_some() {
+            self.recover = Job::Done(Ok("Boot flash default set to DSM (demo).".into()));
+            return;
+        }
+        match self.target(cx) {
+            Ok(t) => {
+                self.recover = Job::Running;
+                worker::spawn_recover(self.tx.clone(), t, self.cfg_dir.join("logs"));
+            }
+            Err(e) => self.recover = Job::Done(Err(e)),
+        }
+        cx.notify();
+    }
+
+    pub fn start_boot_manager(&mut self, cx: &mut Context<App>) {
+        if self.bootmgr.running() {
+            return;
+        }
+        if self.demo.is_some() {
+            self.bootmgr = Job::Done(Ok(()));
+            return;
+        }
+        let hostname = self.input_value(&self.inp.hostname, cx).trim().to_string();
+        let arm = self.facts.as_ref().is_some_and(|f| f.arch.is_arm());
+        match self.target(cx) {
+            Ok(t) => {
+                self.bootmgr = Job::Running;
+                worker::spawn_boot_manager(self.tx.clone(), t, hostname, arm, self.cfg_dir.join("dom-backups"), self.cfg_dir.join("logs"));
+            }
+            Err(e) => self.bootmgr = Job::Done(Err(e)),
+        }
+        cx.notify();
+    }
+
+    // ------------------------------------------------------------------------------------------ settings / updates
+
+    pub fn refresh_compat(&mut self, cx: &mut Context<App>) {
+        if self.compat_refreshing {
+            return;
+        }
+        if self.demo.is_some() {
+            self.compat_note = Some(("Demo mode: the list is not downloaded.".into(), true));
+            cx.notify();
+            return;
+        }
+        self.compat_refreshing = true;
+        worker::spawn_compat_refresh(self.tx.clone(), self.cfg_dir.clone());
+        cx.notify();
+    }
+
+    pub fn channel(&self) -> Channel {
+        self.settings.update_channel.parse().unwrap_or_default()
+    }
+
+    pub fn maybe_check_updates(&mut self) {
+        if self.settings.check_updates && !matches!(self.update, UpdateState::Checking) {
+            self.update = UpdateState::Checking;
+            worker::spawn_update_check(self.tx.clone(), version(), self.channel(), self.cfg_dir.join("updates"));
+        }
+    }
+
+    pub fn check_updates_now(&mut self, cx: &mut Context<App>) {
+        if self.demo.is_some() {
+            self.update = UpdateState::Available(Box::new(demo::update_info()));
+        } else {
+            self.update = UpdateState::Checking;
+            worker::spawn_update_check(self.tx.clone(), version(), self.channel(), self.cfg_dir.join("updates"));
+        }
+        cx.notify();
+    }
+
+    pub fn update_info(&self) -> Option<&UpdateInfo> {
+        match &self.update {
+            UpdateState::Available(i) | UpdateState::Downloading(i, _) | UpdateState::Verified(i, _) | UpdateState::Failed(i, _) => Some(i),
+            _ => None,
+        }
+    }
+
+    pub fn start_update_download(&mut self, cx: &mut Context<App>) {
+        let Some(info) = self.update_info().cloned() else { return };
+        if self.demo.is_some() {
+            self.update = UpdateState::Failed(
+                Box::new(info),
+                "Demo mode: nothing is downloaded. In a real run the file is checked against the project's signature and SHA-256 before it can be installed.".into(),
+            );
+            cx.notify();
+            return;
+        }
+        self.update =
+            UpdateState::Downloading(Box::new(info.clone()), Progress { downloaded: 0, total: info.asset.as_ref().map(|a| a.size) });
+        worker::spawn_update_download(self.tx.clone(), info.clone(), self.cfg_dir.join("updates").join("downloads").join(&info.latest));
+        cx.notify();
+    }
+
+    pub fn remind_tomorrow(&mut self, cx: &mut Context<App>) {
+        self.settings.remind_after = Some(now_unix() + 24 * 3600);
+        self.save_settings();
+        self.update = UpdateState::UpToDate;
+        cx.notify();
+    }
+
+    pub fn skip_version(&mut self, cx: &mut Context<App>) {
+        if let Some(i) = self.update_info() {
+            self.settings.skip_version = Some(i.latest.clone());
+        }
+        self.save_settings();
+        self.update = UpdateState::UpToDate;
+        cx.notify();
+    }
+
+    /// Apply a verified update. Never while an install is running.
+    pub fn apply_update(&mut self, cx: &mut Context<App>) {
+        if self.install_running() {
+            return;
+        }
+        let UpdateState::Verified(info, vd) = &self.update else { return };
+        match synofurb_core::updater::apply(&vd.path) {
+            Ok(synofurb_core::updater::ApplyOutcome::InstallerLaunched) => cx.quit(),
+            Ok(o) => {
+                let msg = match o {
+                    synofurb_core::updater::ApplyOutcome::Opened => {
+                        "The installer was opened. Finish the installation there, then start synofurb again.".to_string()
+                    }
+                    synofurb_core::updater::ApplyOutcome::Replaced { target, backup } => {
+                        format!(
+                            "Updated {} to {}. The previous version is kept at {}. Start synofurb again.",
+                            target.display(),
+                            info.latest,
+                            backup.display()
+                        )
+                    }
+                    synofurb_core::updater::ApplyOutcome::PackageInstalled { command } => format!("Installed with: {command}"),
+                    synofurb_core::updater::ApplyOutcome::PackageCommand { command } => {
+                        format!("This is a system package. Run it yourself: {command}")
+                    }
+                    synofurb_core::updater::ApplyOutcome::Manual { reason } => reason,
+                    synofurb_core::updater::ApplyOutcome::InstallerLaunched => String::new(),
+                };
+                self.compat_note = Some((msg, true));
+            }
+            Err(e) => self.update = UpdateState::Failed(info.clone(), e.to_string()),
+        }
+        cx.notify();
+    }
+
+    /// True while an installation is in progress (started and not finished): blocks updates and navigation away.
+    pub fn install_running(&self) -> bool {
+        self.install_started && self.result.is_none() && matches!(self.screen, Screen::Install)
+    }
+
+    // ------------------------------------------------------------------------------------------ files
+
+    /// Ask the OS for a file, then put its path into `target`.
+    pub fn browse_file(&mut self, target: Entity<InputState>, window: &mut Window, cx: &mut Context<App>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: None });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = rx.await
+                && let Some(p) = paths.first()
+            {
+                let s = p.display().to_string();
+                let _ = this.update_in(cx, |this, window, cx| this.set_input(&target, &s, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    pub fn browse_dir(&mut self, target: Entity<InputState>, window: &mut Window, cx: &mut Context<App>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: None });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = rx.await
+                && let Some(p) = paths.first()
+            {
+                let s = p.display().to_string();
+                let _ = this.update_in(cx, |this, window, cx| this.set_input(&target, &s, window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Text of the logins summary written by "Save logins to a file".
+    pub fn logins_text(&self, o: &Outcome, password: &str) -> String {
+        let ip = o.ip.map(|i| i.to_string()).unwrap_or_default();
+        format!(
+            "host: {}\naddress: {}\nuser: {}\npassword: {}\nssh: ssh {}@{}\nssh host key: {}\nmanagement: {}\n",
+            o.hostname,
+            ip,
+            o.username,
+            password,
+            o.username,
+            ip,
+            o.ssh_fingerprint.clone().unwrap_or_default(),
+            o.mgmt_url.clone().unwrap_or_default()
+        )
+    }
+
+    pub fn save_logins(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        let Some(Ok(o)) = self.result.clone() else { return };
+        let password = self.input_value(&self.inp.new_password, cx);
+        let text = self.logins_text(&o, &password);
+        let rx = cx.prompt_for_new_path(&self.cfg_dir, Some("nas-logins.txt"));
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(path))) = rx.await {
+                let ok = std::fs::write(&path, text).is_ok();
+                #[cfg(unix)]
+                if ok {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+                }
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.toast(window, cx, if ok { "Logins saved (readable only by you)" } else { "Could not save the file" }, ok)
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub fn password_input(&self) -> Input {
+        Input::new(&self.inp.password).mask_toggle()
+    }
+}
