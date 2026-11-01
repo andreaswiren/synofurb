@@ -249,6 +249,9 @@ if [ "$ENABLE_MGMT" = 1 ]; then
   install -d -m 755 /opt/synofurb-mgmt
   install -m 644 "$P/mgmt/synofurb_mgmt.py" /opt/synofurb-mgmt/synofurb_mgmt.py
   [ -f "$P/mgmt/README.md" ] && install -m 644 "$P/mgmt/README.md" /opt/synofurb-mgmt/README.md
+  # VERSION next to the script: `synofurb_mgmt.py health --json` and `synofurb manage health|update` read it (without it the unit
+  # would report the script's built-in default version and `manage update` could not tell an old copy from the current one).
+  install -m 644 "$P/mgmt/VERSION" /opt/synofurb-mgmt/VERSION
   install -m 644 "$P/mgmt/synofurb-mgmt.service" /etc/systemd/system/synofurb-mgmt.service
   systemctl enable synofurb-mgmt.service || true
 fi

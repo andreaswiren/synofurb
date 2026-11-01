@@ -53,6 +53,9 @@ const STATIC_FILES: &[(&str, &str)] = &[
     mgmt_asset!("mgmt/synofurb_mgmt.py", "synofurb_mgmt.py"),
     mgmt_asset!("mgmt/synofurb-mgmt.service", "synofurb-mgmt.service"),
     mgmt_asset!("mgmt/README.md", "README.md"),
+    // `VERSION` is what `synofurb_mgmt.py health --json` and `manage health` report; the single source is apps/mgmt-plane/VERSION
+    // (the same file `manage::MgmtBundle::embedded()` and `bundle create` ship).
+    mgmt_asset!("mgmt/VERSION", "VERSION"),
 ];
 
 pub struct Payload {
@@ -224,11 +227,115 @@ mod tests {
             "dsm-inspect.txt",
             "mgmt/synofurb_mgmt.py",
             "mgmt/synofurb-mgmt.service",
+            "mgmt/VERSION",
             "files/etc/ssh/sshd_config.d/10-synofurb.conf",
         ] {
             assert!(names.iter().any(|n| n == need), "missing {need} in {names:?}");
         }
         assert_eq!(p.sha256.len(), 64);
+    }
+
+    /// Unpack the payload of the demo job below `dir`.
+    #[cfg(unix)]
+    fn unpack_payload(dir: &std::path::Path) {
+        let (cfg, plan, facts) = setup();
+        let p = build_payload(&cfg, &plan, &facts, "x").unwrap();
+        tar::Archive::new(flate2::read::GzDecoder::new(&p.bytes[..])).unpack(dir).unwrap();
+    }
+
+    /// One source of truth for the management plane version: `apps/mgmt-plane/VERSION`. The installer's payload, the
+    /// `manage` update copy and the offline bundle's `mgmt/` all carry exactly that file.
+    #[test]
+    fn payload_carries_the_management_plane_version_file() {
+        let on_disk = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/mgmt-plane/VERSION")).unwrap();
+        let (cfg, plan, facts) = setup();
+        let p = build_payload(&cfg, &plan, &facts, "x").unwrap();
+        let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(&p.bytes[..]));
+        let mut in_payload = None;
+        for e in ar.entries().unwrap() {
+            let mut e = e.unwrap();
+            if e.path().unwrap().to_string_lossy() == "mgmt/VERSION" {
+                let mut s = String::new();
+                e.read_to_string(&mut s).unwrap();
+                in_payload = Some(s);
+            }
+        }
+        let in_payload = in_payload.expect("mgmt/VERSION is in the payload");
+        assert_eq!(in_payload, on_disk, "the payload's VERSION must be apps/mgmt-plane/VERSION, byte for byte");
+        let v = in_payload.trim();
+        assert!(!v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.'), "{v:?} is not a plain version number");
+        assert_eq!(v, crate::manage::bundled_mgmt_version(), "installer payload and `manage update` ship different versions");
+        let embedded = crate::manage::MgmtBundle::embedded();
+        for name in ["synofurb_mgmt.py", "synofurb-mgmt.service", "README.md", "VERSION"] {
+            let f = embedded.files.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name} missing from the embedded copy"));
+            let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(&p.bytes[..]));
+            let theirs = ar
+                .entries()
+                .unwrap()
+                .map(|e| e.unwrap())
+                .find(|e| e.path().unwrap().to_string_lossy() == format!("mgmt/{name}"))
+                .map(|mut e| {
+                    let mut b = vec![];
+                    e.read_to_end(&mut b).unwrap();
+                    b
+                })
+                .unwrap_or_else(|| panic!("mgmt/{name} missing from the payload"));
+            assert_eq!(f.data, theirs, "{name}: payload and the `manage` copy differ");
+        }
+    }
+
+    /// Run the management-plane block of the real `chroot-setup.sh` with `sh`, against a scratch root: the files land where the
+    /// unit expects them, and `VERSION` sits next to `synofurb_mgmt.py` (that is where the script's `read_version()` looks).
+    #[cfg(unix)]
+    #[test]
+    fn chroot_script_installs_version_next_to_the_management_script() {
+        let script = include_str!("../../../payload/chroot-setup.sh");
+        let start = script.find("# --- management plane").expect("management plane block");
+        let end = script[start..].find("\nsystemctl enable synofurb-firstboot").map(|i| start + i).expect("end of the block");
+        let block = &script[start..end];
+        let root = std::env::temp_dir().join(format!("sf-mgmt-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let pay = root.join("payload");
+        std::fs::create_dir_all(&pay).unwrap();
+        unpack_payload(&pay);
+        let r = root.display().to_string();
+        let block = block
+            .replace("/opt/synofurb-mgmt", &format!("{r}/opt/synofurb-mgmt"))
+            .replace("/etc/systemd/system", &format!("{r}/etc/systemd/system"));
+        assert!(!block.contains(" /opt/synofurb-mgmt") && !block.contains(" /etc/systemd"), "unrewritten absolute path:\n{block}");
+        std::fs::create_dir_all(root.join("etc/systemd/system")).unwrap();
+        let harness = format!(
+            "set -eu\nP={}\nENABLE_MGMT=1\nsay() {{ echo \"[chroot] $*\"; }}\nsystemctl() {{ echo \"systemctl $*\"; }}\n{block}\n",
+            sh_quote(&pay.display().to_string())
+        );
+        let out = std::process::Command::new("sh").arg("-c").arg(&harness).output().unwrap();
+        assert!(out.status.success(), "{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let dir = root.join("opt/synofurb-mgmt");
+        for f in ["synofurb_mgmt.py", "VERSION", "README.md"] {
+            assert!(dir.join(f).is_file(), "{f} was not installed");
+        }
+        assert!(root.join("etc/systemd/system/synofurb-mgmt.service").is_file());
+        assert_eq!(std::fs::read_to_string(dir.join("VERSION")).unwrap(), std::fs::read_to_string(pay.join("mgmt/VERSION")).unwrap());
+        assert_eq!(std::fs::read_to_string(dir.join("VERSION")).unwrap().trim(), crate::manage::bundled_mgmt_version());
+        // with the management plane switched off nothing is installed
+        let off = std::process::Command::new("sh").arg("-c").arg(harness.replace("ENABLE_MGMT=1", "ENABLE_MGMT=0")).output().unwrap();
+        assert!(off.status.success());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `sh -n` / `dash -n` always (when the shell exists); `shellcheck -s dash` as CI runs it, when it is installed.
+    #[cfg(unix)]
+    #[test]
+    fn chroot_script_is_valid_sh_and_shellcheck_clean() {
+        let f = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../payload/chroot-setup.sh");
+        for sh in ["dash", "sh"] {
+            if let Ok(o) = std::process::Command::new(sh).arg("-n").arg(&f).output() {
+                assert!(o.status.success(), "{sh} -n: {}", String::from_utf8_lossy(&o.stderr));
+            }
+        }
+        if let Ok(o) = std::process::Command::new("shellcheck").args(["-s", "dash"]).arg(&f).output() {
+            assert!(o.status.success(), "shellcheck:\n{}", String::from_utf8_lossy(&o.stdout));
+        }
     }
 
     #[test]
