@@ -29,9 +29,35 @@ for sc in $SCREENS; do
   sleep 8
   DISPLAY=:$D import -window root "$OUT/$sc.png" 2>/dev/null
   kill $APP $XV 2>/dev/null; wait $APP $XV 2>/dev/null
-  # gutter: x from W-22 to W-15, below the unit header and above the action bar. The window sits 2 px right of its origin without a WM.
-  sd=$(convert "$OUT/$sc.png" -crop 7x$((H-300))+$((W-22))+170 +repage -colorspace Gray -format '%[fx:standard_deviation*255]' info: 2>/dev/null)
-  bad=$(echo "${sd:-0} > 0.6" | bc -l 2>/dev/null || echo 0)
-  if [ "$bad" = "1" ]; then echo "OVERFLOW $sc (gutter deviation $sd)"; fail=1; [ -n "$KEEP" ] && mkdir -p "$KEEP" && cp "$OUT/$sc.png" "$KEEP/walk-$sc-$TEXT-$THEME.png"; else echo "ok       $sc"; fi
+  # gutter: x from W-22 to W-15, y from 210 (below stepper, unit header and borders) to H-120 (above the action bar). The window sits 2 px right of its origin without a WM.
+  sd=$(convert "$OUT/$sc.png" -crop 7x$((H-330))+$((W-22))+210 +repage -colorspace Gray -format '%[fx:standard_deviation*255]' info: 2>/dev/null)
+  bad=$(echo "${sd:-0} > 0.3" | bc -l 2>/dev/null || echo 0)
+  # the Help sheet is a panel over the right side of the page: the gutter test does not apply to it
+  case "$sc" in help) bad=0;; esac
+  # second detector: a horizontal scrollbar thumb (a 6 px tall run of the thumb colour, 60 px or longer) inside the page
+  hs=$(python3 -I - "$OUT/$sc.png" <<'PY'
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert("RGB"); w, h = im.size; px = im.load()
+THUMB = {(128, 128, 128), (134, 134, 134)}
+def runs(y):
+    r, start = [], None
+    for x in range(w):
+        if px[x, y] in THUMB:
+            start = x if start is None else start
+        elif start is not None:
+            if x - start >= 60: r.append((start, x))
+            start = None
+    if start is not None and w - start >= 60: r.append((start, w))
+    return r
+for y in range(100, h - 60):
+    for a, b in runs(y):
+        if all(any(a2 <= a + 3 and b2 >= b - 3 for a2, b2 in runs(y + d)) for d in (2, 3)):
+            print("1"); sys.exit()
+print("0")
+PY
+)
+  [ "$hs" = "1" ] && bad=1
+  if [ "$bad" = "1" ]; then echo "OVERFLOW $sc (gutter deviation $sd, horizontal scrollbar: $hs)"; fail=1; [ -n "$KEEP" ] && mkdir -p "$KEEP" && cp "$OUT/$sc.png" "$KEEP/walk-$sc-$TEXT-$THEME.png"; else echo "ok       $sc"; fi
 done
 exit $fail
