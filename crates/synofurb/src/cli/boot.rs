@@ -605,6 +605,56 @@ mod tests {
         assert!(select_disks(&facts, &["nope".into()]).unwrap_err().to_string().contains("no disk named 'nope'"));
     }
 
+    fn dom_json(default: &str, with_ours: bool) -> String {
+        let mut entries = vec![
+            json!({"index":0,"name":"SYNOLOGY_1","ours":false,"dsm":true}),
+            json!({"index":1,"name":"SYNOLOGY_2","ours":false,"dsm":true}),
+        ];
+        if with_ours {
+            entries.push(json!({"index":2,"name":"SYNOFURB_BOOT","ours":true,"dsm":false}));
+        }
+        json!({"entries":entries,"default":{"name":default},"files":[],"backup":{"exists":false,"path":""}}).to_string()
+    }
+
+    #[test]
+    fn the_state_text_never_calls_an_unread_menu_dsm() {
+        let unknown = UnitBootState::unknown(ReadOutcome::ToolMissing, "synofurb-dom is not on the unit");
+        let t = state_lines(&unknown).join("\n");
+        assert!(t.contains("NOT READ") && t.contains("NOT KNOWN") && t.contains("not known (synofurb-dom is not on the unit)"), "{t}");
+        assert!(!t.contains("as DSM left it") && !t.to_lowercase().contains("default entry:    dsm"), "{t}");
+        let clean = recovery::parse_dom_status(&dom_json("SYNOLOGY_2", false)).unwrap();
+        let t = state_lines(&clean).join("\n");
+        assert!(t.contains("Default entry:    DSM (SYNOLOGY_2)") && t.contains("as DSM left it"), "{t}");
+        let armed = recovery::parse_dom_status(&dom_json("SYNOFURB_BOOT", true)).unwrap();
+        let t = state_lines(&armed).join("\n");
+        assert!(
+            t.contains("the boot agent") && t.contains("SYNOFURB_BOOT") && t.contains("recover boot-dsm") && !t.contains("as DSM left it"),
+            "{t}"
+        );
+    }
+
+    #[test]
+    fn probe_texts_say_what_was_seen() {
+        let dsm = probe_line(&ProbeResult::DsmBack { ssh_banner: "SSH-2.0-OpenSSH_9".into(), web_port: 5000 });
+        assert!(dsm.starts_with("DSM is back"));
+        for r in [
+            ProbeResult::LoaderOnly { web_port: 5000 },
+            ProbeResult::AgentStillUp { ssh_banner: "SSH-2.0-dropbear".into() },
+            ProbeResult::SshOnly { ssh_banner: "SSH-2.0-OpenSSH_9".into() },
+            ProbeResult::Unreachable,
+        ] {
+            assert!(!probe_line(&r).contains("DSM is back"), "{r:?}");
+        }
+        assert!(wait_advice(&ProbeResult::AgentStillUp { ssh_banner: String::new() }).contains("boot-dsm"));
+        assert!(wait_advice(&ProbeResult::Unreachable).contains("Do not rely on a power cycle"));
+    }
+
+    #[test]
+    fn the_recovery_note_makes_no_data_promise_and_does_not_claim_a_reboot() {
+        let l = RECOVERY_NOTE.to_lowercase();
+        assert!(!l.contains("keeps data volumes") && l.contains("cannot promise") && l.contains("was not rebooted"), "{RECOVERY_NOTE}");
+    }
+
     #[test]
     fn boot_manager_status_documents() {
         let (mut facts, _) = demo_facts();
