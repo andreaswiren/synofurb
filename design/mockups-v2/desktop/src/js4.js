@@ -67,13 +67,14 @@ function confirm(){const u=cur(),g=S.gate,bad=u.disks.find(x=>x[3]),keep=S.plan.
  const bk=alertH(nobk?'err':'warn',nobk?'octagon-x':'triangle-alert',bkTxt);
  const twa=tw?alertH('warn','triangle-alert',`<b>Twin</b> ${d(tw.ip+' · SN '+snTail(tw))}`):'';
  const tri=`<div class="triad"><div class="tri dn"><div class="h">${ic('trash','s')}Destroyed</div><div class="v">${d(keep?u.disks.length*10+' GiB DSM system':u.disks.length+' disks · '+raw)}</div></div><div class="tri ch"><div class="h">${ic('triangle-alert','s')}Changed ${infoTxt('Entries and files are added; the whole boot flash is backed up first.','About the boot flash')}</div><div class="v">${d('Boot flash · backed up first')}</div></div><div class="tri ok"><div class="h">${ic('shield-check','s')}Preserved ${infoTxt(keep?'volume1 is left alone on a best-effort basis, with no guarantee.':'Wipe mode preserves nothing on the disks.','About preserved data')}</div><div class="v">${d(keep?'volume1 · best effort':'Nothing')}</div></div></div>`;
- const list=`<div class="grp" role="group" aria-label="Details"><ul>${li('layers',afterText(),'')}${(keep?li('hard-drive','DSM system and swap',u.disks.length*10+' GiB')+li('hard-drive','DSM settings · packages','—'):u.disks.map((x,i)=>li('hard-drive',x[0]+' · '+x[1]+' · '+dsn(u,i),TiB(x[2]))).join('')+li('database',u.vol.split(' · ').slice(0,2).join(' · '),u.used+' used')+li('server','DSM · settings · users',''))}</ul></div>`;
+ const after=`<div class="grp" role="group" aria-label="After"><ul>${li('layers',afterText(),'')}</ul></div>`;
+ const list=`<div class="grp" role="group" aria-label="Details"><ul>${(keep?li('hard-drive','DSM system and swap',u.disks.length*10+' GiB')+li('hard-drive','DSM settings · packages','—'):u.disks.map((x,i)=>li('hard-drive',x[0]+' · '+x[1]+' · '+dsn(u,i),TiB(x[2]))).join('')+li('database',u.vol.split(' · ').slice(0,2).join(' · '),u.used+' used')+li('server','DSM · settings · users',''))}</ul></div>`;
  return {html:`<div class="page"><div class="ph"><div><h1 class="t-title">Confirm erase</h1></div><span class="sp"></span>${bad?tag(d(bad[0]),{v:'warn',i:'triangle-alert',t:bad[0]+': '+bad[3]+'; consider replacing it first.'}):''}</div>
  <div class="cgrid"><div class="ca col gap16">${bk}${twa}</div>
   <aside class="dz" aria-label="Confirmation"><div class="dz-h">${ic('octagon-x','l')}<span>${d(PHRASE())}</span></div><div class="dz-b">
    ${chk('b1','I have a tested backup')}${chk('b2','I accept data loss')}${chk('b3','This is '+d(u.ip+' · '+snTail(u)))}
    <div class="fld"><span class="lab">${d(PHRASE(),'code')}</span><div class="inp ${phraseState()==='ok'?'ok':''}" id="phw"><input id="g-phrase" autocomplete="off" spellcheck="false" value="${esc(g.phrase)}" aria-label="Type the phrase" class="mono"><span id="phtag">${phraseTag()}</span></div>${tw?`<span class="sub" id="phint"${phraseState()==='ok'?' hidden':''}>Add serial last 4.</span>`:''}</div></div></aside>
-  <div class="ct col gap16"><div class="row"><span class="sub">Free to cancel until step 3; then no undo.</span>${infoBtn('recov','How recovery works')}</div>${tri}</div><div class="cl">${list}</div></div></div>`,
+  <div class="ct col gap16"><div class="row"><span class="sub">Free to cancel until step 3; then no undo.</span>${infoBtn('recov','How recovery works')}</div>${tri}${after}</div><div class="cl">${list}</div></div></div>`,
   foot:F(back('setup')+cmdBtn(),(ok?'':`<button type="button" class="ib" data-reason="${esc(missing())}" aria-label="Why locked"${tip('Why locked')}>${ic('info','s')}</button>`)+`<button class="btn danger" id="f-erase" data-act="erase" ${ok?'':`aria-disabled="true" tabindex="-1" data-reason="${esc(missing())}"`}>${ic('trash')}Erase and install</button>`)}}
 /* the typed-phrase feedback is neutral progress ("n of m") while the text is a prefix of the phrase; a red "No match" only after a wrong character */
 function phraseState(){const g=S.gate,v=norm(g.phrase),P=PHRASE();if(!v)return '';if(v===P)return 'ok';return P.startsWith(v)?'typing':'bad'}
@@ -91,13 +92,13 @@ function install(){const s=S.inst.step,n=instN(),pct=Math.min(100,Math.round(Mat
  const steps=ISTEPS.map((t,i)=>{const k=i+4,c=s>k?'done':s===k?'run':'';return (i===2?`<li class="pnr" role="presentation">${ic('flag','s')}No return</li>`:'')+`<li class="d ${c}"><span class="si">${c==='done'?ic('check'):''}</span><span class="grow">${i+1}. ${t}</span></li>`}).join('');
  const nl=Math.max(1,Math.min(LOGS.length,Math.ceil((s+1)/2.4))),lg=LOGS.slice(Math.max(0,nl-6),nl).map(logLine).join(''),last=LOGS[nl-1];
  const stepName=s<4?FLASH[Math.max(0,s)]:s<16?ISTEPS[s-4]:s===16?'Waiting for reboot':'Verifying';
- const where=s<4?'Phase 3 of 7':s<16?'Step '+Math.max(1,n)+' of 12':s===16?'Phase 6 of 7':'Phase 7 of 7';
+ const where=s<2?'Phase 3 of 7':s<4?'Phase 4 of 7':s<16?'Step '+Math.max(1,n)+' of 12':s===16?'Phase 6 of 7':'Phase 7 of 7';
  const ticks=Array.from({length:12},(_,i)=>`<i class="t ${n>i+1?'done':n===i+1?'run':''}"></i>`).join('');
  return {html:`<div class="page"><div class="ph"><div><h1 class="t-title">Installing</h1><div class="sub t-sub">Keep this window open.</div></div><span class="sp"></span><button class="tag acc rd lg" data-pop="phases">${ic('loader-circle','s')}${PHASES[phaseIdx()]}</button></div>
   ${S.inst.lost?alertH('err','wifi-off','<b>Connection lost.</b> The NAS keeps installing.',`<button class="btn" data-act="reconnect">${ic('refresh-cw')}Reconnect</button>`):''}
   <div class="card"><div class="card-b col"><div class="row"><span class="big-num">${pct}%</span><div class="grow col" style="gap:.125rem">${d('<b>'+stepName+'</b>')}${d(where)}</div><span class="mono sub" id="eta">${d('about '+Math.max(1,Math.round((17-s)*1.3))+' min left')}</span></div><div class="prog lg ${s<0?'ind':''}" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
    <div class="pstrip" aria-label="Installer steps"><div class="ticks">${ticks}</div><div class="pflag ${post?'passed':''}" style="left:${(2/12*100).toFixed(2)}%">${ic('flag','s')}<span>No return${post?' passed':''}</span></div></div></div></div>
-  <div class="col">${acc('isteps','Steps',`<ol class="stp">${steps}</ol>`,false)}${acc('iflash','Boot flash',`<ol class="stp d">${flash}</ol>`,s<4,tag('Backed up',{v:'ok',i:'shield-check'}))}${acc('ilog','Log',`<div class="logbox d" role="log">${lg}</div><div class="row" style="margin-top:.5rem"><button class="btn sm" data-act="copylog">${ic('copy')}Copy</button><button class="btn sm" data-act="openlog">${ic('file-text')}Open file</button></div>`,false,`<span class="logone d">${S.acc.ilog?'':esc(last[0]+' '+last[2])}</span>`)}</div></div>`,
+  <div class="col">${acc('isteps','Steps',`<ol class="stp">${steps}</ol>`,false)}${acc('iflash','Boot flash',`<ol class="stp d">${flash}</ol>`,s<4,tag('Backed up',{v:'ok',i:'shield-check'}))}${acc('ilog','Log',`<div class="logbox d" role="log">${lg}</div><div class="row" style="margin-top:.5rem"><button class="btn" data-act="copylog">${ic('copy')}Copy</button><button class="btn" data-act="openlog">${ic('file-text')}Open file</button></div>`,false,`<span class="logone d">${S.acc.ilog?'':esc(last[0]+' '+last[2])}</span>`)}</div></div>`,
   foot:F('',btn('Cancel',{id:'f-cancel',act:'cancelinst',off:post?'Not possible after step 3.':''})),after(){const r=$('.stp li.run');if(r&&S.acc.isteps)r.scrollIntoView({block:'nearest'})}}}
 /* ---- D9 Install stopped ----
    kinds: stopped (by you, before step 3), pre (failed before step 3), agent (staging: the agent never answered; see AGENT_* below), backup (staging: flash backup did not verify; nothing changed), post (after step 3). */
@@ -108,23 +109,26 @@ const STAGE_NAMES=['Connecting','Inspecting','Boot flash backup','Boot agent add
    - line ~422 (Boot manager): armed with timeout_min: 60.
    When the app gives up the watchdog has been running for up to those 10 minutes, so at most 30 - 10 = 20 minutes remain. */
 const AGENT_WATCHDOG_INSTALL=30,AGENT_WAIT=10,AGENT_WATCHDOG_BOOTMGR=60;
+/* The watchdog counts from when the agent BOOTED (1-3 min after the reboot command), so when the app gives up at least 30-10 = 20 minutes remain
+   (typically 21-23): the clock is an estimate "about 20 minutes or more", not a promise. If the agent never ran there is no watchdog at all
+   (boot/dom/README.md "Fail-safe design"), so at 0:00 the screen says "DSM not back" and keeps the manual recovery in view. */
 function mkFail(kind,o={}){const post=kind==='post',stage=kind==='agent'||kind==='backup';return Object.assign({kind,keep:false,phase:kind==='backup'?'done':'clock',t:post?900:kind==='agent'?(AGENT_WATCHDOG_INSTALL-AGENT_WAIT)*60:60,el:0,out:null,step:kind==='stopped'?Math.max(1,instN()||1):post?11:kind==='agent'?5:kind==='backup'?3:2,rpw:false},o)}
 const fmt=t=>t>=3600?Math.floor(t/3600)+':'+String(Math.floor(t%3600/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0'):Math.floor(t/60)+':'+String(t%60).padStart(2,'0');
 const STEPNAMES=['Load installer components','Preflight: match disks','Release RAID/LVM, wipe reclaimed areas','Partition the disks','Create RAID arrays','Create LVM volumes','Create filesystems','Mount the new system','Install the Debian base system','Write fstab and unpack the payload','Configure packages, users, boot','Finish: save logs, unmount, reboot'];
 function failed(){const f=S.fail,post=f.kind==='post',stopped=f.kind==='stopped',stage=f.kind==='agent'||f.kind==='backup',u=cur(),ph=f.phase;
  const untouched=!post&&!(S.F.disks);
- const sub=stage?'Phase 3 of 7':'Step '+f.step+' of 12';
- const cause={pre:'Disk changed after confirm',post:'Boot entry check failed',agent:'The agent did not answer',backup:'Flash backup did not verify'}[f.kind];
- const meaning=post?(f.step>=11?'Debian is installed.':'Disks are partly changed.'):(stage?(f.kind==='backup'?'Nothing was changed. DSM is untouched.':'DSM is untouched.'):'');
+ const sub=stage?(f.kind==='agent'?'Phase 4 of 7':'Phase 3 of 7'):'Step '+f.step+' of 12';
+ const cause={pre:'Disk changed after confirm',post:'Boot entry check failed',agent:'Agent did not answer',backup:'Flash backup did not verify'}[f.kind];
+ const meaning=post?(f.step>=11?'Debian is installed.':'Disks are partly changed.'):(stage?(f.kind==='backup'?'Nothing was changed. DSM is untouched.':'Data untouched.'):'');
  const alertTop=stopped?alertH('info','info','<b>Stopped by you.</b>'):alertH('err','octagon-x',`<b>${cause}</b> ${infoBtn('cause','Engine message')}`);
- const clockLbl=post?'Rescue shell closes in':f.kind==='agent'?'DSM returns in up to':'DSM returns in';
- const clockInfo=post?'Then DSM becomes the default and the NAS reboots into the DSM loader.':f.kind==='agent'?'The agent’s watchdog is 30 minutes from when it started. The app waited up to 10 minutes for it, so at most 20 minutes remain. Power-cycling the NAS now also boots DSM.':'Then DSM becomes the default and the NAS reboots.';
+ const clockLbl=post?'Rescue shell closes in':f.kind==='agent'?'DSM may return in about 20 min or more':'DSM returns in';
+ const clockInfo=post?'Then DSM becomes the default and the NAS reboots into the DSM loader.':f.kind==='agent'?'If the agent started, its watchdog counts 30 minutes from when it booted, 1 to 3 minutes after the reboot command. The app already waited 10, so 20 minutes or more remain: an estimate, not a promise. If the agent never started there is no watchdog and DSM does not come back by itself.':'Then DSM becomes the default and the NAS reboots.';
  let card='';
  if(ph==='clock')card=`<div class="card"><div class="card-b row gap16"><div class="col" style="gap:.25rem"><span class="sub">${clockLbl} ${infoTxt(clockInfo,'About the clock')}</span><span class="cd" id="cd" role="timer">${fmt(f.t)}</span></div><span class="sp"></span>${meaning?`<span class="sub">${meaning}</span>`:''}</div></div>`;
  else if(ph==='waiting')card=`<div class="card"><div class="card-b row gap16"><div class="col" style="gap:.25rem"><span class="sub">Waiting for DSM</span><span class="cd" id="cd" role="timer">${fmt(f.el)}</span></div><span class="sp"></span>${post?'<span class="sub">The shell closed. The NAS is rebooting.</span>':''}${ic('loader-circle','xl spin')}</div></div>`;
  else if(ph==='done')card=alertH('ok','shield-check',`<b>${meaning}</b> DSM is still running.`);
  else if(ph==='back')card=alertH('ok','circle-check','<b>DSM is back.</b> The NAS answered on its DSM address.');
- else if(ph==='notback')card=alertH('err','octagon-x','<b>DSM did not return.</b> Power-cycle the NAS.')
+ else if(ph==='notback')card=alertH('err','octagon-x',f.kind==='agent'?'<b>DSM not back.</b> The agent may never have run. Use the manual recovery.':'<b>DSM did not return.</b> Power-cycle the NAS.')
  else if(ph==='loader')card=alertH('warn','triangle-alert','<b>The NAS is in the DSM loader.</b> DSM’s system may be gone.');
  else if(ph==='lost')card=alertH('warn','wifi-off','<b>Lost contact with the NAS.</b> The clock keeps running on the NAS.');
  const acts={loader:`<button class="btn" data-dlg="reinstall">${ic('life-buoy')}Reinstall DSM</button>`,lost:`<button class="btn" data-act="reconnect">${ic('refresh-cw')}Reconnect</button>`}[ph];
@@ -137,9 +141,11 @@ function failed(){const f=S.fail,post=f.kind==='post',stopped=f.kind==='stopped'
  const dsmBack=ph==='back';
  const st=[['Disks','hard-drive',untouched?['Untouched','ok','shield-check']:['Changed','err','triangle-alert']],
   ['Boot flash','power',f.kind==='backup'?['Untouched','ok','shield-check']:post?['Restored','ok','circle-check']:['Entries added','warn','triangle-alert']],
-  ['DSM','server',f.kind==='backup'?['Running','ok','circle-check']:(post&&!dsmBack)||ph==='loader'?['Loader only','warn','triangle-alert']:['Default','ok','circle-check']]];
+  ['DSM','server',f.kind==='backup'?['Running','ok','circle-check']:f.kind==='agent'?(dsmBack?['Running','ok','circle-check']:['Default: not confirmed','warn','circle-question-mark']):(post&&!dsmBack)||ph==='loader'?['Loader only','warn','triangle-alert']:['Default','ok','circle-check']]];
  const rec=btn('Recovery options',{go:'recovery'});
- const foot=ph==='back'?F('',rec+btn('Done',{cls:'primary',go:'find'}))
+ const man=btn('Manual recovery',{act:'manualrec',icon:'life-buoy'});
+ const foot=f.kind==='agent'&&ph!=='back'?F('',rec+man+(ph==='notback'?btn('Check again',{cls:'primary',act:'waitdsm',icon:'refresh-cw'}):ph==='waiting'?'':btn('Wait for DSM',{cls:'primary',act:'waitdsm',icon:'loader-circle'})))
+  :ph==='back'?F('',rec+btn('Done',{cls:'primary',go:'find'}))
   :ph==='done'?F('',rec+btn('Back to Confirm',{cls:'primary',go:'confirm',icon:'arrow-left'}))
   :ph==='notback'?F('',rec+btn('Check again',{cls:'primary',act:'waitdsm',icon:'refresh-cw'}))
   :ph==='loader'?F('',rec+btn('Reinstall DSM',{cls:'primary',act:'reinstall',icon:'life-buoy'}))
@@ -149,7 +155,7 @@ function failed(){const f=S.fail,post=f.kind==='post',stopped=f.kind==='stopped'
   :F('',btn('Export diagnostics',{tipT:'Do this before the clock ends; secrets are removed.',icon:'download',act:'export'})+rec+btn('Open rescue shell',{cls:'primary',act:'rescue',icon:'terminal'}));
  return {html:`<div class="page"><div class="ph"><div><h1 class="t-title">Install stopped</h1><div class="sub t-sub">${sub}</div></div></div>
   ${ph==='clock'||ph==='waiting'||ph==='done'?alertTop:''}${cardH}${rescue}
-  <div class="cards3 statecards">${st.map(([l,i,t])=>`<div class="card"><div class="card-b row">${ic(i,'l')}<b>${l}</b><span class="sp"></span>${tag(t[0],{v:t[1],i:t[2]})}</div></div>`).join('')}</div>
+  <div class="cards3 statecards">${st.map(([l,i,t])=>`<div class="card"><div class="card-b row">${ic(i,'l')}<b>${l}</b><span class="sp"></span>${tag(t[0],{v:t[1],i:t[2],t:t[0].startsWith('Default: not')?'We cannot tell if the agent ran; if it did not, a power cycle boots it again.':''})}</div></div>`).join('')}</div>
   <div class="row"><button class="link" data-dlg="next">What happens next</button></div>${acc('flog','Log excerpt',`<div class="logbox d">${logLine(['14:27:19','e',stopped?'user: stop requested before step 3':f.kind==='backup'?'dom: sha256 NAS != local (flash backup rejected)':f.kind==='agent'?'agent: did not appear within 10 minutes':pre_(f)?'preflight: sdc partition table differs from the plan':'dom: read-back checksum mismatch on p2 (2/2)'])}${logLine(['14:27:19','e',stage?'@@FAIL phase '+(f.kind==='backup'?3:5)+'/7 staging stopped':'@@FAIL '+f.step+'/12 refusing to continue'])}</div>`)}</div>`,foot}}
 const pre_=f=>f.kind==='pre';
 /* ---- D10 Done ---- */
@@ -160,11 +166,11 @@ function done(){const u=cur(),y=S.sys,dn=S.done;
  return {html:`<div class="page"><div class="ph"><div><h1 class="t-title">Done</h1><div class="sub t-sub">Debian is running.</div></div><span class="sp"></span>${tag('Verified over SSH',{v:'ok',i:'circle-check',lg:true})}</div>
  <div class="card"><div class="card-b" style="padding:.5rem 1rem"><dl class="dl" style="grid-template-columns:8.75rem 1fr">
  ${row('Address',mono(u.ip),cp(u.ip,'address'))}${row('User',mono(y.user),cp(y.user,'user'))}
- ${row('Password',`<span class="mono" id="pwv">${dn.show?esc(y.pw):'•'.repeat(12)}</span>`,`<button class="btn ghost icon sm" data-act="showpw" aria-label="${dn.show?'Hide':'Show'} password">${ic(dn.show?'eye-off':'eye','s')}</button><button class="btn sm" data-act="copy-pw2">${ic(dn.copied?'check':'copy','s')}${dn.copied?'Copied':'Copy password'}</button>`,'synofurb does not store it and will not show it again.')}
+ ${row('Password',`<span class="mono" id="pwv">${dn.show?esc(y.pw):'•'.repeat(12)}</span>`,`<button class="btn ghost icon sm" data-act="showpw" aria-label="${dn.show?'Hide':'Show'} password">${ic(dn.show?'eye-off':'eye','s')}</button><button class="btn" data-act="copy-pw2">${ic(dn.copied?'check':'copy','s')}${dn.copied?'Copied':'Copy password'}</button>`,'synofurb does not store it and will not show it again.')}
  ${row('SSH',mono('ssh -i ~/.ssh/synofurb_ds918 '+y.user+'@'+u.ip),cp('ssh -i ~/.ssh/synofurb_ds918 '+y.user+'@'+u.ip,'command'))}
  ${row('Host key',mono('SHA256:Hd8vN0cYk2tqLxP4…KyVd6E'),cp('SHA256:Hd8vN0cYk2tqLxP4wZr1eJm7aB9sUf3oGiX5nKyVd6E','host key'),'Compare the full value when the browser warns.')}
- ${row('Web UI',mono('https://'+u.ip+':8443'),btn('Open',{cls:'sm',icon:'external-link',act:'openweb'}))}
- ${row('Certificate',mono('5E:91:C4:0B…D8:3C:A1'),`<button class="btn sm" data-pop="cert">Show full</button>`)}</dl></div></div>
+ ${row('Web UI',mono('https://'+u.ip+':8443'),btn('Open',{icon:'external-link',act:'openweb'}))}
+ ${row('Certificate',mono('5E:91:C4:0B…D8:3C:A1'),`<button class="btn" data-pop="cert">Show full</button>`)}</dl></div></div>
  ${bad?alertH('warn','triangle-alert',`<b>Replace ${d(bad[0])} soon.</b> ${d(bad[3])}`):''}
  <div class="row gap16 wrap"><span class="sp"></span><button class="btn" data-dlg="report">${ic('external-link')}Report result</button></div>
  ${acc('next','Next steps',`<ul style="margin-left:1.25rem"><li>${d('Open the web UI and sign in')}</li><li>${d('RAID sync runs for about 9 hours')}</li><li>${d('Reboot once to check it starts')}</li></ul>`)}</div>`,
@@ -176,8 +182,8 @@ function settings(){const pg=S.settings.page,pages=[['General','settings'],['Upd
  const it=(l,c,tp)=>`<div class="setitem"><span class="lab">${tp?lab(l,tp):l}</span>${c}</div>`;
  const segm=(k,o,v)=>`<div class="seg" role="group">${o.map(x=>`<button aria-pressed="${v===x}" data-set-${k}="${x}">${x}</button>`).join('')}</div>`;
  const P={General:it('Theme',segm('theme',['System','Light','Dark'],(S.themeMode==='System'?'System':S.theme==='dark'?'Dark':'Light')))+it('Text size',segm('size',['Default','Large','Largest'],S.textSize||'Default'),'Scales the whole window.'),
-  Updates:it('Channel',segm('chan',['Stable','Beta'],'Stable'))+it('Auto-update',selectH('set-auto',{opts:()=>[['Ask','Ask'],['Download','Download'],['Off','Off']],get:()=>S.opt.auto,set:v=>{S.opt.auto=v;render()},label:'Auto-update',w:'10rem'}),'Never installs while a conversion is running.')+it('Compatibility list',`${d('v2026.10.3')}<button class="btn sm" data-act="refreshlist">${ic('refresh-cw')}Refresh</button>`),
-  Data:it('Offline bundle',`${selectH('set-arch',{opts:()=>[['x86_64','x86_64'],['arm64','arm64']],get:()=>S.opt.arch,set:v=>{S.opt.arch=v;render()},label:'Offline bundle',w:'10rem'})}${S.bundle?tag('Ready',{v:'ok',i:'circle-check'}):tag('None',{})}<button class="btn sm" data-act="dlbundle">${ic('download')}Download</button>`),
-  Logs:it('Log folder',`${mono('~/.local/share/synofurb/logs')}<button class="btn sm" data-act="openfolder">${ic('folder-open')}Open</button>`),
+  Updates:it('Channel',segm('chan',['Stable','Beta'],'Stable'))+it('Auto-update',selectH('set-auto',{opts:()=>[['Ask','Ask'],['Download','Download'],['Off','Off']],get:()=>S.opt.auto,set:v=>{S.opt.auto=v;render()},label:'Auto-update',w:'10rem'}),'Never installs while a conversion is running.')+it('Compatibility list',`${d('v2026.10.3')}<button class="btn" data-act="refreshlist">${ic('refresh-cw')}Refresh</button>`),
+  Data:it('Offline bundle',`${selectH('set-arch',{opts:()=>[['x86_64','x86_64'],['arm64','arm64']],get:()=>S.opt.arch,set:v=>{S.opt.arch=v;render()},label:'Offline bundle',w:'10rem'})}${S.bundle?tag('Ready',{v:'ok',i:'circle-check'}):tag('None',{})}<button class="btn" data-act="dlbundle">${ic('download')}Download</button>`),
+  Logs:it('Log folder',`${mono('~/.local/share/synofurb/logs')}<button class="btn" data-act="openfolder">${ic('folder-open')}Open</button>`),
   Privacy:it('Send results',`<label class="sw"><input type="checkbox" aria-label="Send results"><span></span></label>`,'Asks before every report; serial numbers are left out.')}[pg];
  return {html:`<div class="page"><div class="ph"><h1 class="t-title">Settings</h1></div><div class="set"><nav class="nav" aria-label="Settings">${pages.map(([n,i])=>`<button aria-current="${pg===n}" data-set-page="${n}">${ic(i)}${n}</button>`).join('')}</nav><div class="card"><div class="card-b" style="padding:.25rem 1.25rem">${P}</div></div></div></div>`,foot:F('',btn('Close',{go:S.back||'find'}))}}

@@ -327,3 +327,4 @@ tr.sel .rad{background:var(--accent);border-color:var(--accent)}tr.sel .rad i{ba
 @container win (max-width:52rem){:root[data-screen=confirm] .page{gap:.5rem}:root[data-screen=confirm] .cgrid{gap:.5rem}:root[data-screen=confirm] .ca{gap:.5rem}:root[data-screen=confirm] .alert{padding:.375rem .75rem}:root[data-screen=confirm] .main{padding-top:.75rem;padding-bottom:.75rem}}
 .rrow{display:flex;gap:.75rem;align-items:flex-start;text-align:left;padding:.5rem .75rem;border:1px solid var(--border-strong);border-radius:var(--r);width:100%}
 .rrow:hover{background:var(--surface-2)}.rrow[aria-checked=true]{background:var(--accent-bg);border-color:var(--accent)}.rrow[aria-checked=true] .rad{background:var(--accent);border-color:var(--accent)}.rrow[aria-checked=true] .rad i{background:var(--on-accent)}
+.rows .row.rw .btn{flex:none}

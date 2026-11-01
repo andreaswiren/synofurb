@@ -518,5 +518,20 @@
 "n": "find-boot-agent",
 "h": "find",
 "q": "nofirst=1&unit=ds918&boot=result&facts=flash"
+},
+{
+"n": "recovery-agent",
+"h": "recovery",
+"q": "nofirst=1&unit=ds918&facts=agent"
+},
+{
+"n": "failed-agent-manual",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=agent&dlg=manualrec"
+},
+{
+"n": "failed-agent-next",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=agent&dlg=next"
 }
 ]
