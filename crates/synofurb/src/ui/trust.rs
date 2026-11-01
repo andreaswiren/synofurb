@@ -6,28 +6,72 @@
 //! Pure and unit-tested (no GPUI types).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use synofurb_core::hostkey::{HostKeyConfirm, HostKeyError, HostKeyPrompt};
 
-/// How long a worker waits for the user before it refuses.
-pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
+/// How long the question may stay open: the engine's own limit (`timing::HOST_KEY_ANSWER_TIMEOUT_SECS`), not a second number.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(synofurb_core::timing::HOST_KEY_ANSWER_TIMEOUT_SECS);
+
+/// What the dialog may show about the question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrustState {
+    /// The worker is waiting; `remaining_s` seconds are left.
+    Waiting { remaining_s: u64 },
+    /// The connection attempt has ended (timeout, cancel or failure): a late Trust would do nothing, so it is not offered.
+    Over,
+}
+
+/// A cheap handle the dialog keeps to see whether the worker still waits for the answer.
+#[derive(Clone)]
+pub struct TrustWatch {
+    ended: Arc<AtomicBool>,
+    started: Instant,
+    timeout: Duration,
+}
+
+impl TrustWatch {
+    pub fn state(&self, now: Instant) -> TrustState {
+        let elapsed = now.saturating_duration_since(self.started);
+        if self.ended.load(Ordering::SeqCst) || elapsed >= self.timeout {
+            TrustState::Over
+        } else {
+            TrustState::Waiting { remaining_s: (self.timeout - elapsed).as_secs() + 1 }
+        }
+    }
+}
+
+/// `2:41`.
+pub fn mmss(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
 
 /// A first-contact question for the UI. Answer with [`TrustAsk::answer`]; dropping it unanswered is a refusal.
 pub struct TrustAsk {
     pub prompt: HostKeyPrompt,
     reply: Sender<bool>,
+    watch: TrustWatch,
 }
 
 impl TrustAsk {
     /// A question nobody will receive an answer to (the demo's dialogs).
     pub fn demo(prompt: HostKeyPrompt) -> TrustAsk {
         let (reply, _rx) = channel::<bool>();
-        TrustAsk { prompt, reply }
+        TrustAsk { prompt, reply, watch: TrustWatch { ended: Arc::new(AtomicBool::new(false)), started: Instant::now(), timeout: ANSWER_TIMEOUT } }
     }
 
-    pub fn answer(self, trust: bool) {
-        let _ = self.reply.send(trust);
+    pub fn watch(&self) -> TrustWatch {
+        self.watch.clone()
+    }
+
+    /// Hand the answer to the waiting worker. `false` when nobody is waiting any more (the attempt ended first): nothing was
+    /// trusted, nothing was pinned.
+    pub fn answer(self, trust: bool) -> bool {
+        if self.watch.state(Instant::now()) == TrustState::Over {
+            return false;
+        }
+        self.reply.send(trust).is_ok()
     }
 }
 
@@ -35,10 +79,14 @@ impl TrustAsk {
 pub fn bridge(deliver: impl Fn(TrustAsk) -> bool + Send + Sync + 'static, timeout: Duration) -> HostKeyConfirm {
     Arc::new(move |prompt: &HostKeyPrompt| {
         let (reply, rx) = channel::<bool>();
-        if !deliver(TrustAsk { prompt: prompt.clone(), reply }) {
+        let ended = Arc::new(AtomicBool::new(false));
+        let watch = TrustWatch { ended: ended.clone(), started: Instant::now(), timeout };
+        if !deliver(TrustAsk { prompt: prompt.clone(), reply, watch }) {
             return false;
         }
-        rx.recv_timeout(timeout).unwrap_or(false)
+        let answer = rx.recv_timeout(timeout).unwrap_or(false);
+        ended.store(true, Ordering::SeqCst);
+        answer
     })
 }
 
@@ -92,6 +140,43 @@ mod tests {
             ask.answer(want);
             assert_eq!(h.join().unwrap(), want);
         }
+    }
+
+    #[test]
+    fn a_late_trust_after_the_connection_ended_is_not_delivered() {
+        let held: Arc<Mutex<Vec<TrustAsk>>> = Arc::new(Mutex::new(vec![]));
+        let h2 = held.clone();
+        let confirm = bridge(
+            move |a| {
+                h2.lock().unwrap().push(a);
+                true
+            },
+            Duration::from_millis(80),
+        );
+        let t = std::thread::spawn(move || confirm(&prompt()));
+        let ask = loop {
+            if let Some(a) = held.lock().unwrap().pop() {
+                break a;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let watch = ask.watch();
+        assert!(matches!(watch.state(Instant::now()), TrustState::Waiting { remaining_s } if remaining_s >= 1));
+        assert!(!t.join().unwrap(), "no answer in time: refused");
+        assert_eq!(watch.state(Instant::now()), TrustState::Over, "the dialog is told the attempt is over");
+        assert!(!ask.answer(true), "a late Trust claims nothing");
+    }
+
+    #[test]
+    fn the_remaining_time_counts_down_and_ends_at_the_engine_limit() {
+        assert_eq!(ANSWER_TIMEOUT.as_secs(), 180);
+        assert_eq!((mmss(180), mmss(161), mmss(5)), ("3:00".into(), "2:41".into(), "0:05".into()));
+        let a = TrustAsk::demo(prompt());
+        let w = a.watch();
+        let t0 = Instant::now();
+        let TrustState::Waiting { remaining_s: r0 } = w.state(t0) else { panic!() };
+        assert!((180..=181).contains(&r0));
+        assert_eq!(w.state(t0 + Duration::from_secs(181)), TrustState::Over);
     }
 
     #[test]

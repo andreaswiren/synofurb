@@ -538,6 +538,8 @@ mod strings {
         DLG_HOSTKEY: Dialog, "Trust this NAS?", "Checks that you are talking to your NAS.", "troubleshooting",
             "Compare this fingerprint with DSM (Control Panel, Terminal and SNMP). If you did not expect a new key, cancel. Nothing, not even your password, is sent before you trust it.";
         HK_FIRST: Label, "First connection to", "", "", "";
+        HK_REMAINING: Label, "Answer within", "", "", "";
+        HK_ENDED: Label, "Connection ended", "Close this dialog and start again.", "", "";
         HK_TRUST: Button, "Trust", "", "", "";
         DLG_HOSTKEY_CHANGED: Dialog, "Host key changed", "The NAS shows another key than the one saved.", "troubleshooting",
             "This NAS now answers with a different key than the one saved for it. That can mean DSM was reinstalled, or that another device took this address. synofurb stopped before sending anything, not even your password. Do not sign in until you have checked the unit. If you replaced it on purpose, forget the old key with this command.";

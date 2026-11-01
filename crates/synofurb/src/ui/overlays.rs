@@ -505,10 +505,25 @@ impl App {
         let host = ask.prompt.host.clone();
         let lines = super::trust::fingerprint_lines(&ask.prompt.fingerprint);
         let full = ask.prompt.fingerprint.clone();
+        let watch = ask.watch();
+        let ticker = cx.new(|cx| {
+            // repaint once a second so the remaining time is honest and the end of the attempt shows at once
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(std::time::Duration::from_secs(1)).await;
+                    if this.update(cx, |_: &mut TrustTick, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+            TrustTick { watch: watch.clone() }
+        });
         let slot = std::rc::Rc::new(std::cell::RefCell::new(Some(ask)));
         window.open_dialog(cx, move |d, _, cx| {
             let (s_no, s_yes) = (slot.clone(), slot.clone());
             let (lines, full) = (lines.clone(), full.clone());
+            let over = watch.state(std::time::Instant::now()) == super::trust::TrustState::Over;
             d.title(copy::DLG_HOSTKEY.short)
                 .w(px(layout::DIALOG_W))
                 .child(
@@ -525,7 +540,8 @@ impl App {
                                 .bg(gpui_kit::component::ActiveTheme::theme(cx).muted)
                                 .child(v_flex().flex_1().min_w_0().children(lines.iter().map(|l| super::kit::mono(cx, l.clone()))))
                                 .child(gpui_kit::component::clipboard::Clipboard::new("hk-copy").value(full.clone()).tooltip("Copy")),
-                        ),
+                        )
+                        .child(ticker.clone()),
                 )
                 .footer(
                     DialogFooter::new()
@@ -535,12 +551,16 @@ impl App {
                             }
                             window.close_dialog(cx);
                         }))
-                        .child(Button::new("hk-yes").primary().label(copy::HK_TRUST.short).on_click(move |_, window, cx| {
-                            if let Some(a) = s_yes.borrow_mut().take() {
-                                a.answer(true);
-                            }
-                            window.close_dialog(cx);
-                        })),
+                        .child(super::kit::with_reason(
+                            "hk-why",
+                            Button::new("hk-yes").primary().label(copy::HK_TRUST.short).on_click(move |_, window, cx| {
+                                if let Some(a) = s_yes.borrow_mut().take() {
+                                    a.answer(true);
+                                }
+                                window.close_dialog(cx);
+                            }),
+                            over.then(|| copy::HK_ENDED.tip.to_string()),
+                        )),
                 )
         });
     }
@@ -592,5 +612,28 @@ impl App {
                     Button::new("hk-cancel").primary().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)),
                 ))
         });
+    }
+}
+
+/// The line under the fingerprint: the remaining answer time, or that the connection already ended.
+struct TrustTick {
+    watch: super::trust::TrustWatch,
+}
+
+impl gpui_kit::Render for TrustTick {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use super::trust::{TrustState, mmss};
+        match self.watch.state(std::time::Instant::now()) {
+            TrustState::Waiting { remaining_s } => gpui_kit::component::h_flex()
+                .gap(px(6.0))
+                .items_baseline()
+                .child(super::kit::caption(cx, copy::HK_REMAINING.short))
+                .child(super::kit::mono_sm(cx, mmss(remaining_s)))
+                .into_any_element(),
+            TrustState::Over => gpui_kit::component::alert::Alert::warning("hk-ended", copy::HK_ENDED.tip)
+                .title(copy::HK_ENDED.short)
+                .icon(super::icons::icon(role::WARN))
+                .into_any_element(),
+        }
     }
 }
