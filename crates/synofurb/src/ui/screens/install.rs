@@ -198,12 +198,17 @@ impl App {
     /// "Cancel install?" (AlertDialog): Esc and the scrim never stop an install; only "Stop install" does.
     pub(crate) fn confirm_cancel(&mut self, window: &mut Window, cx: &mut Context<App>) {
         let app = cx.entity();
+        let item: &'static copy::Item = if self.fail_clock() == crate::ui::facts::FailClock::Halts {
+            &copy::INSTALL_CANCEL_DIALOG_HALT
+        } else {
+            &copy::INSTALL_CANCEL_DIALOG
+        };
         window.open_alert_dialog(cx, move |alert, _, cx| {
             let app = app.clone();
             alert
                 .icon(icons::icon_sized(role::WARN, 20.0, gpui_kit::component::ActiveTheme::theme(cx).warning))
-                .title(copy::INSTALL_CANCEL_DIALOG.short)
-                .description(copy::INSTALL_CANCEL_DIALOG.body)
+                .title(item.short)
+                .description(item.body)
                 .show_cancel(true)
                 .ok_text(copy::INSTALL_STOP.short)
                 .cancel_text(copy::INSTALL_KEEP_GOING.short)

@@ -520,7 +520,7 @@ pub fn fallback_lines(fw: Firmware) -> [&'static str; 3] {
         _ => [
             SAVED,
             "Before the point of no return the disks are untouched. Cancelling or power-cycling boots DSM as before.",
-            "After it, the installer stops instead of guessing and keeps its log and a rescue shell; DSM's operating system is gone. Reinstall DSM from find.synology.com with the .pat file for your model. No data recovery is promised.",
+            "After it, the installer stops instead of guessing and keeps its log and does not reboot by itself (power-cycle after reading it); DSM's operating system is gone. Reinstall DSM from find.synology.com with the .pat file for your model. No data recovery is promised.",
         ],
     }
 }

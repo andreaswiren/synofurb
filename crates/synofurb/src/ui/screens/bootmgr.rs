@@ -129,17 +129,12 @@ impl App {
                         .child(kit::mono(cx, cmd.clone()))
                         .child(Clipboard::new("bm-copy").value(cmd).tooltip("Copy")),
                 )
-                .child(match &self.recover {
-                    Job::Running => {
+                .children(
+                    self.rec_running.map(|_| {
                         Alert::info("bm-back-run", copy::REC_BOOT_RUNNING.short).icon(icons::icon(role::RUNNING)).into_any_element()
-                    }
-                    Job::Done(Ok(_)) => Alert::info("bm-back", copy::REC_BOOT_DONE.tip)
-                        .title(copy::REC_BOOT_DONE.short)
-                        .icon(icons::icon(role::INFO))
-                        .into_any_element(),
-                    Job::Done(Err(e)) => Alert::error("bm-back-err", e.clone()).icon(icons::icon(role::ERR)).into_any_element(),
-                    Job::Idle => div().into_any_element(),
-                })
+                    }),
+                )
+                .children(self.rec_result.as_ref().map(|r| kit::rec_alert("bm-back", r.level, &r.title, &r.detail)))
                 .into_any_element()
         };
         body = body.child(card);
@@ -179,7 +174,7 @@ impl App {
                 began.then(|| copy::BM_CANCEL_WHY.short.to_string()),
             )]);
         } else if done {
-            let returned = matches!(self.recover, Job::Done(Ok(_)));
+            let returned = self.rec_result.as_ref().is_some_and(|r| r.level == crate::ui::worker::RecLevel::Done);
             page = page.right(vec![
                 if returned {
                     Button::new("bm-rec")
@@ -193,8 +188,8 @@ impl App {
                         .icon(icons::icon(role::ROTATE_BACK))
                         .label(copy::BM_RETURN.short)
                         .tooltip(copy::BM_RETURN.tip)
-                        .loading(self.recover.running())
-                        .on_click(cx.listener(|this, _, _, cx| this.start_recover(cx)))
+                        .loading(self.rec_running.is_some())
+                        .on_click(cx.listener(|this, _, window, cx| this.open_boot_dsm_dialog(window, cx)))
                         .into_any_element()
                 },
                 Button::new("bm-done")

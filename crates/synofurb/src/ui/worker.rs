@@ -12,7 +12,7 @@ use synofurb_core::compat::{CompatDb, RefreshOutcome};
 use synofurb_core::discovery::{self, Found, Inventory, ScanOptions, mdns, probe, ssdp, syno_udp};
 use synofurb_core::logs::{Event, Logger};
 use synofurb_core::model::DeviceFacts;
-use synofurb_core::remote::SshSession;
+use synofurb_core::remote::{RemoteShell, SshSession};
 use synofurb_core::session::{self, InstallJob, Outcome, SshTarget};
 use synofurb_core::updater::{self, Channel, Progress, ReleaseCache, UpdateInfo, VerifiedDownload};
 
@@ -58,7 +58,8 @@ pub enum Msg {
         secs: u64,
     },
     DsmWaitDone(Box<synofurb_core::recovery::DsmWait>),
-    Recovered(Result<String, String>),
+    /// A recovery action finished (the engine verified it by reading the unit back, or says why not).
+    RecoveryDone(Box<RecOutcome>),
     BootManagerDone(Result<(), String>),
     /// Progress (0..=100) of a management-plane update or rollback.
     MgmtProgress(u8),
@@ -184,18 +185,6 @@ pub fn spawn_inspect(tx: Tx, t: SshTarget) {
     });
 }
 
-/// Read the unit's boot flash state (`recovery::read_unit_boot_state`): the real menu, never this session's memory.
-pub fn spawn_unit_state(tx: Tx, t: SshTarget) {
-    std::thread::spawn(move || {
-        let log = Logger::memory(None);
-        let r = synofurb_core::recovery::read_unit_boot_state(&t, &log);
-        if let Err(e) = &r {
-            note_changed_key(&tx, e);
-        }
-        send(&tx, Msg::UnitState(r.map(Box::new).map_err(|e| format!("{e:#}"))));
-    });
-}
-
 /// Probe the unit's DSM address every few seconds until DSM answers or `DSM_WAIT_MIN` minutes pass.
 pub fn spawn_wait_dsm(tx: Tx, host: String, cancel: Arc<AtomicBool>) {
     std::thread::spawn(move || {
@@ -212,12 +201,207 @@ pub fn spawn_wait_dsm(tx: Tx, host: String, cancel: Arc<AtomicBool>) {
     });
 }
 
-/// Set the unit's default boot entry to DSM (`recovery::boot_dsm`, no reboot), read it back, and report the engine's sentence.
-pub fn spawn_boot_dsm(tx: Tx, t: SshTarget) {
+/// What a recovery action asks for.
+#[derive(Clone, Debug)]
+pub enum RecAction {
+    /// Set the default boot entry to DSM; `reboot` also asks the unit to reboot (the user chose it).
+    BootDsm { reboot: bool },
+    /// Write a saved flash image back through `synofurb-dom restore` on the unit.
+    Restore { backup: PathBuf },
+    /// Take our entries out of the boot menu.
+    Remove,
+    /// Arm the boot agent for one boot, reboot and wait for it.
+    Agent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecLevel {
+    /// Done and confirmed by reading the unit back.
+    Done,
+    /// A note for the user (a command to run): neither success nor failure.
+    Info,
+    /// Something happened but it could not be confirmed, or the unit is in a state the user must look at.
+    Warn,
+    Error,
+}
+
+pub struct RecOutcome {
+    pub level: RecLevel,
+    pub title: String,
+    pub detail: String,
+    /// Commands to show with a Copy button (the agent's ssh line).
+    pub commands: Vec<String>,
+    /// The unit's boot state read back after the action (replaces what the Recovery page knows).
+    pub state: Option<synofurb_core::recovery::UnitBootState>,
+}
+
+impl RecOutcome {
+    fn err(title: &str, detail: String) -> RecOutcome {
+        RecOutcome { level: RecLevel::Error, title: title.into(), detail, commands: vec![], state: None }
+    }
+}
+
+/// Text for a typed recovery failure. "Could not be confirmed" is a warning, never a success and never a plain error.
+pub fn outcome_of_error(e: &synofurb_core::recovery::RecoveryError) -> RecOutcome {
+    use synofurb_core::recovery::RecoveryError as E;
+    match e {
+        E::Unverified { what, flash_may_have_changed, .. } => RecOutcome {
+            level: RecLevel::Warn,
+            title: format!("{} not confirmed", capital(what)),
+            detail: format!(
+                "{e}. {}",
+                if *flash_may_have_changed {
+                    "The boot flash may have changed: read the unit again before you do anything else."
+                } else {
+                    "Nothing was changed on the boot flash."
+                }
+            ),
+            commands: vec![],
+            state: None,
+        },
+        other => RecOutcome::err("Not done", other.to_string()),
+    }
+}
+
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
+/// Connect for a recovery action. A unit that runs the boot agent (dropbear on the SSH port) is reached with the unit's agent
+/// key and no host-key check (the agent's key changes at every boot and no password is ever sent to it); anything else uses the
+/// sign-in of the page and the host-key policy (pinned, trust on first use). Returns the session and whether it is the agent.
+fn recovery_session(t: &SshTarget, unit: &str, log: &Logger) -> anyhow::Result<(SshSession, bool)> {
+    use synofurb_core::hostkey::HostKeyPolicy;
+    use synofurb_core::recovery::{ProbeOptions, ProbeResult, probe_unit};
+    let opts = ProbeOptions { ssh_port: t.port, ..ProbeOptions::default() };
+    if matches!(probe_unit(&t.host, &opts), ProbeResult::AgentStillUp { .. }) {
+        let key = session::agent_key_for(unit, &session::config_keys_dir())?;
+        let s = SshSession::connect_with(
+            &t.host,
+            t.port,
+            "root",
+            &synofurb_core::remote::Auth::Key(key.private_openssh),
+            log,
+            &HostKeyPolicy::KeyAuthOnly,
+        )?;
+        return Ok((s, true));
+    }
+    Ok((SshSession::connect(&t.host, t.port, &t.user, &t.auth, log)?, false))
+}
+
+/// Run one recovery action on a worker thread (`unit` names the agent key: the serial number, else the address).
+pub fn spawn_recovery(tx: Tx, t: SshTarget, unit: String, action: RecAction) {
+    use synofurb_core::recovery as rec;
     std::thread::spawn(move || {
         let log = Logger::memory(None);
-        let r = synofurb_core::recovery::boot_dsm(&t, false, false, &log).map(|o| o.message).map_err(|e| e.to_string());
-        send(&tx, Msg::Recovered(r));
+        let out = (|| -> RecOutcome {
+            if let RecAction::Agent = action {
+                let cancel = AtomicBool::new(false);
+                return match rec::enter_agent(&t, &cancel, true, &log) {
+                    Ok(a) => RecOutcome {
+                        level: RecLevel::Done,
+                        title: "The agent answers".into(),
+                        detail: format!(
+                            "It reset the default to DSM when it started; its watchdog reboots the unit into DSM after {} minutes without a login. Open a shell with the command below.",
+                            synofurb_core::timing::BOOT_MANAGER_WATCHDOG_MIN
+                        ),
+                        commands: vec![a.ssh_command],
+                        state: None,
+                    },
+                    Err(e) => {
+                        note_changed_key(&tx, &e);
+                        if let Some(s) = session::SessionError::find(&e) {
+                            send(
+                                &tx,
+                                Msg::FailureKind { agent_timeout: s.boot_default_unconfirmed(), flash_untouched: s.flash_untouched() },
+                            );
+                            return RecOutcome {
+                                level: RecLevel::Warn,
+                                title: "The agent did not answer".into(),
+                                detail: s.to_string(),
+                                commands: vec![],
+                                state: None,
+                            };
+                        }
+                        RecOutcome::err("The agent was not started", format!("{e:#}"))
+                    }
+                };
+            }
+            let (mut ssh, agent) = match recovery_session(&t, &unit, &log) {
+                Ok(s) => s,
+                Err(e) => {
+                    note_changed_key(&tx, &e);
+                    return RecOutcome::err("The unit could not be reached", format!("{e:#}"));
+                }
+            };
+            let is_root = agent || ssh.exec("id -u", None).map(|r| r.stdout.trim() == "0").unwrap_or(false);
+            let sudo = if agent { None } else { t.sudo_password.clone() };
+            let mut p = synofurb_core::remote::Privileged { sh: &mut ssh, is_root, sudo_password: sudo };
+            let out = match &action {
+                RecAction::BootDsm { reboot } => match rec::boot_dsm_on(&mut p, *reboot, &log) {
+                    Ok(o) => RecOutcome {
+                        level: RecLevel::Done,
+                        title: if o.reboot_requested { "Reboot requested".into() } else { "Default set to DSM".into() },
+                        detail: o.message,
+                        commands: vec![],
+                        state: Some(o.state_after),
+                    },
+                    Err(e) => outcome_of_error(&e),
+                },
+                RecAction::Restore { backup } => {
+                    match rec::check_backup_file(backup).and_then(|checks| rec::restore_flash_on(&mut p, backup, checks, &log)) {
+                        Ok(o) => RecOutcome {
+                            level: RecLevel::Done,
+                            title: "Boot flash restored".into(),
+                            detail: format!(
+                                "{} MiB written from {}, read back and compared{}.",
+                                o.bytes / 1_048_576,
+                                o.backup.display(),
+                                if o.checked_against_sidecar { "; the file matched its checksum file" } else { "" }
+                            ),
+                            commands: vec![],
+                            state: Some(o.state_after),
+                        },
+                        Err(e) => outcome_of_error(&e),
+                    }
+                }
+                RecAction::Remove => match rec::remove_our_entries_on(&mut p, &log) {
+                    Ok(o) => RecOutcome {
+                        level: RecLevel::Done,
+                        title: "Our entries are removed".into(),
+                        detail: "The boot menu was read back: none of our entries are left and the default is DSM.".into(),
+                        commands: vec![],
+                        state: Some(o.state_after),
+                    },
+                    Err(e) => outcome_of_error(&e),
+                },
+                RecAction::Agent => unreachable!("handled above"),
+            };
+            ssh.close();
+            out
+        })();
+        send(&tx, Msg::RecoveryDone(Box::new(out)));
+    });
+}
+
+/// Unit state read: the agent is reached with its key, the rest with the page's sign-in.
+pub fn spawn_unit_state_for(tx: Tx, t: SshTarget, unit: String) {
+    std::thread::spawn(move || {
+        let log = Logger::memory(None);
+        let r = (|| -> anyhow::Result<synofurb_core::recovery::UnitBootState> {
+            let (mut ssh, agent) = recovery_session(&t, &unit, &log)?;
+            let is_root = agent || ssh.exec("id -u", None)?.stdout.trim() == "0";
+            let sudo = if agent { None } else { t.sudo_password.clone() };
+            let mut p = synofurb_core::remote::Privileged { sh: &mut ssh, is_root, sudo_password: sudo };
+            let st = synofurb_core::recovery::read_boot_state(&mut p);
+            ssh.close();
+            Ok(st)
+        })();
+        if let Err(e) = &r {
+            note_changed_key(&tx, e);
+        }
+        send(&tx, Msg::UnitState(r.map(Box::new).map_err(|e| format!("{e:#}"))));
     });
 }
 

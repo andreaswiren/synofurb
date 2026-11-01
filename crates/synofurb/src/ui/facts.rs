@@ -2,6 +2,7 @@
 //! the risk Tag and its "Way back" sentence, the Recovery rows and their primary, the Quick setup defaults and
 //! the twin-aware confirmation phrase. No GPUI types, so every rule is unit-tested.
 
+use super::copy;
 use synofurb_core::plan::DataRaid;
 
 /// What the app knows has been written to (or is wrong with) the unit.
@@ -108,11 +109,11 @@ impl Risk {
         match self {
             Risk::ReadOnly => "Nothing to undo.",
             Risk::PlanOnly if at == Where::Planning => {
-                "Nothing is written yet. From installer step 3 there is no undo: a failure opens a 15-minute rescue shell, then the DSM loader. No data promise."
+                "Nothing is written yet. From installer step 3 there is no undo: a failure leaves the log, then the DSM loader. No data promise."
             }
             Risk::PlanOnly => "Nothing to undo.",
             Risk::FlashChanged => "Power-cycle or Cancel: DSM boots. Our entries stay until removed.",
-            Risk::DisksChanged => "Rescue shell 15 min, then the DSM loader; no data promise.",
+            Risk::DisksChanged => "Read the log, then the DSM loader; no data promise.",
             Risk::FailedSafely => "DSM boots again by itself.",
             Risk::BootUnconfirmed => "DSM may not return by itself: see Help, Recovery.",
             Risk::DebianRunning => "Recovery stays under Manage.",
@@ -145,6 +146,10 @@ pub struct RecRow {
     pub off: Option<&'static str>,
 }
 
+/// The phrases that unlock the two destructive recovery actions.
+pub const RESTORE_PHRASE: &str = "RESTORE FLASH";
+pub const REMOVE_PHRASE: &str = "REMOVE ENTRIES";
+
 /// The Recovery rows as a function of the facts: a row that cannot work says why.
 pub fn recovery_rows(f: &UnitFacts) -> Vec<RecRow> {
     let dsm_default = !f.default_not_dsm && !f.agent_unknown;
@@ -163,22 +168,22 @@ pub fn recovery_rows(f: &UnitFacts) -> Vec<RecRow> {
         RecRow {
             kind: RecKind::Agent,
             label: "Open agent",
-            button: "Show command",
-            desc: "Shows the command that boots the SSH agent once.",
+            button: "Start",
+            desc: "Reboots into the SSH agent once; DSM stays the way back.",
             off: (!f.flash).then_some("No agent on the flash. Set it up under Boot manager."),
         },
         RecRow {
             kind: RecKind::RestoreFlash,
             label: "Restore flash",
-            button: "Show command",
-            desc: "Shows the command that writes the saved image back to the boot flash.",
+            button: "Restore",
+            desc: "Writes the saved image back to the boot flash.",
             off: (!f.flash).then_some("Nothing of ours is on the flash."),
         },
         RecRow {
             kind: RecKind::RemoveEntries,
             label: "Remove entries",
-            button: "Show command",
-            desc: "Shows the command that leaves only Synology's own files on the flash.",
+            button: "Remove",
+            desc: "Leaves only Synology's own files on the flash.",
             off: if !f.flash {
                 Some("Nothing of ours is on the flash.")
             } else if f.default_not_dsm && f.debian {
@@ -246,6 +251,10 @@ pub fn manual_recovery_commands(backup: Option<&str>) -> [String; 2] {
     ["sudo synofurb-dom default dsm --yes".to_string(), format!("sudo SYNOFURB_DOM=/dev/sdX synofurb-dom restore --yes {image}")]
 }
 
+pub fn shell_arg(s: &str) -> String {
+    shell_quote(s)
+}
+
 fn shell_quote(s: &str) -> String {
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+=:,@%".contains(c)) {
         s.to_string()
@@ -268,6 +277,59 @@ pub fn latest_backup(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         .collect();
     found.sort();
     found.pop()
+}
+
+// ------------------------------------------------------------------------------------------------ installer failure
+
+/// What the generated installer does after a failure, as the Failed page and the Cancel dialog say it. It comes from
+/// `script::failure_handling(&Plan)`: the 60 s and 15 min exist only on boot-flash units; every other unit halts and waits
+/// for a power cycle. No plan (nothing known) claims nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailClock {
+    /// Before the point of no return: DSM is the default and the unit reboots in `secs`.
+    DsmIn {
+        secs: u32,
+    },
+    /// After it: the unit reboots into the DSM loader in `secs` (time to read the log).
+    LoaderIn {
+        secs: u32,
+    },
+    /// The installer halts: "will NOT reboot by itself".
+    Halts,
+    Unknown,
+}
+
+pub fn fail_clock(h: Option<synofurb_core::script::FailureHandling>, past_ponr: bool) -> FailClock {
+    let Some(h) = h else { return FailClock::Unknown };
+    match (h.reboots_by_itself, past_ponr, h.before_ponr_secs, h.after_ponr_secs) {
+        (true, false, Some(secs), _) => FailClock::DsmIn { secs },
+        (true, true, _, Some(secs)) => FailClock::LoaderIn { secs },
+        (false, _, _, _) => FailClock::Halts,
+        _ => FailClock::Unknown,
+    }
+}
+
+/// `60 s`, `15 min`, `2 min 30 s`.
+pub fn clock_text(secs: u32) -> String {
+    match (secs / 60, secs % 60) {
+        (0, s) => format!("{s} s"),
+        (m, 0) => format!("{m} min"),
+        (m, s) => format!("{m} min {s} s"),
+    }
+}
+
+/// The "What happens next" dialog for a failure.
+pub fn next_item(clock: FailClock, past_ponr: bool, keep: bool, agent_unknown: bool) -> &'static copy::Item {
+    let halts = clock == FailClock::Halts;
+    match (agent_unknown, past_ponr, keep, halts) {
+        (true, ..) => &copy::DLG_NEXT_AGENT,
+        (_, false, _, false) => &copy::DLG_NEXT_PRE,
+        (_, false, _, true) => &copy::DLG_NEXT_PRE_HALT,
+        (_, true, false, false) => &copy::DLG_NEXT_WIPE,
+        (_, true, false, true) => &copy::DLG_NEXT_WIPE_HALT,
+        (_, true, true, false) => &copy::DLG_NEXT_KEEP,
+        (_, true, true, true) => &copy::DLG_NEXT_KEEP_HALT,
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ quick setup
@@ -417,7 +479,8 @@ mod tests {
         assert!(flashed[0].off.is_none() && flashed[1].off.is_none() && flashed[2].off.is_none() && flashed[3].off.is_none());
         let debian = recovery_rows(&UnitFacts { flash: true, debian: true, default_not_dsm: true, disks: true, ..f() });
         assert!(debian[3].off.unwrap().contains("Boot DSM first"), "Debian starts through the entries");
-        assert!(debian[1..4].iter().all(|r| r.button == "Show command"), "rows that only show a command say so");
+        assert_eq!(debian[2].button, "Restore");
+        assert_eq!(debian[3].button, "Remove");
         assert!(debian[0].desc.contains("loader"));
     }
 
@@ -511,5 +574,38 @@ mod tests {
     fn agent_command_is_filled_in() {
         assert_eq!(agent_command("192.168.1.20", "admin"), "synofurb-cli boot-manager enter --host 192.168.1.20 --user admin");
         assert!(agent_command("a b", "x").contains("'a b'"));
+    }
+
+    #[test]
+    fn the_failure_clock_follows_the_plan_not_a_literal() {
+        use synofurb_core::script::FailureHandling as H;
+        let dom = H { reboots_by_itself: true, before_ponr_secs: Some(60), after_ponr_secs: Some(900) };
+        let plain = H { reboots_by_itself: false, before_ponr_secs: None, after_ponr_secs: None };
+        assert_eq!(fail_clock(Some(dom), false), FailClock::DsmIn { secs: 60 });
+        assert_eq!(fail_clock(Some(dom), true), FailClock::LoaderIn { secs: 900 });
+        assert_eq!(fail_clock(Some(plain), false), FailClock::Halts);
+        assert_eq!(fail_clock(Some(plain), true), FailClock::Halts);
+        assert_eq!(fail_clock(None, true), FailClock::Unknown);
+        assert_eq!(
+            (clock_text(60), clock_text(900), clock_text(150), clock_text(5)),
+            ("1 min".into(), "15 min".into(), "2 min 30 s".into(), "5 s".into())
+        );
+    }
+
+    #[test]
+    fn what_happens_next_never_promises_a_reboot_the_unit_will_not_do() {
+        for keep in [false, true] {
+            for ponr in [false, true] {
+                let t = next_item(FailClock::Halts, ponr, keep, false);
+                assert!(t.body.contains("not reboot") || t.body.contains("NOT reboot"), "{}", t.key);
+                assert!(!t.body.to_lowercase().contains("rescue shell open"), "{}", t.key);
+                let r = next_item(FailClock::LoaderIn { secs: 900 }, ponr, keep, false);
+                assert!(!r.body.contains("will NOT reboot"), "{}", r.key);
+            }
+        }
+        assert_eq!(next_item(FailClock::DsmIn { secs: 60 }, false, false, true).key, "DLG_NEXT_AGENT");
+        for it in crate::ui::copy::ALL {
+            assert!(!it.body.to_lowercase().contains("open the rescue shell") && !it.short.contains("Open rescue"), "{}", it.key);
+        }
     }
 }

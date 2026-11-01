@@ -187,6 +187,22 @@ pub fn identity_line(cx: &GpuiApp, p: &Palette, model: &str, host: &str, serial:
         .into_any_element()
 }
 
+// ------------------------------------------------------------------------------------------------ recovery results
+
+/// A recovery result as an Alert: success only for what the engine confirmed by reading the unit back; warning for "not
+/// confirmed" and agent timeouts; error for a failure; info for a command the user runs.
+pub fn rec_alert(id: &'static str, level: super::worker::RecLevel, title: &str, detail: &str) -> AnyElement {
+    use super::worker::RecLevel as L;
+    use gpui_kit::component::alert::Alert;
+    let (a, icon) = match level {
+        L::Done => (Alert::success(id, detail.to_string()), role::OK),
+        L::Info => (Alert::info(id, detail.to_string()), role::INFO),
+        L::Warn => (Alert::warning(id, detail.to_string()), role::WARN),
+        L::Error => (Alert::error(id, detail.to_string()), role::ERR),
+    };
+    a.title(title.to_string()).icon(icons::icon(icon)).into_any_element()
+}
+
 // ------------------------------------------------------------------------------------------------ commands
 
 /// A command to run: wrapped monospace text and a stock `Clipboard` copy button. Never a success message.

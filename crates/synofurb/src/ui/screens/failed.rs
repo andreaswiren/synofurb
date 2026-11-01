@@ -1,12 +1,12 @@
 //! D9 Install stopped: what happened, whether disks and flash changed, the clock, the next action.
 //! Text follows docs/RECOVERY.md; no promise of data recovery, ever.
 
-use crate::ui::app::{App, Job};
+use crate::ui::app::App;
 use crate::ui::copy;
 use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
-use crate::ui::state::{BootChoice, Screen};
+use crate::ui::state::Screen;
 use crate::ui::theme::{Themed, Tone};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::accordion::Accordion;
@@ -15,8 +15,6 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, IntoElement, Window, px};
-
-const RESCUE_TIP: &str = "Not available in this version; use the NAS console (VGA or serial).";
 
 impl App {
     pub(crate) fn page_failed(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
@@ -30,7 +28,8 @@ impl App {
         // The engine's agent-timeout text promises that DSM boots again; that is not known, so it is never shown.
         let err = crate::ui::facts::scrub_agent_promise(&err);
         let uf_flash = self.unit_facts().flash;
-        let dom = self.facts.as_ref().is_some_and(|f| self.sys.boot.resolve(f) == BootChoice::Dom);
+        let clock = self.fail_clock();
+        let waits = matches!(clock, crate::ui::facts::FailClock::DsmIn { .. });
         let subtitle = if self.install.step_total > 0 {
             format!("Step {} of {} \u{00b7} {}", self.install.step_n, self.install.step_total, self.install.step_name)
         } else {
@@ -74,16 +73,29 @@ impl App {
                     .child(crate::ui::disclosure::info_tip("t-clock-agent", &copy::FAIL_CLOCK_AGENT, &app))
             }))
             .children((!self.agent_unknown).then(|| {
-                h_flex()
-                    .gap(px(6.0))
-                    .items_center()
-                    .child(kit::muted(cx, if touched { copy::FAIL_RESCUE_IN.short } else { copy::FAIL_DSM_IN.short }))
-                    .child(kit::mono(cx, if touched { "15 min" } else { "60 s" }))
-                    .child(crate::ui::disclosure::info_tip(
-                        "t-clock",
-                        if touched { &copy::FAIL_RESCUE_IN } else { &copy::FAIL_DSM_IN },
-                        &app,
-                    ))
+                use crate::ui::facts::{FailClock, clock_text};
+                match clock {
+                    FailClock::DsmIn { secs } => h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .child(kit::muted(cx, copy::FAIL_DSM_IN.short))
+                        .child(kit::mono(cx, clock_text(secs)))
+                        .child(crate::ui::disclosure::info_tip("t-clock", &copy::FAIL_DSM_IN, &app))
+                        .into_any_element(),
+                    FailClock::LoaderIn { secs } => h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .child(kit::muted(cx, copy::FAIL_LOADER_IN.short))
+                        .child(kit::mono(cx, clock_text(secs)))
+                        .child(crate::ui::disclosure::info_tip("t-clock", &copy::FAIL_LOADER_IN, &app))
+                        .into_any_element(),
+                    FailClock::Halts => h_flex()
+                        .gap(px(2.0))
+                        .child(kit::tag(&p, Tone::Warn, Some(role::WARN), copy::FAIL_HALTS.short))
+                        .child(crate::ui::disclosure::info_tip("t-clock", &copy::FAIL_HALTS, &app))
+                        .into_any_element(),
+                    FailClock::Unknown => gpui_kit::div().into_any_element(),
+                }
             }));
 
         let dsm_status: gpui_kit::AnyElement = {
@@ -123,15 +135,6 @@ impl App {
                 },
             }
         };
-        let status: gpui_kit::AnyElement = match &self.recover {
-            Job::Done(Ok(_)) => Alert::info("rec-ok", copy::REC_BOOT_DONE.tip)
-                .title(copy::REC_BOOT_DONE.short)
-                .small()
-                .icon(icons::icon(role::INFO))
-                .into_any_element(),
-            Job::Done(Err(e)) => Alert::error("rec-err", e.clone()).small().icon(icons::icon(role::ERR)).into_any_element(),
-            _ => gpui_kit::div().into_any_element(),
-        };
         let tail: Vec<String> = self
             .install
             .log
@@ -146,7 +149,7 @@ impl App {
             .rounded(cx.theme_radius())
             .bg(p.log_bg)
             .children(tail.into_iter().map(|l| kit::mono_sm(cx, l).text_color(p.log_fg)));
-        let acc = Accordion::new("fail-acc").bordered(true).item(|i| i.title(copy::FAIL_LOG.short).child(log));
+        let acc = Accordion::new("fail-acc").bordered(true).item(|i| i.title(copy::FAIL_LOG.short).open(!waits).child(log));
 
         let body = v_flex()
             .w_full()
@@ -167,7 +170,6 @@ impl App {
                 ),
             )
             .child(dsm_status)
-            .child(status)
             .child(acc);
 
         let primary: gpui_kit::AnyElement = if self.agent_unknown {
@@ -177,23 +179,28 @@ impl App {
                 .label(copy::REC_MANUAL.short)
                 .on_click(cx.listener(|this, _, window, cx| this.open_manual_recovery(window, cx)))
                 .into_any_element()
-        } else if touched {
-            kit::with_reason(
-                "rescue-why",
-                Button::new("rescue").primary().icon(icons::icon(role::TERMINAL)).label(copy::FAIL_OPEN_RESCUE.short),
-                Some(RESCUE_TIP.to_string()),
-            )
+        } else if waits {
+            Button::new("wait-dsm")
+                .primary()
+                .label(copy::FAIL_WAIT_DSM.short)
+                .loading(matches!(self.dsm_wait, crate::ui::app::DsmWaitState::Waiting { .. }))
+                .on_click(cx.listener(|this, _, window, cx| this.start_wait_dsm(window, cx)))
+                .into_any_element()
         } else {
-            kit::with_reason(
-                "wait-why",
-                Button::new("wait-dsm")
-                    .primary()
-                    .label(copy::FAIL_WAIT_DSM.short)
-                    .loading(matches!(self.dsm_wait, crate::ui::app::DsmWaitState::Waiting { .. }))
-                    .on_click(cx.listener(|this, _, window, cx| this.start_wait_dsm(window, cx))),
-                (!dom).then(|| "Nothing was written; DSM comes back when the NAS restarts.".to_string()),
-            )
+            // no rescue shell exists: what the user needs is the log, the diagnostics and the recovery options
+            Button::new("export")
+                .primary()
+                .icon(icons::icon(role::DOWNLOAD))
+                .label(copy::FAIL_EXPORT.short)
+                .tooltip(copy::FAIL_EXPORT.tip)
+                .on_click(cx.listener(|this, _, window, cx| this.copy_diagnostics(window, cx)))
+                .into_any_element()
         };
+        let copy_log = Button::new("copy-log")
+            .outline()
+            .icon(icons::icon(role::COPY))
+            .label(copy::FAIL_COPY_LOG.short)
+            .on_click(cx.listener(|this, _, window, cx| this.log_copy(window, cx)));
         let diag = Button::new("export")
             .outline()
             .label(copy::FAIL_EXPORT.short)
@@ -213,7 +220,11 @@ impl App {
                     .on_click(cx.listener(|this, _, window, cx| this.start_over(window, cx)))
                     .into_any_element(),
             ])
-            .right(vec![diag.into_any_element(), recovery.into_any_element(), primary])
+            .right(if waits || self.agent_unknown {
+                vec![diag.into_any_element(), copy_log.into_any_element(), recovery.into_any_element(), primary]
+            } else {
+                vec![copy_log.into_any_element(), recovery.into_any_element(), primary]
+            })
     }
 }
 

@@ -74,17 +74,14 @@ impl App {
         });
     }
 
-    /// "What happens next" with the variant that matches what happened.
+    /// "What happens next" with the variant that matches what happened and what this unit's installer does after a failure.
     pub fn open_next_dialog(&mut self, window: &mut Window, cx: &mut Context<App>) {
-        let item: &'static Item = if self.agent_unknown {
-            &copy::DLG_NEXT_AGENT
-        } else if !self.install.past_no_return {
-            &copy::DLG_NEXT_PRE
-        } else if self.form.req.mode == StorageMode::KeepVolumes {
-            &copy::DLG_NEXT_KEEP
-        } else {
-            &copy::DLG_NEXT_WIPE
-        };
+        let item: &'static Item = super::facts::next_item(
+            self.fail_clock(),
+            self.install.past_no_return,
+            self.form.req.mode == StorageMode::KeepVolumes,
+            self.agent_unknown,
+        );
         let app = cx.entity();
         dialog(window, cx, item, &app);
     }

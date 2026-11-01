@@ -136,7 +136,7 @@ mod strings {
         RISK_READ_ONLY: Label, "Read-only", "", "recovery", "Nothing to undo.";
         RISK_PLAN_ONLY: Label, "Plan only", "", "recovery", "Nothing to undo.";
         RISK_FLASH_CHANGED: Label, "Flash changed", "", "recovery", "Power-cycle or Cancel: DSM boots. Our entries stay until removed.";
-        RISK_DISKS_CHANGED: Label, "Disks changed", "", "recovery", "Rescue shell 15 min, then the DSM loader; no data promise.";
+        RISK_DISKS_CHANGED: Label, "Disks changed", "", "recovery", "Read the log, then the DSM loader; no data promise.";
         RISK_FAILED_SAFELY: Label, "Failed safely", "", "recovery", "DSM boots again by itself.";
         RISK_DEBIAN_RUNNING: Label, "Debian running", "", "recovery", "Recovery stays under Manage.";
         RISK_BOOT_UNCONFIRMED: Label, "Boot unconfirmed", "", "recovery", "DSM may not return by itself: see Help, Recovery.";
@@ -351,7 +351,7 @@ mod strings {
         CONF_FLASH: Label, "Boot flash", "Entries and files are added; the whole flash is backed up first.", "backups", "";
         CONF_TWIN: Label, "Same model nearby", "Another unit of this model is on the network; compare serials.", "first-install", "";
         DLG_RECOVERY: Dialog, "How recovery works", "DSM is the default; failures return to it.", "recovery",
-            "DSM stays the default boot entry. Before installer step 3 (the point of no return), a failure or cancel reboots the NAS into DSM within 60 seconds.\n\nFrom step 3, a failure leaves a rescue shell open for 15 minutes, then the NAS reboots into the DSM loader, which shows Synology's install page. DSM's own system may be gone by then; reinstall it from Synology.\n\nWe promise nothing about your data.";
+            "DSM stays the default boot entry. Before installer step 3 (the point of no return), a failure or cancel reboots the NAS into DSM within 60 seconds.\n\nFrom step 3, a failure keeps the log. On boot-flash units the NAS reboots after 15 minutes into the DSM loader, which shows Synology's install page; other units stop and wait for a power cycle. DSM's own system may be gone; reinstall it from Synology. There is no rescue shell.\n\nWe promise nothing about your data.";
 
         // ===================================================================== D8 install
         INSTALL_TITLE: Title, "Installing", "", "", "";
@@ -376,7 +376,9 @@ mod strings {
         FAIL_DISKS_UNTOUCHED: Label, "Disks untouched", "No disk was written.", "recovery", "";
         FAIL_FLASH_CHANGED: Label, "Flash changed", "Entries are on it; the full backup is on this computer.", "backups", "";
         FAIL_FLASH_UNTOUCHED: Label, "Flash untouched", "No boot entry was written.", "backups", "";
-        FAIL_RESCUE_IN: Label, "Rescue shell closes in", "Then DSM becomes the default and the NAS reboots.", "recovery", "";
+        FAIL_LOADER_IN: Label, "DSM loader in", "On boot-flash units the NAS reboots into Synology's loader after 15 minutes, which is time to read the log.", "recovery", "";
+        FAIL_HALTS: Label, "Will not reboot itself", "The installer stops and waits: read the log on the console, then power-cycle the NAS.", "recovery", "";
+        FAIL_COPY_LOG: Button, "Copy log", "", "", "";
         FAIL_DSM_IN: Label, "DSM returns in", "The installer's failure handler sets DSM as default and reboots.", "recovery", "";
         FAIL_WAITING: Label, "Waiting for DSM", "", "", "";
         FAIL_DSM_BACK: Label, "DSM is back.", "The NAS answered on its DSM address.", "", "";
@@ -384,7 +386,6 @@ mod strings {
         FAIL_DSM_AGENT_UP: Prose, "The boot agent is up.", "The unit is in the agent, not in DSM; reboot it into DSM from the agent.", "recovery", "";
         FAIL_DSM_NOTBACK: Label, "DSM did not return.", "Power-cycle the NAS and check again.", "recovery", "";
         FAIL_DSM_NOTBACK_AGENT: Label, "DSM not back.", "The agent may never have run, so use the manual recovery.", "recovery", "";
-        FAIL_OPEN_RESCUE: Button, "Open rescue shell", "", "", "";
         FAIL_WAIT_DSM: Button, "Wait for DSM", "", "", "";
         FAIL_EXPORT: Button, "Export diagnostics", "Do this before the clock ends; secrets are removed.", "troubleshooting", "";
         FAIL_RECOVERY: Button, "Recovery options", "", "", "";
@@ -399,11 +400,18 @@ mod strings {
         DLG_NEXT_AGENT: Dialog, "What happens next", "", "recovery",
             "The app waited 10 minutes and cannot tell what happened. If the agent started, its watchdog reboots the NAS into DSM, 20 minutes or more from now.\n\nIf it never started, the NAS may keep booting the agent after every power cycle. Then choose SYNOLOGY_2 in the boot menu on a serial or VGA console, or restore the boot flash from another computer.\n\nDSM is not confirmed. Your disks are untouched.";
         DLG_NEXT_PRE: Dialog, "What happens next", "", "recovery",
-            "No disk was changed. The NAS sets DSM as the default and reboots in 60 seconds, then DSM starts as before.\n\nIf DSM is not back after 10 minutes, power-cycle the NAS. Our entries stay on the boot flash until you remove them under Recovery.";
+            "No disk was changed. The installer sets DSM as the default and reboots the NAS in 60 seconds, then DSM starts as before.\n\nIf DSM is not back after 10 minutes, power-cycle the NAS. Our entries stay on the boot flash until you remove them under Recovery.";
+        DLG_NEXT_PRE_HALT: Dialog, "What happens next", "", "recovery",
+            "No disk was changed. This installer does not reboot the NAS by itself: it stops and waits. Read the log, then power-cycle the NAS and DSM starts as before.";
         DLG_NEXT_WIPE: Dialog, "What happens next", "", "recovery",
-            "The first disk was changed and DSM's own system may be gone. Export diagnostics first, then open the rescue shell.\n\nAt zero DSM becomes the default and the NAS reboots into the DSM loader, which shows Synology's install page. Reinstall DSM from Synology. A Wipe install leaves no data to keep.";
+            "The first disk was changed and DSM's own system may be gone. Export diagnostics first; there is no rescue shell.\n\nThe installer sets DSM as the default and reboots the NAS after 15 minutes into the DSM loader, which shows Synology's install page. Reinstall DSM from Synology. A Wipe install leaves no data to keep.";
+        DLG_NEXT_WIPE_HALT: Dialog, "What happens next", "", "recovery",
+            "The first disk was changed and DSM's own system may be gone. Export diagnostics first; there is no rescue shell.\n\nThis installer will NOT reboot the NAS by itself. Read the log on the console, then power-cycle it: the DSM loader shows Synology's install page. Reinstall DSM from Synology.";
         DLG_NEXT_KEEP: Dialog, "What happens next", "", "recovery",
-            "The first disk was changed. Export diagnostics, then open the rescue shell.\n\nAt zero the NAS reboots into the DSM loader and Synology's install page. Your data volume was not part of any write command and should be intact unless the failure was a hardware problem.\n\nSynology documents a reinstall that can keep data volumes; check its current documentation. We cannot guarantee it.";
+            "The first disk was changed. Export diagnostics first; there is no rescue shell.\n\nAfter 15 minutes the NAS reboots into the DSM loader and Synology's install page. Your data volume was not part of any write command and should be intact unless the failure was a hardware problem. We cannot guarantee it.";
+        DLG_NEXT_KEEP_HALT: Dialog, "What happens next", "", "recovery",
+            "The first disk was changed. Export diagnostics first; there is no rescue shell.\n\nThis installer will NOT reboot the NAS by itself. Power-cycle it after reading the log; the DSM loader shows Synology's install page. Your data volume was not part of any write command, but we cannot guarantee it.";
+        INSTALL_CANCEL_DIALOG_HALT: Dialog, "Cancel install?", "Nothing is written before step 3.", "recovery", "Before step 3 no disk is changed. This installer does not reboot the NAS by itself: after stopping, power-cycle it and DSM starts as before.";
 
         // ===================================================================== D10 done
         DONE_TITLE: Title, "Done", "", "", "";
@@ -511,7 +519,17 @@ mod strings {
         REC_BOOT_RUNNING: Label, "Setting default to DSM", "", "", "";
         REC_BOOT_DONE: Label, "Default set to DSM", "Reboot the NAS to start DSM; this app does not reboot it.", "recovery", "";
         REC_BOOT_DSM_OK: Button, "Set default", "", "", "";
-        DLG_BOOT_DSM: Dialog, "Boot DSM next?", "Makes DSM the default boot entry.", "recovery", "This makes DSM the default boot entry on the unit. It does not reboot the unit: do that yourself afterwards. If the unit does not answer, use Manual recovery.";
+        DLG_BOOT_DSM: Dialog, "Boot DSM next?", "Makes DSM the default boot entry.", "recovery", "This makes DSM the default boot entry on the unit and reads it back. Set default does not reboot it; Set and reboot also asks the unit to reboot, and DSM is back only when it answers. If the unit does not answer, use Manual recovery.";
+        REC_BOOT_DSM_REBOOT: Button, "Set and reboot", "", "", "";
+        DLG_AGENT: Dialog, "Reboot into the agent?", "The unit reboots once into the SSH agent.", "boot-manager", "The unit reboots into the boot agent and this app waits up to 10 minutes for it. The agent resets the default to DSM when it starts. If it does not answer, the default is not confirmed.";
+        REC_AGENT_OK: Button, "Reboot", "", "", "";
+        REC_AGENT_RUNNING: Label, "Waiting for the agent", "", "", "";
+        REC_RESTORE_RUNNING: Label, "Restoring the flash", "", "", "";
+        REC_REMOVE_RUNNING: Label, "Removing our entries", "", "", "";
+        REC_SHOW_COMMAND: Button, "Show command", "", "", "";
+        REC_NO_BACKUP: Label, "No saved image", "No saved boot-flash image is in this folder.", "", "";
+        DLG_RESTORE: Dialog, "Restore boot flash?", "Writes the saved image back to the boot flash.", "backups", "This writes the saved image back to the boot flash through the unit. The engine checks the file, snapshots the flash, writes, reads back and compares. File:";
+        DLG_REMOVE: Dialog, "Remove our entries?", "Leaves only Synology's own files on the flash.", "boot-manager", "This removes our entries from the boot flash and sets DSM as the default. The result is read back from the unit.";
         MGMT_ROLLBACK_OK: Button, "Roll back", "", "", "";
         DLG_MGMT_ROLLBACK: Dialog, "Roll back the update?", "Goes back to the version the unit had before.", "", "The unit goes back to the management app version it had before the last update. The web UI restarts and is unavailable for a few seconds. Disks and data are not touched.";
         DLG_HOSTKEY: Dialog, "Trust this NAS?", "Checks that you are talking to your NAS.", "troubleshooting",
@@ -639,7 +657,7 @@ mod strings {
         T_BACKUPS: Topic, "Backups", "Your backup and what synofurb saves.", "",
             "Your own backup is essential. In Wipe mode nothing on the disks is preserved; in Keep mode the data volume is left alone on a best-effort basis with no guarantee.\n\nsynofurb also saves on this computer:\n\n- **Boot-flash image**: the whole flash, hash-verified, before the first flash write. Keep it off the NAS.\n- **Disk metadata backup**: the first and last 1 MiB of every disk we change (partition tables, GPT headers). That is metadata only, not your files, and it cannot bring back a formatted filesystem.\n- The plan, the install script and the log.";
         T_RECOVERY: Topic, "Recovery", "What returns the unit to DSM, by phase.", "",
-            "DSM stays the default boot entry and failures point it back at DSM, except when the agent never answered: then the default is not confirmed.\n\n- **Before the boot flash is changed**: nothing to undo.\n- **Agent installed**: the agent resets the default to DSM first; it reboots to DSM if nobody logs in.\n- **Before step 3**: a failure reboots to DSM after 60 s; a power cycle also works.\n- **After step 3**: rescue shell for 15 minutes, then the DSM loader runs; DSM's own system may be gone, reinstall it from Synology (find.synology.com); no data promise.\n- **Agent never answered**: DSM is not confirmed and may not return by itself; use Manual recovery (SYNOLOGY_2 in the boot menu).\n- **Debian installed**: pick the previous kernel in the boot menu or boot DSM.\n\nCommands: `synofurb recover`, `synofurb boot-manager enter`.";
+            "DSM stays the default boot entry and failures point it back at DSM, except when the agent never answered: then the default is not confirmed.\n\n- **Before the boot flash is changed**: nothing to undo.\n- **Agent installed**: the agent resets the default to DSM first; it reboots to DSM if nobody logs in.\n- **Before step 3**: a failure reboots to DSM after 60 s; a power cycle also works.\n- **After step 3**: no rescue shell. Boot-flash units reboot after 15 minutes into the DSM loader; others stop and wait for a power cycle. DSM's own system may be gone, reinstall it from Synology (find.synology.com); no data promise.\n- **Agent never answered**: DSM is not confirmed and may not return by itself; use Manual recovery (SYNOLOGY_2 in the boot menu).\n- **Debian installed**: pick the previous kernel in the boot menu or boot DSM.\n\nCommands: `synofurb recover`, `synofurb boot-manager enter`.";
         T_BOOT_MANAGER: Topic, "Boot manager", "A one-shot SSH agent on the boot flash.", "",
             "x86 units boot through a small internal boot flash. Boot manager adds an SSH agent entry to it. The whole flash is saved to this computer first; disks are untouched; DSM's entry stays and stays the default.\n\nThe agent is one-shot: it resets the default to DSM when it starts and reboots to DSM after 60 minutes without a login. If it never starts, the unit may keep booting it; see Recovery. From it, `sf-boot kexec <kernel-url> <initrd-url>` starts another Linux kernel. kexec starts Linux kernels only, not Windows or UEFI-only ISOs. Once another system runs, nothing of ours is running: power-cycling returns to the default entry. That system can see and change your disks.";
         T_SERIAL_CONSOLE: Topic, "Serial console", "Boot messages without a network.", "",
@@ -649,7 +667,7 @@ mod strings {
         T_CLI: Topic, "Command line", "Everything in the app is also a command.", "",
             "Everything in the app is also a command, and the command line is the screen-reader accessible path (the app window does not support screen readers).\n\n`synofurb scan` discovers units.\n\n`synofurb plan --host <ip> --user <admin>` shows the plan, read-only.\n\n`synofurb install ... --have-backup --accept-data-loss --confirm` converts a unit.\n\n`synofurb recover` and `synofurb boot-manager enter` handle recovery.\n\nThe Copy command button on Plan, System and Confirm copies the equivalent command. On Confirm the three confirmation flags are included only after you confirm.";
         T_TROUBLESHOOTING: Topic, "Troubleshooting", "No units, SSH off, login failed, installer stuck.", "",
-            "**No units found**: wrong network or VLAN, NAS still booting, firewall (UDP 9999, mDNS 5353, TCP 22). Use Add by IP.\n\n**SSH is off**: enable it in DSM, Control Panel, Terminal and SNMP.\n\n**Login failed**: DSM may auto-block this computer after a few failures; check the account is an administrator.\n\n**Installer did not come up**: before step 3, DSM returns by itself. If the app says the default is not confirmed, it may not: use Manual recovery.\n\n**Boot flash write failed**: the tool restores the flash and verifies it; use the rescue shell within 15 minutes.\n\nLogs: `~/.local/share/synofurb/logs` (secrets removed). Settings, Logs opens the folder; About copies diagnostics.";
+            "**No units found**: wrong network or VLAN, NAS still booting, firewall (UDP 9999, mDNS 5353, TCP 22). Use Add by IP.\n\n**SSH is off**: enable it in DSM, Control Panel, Terminal and SNMP.\n\n**Login failed**: DSM may auto-block this computer after a few failures; check the account is an administrator.\n\n**Installer did not come up**: before step 3, DSM returns by itself. If the app says the default is not confirmed, it may not: use Manual recovery.\n\n**Boot flash write failed**: the tool restores the flash and verifies it; read the install log and use Recovery.\n\nLogs: `~/.local/share/synofurb/logs` (secrets removed). Settings, Logs opens the folder; About copies diagnostics.";
         T_REPORT_RESULT: Topic, "Report a result", "How a model moves from Untested to Verified.", "",
             "Reports move a model from Untested towards Verified. After an install, press Report result on the Done screen. It opens a pre-filled GitHub issue (compat report template) with the model, DSM version, synofurb version, result, boot method and a log excerpt without secrets. The serial number is left out. Nothing is sent without your click, and Settings, Privacy has an off switch. A maintainer checks the log and changes the status through a reviewed pull request.";
         T_RAID_LEVELS: Topic, "RAID levels", "What each level costs and survives.", "",
@@ -865,8 +883,8 @@ pub static SCREENS: &[ScreenCopy] = &[
             &FAIL_TITLE,
             &FAIL_DISKS_CHANGED,
             &FAIL_FLASH_CHANGED,
-            &FAIL_RESCUE_IN,
-            &FAIL_OPEN_RESCUE,
+            &FAIL_LOADER_IN,
+            &FAIL_COPY_LOG,
             &FAIL_EXPORT,
             &FAIL_RECOVERY,
             &FAIL_NEXT,
@@ -1031,7 +1049,7 @@ mod tests {
         assert_eq!(sentences("One sentence only."), 1);
         assert_eq!(sentences("One. Two."), 2);
         assert_eq!(sentences("Version 1.2.3 is out"), 0);
-        assert_eq!(sentences("Rescue shell 15 min, then the DSM loader; no data promise."), 1);
+        assert_eq!(sentences("Read the log, then the DSM loader; no data promise."), 1);
     }
 
     #[test]

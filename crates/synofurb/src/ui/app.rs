@@ -201,7 +201,8 @@ pub struct App {
     pub log_follow: bool,
     pub log_selected_all: bool,
     pub log_scroll: gpui_kit::UniformListScrollHandle,
-    pub recover: Job<String>,
+    /// The recovery action running now (one at a time).
+    pub rec_running: Option<super::facts::RecKind>,
     /// The unit's boot state as read over SSH when Recovery opened (never this session's memory), or why it was not read.
     pub unit_state: Option<synofurb_core::recovery::UnitBootState>,
     pub unit_state_err: Option<String>,
@@ -431,7 +432,7 @@ impl App {
             log_follow: true,
             log_selected_all: false,
             log_scroll: gpui_kit::UniformListScrollHandle::new(),
-            recover: Job::Idle,
+            rec_running: None,
             unit_state: None,
             unit_state_err: None,
             unit_state_loading: false,
@@ -758,10 +759,15 @@ impl App {
                 self.agent_unknown = agent_timeout;
                 self.flash_untouched = flash_untouched;
             }
-            Msg::Recovered(r) => {
-                self.recover = Job::Done(r);
-                // the default boot entry just changed: read the unit again
-                self.read_unit_state(cx);
+            Msg::RecoveryDone(o) => {
+                self.rec_running = None;
+                let o = *o;
+                if let Some(st) = o.state {
+                    self.unit_state = Some(st);
+                    self.unit_state_err = None;
+                }
+                self.rec_result =
+                    Some(super::screens::recover::RecResult { level: o.level, title: o.title, detail: o.detail, commands: o.commands });
             }
             Msg::UnitState(r) => {
                 self.unit_state_loading = false;
@@ -906,7 +912,7 @@ impl App {
         self.agent_unknown = false;
         self.install_started = false;
         self.bootmgr = Job::Idle;
-        self.recover = Job::Idle;
+        self.rec_running = None;
         self.rec_result = None;
         self.unit_state = None;
         self.unit_state_err = None;
@@ -1275,21 +1281,62 @@ impl App {
         self.start_scan(cx);
     }
 
-    /// Boot DSM next: set the default boot entry to DSM on the unit (the engine reads it back; it does not reboot).
-    pub fn start_recover(&mut self, cx: &mut Context<App>) {
-        if self.recover.running() {
+    /// What the installer of the planned install does after a failure (boot-flash units reboot, the rest halt).
+    pub fn fail_clock(&self) -> super::facts::FailClock {
+        super::facts::fail_clock(self.form.plan.as_ref().map(synofurb_core::script::failure_handling), self.install.past_no_return)
+    }
+
+    /// The name the unit's agent key is kept under: its serial number, else the address.
+    pub fn unit_key_name(&self, cx: &gpui_kit::App) -> String {
+        match &self.facts {
+            Some(f) if !f.serial.is_empty() => f.serial.clone(),
+            _ => match &self.manage_unit {
+                Some(u) if !u.serial.is_empty() => u.serial.clone(),
+                _ => super::format::display_host(&self.input_value(&self.inp.host, cx)),
+            },
+        }
+    }
+
+    /// Run a recovery action on the unit (the engine checks and reads the unit back). Demo: a scripted result.
+    pub fn start_recovery(&mut self, kind: super::facts::RecKind, action: worker::RecAction, cx: &mut Context<App>) {
+        if self.rec_running.is_some() {
             return;
         }
+        self.rec_result = None;
         if self.demo.is_some() {
-            self.recover = Job::Done(Ok("The default boot entry is DSM. The unit was not rebooted (demo).".into()));
+            self.rec_running = Some(kind);
+            let (title, detail) = match &action {
+                worker::RecAction::BootDsm { reboot } => {
+                    (if *reboot { "Reboot requested" } else { "Default set to DSM" }, "Demo: nothing was sent to a unit.")
+                }
+                worker::RecAction::Restore { .. } => ("Boot flash restored", "Demo: nothing was written."),
+                worker::RecAction::Remove => ("Our entries are removed", "Demo: nothing was removed."),
+                worker::RecAction::Agent => ("The agent answers", "Demo: no unit was rebooted."),
+            };
+            let out = worker::RecOutcome {
+                level: worker::RecLevel::Done,
+                title: title.into(),
+                detail: detail.into(),
+                commands: vec![],
+                state: None,
+            };
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1200));
+                let _ = tx.unbounded_send(Msg::RecoveryDone(Box::new(out)));
+            });
+            cx.notify();
             return;
         }
         match self.target(cx) {
             Ok(t) => {
-                self.recover = Job::Running;
-                worker::spawn_boot_dsm(self.tx.clone(), t);
+                self.rec_running = Some(kind);
+                let unit = self.unit_key_name(cx);
+                worker::spawn_recovery(self.tx.clone(), t, unit, action);
             }
-            Err(e) => self.recover = Job::Done(Err(e)),
+            Err(e) => {
+                self.rec_result = Some(super::screens::recover::RecResult::error("Not done", e));
+            }
         }
         cx.notify();
     }
@@ -1302,7 +1349,8 @@ impl App {
         match self.target(cx) {
             Ok(t) => {
                 self.unit_state_loading = true;
-                worker::spawn_unit_state(self.tx.clone(), t);
+                let unit = self.unit_key_name(cx);
+                worker::spawn_unit_state_for(self.tx.clone(), t, unit);
             }
             Err(e) => self.unit_state_err = Some(e),
         }
