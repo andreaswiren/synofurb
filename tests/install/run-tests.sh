@@ -38,7 +38,7 @@ check() { # description, condition-result(0=true)
 finish() { [ "${FAILED_HERE:-0}" = 0 ] && ok; }
 expect_rc() { check "exit status $RC, expected $1" "$([ "$RC" = "$1" ]; echo $?)"; }
 expect_out() { check "output lacks: $1" "$(printf '%s' "$OUT" | grep -qF -- "$1"; echo $?)"; }
-expect_not_out() { check "output unexpectedly contains: $1" "$(printf '%s' "$OUT" | grep -qF -- "$1"; echo $?)" ; }
+expect_not_out() { check "output unexpectedly contains: $1" "$(printf '%s' "$OUT" | grep -qF -- "$1" && echo 1 || echo 0)"; }
 exists() { [ -e "$1" ] || [ -L "$1" ]; }
 expect_exists() { check "missing: $1" "$(exists "$1"; echo $?)"; }
 expect_absent() { check "should not exist: $1" "$(exists "$1" && echo 1 || echo 0)"; }
@@ -259,6 +259,65 @@ inst --insecure-skip-signature --format appimage; expect_rc 0; expect_out "AppIm
 expect_exists "$HOME_DIR/.local/bin/synofurb"
 finish
 
+begin "--cli: installs only synofurb-cli (no desktop entry, no icon, no desktop binary), SHA-256 + signature"
+new_env; release --platforms linux-x86_64
+inst --cli "${SIGARGS[@]}"
+expect_rc 0; expect_out "synofurb-cli 0.2.0 for linux/x86_64"; expect_out "synofurb-cli-0.2.0-linux-x86_64.tar.gz"; expect_out "SHA-256 OK"
+[ "$HAVE_MINISIGN" = 1 ] && expect_out "Signature OK"
+expect_exists "$HOME_DIR/.local/bin/synofurb-cli"
+check "cli binary not executable" "$([ -x "$HOME_DIR/.local/bin/synofurb-cli" ]; echo $?)"
+expect_absent "$HOME_DIR/.local/bin/synofurb"
+expect_absent "$HOME_DIR/.local/share/applications/synofurb.desktop"; expect_absent "$HOME_DIR/.local/share/icons"
+check "installed cli does not run" "$("$HOME_DIR/.local/bin/synofurb-cli" --version | grep -q 'synofurb-cli 0.2.0'; echo $?)"
+expect_out "synofurb-cli --help"
+finish
+
+begin "--cli: explicit --version, --dir, idempotent; coexists with the desktop install; --uninstall --cli removes only the CLI"
+new_env; release --platforms linux-x86_64 --version 0.3.1
+inst --cli --version v0.3.1 --dir "$T/bin" --insecure-skip-signature; expect_rc 0; expect_exists "$T/bin/synofurb-cli"
+inst --cli --version 0.3.1 --dir "$T/bin" --insecure-skip-signature; expect_rc 0
+inst --version 0.3.1 --dir "$T/bin" --insecure-skip-signature; expect_rc 0; expect_exists "$T/bin/synofurb"
+inst --cli --dir "$T/bin" --uninstall --dry-run; expect_rc 0; expect_out "would remove $T/bin/synofurb-cli"; expect_exists "$T/bin/synofurb-cli"
+inst --cli --dir "$T/bin" --uninstall; expect_rc 0; expect_out "Removed $T/bin/synofurb-cli"
+expect_absent "$T/bin/synofurb-cli"; expect_exists "$T/bin/synofurb"
+inst --cli --dir "$T/bin" --uninstall; expect_rc 0; expect_out "Nothing to remove"
+finish
+
+begin "--cli: --dry-run names the cli asset and no desktop entry; --run passes arguments to synofurb-cli; macOS and wrong arch"
+new_env; release --platforms linux-x86_64,macos-aarch64
+inst --cli --dry-run --dir "$T/bin"; expect_rc 0; expect_out "synofurb-cli-0.2.0-linux-x86_64.tar.gz"; expect_not_out "desktop entry"; expect_not_out "synofurb-0.2.0-linux-x86_64.tar.gz"
+expect_absent "$T/bin"
+inst --cli --insecure-skip-signature --run scan --json --no-sweep; expect_rc 0; expect_out "Running: synofurb-cli scan --json --no-sweep"
+check "synofurb-cli not called with the right arguments" "$(grep -qx 'scan --json --no-sweep' "$T/run.log"; echo $?)"
+FORCE_OS=macos FORCE_ARCH=aarch64 inst --cli --insecure-skip-signature; expect_rc 0; expect_exists "$HOME_DIR/.local/bin/synofurb-cli"
+FORCE_ARCH=aarch64 inst --cli --insecure-skip-signature; expect_rc 1; expect_out "no asset for linux/aarch64"; expect_out "synofurb-cli-0.2.0-linux-aarch64.tar.gz"
+inst --cli --format appimage --insecure-skip-signature; expect_rc 1; expect_out "--cli is only available as --format tar"
+finish
+
+begin "--cli: tampered / unlisted / hostile archives are refused and nothing is installed"
+new_env; release --platforms linux-x86_64 --mutate cli-asset
+inst --cli "${SIGARGS[@]}"; expect_rc 1; expect_out "SHA-256 MISMATCH"; expect_absent "$HOME_DIR/.local/bin/synofurb-cli"
+release --platforms linux-x86_64 --mutate cli-unlisted
+inst --cli "${SIGARGS[@]}"; expect_rc 1; expect_out "no asset for linux/x86_64"; expect_absent "$HOME_DIR/.local/bin/synofurb-cli"
+release --platforms linux-x86_64 --mutate cli-evil-tar
+inst --cli "${SIGARGS[@]}"; expect_rc 1; expect_out "absolute or parent-directory"; expect_absent "$HOME_DIR/.local/bin/synofurb-cli"; expect_absent "$T/evil-cli.txt"
+release --platforms linux-x86_64 --mutate cli-link-tar
+inst --cli "${SIGARGS[@]}"; expect_rc 1; expect_out "links or special files"
+release --platforms linux-x86_64 --mutate cli-no-binary
+inst --cli "${SIGARGS[@]}"; expect_rc 1; expect_out "does not contain a regular file named 'synofurb-cli'"
+if [ "$HAVE_MINISIGN" = 1 ]; then
+    release --platforms linux-x86_64 --mutate sums-after-sign
+    inst --cli --pubkey "$PUB"; expect_rc 1; expect_out "SIGNATURE VERIFICATION FAILED"; expect_absent "$HOME_DIR/.local/bin/synofurb-cli"
+fi
+finish
+
+begin "--cli works piped into sh (curl | sh -s -- --cli --run ...)"
+new_env; release --platforms linux-x86_64
+OUT="$(HOME="$HOME_DIR" SYNOFURB_TEST_LOG="$T/run.log" SYNOFURB_FORCE_OS=linux SYNOFURB_FORCE_ARCH=x86_64 sh -s -- --cli --insecure-skip-signature --dir "$T/pbin" --run wizard --demo <"$INSTALL_SH" 2>&1)"; RC=$?
+expect_rc 0; expect_exists "$T/pbin/synofurb-cli"
+check "piped --run arguments lost" "$(grep -qx 'wizard --demo' "$T/run.log"; echo $?)"
+finish
+
 begin "macOS dmg install with a fake hdiutil"
 new_env; release --platforms macos-aarch64
 mkdir -p "$T/fakebin" "$T/fakedmg/synofurb.app/Contents/MacOS"
@@ -449,6 +508,33 @@ else
     ps -Portable -Dir "$T/pdir" -InsecureSkipSignature; expect_rc 1; expect_out "escapes the install folder"; expect_absent "$T/pdir"
     release --platforms windows-x86_64 --mutate no-binary
     ps -Portable -Dir "$T/pdir" -InsecureSkipSignature; expect_rc 1; expect_out "does not contain synofurb.exe"
+    finish
+
+    begin "ps1: -Cli -DryRun, install with SHA-256 only, -AddToPath is Windows-only, -Uninstall -Cli"
+    new_env; release --platforms windows-x86_64
+    ps -Cli -DryRun -Dir "$T/cdir"; expect_rc 0; expect_out "synofurb-cli 0.2.0 for windows/x86_64"; expect_out "synofurb-cli-0.2.0-windows-x86_64.zip"; expect_out "would extract to $T/cdir"; expect_not_out "msiexec"
+    OUT="$(PS1="$REPO/install.ps1" SYNOFURB_PS_TEST=1 SYNOFURB_FORCE_ARCH=x86_64 "$PWSH" -NoProfile -NonInteractive -Command '& $env:PS1 -Cli -DryRun -Run wizard,--demo' 2>&1)"; RC=$?
+    expect_rc 0; expect_out "would run: synofurb-cli wizard --demo"
+    ps -Cli -Portable -DryRun; expect_rc 1; expect_out "do not combine"
+    ps -Cli -InsecureSkipSignature -Dir "$T/cdir"; expect_rc 0; expect_out "SHA-256 OK"; expect_exists "$T/cdir/synofurb-cli.exe"; expect_exists "$T/cdir/LICENSE"
+    expect_absent "$T/cdir/synofurb.exe"
+    ps -Cli -Uninstall -Dir "$T/cdir" -DryRun; expect_rc 0; expect_out "would remove"; expect_exists "$T/cdir"
+    ps -Cli -Uninstall -Dir "$T/cdir"; expect_rc 0; expect_absent "$T/cdir"
+    ps -Cli -Uninstall -Dir "$T/cdir"; expect_rc 0; expect_out "Nothing to remove"
+    finish
+
+    begin "ps1: -Cli refuses a tampered / zip-slip / binary-less archive and a missing arch"
+    new_env; release --platforms windows-x86_64 --mutate cli-asset
+    ps -Cli -InsecureSkipSignature -Dir "$T/cdir"; expect_rc 1; expect_out "SHA-256 MISMATCH"; expect_absent "$T/cdir"
+    release --platforms windows-x86_64 --mutate cli-zip-slip
+    ps -Cli -InsecureSkipSignature -Dir "$T/cdir"; expect_rc 1; expect_out "escapes the install folder"; expect_absent "$T/cdir"
+    release --platforms windows-x86_64 --mutate cli-no-binary
+    ps -Cli -InsecureSkipSignature -Dir "$T/cdir"; expect_rc 1; expect_out "does not contain synofurb-cli.exe"
+    release --platforms windows-x86_64
+    PS_ARCH=aarch64 ps -Cli -InsecureSkipSignature -Dir "$T/cdir"; expect_rc 1; expect_out "no asset for windows/aarch64"; expect_out "synofurb-cli-0.2.0-windows-aarch64.zip"
+    if [ "$HAVE_MINISIGN" = 1 ]; then
+        ps -Cli -Dir "$T/cdir2" -PublicKey "$PUB" -RequireSignature; expect_rc 0; expect_out "Signature OK"; expect_exists "$T/cdir2/synofurb-cli.exe"
+    fi
     finish
 
     begin "ps1: MSI path calls msiexec /i ... /qn with INSTALLDIR and reports failure"

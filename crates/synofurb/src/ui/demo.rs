@@ -195,8 +195,12 @@ pub fn update_info() -> UpdateInfo {
 pub enum Script {
     /// Runs to step 6 after the point of no return and then idles (the "install" screenshot).
     Running,
+    /// Stops at step 2, before the point of no return, and idles.
+    RunningEarly,
     /// Fails at step 11 after the point of no return.
     Fails,
+    /// Fails at step 2, before the point of no return (the disks were not touched).
+    FailsEarly,
     /// Runs through to the end.
     Succeeds,
 }
@@ -246,6 +250,7 @@ pub fn script_events(script: Script, unit: DemoUnit, model: &str) -> Vec<Event> 
     let steps = crate::ui::state::INSTALL_STEPS;
     let last = match script {
         Script::Running => 6,
+        Script::RunningEarly | Script::FailsEarly => 2,
         Script::Fails => 11,
         Script::Succeeds => 12,
     };
@@ -276,6 +281,12 @@ pub fn script_events(script: Script, unit: DemoUnit, model: &str) -> Vec<Event> 
         }
     }
     match script {
+        Script::FailsEarly => {
+            l(&mut v, Level::Error, Source::Installer, "ERROR preflight: /dev/sdc is not the disk the plan expects", &mut ts);
+            l(&mut v, Level::Error, Source::Installer, "@@FAIL preflight: disks differ from the plan", &mut ts);
+            v.push(Event::InstallerFailed("preflight: disks differ from the plan".into()));
+            v.push(Event::Phase(Phase::Failed));
+        }
         Script::Fails => {
             l(&mut v, Level::Error, Source::Installer, "ERROR grub-install: cannot write to /dev/sdc: Input/output error", &mut ts);
             l(&mut v, Level::Error, Source::Installer, "@@FAIL grub-install failed on sdc", &mut ts);
@@ -290,7 +301,7 @@ pub fn script_events(script: Script, unit: DemoUnit, model: &str) -> Vec<Event> 
             l(&mut v, Level::Info, Source::App, "new system answers on ssh and https://192.168.1.20:8443", &mut ts);
             v.push(Event::Phase(Phase::Finished));
         }
-        Script::Running => {}
+        Script::Running | Script::RunningEarly => {}
     }
     v
 }
@@ -309,12 +320,15 @@ pub fn spawn_script(tx: Tx, script: Script, unit: DemoUnit, model: String, out: 
                     "the installer reported a failure: grub-install failed on sdc: Input/output error".into(),
                 )));
             }
+            Script::FailsEarly => {
+                let _ = tx.unbounded_send(Msg::Finished(Err("the installer reported a failure: preflight: disks differ from the plan".into())));
+            }
             Script::Succeeds => {
                 if let Some(o) = out {
                     let _ = tx.unbounded_send(Msg::Finished(Ok(o)));
                 }
             }
-            Script::Running => {}
+            Script::Running | Script::RunningEarly => {}
         }
     });
 }
@@ -354,6 +368,11 @@ mod tests {
         assert!(matches!(run.iter().rev().find(|e| matches!(e, Event::Step { .. })), Some(Event::Step { n: 6, .. })));
         let fail = script_events(Script::Fails, DemoUnit::Ds918, "DS918+");
         assert!(fail.iter().any(|e| matches!(e, Event::InstallerFailed(_))));
+        let early = script_events(Script::FailsEarly, DemoUnit::Ds918, "DS918+");
+        assert!(early.iter().any(|e| matches!(e, Event::InstallerFailed(_))));
+        assert!(!early.iter().any(|e| matches!(e, Event::PointOfNoReturn)), "the early failure is before the point of no return");
+        let before = script_events(Script::RunningEarly, DemoUnit::Ds918, "DS918+");
+        assert!(!before.iter().any(|e| matches!(e, Event::PointOfNoReturn)));
         let ok = script_events(Script::Succeeds, DemoUnit::Rs816, "RS816");
         assert!(ok.iter().any(|e| matches!(e, Event::InstallerDone)));
         assert!(ok.iter().any(|e| matches!(e, Event::Log(l) if l.msg.contains("uboot-env| "))), "ARM script prints U-Boot commands");

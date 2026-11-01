@@ -7,11 +7,12 @@ use crate::inspect::{inspect_script, parse_inspect};
 use crate::kexec::{self, KexecJob, KitParams};
 use crate::logs::{Event, Logger, Phase};
 use crate::model::*;
-use crate::payload::build_payload;
+use crate::offline::{Bundle, MIRROR_NAME};
+use crate::payload::{OfflineEnv, build_payload, build_payload_offline};
 use crate::plan::Plan;
 use crate::remote::{Auth, Privileged, RemoteShell, SshSession, fetch_host_fingerprint};
 use crate::script::{ScriptParams, render_stage2};
-use crate::server::{Served, Server, local_ip_towards};
+use crate::server::{OFFLINE_MIRROR_ROUTE, Served, Server, local_ip_towards};
 use anyhow::{Context, Result, bail};
 use std::net::{IpAddr, TcpStream, UdpSocket};
 use std::path::PathBuf;
@@ -119,6 +120,10 @@ pub struct Staged {
 }
 
 /// Render script/payload/preseed, start the local server and build the installer initrd.
+///
+/// With `job.offline_bundle` set nothing is downloaded: the installer files come from the bundle (hashes checked
+/// against its manifest), the bundle's mirror is served at `/<token>/mirror/` and `mirror_host`/`mirror_dir` point
+/// the installer, `debootstrap` and `apt` at it.
 pub fn stage(job: &InstallJob, bind_ip: IpAddr, inspect_raw: &str, log: &Logger, progress: &mut dyn FnMut(&str, f32)) -> Result<Staged> {
     if !job.plan.is_ok() {
         bail!("the install plan has errors: {}", job.plan.errors.join("; "));
@@ -127,12 +132,43 @@ pub fn stage(job: &InstallJob, bind_ip: IpAddr, inspect_raw: &str, log: &Logger,
     let (http_port, tcp_port, udp_port) = free_ports(bind_ip)?;
     let token = random_token(16);
     let http_base = format!("http://{bind_ip}:{http_port}/{token}");
-    let payload = build_payload(&job.cfg, &job.plan, &job.facts, inspect_raw)?;
+    let mut cfg = job.cfg.clone();
+    let bundle = match &job.offline_bundle {
+        Some(dir) => {
+            let b = Bundle::open(dir).with_context(|| format!("opening the offline bundle {}", dir.display()))?;
+            let warnings = b.check_for_install(job.facts.arch, &cfg.suite, cfg.kernel, &cfg.extra_packages, job.with_firmware)?;
+            for w in warnings {
+                log.warn(w);
+            }
+            if !bind_ip.is_ipv4() {
+                bail!(
+                    "offline installs need an IPv4 address of this computer (the installer fetches packages from {bind_ip}); pick the LAN IPv4 address"
+                );
+            }
+            // The installer, debootstrap and apt all read this: the bundle is the mirror.
+            cfg.mirror_host = format!("{bind_ip}:{http_port}");
+            cfg.mirror_dir = format!("/{token}/{OFFLINE_MIRROR_ROUTE}/{MIRROR_NAME}");
+            cfg.validate()?;
+            log.info(format!(
+                "OFFLINE install: packages come from the bundle {} (suites: {}) served at http://{}{}",
+                dir.display(),
+                b.suites().join(", "),
+                cfg.mirror_host,
+                cfg.mirror_dir
+            ));
+            Some(b)
+        }
+        None => None,
+    };
+    let payload = match &bundle {
+        Some(b) => build_payload_offline(&cfg, &job.plan, &job.facts, inspect_raw, &OfflineEnv { suites: b.suites().to_vec() })?,
+        None => build_payload(&cfg, &job.plan, &job.facts, inspect_raw)?,
+    };
     let run_id = random_token(4);
     let stage2 = render_stage2(&ScriptParams {
         plan: &job.plan,
         facts: &job.facts,
-        cfg: &job.cfg,
+        cfg: &cfg,
         run_id: &run_id,
         http_base: &http_base,
         payload_sha256: &payload.sha256,
@@ -147,19 +183,44 @@ pub fn stage(job: &InstallJob, bind_ip: IpAddr, inspect_raw: &str, log: &Logger,
         let _ = std::fs::write(dir.join(format!("plan-{run_id}.json")), serde_json::to_string_pretty(&job.plan)?);
         log.info(format!("saved the generated installer script to {}/stage2-{run_id}.sh for review", dir.display()));
     }
-    let preseed = debian::render_preseed(&PreseedParams { cfg: &job.cfg, http_base: &http_base });
-    let files =
-        debian::fetch_installer(job.facts.arch, &job.cfg.suite, &job.cache_dir, job.with_firmware, job.cfg.dtb.as_deref(), log, progress)?;
+    let preseed = debian::render_preseed(&PreseedParams { cfg: &cfg, http_base: &http_base });
+    let files = match &bundle {
+        Some(b) => {
+            progress("verifying the offline bundle's installer files", 0.0);
+            b.verify_installer(job.facts.arch)?;
+            let mut f = b.installer_files(job.facts.arch)?;
+            if !job.with_firmware {
+                f.firmware = None;
+            }
+            if let (Arch::Armhf, Some(d)) = (job.facts.arch, cfg.dtb.as_deref()) {
+                f.dtb = b.dtb(job.facts.arch, d);
+                if f.dtb.is_none() {
+                    log.warn(format!("{d} is not in the offline bundle; supply your own DTB"));
+                }
+            }
+            progress("verifying the offline bundle's installer files", 1.0);
+            f
+        }
+        None => debian::fetch_installer(job.facts.arch, &cfg.suite, &job.cache_dir, job.with_firmware, cfg.dtb.as_deref(), log, progress)?,
+    };
     let initrd = job.cache_dir.join(format!("initrd-synofurb-{run_id}.gz"));
+    std::fs::create_dir_all(&job.cache_dir)?;
     debian::build_initrd(&files, &preseed, &initrd)?;
-    let cmdline = debian::installer_cmdline(&job.cfg.serial, &bind_ip.to_string(), udp_port, job.verbose_installer, None);
+    let cmdline = debian::installer_cmdline(&cfg.serial, &bind_ip.to_string(), udp_port, job.verbose_installer, None);
     log.info(format!("installer kernel command line: {cmdline}"));
     let mut served_files = std::collections::HashMap::new();
     served_files.insert("installer-kernel".to_string(), files.kernel.clone());
     served_files.insert("installer-initrd".to_string(), initrd.clone());
     let server = Server::start(
         bind_ip,
-        Served { files: served_files, token, stage2, payload: payload.bytes, preseed: preseed.clone() },
+        Served {
+            files: served_files,
+            token,
+            stage2,
+            payload: payload.bytes,
+            preseed: preseed.clone(),
+            mirror: bundle.as_ref().map(|b| b.mirror_dir()),
+        },
         log.clone(),
         (http_port, tcp_port, udp_port),
     )?;
@@ -249,7 +310,20 @@ fn dom_install_flow(
     let backup = backup_dom(ssh, is_root, pw.clone(), backup_dir, &unit, dom.sectors * SECTOR, logger)?;
     logger
         .warn(format!("KEEP THIS FILE: {} is the only way to rebuild the unit's boot flash if it is ever damaged", backup.path.display()));
-    let files = AgentFiles::locate_or_fetch(job.facts.arch, agent_dir, &job.cache_dir, logger, progress)?;
+    let files = match &job.offline_bundle {
+        // offline: the agent comes from the bundle, never from the Internet
+        Some(dir) => {
+            let b = Bundle::open(dir)?;
+            let adir = b.agent_dir(job.facts.arch).with_context(|| {
+                format!(
+                    "the offline bundle has no boot agent for {}; build it with `synofurb bundle create` (without --no-agent) while online",
+                    job.facts.arch.debian()
+                )
+            })?;
+            AgentFiles::locate(job.facts.arch, Some(&adir))?
+        }
+        None => AgentFiles::locate_or_fetch(job.facts.arch, agent_dir, &job.cache_dir, logger, progress)?,
+    };
     let key = agent_key_for(&unit, &crate::session::config_keys_dir())?;
     let overlay = AgentOverlay {
         hostname: format!("{}-agent", job.cfg.hostname),

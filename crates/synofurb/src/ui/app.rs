@@ -1,16 +1,20 @@
 //! The root view: all UI state, the message pump from the worker threads, and the actions screens trigger.
 //! Rendering lives in `render.rs` (chrome) and `screens/` (one module per screen).
 
+use super::cli_cmd::CliCommand;
+use super::copy;
 use super::demo::{self, DemoUnit, Script};
 use super::settings::{UiSettings, now_unix};
 use super::state::*;
 use super::theme::{self, ThemeChoice};
+use super::screens::inventory::InventoryTable;
 use super::worker::{self, Msg, Tx};
 use crate::cli::config_dir;
 use futures::StreamExt;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::component::slider::{SliderEvent, SliderState};
+use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::component::{IndexPath, WindowExt};
 use gpui_kit::{AppContext, ClipboardItem, Context, Entity, FocusHandle, PathPromptOptions, SharedString, Subscription, Window};
 use std::collections::BTreeSet;
@@ -98,6 +102,9 @@ pub struct Inputs {
     pub kit_dir: Entity<InputState>,
     pub typed: Entity<InputState>,
     pub log_search: Entity<InputState>,
+    pub filter: Entity<InputState>,
+    pub add_ip: Entity<InputState>,
+    pub bundle: Entity<InputState>,
 }
 
 pub struct PlanForm {
@@ -156,6 +163,18 @@ pub struct App {
     pub sys: SysForm,
     pub ack_backup: bool,
     pub ack_loss: bool,
+    pub ack_unit: bool,
+    /// Source: Offline in the System form.
+    pub source_offline: bool,
+    /// The app itself could not reach the Internet (a check failed); the status bar says Offline.
+    pub app_offline: bool,
+    /// "Password copied" on the Done screen (Finish stays disabled until it is ticked).
+    pub password_copied: bool,
+    pub inv_table: Entity<TableState<InventoryTable>>,
+    /// The converted unit shown on the Manage page.
+    pub manage_unit: Option<Found>,
+    /// A dialog opened by a demo target, once the window exists.
+    pub pending_overlay: Overlay,
 
     pub install: InstallView,
     pub install_started: bool,
@@ -214,6 +233,9 @@ impl App {
             kit_dir: input("folder for the installer kit", &cfg_dir.join("kit").display().to_string(), false, &mut subs, cx),
             typed: input("", "", false, &mut subs, cx),
             log_search: input("Search the log", "", false, &mut subs, cx),
+            filter: input(copy::INV_FILTER.short, "", false, &mut subs, cx),
+            add_ip: input("192.168.1.20", "", false, &mut subs, cx),
+            bundle: input("/path/to/bundle", "", false, &mut subs, cx),
         };
         // Enter in the connection fields starts the inspection (the primary action of that screen).
         for st in [&inp.host, &inp.port, &inp.user, &inp.password, &inp.sudo, &inp.key_path] {
@@ -240,7 +262,8 @@ impl App {
         // Follow the operating system's light/dark setting while the choice is "follow system".
         subs.push(cx.observe_window_appearance(window, |this: &mut App, _window, cx| {
             if this.settings.theme == ThemeChoice::System {
-                theme::apply(theme::Palette::for_mode(theme::os_is_dark(cx)), cx);
+                let scale = this.settings.text_scale;
+                theme::apply(theme::os_is_dark(cx), scale, cx);
             }
         }));
 
@@ -294,6 +317,16 @@ impl App {
             (Inventory::load(&cfg_dir.join("inventory.json")), CompatDb::load_best(&cfg_dir))
         };
 
+        let inv_table = cx.new(|cx| TableState::new(InventoryTable::default(), window, cx));
+        subs.push(cx.subscribe(&inv_table, |this: &mut App, st, ev: &TableEvent, cx| {
+            if let TableEvent::SelectRow(ix) = ev {
+                let ip = st.read(cx).delegate().ip_at(*ix);
+                if ip.is_some() {
+                    this.selected_ip = ip;
+                    cx.notify();
+                }
+            }
+        }));
         let mut app = App {
             screen: Screen::Inventory,
             return_to: Screen::Inventory,
@@ -330,6 +363,13 @@ impl App {
             },
             ack_backup: false,
             ack_loss: false,
+            ack_unit: false,
+            source_offline: false,
+            app_offline: false,
+            password_copied: false,
+            inv_table,
+            manage_unit: None,
+            pending_overlay: Overlay::None,
             install: InstallView::default(),
             install_started: false,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -387,7 +427,7 @@ impl App {
         self.settings.theme = choice;
         self.save_settings();
         let dark = choice.is_dark(theme::os_is_dark(cx));
-        theme::apply(theme::Palette::for_mode(dark), cx);
+        theme::apply(dark, self.settings.text_scale, cx);
         cx.notify();
     }
 
@@ -414,14 +454,18 @@ impl App {
         self.selected_ip = Some(unit.address().to_string());
         self.set_input(&self.inp.host.clone(), &format!("{} (demo)", unit.address()), window, cx);
         self.set_input(&self.inp.password.clone(), "demo-not-a-real-password", window, cx);
-        let beyond_inventory = !matches!(t.screen, Screen::Inventory | Screen::Connect | Screen::Settings) || t.update_dialog;
-        let past_inspect = !matches!(t.screen, Screen::Inventory | Screen::Connect | Screen::Settings);
+        self.app_offline = t.offline;
+        self.source_offline = t.offline && t.screen == Screen::System;
+        let past_inspect = !matches!(t.screen, Screen::Inventory | Screen::Connect | Screen::Settings | Screen::About);
         if past_inspect {
             let raw = unit.raw();
             let facts = unit.facts();
             self.on_inspected(facts, raw, false, window, cx);
         }
-        let _ = beyond_inventory;
+        if t.keep {
+            self.form.req.mode = StorageMode::KeepVolumes;
+            self.rebuild_plan();
+        }
         match t.screen {
             Screen::Confirm => {
                 self.ack_backup = true;
@@ -431,10 +475,13 @@ impl App {
             Screen::Install | Screen::Failed | Screen::Done => {
                 self.ack_backup = true;
                 self.ack_loss = true;
+                self.ack_unit = true;
                 let model = self.facts.as_ref().map(|f| f.model.clone()).unwrap_or_default();
-                let script = match t.screen {
-                    Screen::Install => Script::Running,
-                    Screen::Failed => Script::Fails,
+                let script = match (t.screen, t.past_no_return) {
+                    (Screen::Install, true) => Script::Running,
+                    (Screen::Install, false) => Script::RunningEarly,
+                    (Screen::Failed, true) => Script::Fails,
+                    (Screen::Failed, false) => Script::FailsEarly,
                     _ => Script::Succeeds,
                 };
                 self.install_started = true;
@@ -450,6 +497,9 @@ impl App {
             }
             Screen::BootMgr => self.goal = Goal::BootManager,
             Screen::Recover => self.goal = Goal::Recover,
+            Screen::Manage => {
+                self.manage_unit = demo::inventory().devices.into_iter().find(|d| d.synofurb_debian);
+            }
             _ => {}
         }
         if t.screen != Screen::Install {
@@ -458,13 +508,20 @@ impl App {
         if matches!(t.screen, Screen::Inventory) {
             self.start_scan(cx);
         }
-        if t.screen == Screen::Settings {
+        if t.screen.is_side_page() {
             self.return_to = Screen::Inventory;
         }
-        if t.update_dialog {
-            let info = demo::update_info();
-            self.update = UpdateState::Available(Box::new(info));
-            cx.defer_in(window, |this, window, cx| this.open_update_dialog(window, cx));
+        // Dialogs and the Help sheet open once the first frame exists.
+        self.pending_overlay = t.overlay;
+        match t.overlay {
+            Overlay::Update => {
+                self.update = UpdateState::Available(Box::new(demo::update_info()));
+            }
+            Overlay::None => {}
+            _ => {}
+        }
+        if t.overlay != Overlay::None {
+            cx.defer_in(window, |this, window, cx| this.open_pending_overlay(window, cx));
         }
         if t.screen == Screen::Confirm && std::env::var("SYNOFURB_DEMO_SCROLL").as_deref() == Ok("bottom") {
             // Screenshots of the gate: scroll to the confirmation fields once the page has been laid out.
@@ -476,6 +533,21 @@ impl App {
                 });
             })
             .detach();
+        }
+    }
+
+    /// Open the dialog or sheet a demo target asked for (and, in a real run, the first-launch dialog once).
+    pub fn open_pending_overlay(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        let o = std::mem::take(&mut self.pending_overlay);
+        let app = cx.entity();
+        match o {
+            Overlay::None => {}
+            Overlay::Update => self.open_update_dialog(window, cx),
+            Overlay::Help(topic) => self.open_help_topic(topic, window, cx),
+            Overlay::RecoveryDialog => super::disclosure::dialog(window, cx, &copy::DLG_RECOVERY, &app),
+            Overlay::KeepDialog => self.open_keep_dialog(window, cx),
+            Overlay::NextDialog => self.open_next_dialog(window, cx),
+            Overlay::FirstLaunch => self.open_first_launch(window, cx),
         }
     }
 
@@ -809,7 +881,7 @@ impl App {
     }
 
     pub fn gate<'a>(&'a self, typed: &'a str, phrase: &'a str) -> ConfirmGate<'a> {
-        ConfirmGate { phrase, typed, ack_backup: self.ack_backup, ack_loss: self.ack_loss, plan_ok: self.plan_ok() }
+        ConfirmGate { phrase, typed, ack_backup: self.ack_backup, ack_loss: self.ack_loss, ack_unit: self.ack_unit, plan_ok: self.plan_ok() }
     }
 
     pub fn build_job(&mut self, cx: &gpui_kit::App) -> Result<InstallJob, String> {
@@ -865,7 +937,7 @@ impl App {
             with_firmware: self.sys.with_firmware,
             verbose_installer: self.sys.verbose,
             display_password: password,
-            offline_bundle: None,
+            offline_bundle: if self.source_offline { Some(PathBuf::from(self.input_value(&self.inp.bundle, cx).trim())) } else { None },
         })
     }
 
@@ -930,6 +1002,8 @@ impl App {
         self.install_started = false;
         self.ack_backup = false;
         self.ack_loss = false;
+        self.ack_unit = false;
+        self.password_copied = false;
         self.sys.generated_key = None;
         self.reveal_password = false;
         self.recover = Job::Idle;

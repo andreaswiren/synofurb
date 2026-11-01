@@ -74,6 +74,7 @@ fi
 | Windows (x86_64) | \`synofurb-$VERSION-windows-x86_64.msi\` (installer), \`.exe\` (NSIS setup), \`.zip\` (portable) |
 | macOS (Apple silicon / Intel) | \`synofurb-$VERSION-macos-aarch64\` / \`-x86_64\` \`.dmg\`, \`.tar.gz\` (bare binary), \`.pkg\` when present |
 | Linux (x86_64 / aarch64) | \`.deb\`, \`.rpm\`, \`.AppImage\`, \`.tar.gz\` (bare binary) |
+| Command line only (servers, SSH, CI; no GUI libraries) | \`synofurb-cli-$VERSION-<os>-<arch>.tar.gz\` (Linux, macOS), \`.zip\` (Windows); \`install.sh --cli\` / \`install.ps1 -Cli\` |
 | NAS side | \`synofurb-agent-<arch>-$VERSION.vmlinuz\`/\`.initrd\`, \`synofurb-dom\`, \`compat-models.json\`, \`synofurb-mgmt-*.tar.gz\` |
 
 Quickest install: \`curl -fsSL https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.sh | sh\` (Linux, macOS) or

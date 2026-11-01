@@ -1,10 +1,11 @@
 # Installing synofurb
 
-Three things can be installed, on three different machines:
+Four things can be installed, on different machines:
 
 | What | Where | How |
 |---|---|---|
 | **The desktop app** (`synofurb`) | your Windows / macOS / Linux PC | [one-liner](#the-desktop-app-one-liners) or [packages](#packages-by-hand) |
+| **The command line only** (`synofurb-cli`, no GUI libraries) | a server, an SSH session, a container, CI, any machine without a display | [one-liner](#the-command-line-only-synofurb-cli) |
 | **The whole conversion, headless** | any Linux/macOS box on the NAS's network | [one command](#convert-a-nas-headless-from-a-linuxmacos-box) |
 | **The NAS management plane** | an *existing* Debian box (the installer puts it on converted NAS units for you) | [one-liner](#the-nas-management-plane-on-an-existing-debian-box) |
 
@@ -87,6 +88,38 @@ The script verifies the SHA-256 against `SHA256SUMS`. When `minisign` is on `PAT
 signature; without it you get a loud warning that only integrity was checked. Add `-RequireSignature` to make that an error. TLS 1.2 or newer is forced.
 Unsigned builds (before code-signing certificates exist) trigger Microsoft SmartScreen: *More info -> Run anyway* is expected until then.
 
+## The command line only (`synofurb-cli`)
+
+`synofurb-cli` has every command of the app (scan, inspect, plan, install, boot manager, recovery, offline bundles, a terminal wizard) and **links no
+graphical library**: it starts on a headless server where the desktop app cannot (no `libxkbcommon`, X11, Wayland, Vulkan, freetype). Full reference:
+[CLI.md](CLI.md).
+
+```sh
+# Linux / macOS: installs ~/.local/bin/synofurb-cli
+curl -fsSL https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.sh | sh -s -- --cli
+# ... and start the guided terminal session straight away
+curl -fsSL https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.sh | sh -s -- --cli --run wizard
+```
+```powershell
+# Windows: a piped script cannot take parameters, so save it first; installs %LOCALAPPDATA%\Programs\synofurb-cli\synofurb-cli.exe
+irm https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.ps1 -OutFile i.ps1; .\i.ps1 -Cli -AddToPath
+# or as a script block
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.ps1))) -Cli -AddToPath
+```
+
+| Option | Meaning |
+|---|---|
+| `install.sh --cli` / `install.ps1 -Cli` | install the headless program instead of the desktop app. Downloads `synofurb-cli-<version>-<os>-<arch>.tar.gz` (Linux, macOS) or `.zip` (Windows) for `x86_64` or `aarch64` |
+| `--dir DIR` / `-Dir PATH` | where it goes (default `~/.local/bin`, or `%LOCALAPPDATA%\Programs\synofurb-cli` on Windows) |
+| `--system` | Linux/macOS: `/usr/local/bin`, via `sudo` unless you are root |
+| `-AddToPath` | Windows: add the folder to your user `PATH` |
+| `--run ARGS...` / `-Run a,b` | after installing run `synofurb-cli ARGS...` with the terminal attached |
+| `--uninstall --cli` / `-Uninstall -Cli` | remove only `synofurb-cli` (a desktop install next to it stays) |
+
+Everything else (`--version`, `--pubkey`, `--insecure-skip-signature`, `--dry-run`, `-RequireSignature`) works as for the desktop app: the signature of `SHA256SUMS`
+and the SHA-256 of the archive are verified before anything is installed. The CLI needs only a glibc 2.39+ Linux (Ubuntu 24.04, Debian 13, Fedora 40+, no GPU
+stack), macOS 12+ or Windows 10+. It updates itself with `synofurb-cli self-update` (same verification, from the `synofurb-cli-*` asset).
+
 ## Packages by hand
 
 Download from the [releases page](https://github.com/andreaswiren/synofurb/releases), [verify](#verifying-a-download), then:
@@ -103,8 +136,9 @@ Download from the [releases page](https://github.com/andreaswiren/synofurb/relea
 | Linux | `...-linux-<arch>.rpm` | `sudo dnf install ./file.rpm` |
 | Linux | `...-linux-<arch>.AppImage` | `chmod +x file.AppImage && ./file.AppImage` (needs FUSE 2: `libfuse2`/`fuse-libs`; or `APPIMAGE_EXTRACT_AND_RUN=1 ./file.AppImage`) |
 | Linux | `...-linux-<arch>.tar.gz` | the bare binary (+ icon); `tar -xzf file.tar.gz` |
+| any | `synofurb-cli-<v>-<os>-<arch>.tar.gz` (Linux, macOS) / `.zip` (Windows) | the **headless command line**: `synofurb-cli[.exe]`, `LICENSE`, `README.txt`; needs no GUI library |
 
-Once installed, `synofurb self-update --check` finds newer releases; it verifies the same SHA-256 and signature (see [UPDATES.md](UPDATES.md)).
+Once installed, `synofurb self-update --check` (`synofurb-cli self-update --check`) finds newer releases; it verifies the same SHA-256 and signature (see [UPDATES.md](UPDATES.md)).
 
 ## Convert a NAS headless from a Linux/macOS box
 
@@ -126,6 +160,9 @@ curl -fsSL https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.
   --run install --host 192.168.1.20 --user admin --mode keep \
   --hostname nas --username nasadmin --have-backup --accept-data-loss --confirm "ERASE DS918+"
 ```
+
+On a server without a display install the headless build instead (`... | sh -s -- --cli --run scan`, then `synofurb-cli plan ...`; every command below exists in both
+programs). The same conversion as one guided terminal session: `synofurb-cli wizard`.
 
 After the first run `synofurb` is installed in `~/.local/bin`, so later you can call it directly. `--run` hands the terminal to the program (prompts, typed
 confirmations and the live log work) and exits with the program's exit status, so it can be scripted. Add `--version 0.2.0` to pin the release, and

@@ -25,9 +25,10 @@ cp "$REPO/LICENSE" "$SK/LICENSE"
 printf '[workspace]\nmembers = []\n\n[workspace.package]\nversion = "0.7.1"\nedition = "2024"\n\n[profile.release]\nstrip = true\n' >"$SK/Cargo.toml"
 printf '0.3.0\n' >"$SK/apps/mgmt-plane/VERSION"
 for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
-    mkdir -p "$SK/target/$t/release"; cp /bin/true "$SK/target/$t/release/synofurb"
+    mkdir -p "$SK/target/$t/release"; cp /bin/true "$SK/target/$t/release/synofurb"; cp /bin/true "$SK/target/$t/release/synofurb-cli"
 done
 mkdir -p "$SK/target/x86_64-pc-windows-msvc/release"; printf 'MZ fake' >"$SK/target/x86_64-pc-windows-msvc/release/synofurb.exe"
+printf 'MZ fake cli' >"$SK/target/x86_64-pc-windows-msvc/release/synofurb-cli.exe"
 S="$SK/scripts"
 
 echo "package scripts"
@@ -51,6 +52,27 @@ chk "mac archive" "$(tar -tzf "$WORK/o2/synofurb-0.7.1-macos-aarch64.tar.gz" | g
 chk "mac archive must not contain the linux icon" "$(tar -tzf "$WORK/o2/synofurb-0.7.1-macos-aarch64.tar.gz" | grep -q png; test $? -ne 0; echo $?)"
 run "$S/package-portable.sh" --target riscv64-unknown-linux-gnu --out "$WORK/o2"; chk "unsupported triple must fail" "$([ "$RC" != 0 ]; echo $?)"
 run "$S/package-portable.sh" --target i686-pc-windows-msvc --out "$WORK/o2"; chk "unsupported triple must fail" "$([ "$RC" != 0 ]; echo $?)"
+finish
+
+begin "cli archive (Linux/macOS tar.gz, Windows zip): name, flat contents, modes, reproducible, no desktop files"
+run "$S/package-cli.sh" --target x86_64-unknown-linux-gnu --out "$WORK/oc1"; chk "exit $RC" "$([ "$RC" = 0 ]; echo $?)"
+F="$WORK/oc1/synofurb-cli-0.7.1-linux-x86_64.tar.gz"
+chk "asset missing" "$([ -f "$F" ]; echo $?)"
+LIST="$(tar -tvzf "$F" 2>/dev/null)"
+for n in synofurb-cli LICENSE README.txt; do chk "no $n in archive" "$(printf '%s' "$LIST" | grep -q " $n\$"; echo $?)"; done
+chk "binary not 0755" "$(printf '%s' "$LIST" | grep -q '^-rwxr-xr-x.* synofurb-cli$'; echo $?)"
+chk "the CLI archive must not carry the desktop binary or icon" "$(printf '%s' "$LIST" | grep -Eq ' (synofurb|synofurb.png)$'; test $? -ne 0; echo $?)"
+chk "no top-level dir expected" "$(tar -tzf "$F" | grep -q /; test $? -ne 0; echo $?)"
+a="$(sha256sum "$F" | cut -d' ' -f1)"; run "$S/package-cli.sh" --target x86_64-unknown-linux-gnu --out "$WORK/oc1b"; b="$(sha256sum "$WORK/oc1b/synofurb-cli-0.7.1-linux-x86_64.tar.gz" | cut -d' ' -f1)"
+chk "not reproducible" "$([ "$a" = "$b" ]; echo $?)"
+run "$S/package-cli.sh" --target aarch64-unknown-linux-gnu --out "$WORK/oc2"; chk "aarch64 exit $RC" "$([ "$RC" = 0 ]; echo $?)"
+chk "aarch64 asset" "$([ -f "$WORK/oc2/synofurb-cli-0.7.1-linux-aarch64.tar.gz" ]; echo $?)"
+run "$S/package-cli.sh" --target aarch64-apple-darwin --out "$WORK/oc2"; chk "mac exit $RC" "$([ "$RC" = 0 ]; echo $?)"
+chk "mac archive" "$(tar -tzf "$WORK/oc2/synofurb-cli-0.7.1-macos-aarch64.tar.gz" | grep -qx synofurb-cli; echo $?)"
+run "$S/package-cli.sh" --target x86_64-pc-windows-msvc --out "$WORK/oc2"; chk "windows exit $RC" "$([ "$RC" = 0 ]; echo $?)"
+chk "zip listing" "$(python3 -c "import zipfile,sys; n=zipfile.ZipFile(sys.argv[1]).namelist(); sys.exit(0 if n[0]=='synofurb-cli.exe' and 'LICENSE' in n and 'synofurb.exe' not in n else 1)" "$WORK/oc2/synofurb-cli-0.7.1-windows-x86_64.zip"; echo $?)"
+run "$S/package-cli.sh" --target riscv64-unknown-linux-gnu --out "$WORK/oc2"; chk "unsupported triple must fail" "$([ "$RC" != 0 ]; echo $?)"
+run "$S/package-cli.sh" --target x86_64-unknown-linux-gnu --bin "$WORK/nope" --out "$WORK/oc2"; chk "missing binary must fail" "$([ "$RC" != 0 ]; echo $?)"; chk "tells how to build it" "$(printf '%s' "$OUT" | grep -q -- '--no-default-features --bin synofurb-cli'; echo $?)"
 finish
 
 begin "rpm: name, version, requires, files"
@@ -101,13 +123,19 @@ for f in windows-x86_64.msi windows-x86_64.exe windows-x86_64.zip macos-aarch64.
     linux-x86_64.deb linux-x86_64.rpm linux-x86_64.AppImage linux-x86_64.tar.gz linux-aarch64.deb linux-aarch64.rpm linux-aarch64.AppImage linux-aarch64.tar.gz; do
     echo "$f" >"$D/synofurb-$V-$f"
 done
+for f in windows-x86_64.zip macos-aarch64.tar.gz macos-x86_64.tar.gz linux-x86_64.tar.gz linux-aarch64.tar.gz; do echo "cli $f" >"$D/synofurb-cli-$V-$f"; done
 for a in amd64 arm64 armhf; do echo k >"$D/synofurb-agent-$a-$V.vmlinuz"; echo i >"$D/synofurb-agent-$a-$V.initrd"; done
 echo d >"$D/synofurb-dom"; echo '{}' >"$D/compat-models.json"; echo m >"$D/synofurb-mgmt-$M.tar.gz"
 run "$S/package-collect.sh" --dir "$D" --version $V --mgmt-version $M; chk "complete set exit $RC" "$([ "$RC" = 0 ]; echo $?)"
 chk "warns about optional" "$(printf '%s' "$OUT" | grep -q 'optional asset not present'; echo $?)"
 chk "SHA256SUMS verifies" "$(cd "$D" && grep -v ' SHA256SUMS' SHA256SUMS | sha256sum -c --quiet - >/dev/null 2>&1; echo $?)"
-chk "SHA256SUMS lists 25 files" "$([ "$(wc -l <"$D/SHA256SUMS" | tr -d ' ')" = 25 ]; echo $?)"
+chk "SHA256SUMS lists 30 files" "$([ "$(wc -l <"$D/SHA256SUMS" | tr -d ' ')" = 30 ]; echo $?)"
 chk "sorted, two-space format" "$(grep -Eq '^[0-9a-f]{64}  synofurb-' "$D/SHA256SUMS"; echo $?)"
+rm "$D/synofurb-cli-$V-linux-aarch64.tar.gz"
+run "$S/package-collect.sh" --dir "$D" --version $V --mgmt-version $M; chk "missing CLI archive must fail" "$([ "$RC" != 0 ]; echo $?)"; chk "names the missing CLI archive" "$(printf '%s' "$OUT" | grep -q 'synofurb-cli-0.7.1-linux-aarch64.tar.gz'; echo $?)"
+echo c >"$D/synofurb-cli-$V-linux-aarch64.tar.gz"; echo c >"$D/synofurb-cli-$V-windows-aarch64.zip"
+run "$S/package-collect.sh" --dir "$D" --version $V --mgmt-version $M; chk "optional windows-aarch64 CLI zip is accepted: exit $RC" "$([ "$RC" = 0 ]; echo $?)"
+rm "$D/synofurb-cli-$V-windows-aarch64.zip"
 rm "$D/synofurb-$V-linux-aarch64.rpm"
 run "$S/package-collect.sh" --dir "$D" --version $V --mgmt-version $M; chk "missing rpm must fail" "$([ "$RC" != 0 ]; echo $?)"; chk "names the missing file" "$(printf '%s' "$OUT" | grep -q 'synofurb-0.7.1-linux-aarch64.rpm'; echo $?)"
 echo r >"$D/synofurb-$V-linux-aarch64.rpm"; echo x >"$D/synofurb-0.7.0-linux-x86_64.deb"

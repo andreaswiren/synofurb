@@ -1,17 +1,30 @@
-//! The window chrome around every screen: step rail (left), safety bar (top), update banner, scrolling page,
-//! pinned action bar (bottom). Screens return a [`Page`]; this file lays it out.
+//! The window shell around every screen (UX spec 1.1): TitleBar (mark, wordmark, Help / Settings / menu), the
+//! horizontal Stepper, the scrolling page, a pinned footer with the actions, and the StatusBar (risk tag, unit,
+//! "Way back"). Screens return a [`Page`]; this file lays it out. Every element here is a stock gpui-component widget.
 
-use super::app::{App, UpdateState, version};
+use super::app::{App, UpdateState};
+use super::brand;
+use super::copy::{self, Item};
+use super::disclosure::info_tip;
+use super::icons::{self, role};
+use super::kit;
 use super::state::*;
-use super::theme::{self, Palette, Themed, Tone, layout, radius, space};
-use super::widgets::*;
+use super::theme::{self, Themed, Tone, layout};
+use gpui_kit::component::alert::Alert;
+use gpui_kit::component::badge::Badge;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::hover_card::HoverCard;
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
+use gpui_kit::component::status_bar::StatusBar;
+use gpui_kit::component::stepper::{Stepper, StepperItem};
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, FontWeight, IntoElement, KeyBinding, Render, Role, SharedString, Window, actions, div, px};
+use gpui_kit::{Anchor, AnyElement, Context, FontWeight, IntoElement, KeyBinding, Render, Role, SharedString, Window, actions, div, px};
 
-actions!(synofurb, [GoBack, GoForward, PrimaryAction, OpenSettings]);
+actions!(synofurb, [GoBack, PrimaryAction, OpenSettings, OpenHelp, OpenAbout, CopyCommand, CheckUpdates]);
 
 /// `cmd-<k>` on macOS, `ctrl-<k>` elsewhere (a `&'static str`, as `KeyBinding::new` needs).
 macro_rules! modkey {
@@ -22,26 +35,34 @@ macro_rules! modkey {
 pub(crate) use modkey;
 
 pub const KEY_CONTEXT: &str = "SynoApp";
+/// The same, but not while a text field has focus (so typing `?` in a field types a question mark).
+const KEY_CONTEXT_NOT_TEXT: &str = "SynoApp && !Input";
 
 pub fn bind_keys(cx: &mut gpui_kit::App) {
     cx.bind_keys([
         KeyBinding::new("alt-left", GoBack, Some(KEY_CONTEXT)),
-        KeyBinding::new("alt-right", GoForward, Some(KEY_CONTEXT)),
         KeyBinding::new("enter", PrimaryAction, Some(KEY_CONTEXT)),
         KeyBinding::new(modkey!(","), OpenSettings, Some(KEY_CONTEXT)),
+        KeyBinding::new("f1", OpenHelp, Some(KEY_CONTEXT)),
+        KeyBinding::new("?", OpenHelp, Some(KEY_CONTEXT_NOT_TEXT)),
+        KeyBinding::new(if cfg!(target_os = "macos") { "cmd-shift-c" } else { "ctrl-shift-c" }, CopyCommand, Some(KEY_CONTEXT)),
     ]);
 }
 
-/// What a screen hands to the chrome.
+/// What a screen hands to the shell.
 pub struct Page {
     pub title: SharedString,
+    /// The title's info icon (popover with a paragraph and a link to a Help topic).
+    pub title_info: Option<&'static Item>,
     pub subtitle: Option<SharedString>,
+    /// The subtitle's tooltip.
+    pub subtitle_tip: Option<&'static Item>,
     pub header_right: Option<AnyElement>,
     pub body: AnyElement,
-    /// Left side of the action bar: the reason a button is disabled, a status, ...
-    pub note: Option<AnyElement>,
-    /// Right side of the action bar, in order (safe action rightmost unless the screen says otherwise).
-    pub buttons: Vec<AnyElement>,
+    /// Left side of the footer: Back, Copy command.
+    pub footer_left: Vec<AnyElement>,
+    /// Right side of the footer: secondary actions, then the primary action rightmost.
+    pub footer_right: Vec<AnyElement>,
     /// The body scrolls inside the page. Screens with their own scrolling region (the install log) turn this off.
     pub scroll: bool,
 }
@@ -50,11 +71,13 @@ impl Page {
     pub fn new(title: impl Into<SharedString>, body: impl IntoElement) -> Page {
         Page {
             title: title.into(),
+            title_info: None,
             subtitle: None,
+            subtitle_tip: None,
             header_right: None,
             body: body.into_any_element(),
-            note: None,
-            buttons: vec![],
+            footer_left: vec![],
+            footer_right: vec![],
             scroll: true,
         }
     }
@@ -62,12 +85,24 @@ impl Page {
         self.subtitle = Some(s.into());
         self
     }
-    pub fn note(mut self, e: impl IntoElement) -> Page {
-        self.note = Some(e.into_any_element());
+    pub fn subtitle_tip(mut self, i: &'static Item) -> Page {
+        self.subtitle_tip = Some(i);
         self
     }
-    pub fn buttons(mut self, b: Vec<AnyElement>) -> Page {
-        self.buttons = b;
+    pub fn title_info(mut self, i: &'static Item) -> Page {
+        self.title_info = Some(i);
+        self
+    }
+    pub fn header_right(mut self, e: impl IntoElement) -> Page {
+        self.header_right = Some(e.into_any_element());
+        self
+    }
+    pub fn left(mut self, b: Vec<AnyElement>) -> Page {
+        self.footer_left = b;
+        self
+    }
+    pub fn right(mut self, b: Vec<AnyElement>) -> Page {
+        self.footer_right = b;
         self
     }
     pub fn no_scroll(mut self) -> Page {
@@ -92,10 +127,12 @@ impl App {
             Screen::Settings => self.page_settings(window, cx),
             Screen::BootMgr => self.page_bootmgr(window, cx),
             Screen::Recover => self.page_recover(window, cx),
+            Screen::Manage => self.page_manage(window, cx),
+            Screen::About => self.page_about(window, cx),
         }
     }
 
-    /// Back / forward targets for Alt+Left / Alt+Right and the Back button.
+    /// Back target for Alt+Left and the Back button.
     pub fn back_target(&self) -> Option<Screen> {
         Some(match self.screen {
             Screen::Connect => Screen::Inventory,
@@ -104,268 +141,243 @@ impl App {
             Screen::Plan | Screen::BootMgr | Screen::Recover => Screen::Goal,
             Screen::System => Screen::Plan,
             Screen::Confirm => Screen::System,
-            Screen::Settings => self.return_to,
+            Screen::Settings | Screen::About | Screen::Manage => self.return_to,
             _ => return None,
         })
     }
 
-    fn forward_target(&self) -> Option<Screen> {
-        // Forward only through steps that were already completed.
-        let cur = self.current_step();
-        let next = Step::ALL.iter().find(|s| **s == cur).and_then(|s| Step::ALL.get(s.number()).copied())?;
-        if self.install_started || next >= Step::Install {
-            return None;
-        }
-        match (self.screen, self.facts.is_some()) {
-            (Screen::Inventory, true) => Some(Screen::Connect),
-            (Screen::Connect, true) => Some(Screen::Inspect),
-            (Screen::Inspect, true) => Some(Screen::Goal),
-            _ => None,
+    /// The risk tag state, from what has been written.
+    pub fn risk(&self) -> Risk {
+        let dom = self.facts.as_ref().is_some_and(|f| self.sys.boot.resolve(f) == BootChoice::Dom);
+        risk_for(Written {
+            screen: Some(if self.screen.is_side_page() { self.return_to } else { self.screen }),
+            install_started: self.install_started,
+            past_no_return: self.install.past_no_return,
+            failed: self.screen == Screen::Failed || matches!(self.result, Some(Err(_))),
+            succeeded: matches!(self.result, Some(Ok(_))),
+            dom,
+            agent: matches!(self.bootmgr, super::app::Job::Running | super::app::Job::Done(Ok(()))),
+        })
+    }
+
+    fn risk_item(r: Risk) -> &'static Item {
+        match r {
+            Risk::ReadOnly => &copy::RISK_READ_ONLY,
+            Risk::PlanOnly => &copy::RISK_PLAN_ONLY,
+            Risk::FlashChanged => &copy::RISK_FLASH_CHANGED,
+            Risk::DisksChanged => &copy::RISK_DISKS_CHANGED,
+            Risk::FailedSafely => &copy::RISK_FAILED_SAFELY,
+            Risk::DebianRunning => &copy::RISK_DEBIAN_RUNNING,
         }
     }
 
-    fn render_rail(&self, p: &Palette, cx: &mut Context<App>) -> AnyElement {
-        let cur = self.current_step();
-        let running = self.install_running();
-        v_flex()
-            .w(px(layout::RAIL_W))
-            .flex_none()
-            .h_full()
-            .bg(p.sidebar)
-            .border_r_1()
-            .border_color(p.border)
-            .p(px(space::S12))
-            .gap(px(space::S4))
+    fn render_title_bar(&self, cx: &mut Context<App>) -> AnyElement {
+        let app = cx.entity();
+        let dot = matches!(self.update, UpdateState::Available(_));
+        let right = h_flex()
+            .gap(px(4.0))
+            .items_center()
             .child(
-                h_flex()
-                    .items_center()
-                    .gap(px(space::S8))
-                    .px(px(space::S8))
-                    .py(px(space::S12))
-                    .child(
-                        div().size(px(28.0)).rounded(px(radius::SM)).bg(p.accent).flex().items_center().justify_center().child(icon_sized(
-                            "server",
-                            16.0,
-                            p.on_accent,
-                        )),
-                    )
-                    .child(text(p, theme::H2, "synofurb")),
+                Button::new("tb-help")
+                    .ghost()
+                    .small()
+                    .icon(icons::icon(role::TIP))
+                    .tooltip(copy::MENU_HELP.tip)
+                    .accessibility_label(copy::MENU_HELP.short)
+                    .on_click(cx.listener(|this, _, window, cx| this.open_help_topic(None, window, cx))),
             )
-            .children(Step::ALL.iter().enumerate().map(|(i, step)| {
-                let state = step_state(cur, *step);
-                let clickable = can_jump(cur, *step, self.install_started) && !running;
-                let (label_color, weight) = match state {
-                    StepState::Current => (p.accent_fg, 650.0),
-                    StepState::Done => (p.fg, 500.0),
-                    StepState::Upcoming => (p.fg_2, 400.0),
-                };
-                let circle = match state {
-                    StepState::Done => {
-                        div().size(px(22.0)).rounded_full().bg(p.accent).flex().items_center().justify_center().child(icon_sized(
-                            "check",
-                            14.0,
-                            p.on_accent,
+            .child(
+                Badge::new().dot().count(usize::from(dot)).child(
+                    Button::new("tb-settings")
+                        .ghost()
+                        .small()
+                        .icon(icons::icon(role::SETTINGS))
+                        .tooltip(copy::MENU_SETTINGS.tip)
+                        .accessibility_label(copy::MENU_SETTINGS.short)
+                        .disabled(self.install_running())
+                        .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Settings, window, cx))),
+                ),
+            )
+            .child(
+                Button::new("tb-menu")
+                    .ghost()
+                    .small()
+                    .icon(icons::icon(gpui_kit::assets::IconName::Menu))
+                    .accessibility_label("Menu")
+                    .dropdown_menu(move |menu, _, _| {
+                        let (a1, a2) = (app.clone(), app.clone());
+                        menu.item(PopupMenuItem::new(copy::MENU_ABOUT.short).icon(icons::icon(role::ABOUT)).on_click(
+                            move |_, window, cx| a1.update(cx, |t, cx| t.go(Screen::About, window, cx)),
                         ))
-                    }
-                    StepState::Current => div()
-                        .size(px(22.0))
-                        .rounded_full()
-                        .border_2()
-                        .border_color(p.accent)
-                        .bg(p.surface)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(text(p, theme::CAPTION, step.number().to_string()).text_color(p.accent_fg)),
-                    StepState::Upcoming => div()
-                        .size(px(22.0))
-                        .rounded_full()
-                        .border_1()
-                        .border_color(p.border_strong)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(text(p, theme::CAPTION, step.number().to_string()).text_color(p.fg_2)),
-                };
-                let state_word = match state {
-                    StepState::Done => "completed",
-                    StepState::Current => "current step",
-                    StepState::Upcoming => "not reached yet",
-                };
-                let step = *step;
-                h_flex()
-                    .id(("rail-step", i))
-                    .h(px(36.0))
-                    .px(px(space::S8))
-                    .gap(px(space::S12))
-                    .items_center()
-                    .rounded(px(radius::MD))
-                    .role(Role::ListItem)
-                    .aria_label(format!("Step {}: {}, {}", step.number(), step.label(), state_word))
-                    .when(state == StepState::Current, |d| d.bg(p.accent_bg))
-                    .when(clickable, |d| {
-                        d.cursor_pointer().hover(|s| s.bg(p.surface_2)).on_click(cx.listener(move |this, _, window, cx| {
-                            this.go(step.screen(), window, cx);
-                        }))
-                    })
-                    .child(circle)
-                    .child(text(p, theme::BODY, step.label()).text_color(label_color).font_weight(FontWeight(weight)))
-            }))
-            .child(div().flex_1())
+                        .item(PopupMenuItem::new(copy::MENU_UPDATES.short).icon(icons::icon(role::REFRESH)).on_click(
+                            move |_, _, cx| a2.update(cx, |t, cx| t.check_updates_now(cx)),
+                        ))
+                    }),
+            );
+        TitleBar::new()
             .child(
-                v_flex()
-                    .gap(px(space::S8))
-                    .child(
-                        Button::new("open-settings")
-                            .ghost()
-                            .small()
-                            .icon(icon("settings"))
-                            .label("Settings and About")
-                            .disabled(self.install_running())
-                            .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Settings, window, cx))),
-                    )
-                    .child(
-                        muted(p, format!("v{}{}", version(), if self.demo.is_some() { " (demo)" } else { "" }))
-                            .px(px(space::S8))
-                            .text_size(theme::CAPTION.size()),
-                    ),
+                h_flex()
+                    .gap(px(8.0))
+                    .items_center()
+                    .child(brand::mark(cx, 20.0))
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(copy::APP_NAME.short)),
             )
+            .child(right)
             .into_any_element()
     }
 
-    fn render_safety_bar(&self, p: &Palette, cx: &mut Context<App>) -> AnyElement {
-        let risk = risk_for(self.screen, self.install_started, self.install.past_no_return);
-        let touched = risk == Risk::DisksModified;
-        let unit = self.facts.as_ref().map(|f| {
-            let model = if f.model.is_empty() { f.hostname.clone() } else { f.model.clone() };
-            let host = super::format::display_host(&self.input_value(&self.inp.host, cx));
-            format!("{model}  {host}")
+    fn render_stepper(&self, cx: &mut Context<App>) -> AnyElement {
+        let cur = self.current_step();
+        let running = self.install_running();
+        let items = Step::ALL.iter().map(|s| {
+            let state = step_state(cur, *s);
+            let clickable = can_jump(cur, *s, self.install_started) && !running;
+            let label = match s {
+                Step::Find => &copy::STEP_FIND,
+                Step::Connect => &copy::STEP_CONNECT,
+                Step::Inspect => &copy::STEP_INSPECT,
+                Step::Goal => &copy::STEP_GOAL,
+                Step::Plan => &copy::STEP_PLAN,
+                Step::System => &copy::STEP_SYSTEM,
+                Step::Confirm => &copy::STEP_CONFIRM,
+                Step::Install => &copy::STEP_INSTALL,
+                Step::Done => &copy::STEP_DONE,
+            };
+            StepperItem::new().disabled(!clickable && state != StepState::Current).child(div().text_xs().child(label.short))
         });
-        let row = h_flex()
-            .w_full()
-            .gap(px(space::S4))
-            .items_center()
-            .flex_wrap()
-            .child(h_flex().flex_none().gap(px(space::S4)).items_center().children(Risk::ALL.iter().map(|r| {
-                let reached = *r <= risk;
-                let current = *r == risk;
-                let tone = if *r == Risk::DisksModified { Tone::Err } else { Tone::Accent };
-                let c = p.tone(tone);
-                h_flex()
-                    .h(px(24.0))
-                    .px(px(space::S8))
-                    .gap(px(space::S4))
-                    .items_center()
-                    .rounded(px(radius::SM))
-                    .border_1()
-                    .border_color(if current { c.solid } else { p.border })
-                    .bg(if current { c.bg } else { p.surface })
-                    .child(icon_sized(
-                        if current {
-                            if *r == Risk::DisksModified { "triangle-alert" } else { "shield-check" }
-                        } else if reached {
-                            "check"
-                        } else {
-                            "circle-dashed"
-                        },
-                        13.0,
-                        if current {
-                            c.fg
-                        } else if reached {
-                            p.fg_2
-                        } else {
-                            p.placeholder
-                        },
-                    ))
-                    .child(
-                        text(p, theme::CAPTION, r.label())
-                            .text_color(if current {
-                                c.fg
-                            } else if reached {
-                                p.fg_2
-                            } else {
-                                p.placeholder
-                            })
-                            .font_weight(FontWeight(if current { 700.0 } else { 400.0 })),
-                    )
-            })))
-            .child(div().flex_1())
-            .when_some(unit, |d, u| d.child(chip(p, u)))
-            .child(badge(
-                p,
-                if touched { Tone::Err } else { Tone::Ok },
-                if touched { "triangle-alert" } else { "shield-check" },
-                if touched { "Disks touched: Yes" } else { "Disks touched: No" },
-                false,
-            ));
-        v_flex()
+        div()
             .w_full()
             .flex_none()
             .px(px(layout::PAGE_PAD))
-            .py(px(space::S8))
-            .gap(px(space::S4))
-            .bg(p.surface)
+            .py(px(8.0))
             .border_b_1()
-            .border_color(p.border)
-            .id("safety-bar")
-            .role(Role::Status)
-            .aria_label(format!("Safety state: {}. {}", risk.label(), risk.sentence()))
-            .child(row)
-            .child(muted(p, risk.sentence()).text_size(theme::CAPTION.size()))
+            .border_color(cx.theme().border)
+            .child(
+                Stepper::new("steps")
+                    .small()
+                    .selected_index(cur.number() - 1)
+                    .items(items)
+                    .on_click(cx.listener(|this, ix: &usize, window, cx| {
+                        let target = Step::ALL[*ix];
+                        if can_jump(this.current_step(), target, this.install_started) && !this.install_running() {
+                            this.go(target.screen(), window, cx);
+                        }
+                    })),
+            )
             .into_any_element()
     }
 
-    fn render_update_banner(&self, p: &Palette, cx: &mut Context<App>) -> Option<AnyElement> {
+    fn render_status_bar(&self, cx: &mut Context<App>) -> AnyElement {
+        let p = cx.pal();
+        let risk = self.risk();
+        let item = Self::risk_item(risk);
+        let (tone, icon) = match risk {
+            Risk::ReadOnly | Risk::PlanOnly => (Tone::Ok, role::SAFE),
+            Risk::FlashChanged => (Tone::Warn, role::WARN),
+            Risk::DisksChanged => (Tone::Err, role::DANGER),
+            Risk::FailedSafely => (Tone::Warn, role::WARN),
+            Risk::DebianRunning => (Tone::Ok, role::OK),
+        };
+        let risk_tag = HoverCard::new("risk-tag")
+            .trigger(div().id("risk-tag").role(Role::Status).aria_label(format!("{}. {}", item.short, item.tip)).child(kit::tag(&p, tone, Some(icon), item.short)))
+            .content({
+                let tip = item.tip;
+                move |_, _, _| div().p(px(8.0)).max_w(px(280.0)).text_sm().child(tip)
+            });
+        let identity = self.facts.as_ref().map(|f| {
+            let model = if f.model.is_empty() { f.hostname.clone() } else { f.model.clone() };
+            format!("{} \u{00b7} {}", model, super::format::display_host(&self.input_value(&self.inp.host, cx)))
+        });
+        let way_back = Popover::new("way-back").anchor(Anchor::BottomRight).trigger(Button::new("way-back-btn").link().small().label(copy::WAY_BACK.short)).content({
+            let tip = item.tip;
+            move |_, _, _| div().w(px(280.0)).text_sm().child(tip)
+        });
+        let offline = self.offline_app();
+        StatusBar::new()
+            .left(h_flex().gap(px(8.0)).items_center().child(risk_tag).when(self.demo.is_some(), |d| {
+                d.child(kit::tag(&p, Tone::Info, None, copy::TAG_DEMO.short))
+            }).when(offline, |d| d.child(kit::tag(&p, Tone::Warn, Some(role::OFFLINE), copy::TAG_OFFLINE.short))))
+            .child(match identity {
+                Some(i) => kit::mono_sm(cx, i).into_any_element(),
+                None => div().into_any_element(),
+            })
+            .right(way_back)
+            .into_any_element()
+    }
+
+    fn render_update_banner(&self, cx: &mut Context<App>) -> Option<AnyElement> {
         if self.install_started && self.result.is_none() {
             return None; // never while a conversion runs
         }
-        if matches!(self.screen, Screen::Settings) {
+        if self.screen.is_side_page() {
             return None;
         }
         let UpdateState::Available(info) = &self.update else { return None };
-        let b = banner(
-            p,
-            Tone::Accent,
-            format!("synofurb {} is available", info.latest),
-            format!("You have {}. Release notes, size and verification are in the details.", info.current),
-            vec![
-                btn_secondary("upd-details", "View details")
-                    .small()
-                    .on_click(cx.listener(|this, _, window, cx| this.open_update_dialog(window, cx)))
-                    .into_any_element(),
-                btn_ghost("upd-later", "Remind me tomorrow")
-                    .small()
-                    .on_click(cx.listener(|this, _, _, cx| this.remind_tomorrow(cx)))
-                    .into_any_element(),
-            ],
-        );
-        Some(div().px(px(layout::PAGE_PAD)).pt(px(space::S12)).child(b).into_any_element())
+        let p = cx.pal();
+        Some(
+            h_flex()
+                .w_full()
+                .flex_none()
+                .items_center()
+                .gap(px(8.0))
+                .px(px(layout::PAGE_PAD))
+                .pt(px(8.0))
+                .child(Alert::info("update-banner", copy::UPD_BANNER.short).small().flex_1().min_w_0())
+                .child(kit::tag(&p, Tone::Accent, None, info.latest.clone()))
+                .child(Button::new("upd-details").ghost().small().label(copy::UPD_DETAILS.short).on_click(cx.listener(|this, _, window, cx| this.open_update_dialog(window, cx))))
+                .child(Button::new("upd-later").ghost().small().label(copy::UPD_LATER.short).on_click(cx.listener(|this, _, _, cx| this.remind_tomorrow(cx))))
+                .into_any_element(),
+        )
+    }
+
+    fn render_header(&self, page: &Page, cx: &mut Context<App>) -> AnyElement {
+        let app = cx.entity();
+        h_flex()
+            .w_full()
+            .items_start()
+            .justify_between()
+            .gap(px(16.0))
+            .child(
+                v_flex()
+                    .gap(px(2.0))
+                    .min_w_0()
+                    .child(
+                        h_flex()
+                            .gap(px(4.0))
+                            .items_center()
+                            .child(
+                                div()
+                                    .id("page-title")
+                                    .role(Role::Heading)
+                                    .aria_label(page.title.clone())
+                                    .text_size(theme::TITLE.size())
+                                    .line_height(theme::TITLE.line())
+                                    .font_weight(FontWeight(theme::TITLE.weight))
+                                    .child(page.title.clone()),
+                            )
+                            .when_some(page.title_info, |d, i| d.child(info_tip("title-info", i, &app))),
+                    )
+                    .when_some(page.subtitle.clone(), |d, s| {
+                        d.child(h_flex().gap(px(2.0)).items_center().child(kit::muted(cx, s)).when_some(page.subtitle_tip, |d, i| d.child(info_tip("sub-info", i, &app))))
+                    }),
+            )
+            .when_some(page.header_right.is_some().then_some(()), |d, _| d)
+            .into_any_element()
     }
 }
 
 impl Render for App {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = cx.pal();
-        let page = self.page_for(window, cx);
-        let rail = self.render_rail(&p, cx);
-        let safety = self.render_safety_bar(&p, cx);
-        let update = self.render_update_banner(&p, cx);
+        let mut page = self.page_for(window, cx);
+        let title_bar = self.render_title_bar(cx);
+        let stepper = (!self.screen.is_side_page()).then(|| self.render_stepper(cx));
+        let status = self.render_status_bar(cx);
+        let update = self.render_update_banner(cx);
+        let header = self.render_header(&page, cx);
+        let header_right = page.header_right.take();
 
-        let header = h_flex()
-            .w_full()
-            .items_start()
-            .justify_between()
-            .gap(px(space::S16))
-            .child(
-                v_flex()
-                    .gap(px(space::S4))
-                    .min_w_0()
-                    .child(h1(&p, page.title.clone()).id("page-title").role(Role::Heading).aria_label(page.title.clone()))
-                    .when_some(page.subtitle.clone(), |d, s| d.child(body(&p, s).text_color(p.fg_2))),
-            )
-            .when_some(page.header_right, |d, r| d.child(r));
-
-        let content = v_flex().w_full().gap(px(space::S16)).p(px(layout::PAGE_PAD)).child(header).child(page.body);
+        let top = h_flex().w_full().items_start().gap(px(16.0)).child(div().flex_1().min_w_0().child(header)).when_some(header_right, |d, r| d.child(r));
+        let content = v_flex().w_full().gap(px(16.0)).p(px(layout::PAGE_PAD)).child(top).child(page.body);
         let content_area = if page.scroll {
             div()
                 .id("page")
@@ -381,18 +393,19 @@ impl Render for App {
             div().flex_1().min_h_0().w_full().flex().flex_col().child(content.h_full().min_h_0()).into_any_element()
         };
 
-        let action_bar = h_flex()
+        let footer = h_flex()
             .w_full()
             .flex_none()
             .px(px(layout::PAGE_PAD))
-            .py(px(space::S12))
-            .gap(px(space::S16))
+            .py(px(12.0))
+            .gap(px(8.0))
             .items_center()
-            .bg(p.surface)
             .border_t_1()
-            .border_color(p.border)
-            .child(div().flex_1().min_w_0().when_some(page.note, |d, n| d.child(n)))
-            .child(h_flex().flex_none().gap(px(space::S8)).items_center().children(page.buttons));
+            .border_color(cx.theme().border)
+            .bg(cx.theme().tokens.background)
+            .child(h_flex().gap(px(8.0)).items_center().children(page.footer_left))
+            .child(div().flex_1())
+            .child(h_flex().gap(px(8.0)).items_center().children(page.footer_right));
 
         div()
             .id("synofurb")
@@ -405,34 +418,28 @@ impl Render for App {
                     this.go(t, window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &GoForward, window, cx| {
-                if let Some(t) = this.forward_target() {
-                    this.go(t, window, cx);
-                }
-            }))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 if !this.install_running() && this.screen != Screen::Settings {
                     this.go(Screen::Settings, window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &OpenHelp, window, cx| this.open_help_topic(None, window, cx)))
+            .on_action(cx.listener(|this, _: &OpenAbout, window, cx| this.go(Screen::About, window, cx)))
+            .on_action(cx.listener(|this, _: &CheckUpdates, _, cx| this.check_updates_now(cx)))
+            .on_action(cx.listener(|this, _: &CopyCommand, window, cx| this.copy_cli_command(window, cx)))
             .on_action(cx.listener(|this, _: &PrimaryAction, window, cx| this.primary_action(window, cx)))
             .size_full()
             .flex()
-            .flex_row()
-            .bg(p.canvas)
-            .text_color(p.fg)
+            .flex_col()
+            .bg(cx.theme().tokens.background)
+            .text_color(cx.theme().foreground)
             .text_size(theme::BODY.size())
-            .child(rail)
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .child(safety)
-                    .when_some(update, |d, u| d.child(u))
-                    .child(content_area)
-                    .child(action_bar),
-            )
+            .child(title_bar)
+            .children(stepper)
+            .children(update)
+            .child(content_area)
+            .child(footer)
+            .child(status)
     }
 }
 
@@ -441,8 +448,7 @@ impl App {
     pub fn primary_action(&mut self, window: &mut Window, cx: &mut Context<App>) {
         match self.screen {
             Screen::Inventory => {
-                if self.selected_ip.is_some() {
-                    let ip = self.selected_ip.clone().unwrap_or_default();
+                if let Some(ip) = self.selected_ip.clone() {
                     self.select_host(&ip, window, cx);
                 }
             }
@@ -458,8 +464,11 @@ impl App {
                     self.go(Screen::System, window, cx)
                 }
             }
-            Screen::System => self.go(Screen::Confirm, window, cx),
-            Screen::Done | Screen::Failed => {}
+            Screen::System => {
+                if self.system_form_errors(cx).is_empty() {
+                    self.go(Screen::Confirm, window, cx)
+                }
+            }
             _ => {}
         }
     }

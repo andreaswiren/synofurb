@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    synofurb desktop installer for Windows (PowerShell 5.1 and 7+).
+    synofurb installer for Windows (PowerShell 5.1 and 7+): the desktop app, or with -Cli the headless command line.
 
 .DESCRIPTION
     Finds the release (latest, or -Version), downloads the MSI (default) or the portable zip, verifies the
@@ -10,12 +10,19 @@
     One-liner (latest release, MSI, machine-wide; asks for elevation only for msiexec):
         irm https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.ps1 | iex
 
+    The command line only (no GUI; for servers, remote sessions and CI) needs a parameter, so save the script first:
+        irm https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.ps1 -OutFile i.ps1; .\i.ps1 -Cli
+
     With parameters (a piped script cannot take any, so build a script block):
         & ([scriptblock]::Create((irm https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.ps1))) -Version 0.2.0 -Run scan
         & ([scriptblock]::Create((irm https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.ps1))) -User -Run install,--host,192.168.1.20
 
 .PARAMETER Version
     Release to install, e.g. 0.2.0 (default: the latest release).
+.PARAMETER Cli
+    Install the command-line program synofurb-cli.exe instead of the desktop app: downloads synofurb-cli-<version>-windows-<arch>.zip,
+    extracts it to -Dir (default %LOCALAPPDATA%\Programs\synofurb-cli). No MSI, no shortcuts, no elevation, no GUI libraries.
+    Combine with -AddToPath to use it from any terminal. Cannot be combined with -Portable or -User.
 .PARAMETER Portable
     Download the portable zip and just extract it to -Dir (default %LOCALAPPDATA%\Programs\synofurb-portable). No
     shortcuts, no registry entries, no elevation.
@@ -25,9 +32,9 @@
 .PARAMETER Dir
     Install directory. For the MSI it is passed as INSTALLDIR; for -User/-Portable it is the extraction folder.
 .PARAMETER AddToPath
-    With -User/-Portable: add the install folder to the current user's PATH.
+    With -Cli/-User/-Portable: add the install folder to the current user's PATH.
 .PARAMETER Run
-    After installing, run `synofurb <Run...>`, e.g. -Run scan  or  -Run install,--host,192.168.1.20
+    After installing, run `synofurb <Run...>` (`synofurb-cli <Run...>` with -Cli), e.g. -Run scan  or  -Run install,--host,192.168.1.20
 .PARAMETER Uninstall
     Remove synofurb (MSI product, or the -User/-Portable folder, shortcut and uninstall entry).
 .PARAMETER DryRun
@@ -42,6 +49,7 @@
 [CmdletBinding()]
 param(
     [string]$Version = '',
+    [switch]$Cli,
     [switch]$Portable,
     [switch]$User,
     [string]$Dir = '',
@@ -57,7 +65,7 @@ param(
 function Install-Synofurb {
     [CmdletBinding()]
     param(
-        [string]$Version, [bool]$Portable, [bool]$User, [string]$Dir, [bool]$AddToPath, [string[]]$Run,
+        [string]$Version, [bool]$Cli, [bool]$Portable, [bool]$User, [string]$Dir, [bool]$AddToPath, [string[]]$Run,
         [bool]$Uninstall, [bool]$DryRun, [bool]$InsecureSkipSignature, [bool]$RequireSignature, [string]$PublicKey
     )
 
@@ -161,7 +169,19 @@ function Install-Synofurb {
     $perUserDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs\synofurb' } else { Join-Path ([IO.Path]::GetTempPath()) 'synofurb' }
     $portableDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs\synofurb-portable' } else { Join-Path ([IO.Path]::GetTempPath()) 'synofurb-portable' }
     $startMenu = if ($env:APPDATA) { Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\synofurb.lnk' } else { '' }
+    $cliDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs\synofurb-cli' } else { Join-Path ([IO.Path]::GetTempPath()) 'synofurb-cli' }
+    $progName = if ($Cli) { 'synofurb-cli' } else { 'synofurb' }
+    $exeName = "$progName.exe"
+    if ($Cli -and ($Portable -or $User)) { throw '-Cli installs the command line into its own folder; do not combine it with -Portable or -User' }
 
+    if ($Uninstall -and $Cli) {
+        # only the command line: the desktop app (MSI, shortcuts, registry entries) is not touched
+        $d = if ($Dir) { $Dir } else { $cliDir }
+        if ((Test-Path -LiteralPath (Join-Path $d $exeName)) -or ($TestMode -and (Test-Path -LiteralPath $d))) {
+            if ($DryRun) { Write-Host "[dry-run] would remove $d" } else { Remove-Item -LiteralPath $d -Recurse -Force; Write-Host "Removed $d" }
+        } else { Write-Host "Nothing to remove: $exeName is not installed in $d." }
+        return
+    }
     if ($Uninstall) {
         $did = $false
         foreach ($e in Get-InstalledEntries) {
@@ -217,22 +237,22 @@ function Install-Synofurb {
         if ($Version -notmatch $versionPattern) { throw "refusing unexpected release tag from the API: $tagName" }
     }
     $tag = "v$Version"
-    $usingZip = $Portable -or $User
+    $usingZip = $Portable -or $User -or $Cli
     $ext = if ($usingZip) { 'zip' } else { 'msi' }
-    $asset = "synofurb-$Version-windows-$arch.$ext"
+    $asset = if ($Cli) { "synofurb-cli-$Version-windows-$arch.zip" } else { "synofurb-$Version-windows-$arch.$ext" }
     $urlBase = "$DlBase/$tag"
-    if (-not $Dir) { $Dir = if ($User) { $perUserDir } elseif ($Portable) { $portableDir } else { '' } }
+    if (-not $Dir) { $Dir = if ($Cli) { $cliDir } elseif ($User) { $perUserDir } elseif ($Portable) { $portableDir } else { '' } }
     if ($Dir -and -not [IO.Path]::IsPathRooted($Dir)) { throw "-Dir must be an absolute path (got: $Dir)" }
     if ($Dir -match '["\r\n]') { throw '-Dir must not contain double quotes or line breaks' }
 
-    Write-Host "synofurb $Version for windows/$arch ($asset)"
+    Write-Host "$progName $Version for windows/$arch ($asset)"
     if ($DryRun) {
         Write-Host "[dry-run] would download $urlBase/$asset"
         Write-Host "[dry-run] would download $urlBase/SHA256SUMS and $urlBase/SHA256SUMS.minisig"
         if ($InsecureSkipSignature) { Write-Host '[dry-run] would verify SHA-256 only (-InsecureSkipSignature)' } else { Write-Host '[dry-run] would verify SHA-256 and, if minisign is installed, the signature' }
         if ($usingZip) { Write-Host "[dry-run] would extract to $Dir$(if ($User) { ' and add a Start Menu shortcut + Apps & features entry' })" }
         else { Write-Host "[dry-run] would run: msiexec /i $asset /qn /norestart$(if ($Dir) { ' INSTALLDIR="' + $Dir + '"' })  (elevating only msiexec if needed)" }
-        if ($Run.Count -gt 0) { Write-Host "[dry-run] would run: synofurb $($Run -join ' ')" }
+        if ($Run.Count -gt 0) { Write-Host "[dry-run] would run: $progName $($Run -join ' ')" }
         Write-Host '[dry-run] nothing was downloaded or changed.'
         return
     }
@@ -309,10 +329,10 @@ function Install-Synofurb {
                 if (-not [IO.Path]::GetFullPath($f.FullName).StartsWith($stagingFull, [StringComparison]::OrdinalIgnoreCase)) { throw 'archive contains paths outside its folder - refusing to install' }
                 if ($f.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'archive contains links - refusing to install' }
             }
-            if (-not (Test-Path -LiteralPath (Join-Path $staging 'synofurb.exe') -PathType Leaf)) { throw "archive does not contain synofurb.exe at its top level" }
+            if (-not (Test-Path -LiteralPath (Join-Path $staging $exeName) -PathType Leaf)) { throw "archive does not contain $exeName at its top level" }
             New-Item -ItemType Directory -Path $Dir -Force | Out-Null
             Copy-Item -Path (Join-Path $staging '*') -Destination $Dir -Recurse -Force
-            $exeToRun = Join-Path $Dir 'synofurb.exe'
+            $exeToRun = Join-Path $Dir $exeName
             Write-Host "Extracted to $Dir"
 
             if ($User -and $onWindows) {
@@ -357,13 +377,13 @@ function Install-Synofurb {
     Write-Host "Done.$(if ($exeToRun) { ' Run:  & "' + $exeToRun + '" --help' })"
 
     if ($Run.Count -gt 0) {
-        if (-not $exeToRun) { throw 'cannot find the installed synofurb.exe to run (a restart or a new terminal may be needed for PATH)' }
-        Write-Host "Running: synofurb $($Run -join ' ')"
+        if (-not $exeToRun) { throw "cannot find the installed $exeName to run (a restart or a new terminal may be needed for PATH)" }
+        Write-Host "Running: $progName $($Run -join ' ')"
         & $exeToRun @Run
         $global:LASTEXITCODE = $LASTEXITCODE
     }
 }
 
-Install-Synofurb -Version $Version -Portable $Portable.IsPresent -User $User.IsPresent -Dir $Dir -AddToPath $AddToPath.IsPresent -Run $Run `
+Install-Synofurb -Version $Version -Cli $Cli.IsPresent -Portable $Portable.IsPresent -User $User.IsPresent -Dir $Dir -AddToPath $AddToPath.IsPresent -Run $Run `
     -Uninstall $Uninstall.IsPresent -DryRun $DryRun.IsPresent -InsecureSkipSignature $InsecureSkipSignature.IsPresent `
     -RequireSignature $RequireSignature.IsPresent -PublicKey $PublicKey

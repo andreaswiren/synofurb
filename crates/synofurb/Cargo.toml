@@ -1,18 +1,50 @@
 [package]
 name = "synofurb"
-description = "Desktop tool that reinstalls Synology NAS units with plain Debian 13"
+description = "Desktop tool and command line that reinstall Synology NAS units with plain Debian 13"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+default-run = "synofurb"
+build = "build.rs"
+
+# One crate, two programs:
+#   synofurb      the GPUI desktop app plus every CLI subcommand            (feature "gui", on by default)
+#   synofurb-cli  every CLI subcommand, NO GUI libraries (headless servers, SSH sessions, CI)
+# Everything the two share lives in the library target (src/lib.rs); only the `ui` module and GPUI are specific to the GUI.
+# Build the headless one with:  cargo build --release -p synofurb --no-default-features --bin synofurb-cli
+[features]
+default = ["gui"]
+gui = ["dep:gpui-kit", "dep:futures"]
+
+[lib]
+name = "synofurb_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "synofurb"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[[bin]]
+name = "synofurb-cli"
+path = "src/bin/synofurb-cli.rs"
 
 [dependencies]
 anyhow = "1.0.104"
-clap = { version = "4.6.7", features = ["derive"] }
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+clap_complete = "4.6"
+ctrlc = { version = "3", features = ["termination"] }
 directories = "6.0.0"
+flate2 = "1.1.10"
+hex = "0.4.3"
 log = "0.4.35"
 rpassword = "7.5.4"
-serde_json = "1.0.154"
-synofurb-core = { path = "../synofurb-core" }
-futures = "0.3"
-gpui-kit = "0.8.1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+synofurb-core = { path = "../synofurb-core" }
+tar = "0.4.46"
+# GUI only
+futures = { version = "0.3", optional = true }
+gpui-kit = { version = "0.8.1", optional = true }

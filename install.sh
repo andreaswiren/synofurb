@@ -1,12 +1,14 @@
 #!/bin/sh
-# synofurb desktop installer for Linux and macOS (POSIX sh).
+# synofurb installer for Linux and macOS (POSIX sh): the desktop app, or with --cli the headless command line.
 #
 #   curl -fsSL https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.sh | sh -s -- --version 0.2.0 --dir ~/.local/bin --run scan
+#   curl -fsSL https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.sh | sh -s -- --cli      # servers, SSH sessions, CI
 #
 # What it does: detects OS/arch, finds the release (latest, or --version), downloads the matching asset plus
 # SHA256SUMS and SHA256SUMS.minisig, verifies the minisign signature (when `minisign` is installed) and the
-# SHA-256, installs the `synofurb` binary and (Linux) a desktop entry.  It never evaluates downloaded data;
+# SHA-256, installs the `synofurb` binary and (Linux) a desktop entry; with --cli it installs `synofurb-cli`
+# (no GUI libraries needed) to ~/.local/bin and nothing else.  It never evaluates downloaded data;
 # the only things taken from the network are files that are verified before they are used.
 #
 # Run with --help for all options.  Source of truth for the release layout: docs/RELEASING.md.
@@ -25,6 +27,8 @@ VERSION=""
 DIR=""
 SYSTEM=0
 FORMAT="tar"
+CLI=0
+BIN_NAME="synofurb"
 UNINSTALL=0
 DRY_RUN=0
 INSECURE=0
@@ -40,6 +44,8 @@ synofurb installer (Linux, macOS)
 usage: install.sh [options] [--run SUBCOMMAND [ARGS...]]
 
 options:
+  --cli                      install the headless command line `synofurb-cli` instead of the desktop app (no GUI libraries,
+                             no desktop entry; works on servers and over SSH). Default location ~/.local/bin/synofurb-cli
   --version X.Y.Z            install this release instead of the latest
   --dir DIR                  install the binary into DIR (default: ~/.local/bin; with --system: /usr/local/bin)
   --system                   system-wide install (uses sudo when not root)
@@ -48,15 +54,17 @@ options:
   --pubkey KEY               minisign public key (base64 line) to verify SHA256SUMS.minisig with
   --insecure-skip-signature  accept the SHA-256 check alone (proves integrity, NOT authenticity). Needed when
                              minisign is not installed
-  --uninstall                remove what this installer put in place (binary, desktop entry, icon, app bundle)
+  --uninstall                remove what this installer put in place (binary, desktop entry, icon, app bundle; with --cli: synofurb-cli)
   --dry-run                  show what would be done; download and change nothing
   -h, --help                 this text
-  --run ARGS...              (must come last) after installing, run `synofurb ARGS...`
+  --run ARGS...              (must come last) after installing, run `synofurb ARGS...` (`synofurb-cli ARGS...` with --cli)
 
 examples:
   curl -fsSL https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.sh | sh
   curl -fsSL .../install.sh | sh -s -- --version 0.2.0 --dir ~/.local/bin --run scan
   curl -fsSL .../install.sh | sh -s -- --run install --host 192.168.1.20 --user admin --mode keep ...
+  curl -fsSL .../install.sh | sh -s -- --cli                     # headless server / SSH session
+  curl -fsSL .../install.sh | sh -s -- --cli --run wizard        # install it and start the terminal wizard
 
 environment (mostly for testing/mirrors): SYNOFURB_API_BASE, SYNOFURB_DL_BASE, SYNOFURB_MINISIGN_PUBKEY,
 SYNOFURB_MINISIGN_BIN, SYNOFURB_FORCE_OS, SYNOFURB_FORCE_ARCH
@@ -187,7 +195,7 @@ compute_paths() {
     case "$DIR$DATA_DIR" in
         *\"* | *\\* | *\$* | *\`* | *%* | *"$nl"*) die "install paths must not contain a double quote, backslash, \$, backtick, % or newline" ;;
     esac
-    BIN="$DIR/synofurb"
+    BIN="$DIR/$BIN_NAME"
     DESKTOP_FILE="$DATA_DIR/applications/synofurb.desktop"
     ICON_FILE="$DATA_DIR/icons/hicolor/256x256/apps/synofurb.png"
     APP_BUNDLE="$APP_DIR/synofurb.app"
@@ -212,6 +220,14 @@ resolve_version() {
 }
 
 select_asset() {
+    if [ "$CLI" = 1 ]; then
+        # the command line ships as a bare binary in a tar.gz on both Linux and macOS
+        [ "$FORMAT" = tar ] || die "--cli is only available as --format tar (got: $FORMAT)"
+        EXT="tar.gz"
+        ASSET="synofurb-cli-${VERSION}-${OS}-${ARCH}.${EXT}"
+        URL_BASE="$DL_BASE/$TAG"
+        return
+    fi
     case "$OS:$FORMAT" in
         linux:tar | macos:tar) EXT="tar.gz" ;;
         linux:appimage) EXT="AppImage" ;;
@@ -294,16 +310,16 @@ install_tar() {
     stage="$TMP/stage"
     mkdir -p "$stage"
     tar -xzf "$archive" -C "$stage"
-    if [ ! -f "$stage/synofurb" ] || [ -L "$stage/synofurb" ]; then
-        die "archive does not contain a regular file named 'synofurb' at its top level"
+    if [ ! -f "$stage/$BIN_NAME" ] || [ -L "$stage/$BIN_NAME" ]; then
+        die "archive does not contain a regular file named '$BIN_NAME' at its top level"
     fi
     run_priv mkdir -p "$DIR"
-    atomic_install "$stage/synofurb" "$BIN" 0755
+    atomic_install "$stage/$BIN_NAME" "$BIN" 0755
     say "Installed $BIN"
     if [ "$OS" = macos ]; then xattr -d com.apple.quarantine "$BIN" 2>/dev/null || true; fi
     ICON_SRC=""
     if [ -f "$stage/synofurb.png" ] && [ ! -L "$stage/synofurb.png" ]; then ICON_SRC="$stage/synofurb.png"; fi
-    if [ "$OS" = linux ] && [ "$NO_DESKTOP" = 0 ]; then
+    if [ "$OS" = linux ] && [ "$NO_DESKTOP" = 0 ] && [ "$CLI" = 0 ]; then
         create_desktop_entry "$ICON_SRC"
     fi
 }
@@ -376,6 +392,19 @@ install_dmg() {
 # ---------------------------------------------------------------------------------------------- uninstall
 do_uninstall() {
     removed=0
+    if [ "$CLI" = 1 ]; then
+        # only the command-line binary: the desktop app (same prefix, other file) stays
+        if [ -e "$BIN" ] || [ -L "$BIN" ]; then
+            if [ "$DRY_RUN" = 1 ]; then say "would remove $BIN"; else
+                run_priv rm -f "$BIN"
+                say "Removed $BIN"
+            fi
+        else
+            say "Nothing to remove (looked for $BIN)."
+        fi
+        say "Your settings and inventory (e.g. ~/.config/synofurb) were left in place; delete them yourself if you want them gone."
+        return
+    fi
     for f in "$BIN" "$DESKTOP_FILE" "$ICON_FILE"; do
         if [ -e "$f" ] || [ -L "$f" ]; then
             if [ "$DRY_RUN" = 1 ]; then say "would remove $f"; else
@@ -419,6 +448,11 @@ main() {
                 [ $# -ge 2 ] || usage_error "--format needs a value"
                 FORMAT="$2"
                 shift 2
+                ;;
+            --cli)
+                CLI=1
+                BIN_NAME="synofurb-cli"
+                shift
                 ;;
             --pubkey)
                 [ $# -ge 2 ] || usage_error "--pubkey needs a value"
@@ -472,13 +506,13 @@ main() {
     resolve_version
     select_asset
 
-    say "synofurb $VERSION for $OS/$ARCH ($ASSET)"
+    say "$BIN_NAME $VERSION for $OS/$ARCH ($ASSET)"
     if [ "$DRY_RUN" = 1 ]; then
         say "[dry-run] would download $URL_BASE/$ASSET"
         say "[dry-run] would download $URL_BASE/SHA256SUMS and $URL_BASE/SHA256SUMS.minisig"
         if [ "$INSECURE" = 1 ]; then say "[dry-run] would verify SHA-256 only (--insecure-skip-signature)"; else say "[dry-run] would verify the minisign signature and SHA-256"; fi
         say "[dry-run] would install to $BIN$([ "$SYSTEM" = 1 ] && printf ' (system-wide%s)' "${SUDO:+, via sudo}")"
-        if [ "$OS" = linux ] && [ "$NO_DESKTOP" = 0 ]; then say "[dry-run] would create $DESKTOP_FILE"; fi
+        if [ "$OS" = linux ] && [ "$NO_DESKTOP" = 0 ] && [ "$CLI" = 0 ]; then say "[dry-run] would create $DESKTOP_FILE"; fi
         if [ "$RUN_ARGS_SET" = 1 ]; then say "[dry-run] would run: $BIN $*"; fi
         say "[dry-run] nothing was downloaded or changed."
         exit 0
@@ -507,7 +541,7 @@ main() {
     say "Done. Run:  $BIN --help"
 
     if [ "$RUN_ARGS_SET" = 1 ]; then
-        say "Running: synofurb $*"
+        say "Running: $BIN_NAME $*"
         cleanup
         trap - EXIT
         # when this script itself was piped into sh, stdin is the script: give the program the terminal instead

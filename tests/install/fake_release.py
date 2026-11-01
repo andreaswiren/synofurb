@@ -22,6 +22,12 @@ printf '%s\\n' "$*" >> "${SYNOFURB_TEST_LOG:-/dev/null}"
 case "${1:-}" in --version) echo "synofurb @VER@" ;; esac
 exit "${SYNOFURB_TEST_EXIT:-0}"
 """
+FAKE_CLI_BIN = """#!/bin/sh
+# fake synofurb-cli used by the installer tests
+printf '%s\\n' "$*" >> "${SYNOFURB_TEST_LOG:-/dev/null}"
+case "${1:-}" in --version) echo "synofurb-cli @VER@" ;; esac
+exit "${SYNOFURB_TEST_EXIT:-0}"
+"""
 PNG = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000001e221bc330000000049454e44ae426082")
 
 
@@ -44,6 +50,19 @@ def desktop_tar(path: Path, version: str, mutate: str) -> None:
         if mutate == "evil-tar":
             add(tf, "../evil.txt", b"pwned")
         if mutate == "link-tar":
+            add(tf, "sneaky", b"", typ=tarfile.SYMTYPE, linkname="/etc/passwd")
+
+
+def cli_tar(path: Path, version: str, mutate: str) -> None:
+    """The headless build: a flat archive with `synofurb-cli`, LICENSE and README.txt (no icon, no desktop files)."""
+    with tarfile.open(path, "w:gz") as tf:
+        if mutate != "cli-no-binary":
+            add(tf, "synofurb-cli", FAKE_CLI_BIN.replace("@VER@", version).encode(), 0o755)
+        add(tf, "LICENSE", b"MIT\n")
+        add(tf, "README.txt", b"synofurb-cli\n")
+        if mutate == "cli-evil-tar":
+            add(tf, "../evil-cli.txt", b"pwned")
+        if mutate == "cli-link-tar":
             add(tf, "sneaky", b"", typ=tarfile.SYMTYPE, linkname="/etc/passwd")
 
 
@@ -93,10 +112,21 @@ def main() -> None:
                 if a.mutate == "zip-slip":
                     zf.writestr("../evil.txt", "pwned")
             names += [msi, zname]
+            cz = f"synofurb-cli-{a.version}-{plat}.zip"
+            with zipfile.ZipFile(dl / cz, "w") as zf:
+                if a.mutate != "cli-no-binary":
+                    zf.writestr("synofurb-cli.exe", "MZ fake cli exe " + a.version)
+                zf.writestr("LICENSE", "MIT\n")
+                if a.mutate == "cli-zip-slip":
+                    zf.writestr("../evil-cli.txt", "pwned")
+            names.append(cz)
             continue
         name = f"synofurb-{a.version}-{plat}.tar.gz"
         desktop_tar(dl / name, a.version, a.mutate)
         names.append(name)
+        cname = f"synofurb-cli-{a.version}-{plat}.tar.gz"
+        cli_tar(dl / cname, a.version, a.mutate)
+        names.append(cname)
         if plat.startswith("linux"):
             ai = f"synofurb-{a.version}-{plat}.AppImage"
             (dl / ai).write_bytes(FAKE_BIN.replace("@VER@", a.version).encode())
@@ -117,6 +147,16 @@ def main() -> None:
         first = a.platforms.split(",")[0]
         p = dl / f"synofurb-{a.version}-{first}.{'zip' if first.startswith('windows') and a.tamper_ext == 'zip' else 'msi' if first.startswith('windows') else 'tar.gz'}"
         p.write_bytes(p.read_bytes() + b"\0tampered")
+    if a.mutate == "cli-asset":  # tamper with the CLI archive after the sums were computed and signed
+        first = a.platforms.split(",")[0]
+        p = dl / f"synofurb-cli-{a.version}-{first}.{'zip' if first.startswith('windows') else 'tar.gz'}"
+        p.write_bytes(p.read_bytes() + b"\0tampered")
+    if a.mutate == "cli-unlisted":  # the CLI archive exists but SHA256SUMS does not list it
+        sums = "".join(l for l in sums.splitlines(keepends=True) if "synofurb-cli-" not in l)
+        (dl / "SHA256SUMS").write_text(sums)
+        if a.seckey:
+            subprocess.run(["minisign", "-S", "-s", a.seckey, "-m", str(dl / "SHA256SUMS"), "-x", str(dl / "SHA256SUMS.minisig")],
+                           check=True, capture_output=True, input=b"\n")
     if a.mutate == "sums-after-sign":  # valid-looking sums, but the signature no longer matches
         (dl / "SHA256SUMS").write_text(sums + f"{'0' * 64}  something-else.zip\n")
 

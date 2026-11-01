@@ -3586,26 +3586,30 @@ PAGES.dashboard = async () => {
   syncing.forEach(a => parts.push(banner('warn', a.name + ' is ' + a.sync.action + (a.sync.percent != null ? ' (' + a.sync.percent + '%)' : ''), 'Volumes stay usable; performance is reduced' + (a.sync.finish_min ? ' for about ' + Math.round(a.sync.finish_min) + ' min.' : '.'))));
   if (ki.ge7) parts.push(banner('info', 'Kernel ' + ki.release, 'Linux 7 or newer is running. If a driver for your hardware misbehaves, the boot manager can start the previous kernel or DSM.', btn('Boot manager', {size: 'sm', onclick: () => show('boot')})));
   if (mc.applicable && !mc.installed) parts.push(banner('warn', 'CPU microcode package is not installed', 'Install ' + mc.package + ' (apt install ' + mc.package + ') to receive CPU security and stability fixes.'));
-  // disks: one row per physical disk with its role; the full device tree is folded away
-  const kids = {}; s.disks.forEach(d => { if (d.pkname) (kids[d.pkname] = kids[d.pkname] || []).push(d); });
-  const below = d => { const o = [], st = [...(kids[d.kname] || [])], seen = new Set(); while (st.length) { const x = st.pop(); if (seen.has(x.kname)) continue; seen.add(x.kname); o.push(x); st.push(...(kids[x.kname] || [])); } return o; };
+  // disks: one row per physical disk with its role; the full device tree is folded away.
+  // The tree comes from each device's children list (a RAID member shows up under every disk of the array).
+  const byK = {}; s.disks.forEach(d => { byK[d.kname] = d; });
+  const kidsOf = d => (d.children || []).map(k => byK[k]).filter(Boolean);
+  const below = d => { const o = [], st = [...kidsOf(d)], seen = new Set(); while (st.length) { const x = st.pop(); if (seen.has(x.kname)) continue; seen.add(x.kname); o.push(x); st.push(...kidsOf(x)); } return o; };
   const role = d => {
-    const sub = below(d), mps = d.mountpoints.concat(...sub.map(x => x.mountpoints));
-    if (mps.some(m => ['/', '/boot', '/boot/efi', '[SWAP]'].includes(m))) return badge('info', 'System', 'server');
-    const mdn = sub.filter(x => /^raid|^md/.test(x.type)).map(x => x.name);
-    if (mdn.length) return badge('ok', 'Array ' + [...new Set(mdn)].join(', '), 'layers');
+    const sub = below(d), mps = d.mountpoints.concat(...sub.map(x => x.mountpoints)), out = [];
+    if (d.kname.startsWith('synoboot') || d.model === 'DOM') return badge('info', 'Boot flash', 'board');
+    if (mps.some(m => ['/', '/boot', '/boot/efi', '[SWAP]'].includes(m))) out.push(badge('info', 'System', 'server'));
+    const mdn = [...new Set(sub.filter(x => /^raid|^md/.test(x.type)).map(x => x.name))];
+    if (mdn.length) out.push(badge('ok', 'Array ' + mdn.sort().join(', '), 'layers'));
+    if (out.length) return h('div', {class: 'row'}, out);
     if (sub.some(x => x.fstype || x.mountpoints.length) || d.fstype) return badge('neutral', (sub.find(x => x.fstype) || d).fstype || 'In use', 'database');
     return badge('neutral', 'Unused', 'plus');
   };
   const drows = s.disks.filter(d => d.type === 'disk' && !/^(loop|zram|ram|sr|nbd)/.test(d.kname)).map(d => [h('b', {class: 'mono'}, '/dev/' + d.kname), [d.model, d.serial].filter(Boolean).join(' - ') || '-', fmtBytes(d.size),
     [d.tran ? chip(d.tran) : null, chip(d.rota ? 'HDD' : 'SSD')], role(d)]);
-  const trows = [], tseen = new Set();
+  const trows = [], tseen = new Set(), isChild = new Set(); s.disks.forEach(d => (d.children || []).forEach(k => isChild.add(k)));
   const walk = (d, depth) => {
     if (tseen.has(d.kname)) return; tseen.add(d.kname);
     trows.push([h('span', {class: 'mono ind' + Math.min(depth, 3)}, d.name), d.type, fmtBytes(d.size), d.fstype || '', d.label || '', h('span', {class: 'mono'}, d.mountpoints.join(', '))]);
-    (kids[d.kname] || []).forEach(c => walk(c, depth + 1));
+    kidsOf(d).forEach(c => walk(c, depth + 1));
   };
-  s.disks.filter(d => !d.pkname).forEach(d => walk(d, 0));
+  s.disks.filter(d => !isChild.has(d.kname)).forEach(d => walk(d, 0));
   const smart = h('div', {});
   const sb = btn('Check SMART health', {icon: 'shield-check', onclick: () => act(sb, async () => {
     const r = await api('GET', '/api/smart');

@@ -49,6 +49,11 @@ pkg_asset_name() { # version os arch ext
     printf 'synofurb-%s-%s-%s.%s' "$1" "$2" "$3" "$4"
 }
 
+# synofurb-cli-<version>-<os>-<arch>.<ext>  (the headless command-line build; no GUI libraries)
+pkg_cli_asset_name() { # version os arch ext
+    printf 'synofurb-cli-%s-%s-%s.%s' "$1" "$2" "$3" "$4"
+}
+
 # a path in the form the host's native tools understand (Git Bash on Windows -> D:/a/..)
 pkg_native_path() {
     if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi

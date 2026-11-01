@@ -2,7 +2,8 @@ name: release
 
 # Release pipeline.  Trigger: push of a tag v*  (or manual dispatch).  Full procedure: docs/RELEASING.md.
 #
-#   design-gate  -> meta -> test -> build (6 platforms) + aux (boot agents) + static (mgmt plane, dom, compat)
+#   design-gate  -> meta -> test -> build (6 platforms, desktop app) + cli (6 platforms, headless synofurb-cli, no GUI libraries)
+#                                   + aux (boot agents) + static (mgmt plane, dom, compat)
 #                                   -> checksums (SHA256SUMS + minisign) -> release (GitHub Release)
 #
 # Nothing is built unless the design gate (scripts/release-gate.py) passes: both critics must have approved the exact
@@ -192,12 +193,99 @@ jobs:
           shellcheck -s sh install.sh apps/mgmt-plane/install.sh
           shellcheck -x -P SCRIPTDIR scripts/package-*.sh
           shellcheck -x -e SC2016 tests/install/run-tests.sh tests/install/test-package-scripts.sh
+          shellcheck -x tests/cli/smoke.sh
       - name: Design-gate unit tests
         run: python3 -m unittest discover -s tests/gate -v
       - name: Installer tests (install.sh, install.ps1, mgmt-plane/install.sh against a fake release server)
         run: tests/install/run-tests.sh
       - name: Packaging script tests
         run: tests/install/test-package-scripts.sh
+      - name: Headless CLI - build without the GUI feature, then the smoke test (env -i, no display libraries needed)
+        run: |
+          cargo build --locked -p synofurb --no-default-features --bin synofurb-cli
+          tests/cli/smoke.sh target/debug/synofurb-cli
+
+  # ------------------------------------------------------------------------------------------------------------------
+  # 4a. headless command line (synofurb-cli): built WITHOUT the GUI feature, so no GPUI system libraries are installed or needed
+  # ------------------------------------------------------------------------------------------------------------------
+  cli:
+    name: cli ${{ matrix.name }}
+    needs: [design-gate, meta, test]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    continue-on-error: ${{ matrix.experimental }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x86_64, runner: windows-latest, target: x86_64-pc-windows-msvc, experimental: false }
+          - { name: windows-aarch64, runner: windows-11-arm, target: aarch64-pc-windows-msvc, experimental: true }
+          - { name: macos-aarch64, runner: macos-14, target: aarch64-apple-darwin, experimental: false }
+          - { name: macos-x86_64, runner: macos-15-intel, target: x86_64-apple-darwin, experimental: false }
+          - { name: linux-x86_64, runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu, experimental: false }
+          - { name: linux-aarch64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, experimental: false }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+        with:
+          key: release-cli-${{ matrix.target }}
+
+      # Deliberately NO apt-get of libxkbcommon / wayland / xcb / vulkan / freetype: the CLI must build on a bare runner.
+      - name: Build synofurb-cli (release, locked, no default features = no GUI)
+        run: |
+          export SYNOFURB_GIT_DESCRIBE="${{ needs.meta.outputs.tag }}"
+          cargo build --release --locked -p synofurb --no-default-features --bin synofurb-cli --target "${{ matrix.target }}"
+
+      - name: No graphical library may be linked or even requested
+        if: runner.os != 'Windows'
+        run: |
+          bin="target/${{ matrix.target }}/release/synofurb-cli"
+          if [ "${RUNNER_OS}" = Linux ]; then deps="$(ldd "${bin}")"; else deps="$(otool -L "${bin}")"; fi
+          echo "${deps}"
+          if echo "${deps}" | grep -Eiq 'xkbcommon|libxcb|libX11|wayland|vulkan|freetype|fontconfig|libGL|libEGL|libdrm|libgbm|libasound|AppKit|Metal|Cocoa'; then
+            echo "::error::synofurb-cli links a graphical library"; exit 1
+          fi
+
+      - name: Smoke test the binary
+        run: |
+          bin="target/${{ matrix.target }}/release/synofurb-cli"
+          [ -f "${bin}.exe" ] && bin="${bin}.exe"
+          out="$("./${bin}" --version)"
+          echo "${out}"
+          echo "${out}" | grep -q "${{ needs.meta.outputs.version }}"
+          "./${bin}" version --json
+          "./${bin}" compat DS923+
+          "./${bin}" plan --facts demo > /dev/null
+          "./${bin}" completions bash > /dev/null
+
+      - name: Smoke test with a stripped environment (Linux/macOS)
+        if: runner.os != 'Windows' && matrix.target == 'x86_64-unknown-linux-gnu'
+        run: tests/cli/smoke.sh "target/${{ matrix.target }}/release/synofurb-cli"
+
+      - name: Package the CLI archive (tar.gz / zip with the bare binary)
+        run: bash scripts/package-cli.sh --target "${{ matrix.target }}" --out dist/release
+
+      - name: Show what was produced
+        run: ls -l dist/release
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-cli-${{ matrix.name }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
 
   # ------------------------------------------------------------------------------------------------------------------
   # 4. desktop app: build + package per platform
@@ -446,7 +534,7 @@ jobs:
   # ------------------------------------------------------------------------------------------------------------------
   checksums:
     name: SHA256SUMS + minisign signature
-    needs: [design-gate, meta, build, agent, static]
+    needs: [design-gate, meta, build, cli, agent, static]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # `release` environment: put the signing secrets there and add required reviewers to approve every release

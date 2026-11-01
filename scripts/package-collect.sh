@@ -6,6 +6,7 @@
 # Contract (see docs/RELEASING.md; the in-app updater depends on it):
 #   synofurb-<version>-<os>-<arch>.<ext>      os: windows|macos|linux   arch: x86_64|aarch64
 #                                             ext: msi exe dmg pkg deb rpm AppImage tar.gz zip
+#   synofurb-cli-<version>-<os>-<arch>.<tar.gz|zip>                      headless command line (no GUI libraries)
 #   synofurb-agent-<amd64|arm64|armhf>-<version>.vmlinuz / .initrd       boot agent
 #   synofurb-dom   compat-models.json   synofurb-mgmt-<mgmt-version>.tar.gz
 #   SHA256SUMS (written here)   SHA256SUMS.minisig (written by the signing step)
@@ -37,6 +38,10 @@ required=()
 optional=()
 required+=("synofurb-$VERSION-windows-x86_64.msi" "synofurb-$VERSION-windows-x86_64.exe" "synofurb-$VERSION-windows-x86_64.zip")
 optional+=("synofurb-$VERSION-windows-aarch64.msi" "synofurb-$VERSION-windows-aarch64.exe" "synofurb-$VERSION-windows-aarch64.zip")
+# the headless command line: tar.gz on Linux/macOS, zip on Windows (Windows on ARM is optional like the desktop build)
+required+=("synofurb-cli-$VERSION-windows-x86_64.zip")
+optional+=("synofurb-cli-$VERSION-windows-aarch64.zip")
+for plat in macos-aarch64 macos-x86_64 linux-x86_64 linux-aarch64; do required+=("synofurb-cli-$VERSION-$plat.tar.gz"); done
 for plat in macos-aarch64 macos-x86_64; do
     required+=("synofurb-$VERSION-$plat.dmg" "synofurb-$VERSION-$plat.tar.gz")
     optional+=("synofurb-$VERSION-$plat.pkg")

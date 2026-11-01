@@ -1,4 +1,4 @@
-//! UI state machine pieces that do not need GPUI: screens and the step rail, the risk level, the data-loss gate,
+//! UI state machine pieces that do not need GPUI: screens and the stepper, the risk tag, the data-loss gate,
 //! boot-method choice, serial-console input parsing and the install progress model. Pure, unit-tested.
 
 use super::logview::{LogBuffer, uboot_command};
@@ -22,66 +22,126 @@ pub enum Screen {
     Settings,
     BootMgr,
     Recover,
+    /// The page of an already converted unit (D15).
+    Manage,
+    About,
 }
 
-/// Names accepted by `synofurb gui --demo --screen <name>`.
-pub const DEMO_SCREEN_NAMES: [&str; 14] = [
+/// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
+/// `help` and `help-topic` are demo targets with an overlay, not screens.
+pub const DEMO_SCREEN_NAMES: [&str; 28] = [
     "inventory",
+    "inventory-offline",
     "connect",
     "inspect",
     "goal",
     "plan",
+    "plan-keep",
     "system",
+    "system-offline",
     "confirm",
     "install",
+    "install-after-ponr",
     "failed",
+    "failed-pre",
+    "failed-post",
     "done",
     "update",
     "settings",
     "bootmgr",
     "recover",
+    "manage",
+    "help",
+    "help-topic",
+    "about",
+    "dlg-recovery",
+    "dlg-keep",
+    "dlg-next",
+    "first-launch",
 ];
 
-/// Where a demo run starts: a screen, optionally with the "update available" dialog on top.
+/// What a demo run opens on top of its screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Overlay {
+    #[default]
+    None,
+    /// The "update available" dialog.
+    Update,
+    /// The Help sheet (`Some(topic id)` opens a topic).
+    Help(Option<&'static str>),
+    /// "How recovery works" dialog.
+    RecoveryDialog,
+    /// "Keep existing volumes" dialog.
+    KeepDialog,
+    /// "What happens next" dialog of the failure screen.
+    NextDialog,
+    /// "Before you start" dialog of the first launch.
+    FirstLaunch,
+}
+
+/// Where a demo run starts: a screen, optionally with something open on top.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DemoTarget {
     pub screen: Screen,
-    pub update_dialog: bool,
+    pub overlay: Overlay,
+    /// The failure screen shows the "after the point of no return" variant.
+    pub past_no_return: bool,
+    /// System and Inventory screens start in Offline mode.
+    pub offline: bool,
+    /// Plan screen starts in Keep mode.
+    pub keep: bool,
 }
 
 impl DemoTarget {
-    /// Parses a `--screen` value. The old egui names `layout` and `account` keep working.
+    fn at(screen: Screen) -> DemoTarget {
+        DemoTarget { screen, overlay: Overlay::None, past_no_return: false, offline: false, keep: false }
+    }
+
+    /// Parses a `--screen` value. The old names (`layout`, `account`, `find`, ...) keep working.
     pub fn parse(name: &str) -> Option<DemoTarget> {
         let n = name.trim().to_ascii_lowercase();
-        let (screen, update_dialog) = match n.as_str() {
-            "inventory" | "find" => (Screen::Inventory, false),
-            "connect" => (Screen::Connect, false),
-            "inspect" => (Screen::Inspect, false),
-            "goal" => (Screen::Goal, false),
-            "plan" | "layout" | "storage" => (Screen::Plan, false),
-            "system" | "account" => (Screen::System, false),
-            "confirm" => (Screen::Confirm, false),
-            "install" => (Screen::Install, false),
-            "failed" | "failure" => (Screen::Failed, false),
-            "done" => (Screen::Done, false),
-            "update" => (Screen::Inventory, true),
-            "settings" | "about" => (Screen::Settings, false),
-            "bootmgr" | "boot-manager" => (Screen::BootMgr, false),
-            "recover" | "restore" => (Screen::Recover, false),
+        let t = match n.as_str() {
+            "inventory" | "find" => DemoTarget::at(Screen::Inventory),
+            "inventory-offline" => DemoTarget { offline: true, ..DemoTarget::at(Screen::Inventory) },
+            "connect" => DemoTarget::at(Screen::Connect),
+            "inspect" => DemoTarget::at(Screen::Inspect),
+            "goal" => DemoTarget::at(Screen::Goal),
+            "plan" | "layout" | "storage" => DemoTarget::at(Screen::Plan),
+            "plan-keep" => DemoTarget { keep: true, ..DemoTarget::at(Screen::Plan) },
+            "system" | "account" => DemoTarget::at(Screen::System),
+            "system-offline" => DemoTarget { offline: true, ..DemoTarget::at(Screen::System) },
+            "confirm" => DemoTarget::at(Screen::Confirm),
+            "install" => DemoTarget::at(Screen::Install),
+            "install-after-ponr" => DemoTarget { past_no_return: true, ..DemoTarget::at(Screen::Install) },
+            "failed" | "failure" | "failed-pre" => DemoTarget::at(Screen::Failed),
+            "failed-post" | "failed-keep" => DemoTarget { past_no_return: true, ..DemoTarget::at(Screen::Failed) },
+            "done" => DemoTarget::at(Screen::Done),
+            "update" => DemoTarget { overlay: Overlay::Update, ..DemoTarget::at(Screen::Inventory) },
+            "settings" => DemoTarget::at(Screen::Settings),
+            "about" => DemoTarget::at(Screen::About),
+            "bootmgr" | "boot-manager" => DemoTarget::at(Screen::BootMgr),
+            "recover" | "recovery" | "restore" => DemoTarget::at(Screen::Recover),
+            "manage" => DemoTarget::at(Screen::Manage),
+            "help" => DemoTarget { overlay: Overlay::Help(None), ..DemoTarget::at(Screen::Inventory) },
+            "help-topic" => DemoTarget { overlay: Overlay::Help(Some("recovery")), ..DemoTarget::at(Screen::Confirm) },
+            "dlg-recovery" => DemoTarget { overlay: Overlay::RecoveryDialog, ..DemoTarget::at(Screen::Confirm) },
+            "dlg-keep" => DemoTarget { overlay: Overlay::KeepDialog, keep: true, ..DemoTarget::at(Screen::Plan) },
+            "dlg-next" => DemoTarget { overlay: Overlay::NextDialog, past_no_return: true, ..DemoTarget::at(Screen::Failed) },
+            "first-launch" => DemoTarget { overlay: Overlay::FirstLaunch, ..DemoTarget::at(Screen::Inventory) },
             _ => return None,
         };
-        Some(DemoTarget { screen, update_dialog })
+        Some(t)
     }
 }
 
-/// The nine steps of the guided flow (concept A: one spine, persistent rail).
+/// The nine steps of the guided flow, in the order of the stepper (UX spec 1.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Step {
     Find,
     Connect,
     Inspect,
     Goal,
-    Storage,
+    Plan,
     System,
     Confirm,
     Install,
@@ -90,34 +150,20 @@ pub enum Step {
 
 impl Step {
     pub const ALL: [Step; 9] =
-        [Step::Find, Step::Connect, Step::Inspect, Step::Goal, Step::Storage, Step::System, Step::Confirm, Step::Install, Step::Done];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Step::Find => "Find NAS",
-            Step::Connect => "Connect",
-            Step::Inspect => "Inspect",
-            Step::Goal => "Goal",
-            Step::Storage => "Storage",
-            Step::System => "System",
-            Step::Confirm => "Confirm",
-            Step::Install => "Install",
-            Step::Done => "Done",
-        }
-    }
+        [Step::Find, Step::Connect, Step::Inspect, Step::Goal, Step::Plan, Step::System, Step::Confirm, Step::Install, Step::Done];
 
     pub fn number(self) -> usize {
         Step::ALL.iter().position(|s| *s == self).unwrap_or(0) + 1
     }
 
-    /// The screen a rail click goes to.
+    /// The screen a stepper click goes to.
     pub fn screen(self) -> Screen {
         match self {
             Step::Find => Screen::Inventory,
             Step::Connect => Screen::Connect,
             Step::Inspect => Screen::Inspect,
             Step::Goal => Screen::Goal,
-            Step::Storage => Screen::Plan,
+            Step::Plan => Screen::Plan,
             Step::System => Screen::System,
             Step::Confirm => Screen::Confirm,
             Step::Install => Screen::Install,
@@ -127,20 +173,25 @@ impl Step {
 }
 
 impl Screen {
-    /// Which rail step a screen belongs to (`None`: Settings, which keeps the rail where it was).
+    /// Which stepper step a screen belongs to. `None`: Settings, About and Manage hide the stepper.
     pub fn step(self) -> Option<Step> {
         Some(match self {
             Screen::Inventory => Step::Find,
             Screen::Connect => Step::Connect,
             Screen::Inspect => Step::Inspect,
             Screen::Goal | Screen::BootMgr | Screen::Recover => Step::Goal,
-            Screen::Plan => Step::Storage,
+            Screen::Plan => Step::Plan,
             Screen::System => Step::System,
             Screen::Confirm => Step::Confirm,
             Screen::Install | Screen::Failed => Step::Install,
             Screen::Done => Step::Done,
-            Screen::Settings => return None,
+            Screen::Settings | Screen::About | Screen::Manage => return None,
         })
+    }
+
+    /// Settings, About and Manage replace the content area without the stepper.
+    pub fn is_side_page(self) -> bool {
+        matches!(self, Screen::Settings | Screen::About | Screen::Manage)
     }
 }
 
@@ -160,61 +211,64 @@ pub fn step_state(current: Step, s: Step) -> StepState {
     }
 }
 
-/// Rail clicks only go back through completed steps, and never while an install is running or finished.
+/// The stepper only goes back through completed steps, and never once an install has started.
 pub fn can_jump(current: Step, target: Step, install_started: bool) -> bool {
     !install_started && target < current
 }
 
 // ------------------------------------------------------------------------------------------------ risk
 
-/// The four-level risk state that is always visible (UX safety pattern 2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// The risk tag of the status bar (UX spec 1.1). It is derived from facts about what has been written, never from
+/// the step number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Risk {
-    ReadingOnly,
-    PlanPrepared,
-    Confirmed,
-    DisksModified,
+    ReadOnly,
+    PlanOnly,
+    FlashChanged,
+    DisksChanged,
+    FailedSafely,
+    DebianRunning,
 }
 
 impl Risk {
-    pub const ALL: [Risk; 4] = [Risk::ReadingOnly, Risk::PlanPrepared, Risk::Confirmed, Risk::DisksModified];
+    pub const ALL: [Risk; 6] = [Risk::ReadOnly, Risk::PlanOnly, Risk::FlashChanged, Risk::DisksChanged, Risk::FailedSafely, Risk::DebianRunning];
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Risk::ReadingOnly => "Reading only",
-            Risk::PlanPrepared => "Plan prepared",
-            Risk::Confirmed => "You confirmed",
-            Risk::DisksModified => "Disks modified",
-        }
-    }
-
-    pub fn sentence(self) -> &'static str {
-        match self {
-            Risk::ReadingOnly => "Nothing on the NAS has been changed. synofurb only reads.",
-            Risk::PlanPrepared => "A plan exists on this computer. Nothing on the NAS has been changed.",
-            Risk::Confirmed => "You confirmed. The installer is starting; the disks are still untouched before the point of no return.",
-            Risk::DisksModified => "The point of no return has passed. The disks have been changed.",
-        }
+    /// Has anything on the NAS been written?
+    pub fn touched(self) -> bool {
+        matches!(self, Risk::FlashChanged | Risk::DisksChanged | Risk::DebianRunning)
     }
 }
 
-/// Risk level for a screen. `past_no_return` comes from the installer's marker event.
-pub fn risk_for(screen: Screen, install_started: bool, past_no_return: bool) -> Risk {
-    if past_no_return {
-        return Risk::DisksModified;
+/// What has been written, as far as the UI knows.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Written {
+    pub screen: Option<Screen>,
+    pub install_started: bool,
+    pub past_no_return: bool,
+    pub failed: bool,
+    pub succeeded: bool,
+    /// The unit starts Debian through its boot flash (the flash is written before any disk).
+    pub dom: bool,
+    /// The boot manager agent has been installed (or is being installed).
+    pub agent: bool,
+}
+
+pub fn risk_for(w: Written) -> Risk {
+    if w.succeeded {
+        return Risk::DebianRunning;
     }
-    match screen {
-        Screen::Inventory | Screen::Connect | Screen::Inspect | Screen::Goal | Screen::Settings | Screen::Recover => Risk::ReadingOnly,
-        Screen::BootMgr => Risk::ReadingOnly,
-        Screen::Plan | Screen::System | Screen::Confirm => Risk::PlanPrepared,
-        Screen::Install => Risk::Confirmed,
-        Screen::Failed | Screen::Done => {
-            if install_started {
-                Risk::Confirmed
-            } else {
-                Risk::ReadingOnly
-            }
-        }
+    if w.past_no_return {
+        return Risk::DisksChanged;
+    }
+    if w.failed {
+        return Risk::FailedSafely;
+    }
+    if w.agent || (w.install_started && w.dom) {
+        return Risk::FlashChanged;
+    }
+    match w.screen {
+        Some(Screen::Plan | Screen::System | Screen::Confirm | Screen::Install) => Risk::PlanOnly,
+        _ => Risk::ReadOnly,
     }
 }
 
@@ -225,6 +279,7 @@ pub enum GateItem {
     PlanOk,
     Backup,
     Accept,
+    Unit,
     Phrase,
 }
 
@@ -232,8 +287,12 @@ pub enum GateItem {
 pub struct ConfirmGate<'a> {
     pub phrase: &'a str,
     pub typed: &'a str,
+    /// "Backup is tested"
     pub ack_backup: bool,
+    /// "I accept data loss"
     pub ack_loss: bool,
+    /// "This is the unit" (the identity line above was compared with the label on the NAS)
+    pub ack_unit: bool,
     pub plan_ok: bool,
 }
 
@@ -279,6 +338,9 @@ impl ConfirmGate<'_> {
         if !self.ack_loss {
             m.push(GateItem::Accept);
         }
+        if !self.ack_unit {
+            m.push(GateItem::Unit);
+        }
         if self.phrase_state() != PhraseMatch::Match {
             m.push(GateItem::Phrase);
         }
@@ -289,27 +351,26 @@ impl ConfirmGate<'_> {
         self.missing().is_empty()
     }
 
-    /// Why the red button is disabled (shown beside it, never silent).
+    /// Why the red button is disabled: "Missing: ..." (the tooltip of the disabled button, never silent).
     pub fn reason(&self) -> Option<String> {
         let m = self.missing();
         if m.is_empty() {
             return None;
         }
-        if m == [GateItem::PlanOk] {
-            return Some("The plan has errors. Go back and fix them first.".into());
-        }
         if m.contains(&GateItem::PlanOk) {
-            return Some("The plan has errors. Go back and fix them, then complete the confirmation.".into());
+            return Some("Missing: a valid plan. Go back and fix the errors.".into());
         }
-        let boxes = m.iter().filter(|i| matches!(i, GateItem::Backup | GateItem::Accept)).count();
-        let phrase = m.contains(&GateItem::Phrase);
-        Some(match (boxes, phrase) {
-            (0, true) => format!("Type {} exactly to enable this button.", self.phrase),
-            (1, false) => "Tick the remaining box to enable this button.".into(),
-            (_, false) => "Tick both boxes to enable this button.".into(),
-            (1, true) => format!("Tick the remaining box and type {} to enable this button.", self.phrase),
-            (_, true) => format!("Tick both boxes and type {} to enable this button.", self.phrase),
-        })
+        let names: Vec<&str> = m
+            .iter()
+            .map(|i| match i {
+                GateItem::PlanOk => "a valid plan",
+                GateItem::Backup => "Backup is tested",
+                GateItem::Accept => "I accept data loss",
+                GateItem::Unit => "This is the unit",
+                GateItem::Phrase => "the typed phrase",
+            })
+            .collect();
+        Some(format!("Missing: {}.", names.join(", ")))
     }
 }
 
@@ -612,57 +673,63 @@ mod tests {
         assert_eq!(DemoTarget::parse("layout").unwrap().screen, Screen::Plan);
         assert_eq!(DemoTarget::parse("account").unwrap().screen, Screen::System);
         let u = DemoTarget::parse("update").unwrap();
-        assert!(u.update_dialog);
-        assert_eq!(u.screen, Screen::Inventory);
+        assert_eq!((u.overlay, u.screen), (Overlay::Update, Screen::Inventory));
+        assert!(DemoTarget::parse("failed-post").unwrap().past_no_return);
+        assert!(!DemoTarget::parse("failed-pre").unwrap().past_no_return);
+        assert!(DemoTarget::parse("system-offline").unwrap().offline);
+        assert!(DemoTarget::parse("plan-keep").unwrap().keep);
+        assert_eq!(DemoTarget::parse("help-topic").unwrap().overlay, Overlay::Help(Some("recovery")));
         assert!(DemoTarget::parse("nope").is_none());
         assert_eq!(DemoTarget::parse("  Confirm ").unwrap().screen, Screen::Confirm);
     }
 
     #[test]
-    fn rail_states_and_jumping() {
+    fn stepper_states_and_jumping() {
         assert_eq!(Step::ALL.len(), 9);
-        assert_eq!(step_state(Step::Storage, Step::Connect), StepState::Done);
-        assert_eq!(step_state(Step::Storage, Step::Storage), StepState::Current);
-        assert_eq!(step_state(Step::Storage, Step::Confirm), StepState::Upcoming);
-        assert!(can_jump(Step::Storage, Step::Connect, false));
-        assert!(!can_jump(Step::Storage, Step::Confirm, false), "never forward through the rail");
+        assert_eq!(step_state(Step::Plan, Step::Connect), StepState::Done);
+        assert_eq!(step_state(Step::Plan, Step::Plan), StepState::Current);
+        assert_eq!(step_state(Step::Plan, Step::Confirm), StepState::Upcoming);
+        assert!(can_jump(Step::Plan, Step::Connect, false));
+        assert!(!can_jump(Step::Plan, Step::Confirm, false), "never forward through the stepper");
         assert!(!can_jump(Step::Install, Step::Goal, true), "no jumping while installing");
         assert_eq!(Screen::Failed.step(), Some(Step::Install));
         assert_eq!(Screen::BootMgr.step(), Some(Step::Goal));
-        assert_eq!(Screen::Settings.step(), None);
+        for s in [Screen::Settings, Screen::About, Screen::Manage] {
+            assert_eq!(s.step(), None);
+            assert!(s.is_side_page(), "{s:?} hides the stepper");
+        }
         for s in Step::ALL {
-            assert_eq!(s.screen().step(), Some(s), "rail click lands on its own step");
+            assert_eq!(s.screen().step(), Some(s), "stepper click lands on its own step");
         }
         assert_eq!(Step::Find.number(), 1);
         assert_eq!(Step::Done.number(), 9);
     }
 
     #[test]
-    fn risk_rises_monotonically_through_the_flow() {
-        let flow = [
-            Screen::Inventory,
-            Screen::Connect,
-            Screen::Inspect,
-            Screen::Goal,
-            Screen::Plan,
-            Screen::System,
-            Screen::Confirm,
-            Screen::Install,
-        ];
-        let mut last = Risk::ReadingOnly;
-        for s in flow {
-            let r = risk_for(s, s == Screen::Install, false);
-            assert!(r >= last, "{s:?}");
-            last = r;
-        }
-        assert_eq!(risk_for(Screen::Install, true, true), Risk::DisksModified);
-        assert_eq!(risk_for(Screen::Failed, true, false), Risk::Confirmed, "failure before the point of no return: disks untouched");
-        assert_eq!(risk_for(Screen::Failed, true, true), Risk::DisksModified);
-        assert!(Risk::PlanPrepared.sentence().contains("Nothing on the NAS has been changed"));
+    fn risk_comes_from_what_was_written() {
+        let w = |screen, started, ponr, failed, ok, dom, agent| Written {
+            screen: Some(screen),
+            install_started: started,
+            past_no_return: ponr,
+            failed,
+            succeeded: ok,
+            dom,
+            agent,
+        };
+        assert_eq!(risk_for(w(Screen::Inspect, false, false, false, false, true, false)), Risk::ReadOnly);
+        assert_eq!(risk_for(w(Screen::Confirm, false, false, false, false, true, false)), Risk::PlanOnly);
+        assert_eq!(risk_for(w(Screen::Install, true, false, false, false, true, false)), Risk::FlashChanged, "boot flash is written first");
+        assert_eq!(risk_for(w(Screen::Install, true, false, false, false, false, false)), Risk::PlanOnly, "no flash, nothing written yet");
+        assert_eq!(risk_for(w(Screen::Install, true, true, false, false, true, false)), Risk::DisksChanged);
+        assert_eq!(risk_for(w(Screen::Failed, true, false, true, false, true, false)), Risk::FailedSafely);
+        assert_eq!(risk_for(w(Screen::Failed, true, true, true, false, true, false)), Risk::DisksChanged, "after step 3 a failure is not safe");
+        assert_eq!(risk_for(w(Screen::Done, true, true, false, true, true, false)), Risk::DebianRunning);
+        assert_eq!(risk_for(w(Screen::BootMgr, false, false, false, false, true, true)), Risk::FlashChanged);
+        assert!(Risk::DisksChanged.touched() && !Risk::ReadOnly.touched() && !Risk::FailedSafely.touched());
     }
 
     fn gate<'a>(typed: &'a str, b: bool, l: bool, ok: bool) -> ConfirmGate<'a> {
-        ConfirmGate { phrase: "ERASE DS918+", typed, ack_backup: b, ack_loss: l, plan_ok: ok }
+        ConfirmGate { phrase: "ERASE DS918+", typed, ack_backup: b, ack_loss: l, ack_unit: true, plan_ok: ok }
     }
 
     #[test]
@@ -675,15 +742,21 @@ mod tests {
         assert!(gate("ERASE DS918+", true, true, true).is_open());
         assert!(gate("  ERASE DS918+\n", true, true, true).is_open(), "pasted whitespace is tolerated");
         assert!(gate("ERASE DS918+", true, true, true).reason().is_none());
+        let mut g = gate("ERASE DS918+", true, true, true);
+        g.ack_unit = false;
+        assert!(!g.is_open(), "the third confirmation is required too");
     }
 
     #[test]
-    fn the_gate_explains_what_is_missing() {
+    fn the_gate_says_what_is_missing() {
         let r = gate("", false, false, true).reason().unwrap();
-        assert!(r.contains("both boxes") && r.contains("ERASE DS918+"));
-        assert!(gate("ERASE DS918+", true, false, true).reason().unwrap().contains("remaining box"));
-        assert!(gate("", true, true, true).reason().unwrap().starts_with("Type ERASE DS918+"));
-        assert!(gate("ERASE DS918+", true, true, false).reason().unwrap().contains("plan has errors"));
+        assert!(r.starts_with("Missing:") && r.contains("Backup is tested") && r.contains("I accept data loss") && r.contains("typed phrase"), "{r}");
+        assert_eq!(gate("ERASE DS918+", true, false, true).reason().unwrap(), "Missing: I accept data loss.");
+        assert_eq!(gate("", true, true, true).reason().unwrap(), "Missing: the typed phrase.");
+        assert!(gate("ERASE DS918+", true, true, false).reason().unwrap().contains("valid plan"));
+        let mut g = gate("ERASE DS918+", true, true, true);
+        g.ack_unit = false;
+        assert_eq!(g.reason().unwrap(), "Missing: This is the unit.");
     }
 
     #[test]

@@ -189,7 +189,7 @@ impl InstallConfig {
     }
 }
 
-fn valid_package_name(p: &str) -> bool {
+pub fn valid_package_name(p: &str) -> bool {
     !p.is_empty()
         && p.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
         && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "+-.".contains(c))

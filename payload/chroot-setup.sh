@@ -7,6 +7,9 @@ export DEBIAN_FRONTEND=noninteractive LC_ALL=C PATH=/usr/local/sbin:/usr/local/b
 P=/opt/synofurb-install
 # shellcheck disable=SC1091
 . "$P/env.sh"
+# Offline installs (the app serves a bundle as the mirror): OFFLINE=1 and OFFLINE_SUITES come from env.sh.
+OFFLINE=${OFFLINE:-0}
+OFFLINE_SUITES=${OFFLINE_SUITES:-}
 say() { echo "[chroot] $*"; }
 apt_install() { say "apt-get install $*"; apt-get install -y --no-install-recommends "$@"; }
 
@@ -28,6 +31,41 @@ for k in /usr/share/keyrings/debian-archive-keyring.pgp /usr/share/keyrings/debi
 done
 [ -n "$KR" ] || { say "no Debian archive keyring in the target; refusing to continue with unsigned packages"; exit 1; }
 rm -f /etc/apt/sources.list
+if [ "$OFFLINE" = 1 ]; then
+  say "OFFLINE install: apt reads the bundle served at http://$MIRROR_HOST$MIRROR_DIR (suites: $OFFLINE_SUITES)"
+  # Only for this install: the bundle is a snapshot, so a Release file may be past its Valid-Until (backports expire
+  # after a week) and the NAS clock may be off. The official sources written at the end check both again.
+  # Translations are not in the bundle.
+  cat > /etc/apt/apt.conf.d/99synofurb-offline <<EOF
+Acquire::Check-Valid-Until "false";
+Acquire::Check-Date "false";
+Acquire::Languages "none";
+EOF
+  OFFLINE_MAIN=""
+  for s in $OFFLINE_SUITES; do
+    case "$s" in *-backports) ;; *) OFFLINE_MAIN="$OFFLINE_MAIN $s" ;; esac
+  done
+  [ -n "$OFFLINE_MAIN" ] || { say "the offline bundle has no $SUITE suite"; exit 1; }
+  cat > /etc/apt/sources.list.d/debian.sources <<EOF
+Types: deb
+URIs: http://$MIRROR_HOST$MIRROR_DIR
+Suites:$OFFLINE_MAIN
+Components: main contrib non-free-firmware
+Signed-By: $KR
+EOF
+  case " $OFFLINE_SUITES " in
+    *" $SUITE-backports "*)
+      cat >> /etc/apt/sources.list.d/debian.sources <<EOF
+
+Types: deb
+URIs: http://$MIRROR_HOST$MIRROR_DIR
+Suites: $SUITE-backports
+Components: main contrib non-free-firmware
+Signed-By: $KR
+EOF
+      ;;
+  esac
+else
 cat > /etc/apt/sources.list.d/debian.sources <<EOF
 Types: deb
 URIs: http://$MIRROR_HOST$MIRROR_DIR
@@ -51,6 +89,7 @@ Suites: $SUITE-backports
 Components: main contrib non-free-firmware
 Signed-By: $KR
 EOF
+fi
 fi
 apt-get update
 apt_install debian-archive-keyring tzdata
@@ -306,6 +345,39 @@ EOF
     fi
     ;;
 esac
+
+if [ "$OFFLINE" = 1 ]; then
+  # The install is done: the installed system updates from the official mirrors from now on.
+  say "OFFLINE install finished: pointing apt at the official Debian mirrors for future updates"
+  rm -f /etc/apt/apt.conf.d/99synofurb-offline
+  cat > /etc/apt/sources.list.d/debian.sources <<EOF
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: $SUITE $SUITE-updates
+Components: main contrib non-free-firmware
+Signed-By: $KR
+
+Types: deb
+URIs: http://deb.debian.org/debian-security
+Suites: $SUITE-security
+Components: main contrib non-free-firmware
+Signed-By: $KR
+EOF
+  if [ "$KERNEL_CHANNEL" = newest ]; then
+    case " $OFFLINE_SUITES " in
+      *" $SUITE-backports "*)
+        cat >> /etc/apt/sources.list.d/debian.sources <<EOF
+
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: $SUITE-backports
+Components: main contrib non-free-firmware
+Signed-By: $KR
+EOF
+        ;;
+    esac
+  fi
+fi
 
 say "cleanup"
 apt-get clean

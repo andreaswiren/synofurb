@@ -1,0 +1,18 @@
+#demo-ribbon{position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:60;display:flex;gap:6px;align-items:flex-start;font:600 12px/16px var(--font-ui)}
+#demo-ribbon button,#demo-ribbon select{font:600 12px/16px var(--font-ui);height:24px;min-height:0;padding:0 10px;border-radius:0 0 8px 8px;border:1px solid var(--warn-border);border-top:0;background:var(--warn-bg);color:var(--warn-fg);width:auto;cursor:pointer}
+#demo-ribbon button:hover{background:var(--surface-2)}
+#demo-ribbon #demo-pill{display:inline-flex;align-items:center;gap:6px}
+#demo-ribbon .dot{width:8px;height:8px;border-radius:999px;background:var(--warn-solid);display:inline-block}
+#demo-panel{position:absolute;top:28px;left:0;width:280px;background:var(--surface);color:var(--fg);border:1px solid var(--border-strong);border-radius:12px;box-shadow:var(--e3);padding:14px;font-weight:400;display:flex;flex-direction:column;gap:10px}
+#demo-panel[hidden]{display:none}
+#demo-panel p{margin:0;font-size:13px;color:var(--fg-2)}
+#demo-panel label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
+#demo-panel label.chk{flex-direction:row;align-items:center;gap:10px}
+#demo-panel select,#demo-panel button{border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);color:var(--fg);height:36px;width:100%;padding:0 10px;font-size:13px}
+#demo-panel input[type=checkbox]{width:20px;height:20px}
+#demo-ov{position:fixed;inset:0;z-index:80;background:rgb(0 0 0/.7);display:grid;place-items:center;padding:16px}
+#demo-ov>div{background:var(--surface);color:var(--fg);border:1px solid var(--border-strong);border-radius:12px;padding:24px;max-width:420px;box-shadow:var(--e3)}
+#demo-ov h2{margin:0 0 6px;font-size:16px;font-weight:600}#demo-ov p{margin:0 0 16px;color:var(--fg-2)}
+@media (max-width:700px){#demo-ribbon{top:auto;bottom:64px;left:8px;transform:none;align-items:flex-end}
+ #demo-ribbon button{border-radius:8px;border-top:1px solid var(--warn-border);height:32px}
+ #demo-panel{top:auto;bottom:38px;width:min(300px,calc(100vw - 16px))}}

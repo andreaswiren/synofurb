@@ -1,0 +1,104 @@
+//! Small helpers on top of the real gpui-component widgets: text styles, status tags, field labels with an info icon.
+//! Nothing in here imitates a widget; each function returns (or configures) a stock one. Colours come from the
+//! theme (`cx.theme()`) or, for the few status tones the Kit has no token for, from [`super::theme::Palette`].
+
+use super::app::App;
+use super::copy::Item;
+use super::disclosure::info_tip;
+use super::icons::{self, role};
+use super::theme::{self, Palette, Tone};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::{ActiveTheme, Sizable, h_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::{AnyElement, App as GpuiApp, Div, ElementId, Entity, FontWeight, IntoElement, SharedString, div, px};
+use synofurb_core::compat::Status;
+
+// ------------------------------------------------------------------------------------------------ text
+
+/// Muted caption text (12 px).
+pub fn caption(cx: &GpuiApp, s: impl Into<SharedString>) -> Div {
+    div().text_xs().text_color(cx.theme().muted_foreground).child(s.into())
+}
+
+/// Secondary body text (14 px, muted).
+pub fn muted(cx: &GpuiApp, s: impl Into<SharedString>) -> Div {
+    div().text_sm().text_color(cx.theme().muted_foreground).child(s.into())
+}
+
+/// Semibold body text.
+pub fn strong(s: impl Into<SharedString>) -> Div {
+    div().text_sm().font_weight(FontWeight::SEMIBOLD).child(s.into())
+}
+
+/// Section heading (16 px semibold).
+pub fn heading(s: impl Into<SharedString>) -> Div {
+    div().text_size(theme::SECTION.size()).font_weight(FontWeight(theme::SECTION.weight)).child(s.into())
+}
+
+/// Monospace text (JetBrains Mono) for addresses, device paths, serials, hashes and commands.
+pub fn mono(cx: &GpuiApp, s: impl Into<SharedString>) -> Div {
+    div().font_family(cx.theme().mono_font_family.clone()).text_size(theme::MONO.size()).child(s.into())
+}
+
+/// Small monospace text (12 px).
+pub fn mono_sm(cx: &GpuiApp, s: impl Into<SharedString>) -> Div {
+    div().font_family(cx.theme().mono_font_family.clone()).text_xs().child(s.into())
+}
+
+// ------------------------------------------------------------------------------------------------ tags
+
+/// A status [`Tag`]: icon plus word, in a tone family. Never colour alone.
+pub fn tag(p: &Palette, tone: Tone, icon: Option<IconName>, label: impl Into<SharedString>) -> Tag {
+    let c = p.tone(tone);
+    let t = Tag::custom(c.bg, c.fg, c.border);
+    let row = h_flex().gap(px(4.0)).items_center().when_some(icon, |d, i| d.child(icons::icon_sized(i, 12.0, c.fg))).child(label.into());
+    t.child(row)
+}
+
+/// Neutral tag without an icon (facts such as "4 disks").
+pub fn chip(p: &Palette, label: impl Into<SharedString>) -> Tag {
+    tag(p, Tone::Neutral, None, label)
+}
+
+/// Tone and icon for a compatibility status.
+pub fn status_style(s: Status) -> (Tone, IconName) {
+    match s {
+        Status::Verified => (Tone::Ok, role::COMPAT_VERIFIED),
+        Status::Community => (Tone::Info, role::COMPAT_COMMUNITY),
+        Status::Untested => (Tone::Neutral, role::COMPAT_UNTESTED),
+        Status::KnownIssues => (Tone::Warn, role::COMPAT_ISSUES),
+        Status::Unsupported => (Tone::Err, role::COMPAT_UNSUPPORTED),
+    }
+}
+
+/// The compatibility [`Tag`]: icon + the fixed status term.
+pub fn compat_tag(p: &Palette, s: Status) -> Tag {
+    let (tone, icon) = status_style(s);
+    tag(p, tone, Some(icon), s.label())
+}
+
+/// Icon that goes with a status tone.
+pub fn tone_icon(tone: Tone) -> IconName {
+    match tone {
+        Tone::Ok => role::OK,
+        Tone::Warn => role::WARN,
+        Tone::Err => role::ERR,
+        Tone::Info => role::INFO,
+        Tone::Accent => role::SPARKLES,
+        Tone::Neutral => role::CURRENT,
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ labels with an info icon
+
+/// `Label (i)`: the field label followed by its info icon (tooltip on hover, popover on Enter, link to a Help topic).
+pub fn labelled(id: impl Into<ElementId>, item: &'static Item, app: &Entity<App>) -> AnyElement {
+    let id: ElementId = id.into();
+    h_flex()
+        .gap(px(2.0))
+        .items_center()
+        .child(item.short)
+        .when(!item.tip.is_empty() || !item.topic.is_empty(), |d| d.child(info_tip(id, item, app)))
+        .into_any_element()
+}

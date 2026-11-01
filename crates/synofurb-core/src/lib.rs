@@ -17,4 +17,5 @@ pub mod session;
 pub mod compat;
 pub mod diskbackup;
 pub mod domboot;
+pub mod offline;
 pub mod updater;

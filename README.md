@@ -42,14 +42,26 @@ other Linux systems by hand, while DSM stays one reboot away ([docs/BOOT.md](doc
 
 ```
 synofurb                      # the desktop app (add `gui --demo` to try it with a built-in sample NAS)
-synofurb scan                 # discovery only
-synofurb compat DS923+        # look a model up in the compatibility list
-synofurb plan   --host 192.168.1.20 --user admin           # read-only
-synofurb install --host ... --mode keep|wipe ...           # needs --have-backup --accept-data-loss --confirm "ERASE <MODEL>"
-synofurb boot-manager install|enter --host ...             # remote-controllable boot environment
-synofurb recover --host ...                                # make the unit boot DSM again
-synofurb self-update [--check]
+synofurb-cli ...              # the same commands with NO graphical libraries: servers, SSH sessions, CI (docs/CLI.md)
+
+synofurb-cli wizard           # the app's nine steps as plain terminal prompts (also: synofurb wizard)
+synofurb scan [--json]        # discovery only (results stream in; saved to the inventory)
+synofurb inventory list|add --ip IP|forget PATTERN
+synofurb inspect --host IP [--json] [--save facts.json]       # read-only: disks, arrays, firmware, boot flash, serial, compatibility
+synofurb compat DS923+ [--json] [--refresh]                   # look a model up in the compatibility list
+synofurb plan --host IP --mode keep|wipe [--keep md2] [--system-gib N] [--copies N] [--raid R] [--free-percent P] [--json]   # read-only
+synofurb install --host IP ... --dry-run [--out DIR]          # render the stage-2 script, payload, plan and preseed; change nothing
+synofurb install --host IP ... --have-backup --accept-data-loss --confirm "ERASE <MODEL>"   # DESTROYS DATA; all three are always required
+synofurb boot-manager install|enter|status --host IP          # remote-controllable boot environment
+synofurb recover --host IP                                    # make the unit boot DSM again
+synofurb backup-dom|disk-backup --host IP                     # boot flash image / partition-table backup, nothing else
+synofurb logs list|show [N]|path   synofurb config show|paths   synofurb fetch-installer ARCH
+synofurb bundle create --arch amd64 --out DIR                 # offline bundle: amd64 ~440 MiB (+ ~470 MiB installer firmware shared by all architectures)
+synofurb bundle verify|info DIR   synofurb install --host IP --source offline --bundle DIR ...   # no Internet needed on either side (docs/OFFLINE.md)
+synofurb self-update [--check]   synofurb completions bash|zsh|fish|powershell   synofurb version [--json]
 ```
+Machine-friendly: `--log-format json` (NDJSON events), `--json` documents, stable exit codes (0 ok, 2 usage, 3 refused by the safety gate, 4 plan errors,
+5 unsupported hardware, 6/7 install failed after/before the point of no return), no colour with `NO_COLOR`. Passwords never go on the command line.
 
 ## The resulting system
 

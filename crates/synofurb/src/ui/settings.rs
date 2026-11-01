@@ -20,6 +20,12 @@ pub struct UiSettings {
     pub remind_after: Option<u64>,
     /// Replace the looping spinner by a static glyph.
     pub reduce_motion: bool,
+    /// Offer to report an install result (off by default; a report always asks first).
+    pub send_results: bool,
+    /// The "Before you start" dialog has been shown once.
+    pub first_launch_done: bool,
+    /// Folder of the offline bundle chosen for Source: Offline.
+    pub bundle_dir: Option<String>,
 }
 
 impl Default for UiSettings {
@@ -32,6 +38,9 @@ impl Default for UiSettings {
             skip_version: None,
             remind_after: None,
             reduce_motion: false,
+            send_results: false,
+            first_launch_done: false,
+            bundle_dir: None,
         }
     }
 }
