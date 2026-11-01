@@ -268,7 +268,10 @@ pub fn manual_recovery_commands(backup: Option<&str>) -> [String; 3] {
         "sudo synofurb-dom default dsm --yes".to_string(),
         format!("sudo SYNOFURB_DOM=/dev/sdX synofurb-dom restore --yes {image}"),
         // for a computer without synofurb-dom: boot/dom/README.md, "Manual recovery"
-        format!("sha256sum -c {image}.sha256 && sudo dd if={image} of=/dev/sdX bs=1M conv=fsync"),
+        // three lines, as docs/RECOVERY.md "Manual recovery, step by step": verify, check the device twice, write
+        format!(
+            "sha256sum -c {image}.sha256   # must say OK\nlsblk -o NAME,SIZE,MODEL,TRAN /dev/sdX   # the 128 MB flash, not one of your disks\nsudo dd if={image} of=/dev/sdX bs=1M conv=fsync status=progress && sync"
+        ),
     ]
 }
 
@@ -575,8 +578,9 @@ mod tests {
         let dd = &c[2];
         assert!(
             dd.starts_with("sha256sum -c /home/u/")
-                && dd.contains(".img.sha256 && sudo dd if=/home/u/")
-                && dd.ends_with("of=/dev/sdX bs=1M conv=fsync"),
+                && dd.contains(".img.sha256   # must say OK\nlsblk")
+                && dd.contains("sudo dd if=/home/u/")
+                && dd.ends_with("of=/dev/sdX bs=1M conv=fsync status=progress && sync"),
             "{dd}"
         );
     }

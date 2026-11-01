@@ -215,6 +215,8 @@ pub struct App {
     pub flash_untouched: bool,
     pub dsm_wait: DsmWaitState,
     /// `(host, port, pinned fingerprint)` as last read from the known-hosts file (read again after every connection).
+    /// Open host-key questions: ended when a connection attempt fails, so a late Trust is not offered.
+    pub open_trust: Vec<super::trust::TrustWatch>,
     pub pin_cache: Option<(String, u16, Option<String>)>,
     pub dsm_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub rec_result: Option<crate::ui::screens::recover::RecResult>,
@@ -454,6 +456,7 @@ impl App {
             unit_state_loading: false,
             flash_untouched: false,
             dsm_wait: DsmWaitState::Idle,
+            open_trust: vec![],
             pin_cache: None,
             dsm_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             rec_result: None,
@@ -742,6 +745,12 @@ impl App {
     // ------------------------------------------------------------------------------------------ messages
 
     pub fn on_msg(&mut self, m: Msg, window: &mut Window, cx: &mut Context<App>) {
+        // A connection that failed ends any open "Trust this NAS?" question: Trust would no longer do anything.
+        if matches!(&m, Msg::Inspected(Err(_)) | Msg::ManageHealth(Err(_)) | Msg::UnitState(Err(_)) | Msg::Finished(Err(_))) {
+            for w in self.open_trust.drain(..) {
+                w.end();
+            }
+        }
         match m {
             Msg::ScanMethod { name, result } => {
                 self.scan.methods.push((name, result));
@@ -783,7 +792,11 @@ impl App {
                 self.screen = if ok { Screen::Done } else { Screen::Failed };
                 window.focus(&self.focus, cx);
             }
-            Msg::HostKeyAsk(ask) => self.open_hostkey_dialog(*ask, window, cx),
+            Msg::HostKeyAsk(ask) => {
+                self.open_trust.retain(|w| matches!(w.state(std::time::Instant::now()), super::trust::TrustState::Waiting { .. }));
+                self.open_trust.push(ask.watch());
+                self.open_hostkey_dialog(*ask, window, cx)
+            }
             Msg::HostKeyChanged { host, port, pinned, presented } => self.open_hostkey_changed(host, port, pinned, presented, window, cx),
             Msg::FailureKind { agent_timeout, flash_untouched } => {
                 self.agent_unknown = agent_timeout;

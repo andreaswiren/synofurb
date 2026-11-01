@@ -32,6 +32,11 @@ pub struct TrustWatch {
 }
 
 impl TrustWatch {
+    /// The connection attempt this question belongs to has ended (it failed or was abandoned): a later Trust is not delivered.
+    pub fn end(&self) {
+        self.ended.store(true, Ordering::SeqCst);
+    }
+
     pub fn state(&self, now: Instant) -> TrustState {
         let elapsed = now.saturating_duration_since(self.started);
         if self.ended.load(Ordering::SeqCst) || elapsed >= self.timeout {
@@ -58,7 +63,11 @@ impl TrustAsk {
     /// A question nobody will receive an answer to (the demo's dialogs).
     pub fn demo(prompt: HostKeyPrompt) -> TrustAsk {
         let (reply, _rx) = channel::<bool>();
-        TrustAsk { prompt, reply, watch: TrustWatch { ended: Arc::new(AtomicBool::new(false)), started: Instant::now(), timeout: ANSWER_TIMEOUT } }
+        TrustAsk {
+            prompt,
+            reply,
+            watch: TrustWatch { ended: Arc::new(AtomicBool::new(false)), started: Instant::now(), timeout: ANSWER_TIMEOUT },
+        }
     }
 
     pub fn watch(&self) -> TrustWatch {
@@ -165,6 +174,16 @@ mod tests {
         assert!(!t.join().unwrap(), "no answer in time: refused");
         assert_eq!(watch.state(Instant::now()), TrustState::Over, "the dialog is told the attempt is over");
         assert!(!ask.answer(true), "a late Trust claims nothing");
+    }
+
+    #[test]
+    fn a_failed_connection_ends_the_question_at_once() {
+        let a = TrustAsk::demo(prompt());
+        let w = a.watch();
+        assert!(matches!(w.state(Instant::now()), TrustState::Waiting { .. }));
+        w.end();
+        assert_eq!(w.state(Instant::now()), TrustState::Over);
+        assert!(!a.answer(true));
     }
 
     #[test]

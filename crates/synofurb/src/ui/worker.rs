@@ -259,6 +259,7 @@ pub fn outcome_of_error(e: &synofurb_core::recovery::RecoveryError) -> RecOutcom
             commands: vec![],
             state: None,
         },
+        E::OtherUnit { .. } => RecOutcome::err("Refused: this image is another unit's", e.to_string()),
         other => RecOutcome::err("Not done", other.to_string()),
     }
 }
@@ -351,9 +352,9 @@ pub fn spawn_recovery(tx: Tx, t: SshTarget, unit: String, action: RecAction) {
                 },
                 RecAction::Restore { backup, unit: id } => {
                     // the image must be this unit's (checked here again, not only when the dialog was built)
-                    match rec::check_backup_belongs(backup, id, false)
-                        .and_then(|_| rec::check_backup_file(backup))
-                        .and_then(|checks| rec::restore_flash_on(&mut p, backup, checks, &log))
+                    // the engine checks the image belongs to this unit and refuses another unit's (allow_other_unit is never set here)
+                    match rec::check_backup_file(backup)
+                        .and_then(|checks| rec::restore_flash_for_unit_on(&mut p, backup, checks, id, false, &log))
                     {
                         Ok(o) => RecOutcome {
                             level: RecLevel::Done,
