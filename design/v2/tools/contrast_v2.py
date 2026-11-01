@@ -8,7 +8,7 @@ Reads design/v2/tokens-v2.json and the generated design/v2/synofurb-theme.json. 
   3. MAP            every ThemeConfig key used exists in gpui-component's schema (when the crate source is available) and resolves to a defined token.
   4. LINT           font sizes in tokens are >= 12 px."""
 import glob, json, os, re, sys
-HERE = os.path.dirname(os.path.abspath(__file__)); V2 = os.path.join(HERE, '..', '..', '..', 'v2')
+HERE = os.path.dirname(os.path.abspath(__file__)); V2 = os.path.join(HERE, '..')
 T = json.load(open(os.path.join(V2, 'tokens-v2.json'))); TH = json.load(open(os.path.join(V2, 'synofurb-theme.json')))
 VERBOSE = '-v' in sys.argv
 def lin(c): c /= 255; return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4

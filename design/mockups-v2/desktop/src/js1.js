@@ -23,7 +23,7 @@ const tag=(txt,{v='',i='',fill=false,rd=false,lg=false,t='',attrs=''}={})=>{cons
   return t?`<button type="button" class="${c}" data-tip="${esc(t)}" data-ptext="${esc(t)}"${attrs}>${inner}</button>`:`<span class="${c}"${attrs}>${inner}</span>`};
 const compatTag=(k,o={})=>{const[c,v,l]=COMPAT[k];return tag(l,{v,i:c,t:{untested:'No one has reported this model; your install is the test.',community:'One report, from another project.',verified:'Confirmed by maintainers.',issues:'Known problems; read the report first.',unsupported:'Debian 13 cannot run on this hardware.'}[k],...o})};
 const cur=()=>S.unit||UNITS[1];
-const DSN=['K7P2','M3Q9','R5T1','H8D4','L2N6','B9V3'];const dsn=(u,i)=>DSN[(i+(u.sn.charCodeAt(2)||0))%6];
+const DSN=['K7P2','M3Q9','R5T1','H8D4','L2N6','B9V3'];const dsn=(u,i)=>DSN[(parseInt(u.sn.slice(-3),36)+i)%6];
 const allUnits=()=>S.twin?[UNITS[0],UNITS[1],TWIN,UNITS[2]]:UNITS;
 const twinOf=u=>allUnits().find(x=>x!==u&&x.model===u.model&&x.sn!==u.sn);
 const snTail=u=>'…'+u.sn.slice(-4);
@@ -57,7 +57,7 @@ function capacity(raid,disks){
 const LEVEL_LABEL={none:'None',raid0:'RAID 0',raid1:'RAID 1',raid5:'RAID 5',raid6:'RAID 6',raid10:'RAID 10',hyb1:'Hybrid 1-disk',hyb2:'Hybrid 2-disk'};
 
 /* ---------- state ---------- */
-const S={screen:'find',unit:null,theme:'light',units:UNITS,twin:false,offline:false,scan:'done',filter:'',sel:null,update:null,
+const S={screen:'find',unit:null,theme:'light',units:UNITS,twin:true,offline:false,scan:'done',filter:'',sel:null,update:null,
   plan:{mode:'wipe',sys:32,copies:3,raid:'auto',free:20},setup:{tab:'storage'},
   sys:{host:'ds918',user:'andreas',pw:'tundra-ember-Sage-4471',key:'Generate',tz:'Europe/Stockholm',web:true,kernel:'Stable',source:'Online',pubkey:''},
   opt:{tz:'Europe/Stockholm',auto:'Ask',arch:'x86_64'},

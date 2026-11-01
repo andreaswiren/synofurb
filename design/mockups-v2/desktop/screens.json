@@ -445,11 +445,6 @@
 "q": "nofirst=1&unit=ds918&pop=raid"
 },
 {
-"n": "tooltip-erase",
-"h": "confirm",
-"q": "nofirst=1&unit=ds918&gate=part&tip=%23f-erase"
-},
-{
 "n": "dev-menu",
 "h": "find",
 "q": "nofirst=1&dev=1"
@@ -458,5 +453,70 @@
 "n": "specimens",
 "h": "specimens",
 "q": "nofirst=1"
+},
+{
+"n": "confirm-keep",
+"h": "confirm",
+"q": "nofirst=1&unit=ds918&keep=1&sys=8&gate=ready"
+},
+{
+"n": "confirm-twin-keep",
+"h": "confirm",
+"q": "nofirst=1&unit=ds918b&keep=1&sys=8"
+},
+{
+"n": "failed-agent",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=agent"
+},
+{
+"n": "failed-agent-waiting",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=agent&phase=waiting&el=9"
+},
+{
+"n": "failed-agent-back",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=agent&phase=back"
+},
+{
+"n": "failed-agent-notback",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=agent&phase=notback"
+},
+{
+"n": "failed-backup",
+"h": "failed",
+"q": "nofirst=1&unit=ds918&fail=backup"
+},
+{
+"n": "failed-post-waiting-keep",
+"h": "failed",
+"q": "nofirst=1&unit=ds1621&fail=postkeep&phase=waiting&el=3"
+},
+{
+"n": "boot-returned",
+"h": "boot",
+"q": "nofirst=1&unit=ds918&boot=result&returned=1"
+},
+{
+"n": "quick-mixed",
+"h": "goal",
+"q": "nofirst=1&unit=ds1621&dlg=quick"
+},
+{
+"n": "system-ds1621",
+"h": "system",
+"q": "nofirst=1&unit=ds1621"
+},
+{
+"n": "cancel-too-late",
+"h": "install",
+"q": "nofirst=1&unit=ds918&step=6&dlg=cancelinst"
+},
+{
+"n": "find-boot-agent",
+"h": "find",
+"q": "nofirst=1&unit=ds918&boot=result&facts=flash"
 }
 ]

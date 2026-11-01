@@ -28,7 +28,7 @@ sprite = '<svg width="0" height="0" style="position:absolute" aria-hidden="true"
 # ---- logo
 B = os.path.join(ROOT, 'assets', 'brand')
 def strip(s): return re.sub(r'<title>.*?</title>', '', s)
-mk_l, mk_d = strip(rd(os.path.join(B, 'synofurb-mark.svg'))), strip(rd(os.path.join(B, 'synofurb-mark-dark.svg')))
+mk_l, mk_d = strip(rd(os.path.join(B, 'synofurb-mark-small.svg'))), strip(rd(os.path.join(B, 'synofurb-mark-small-dark.svg')))   # title bar is 20 px: the arrows-only small artwork
 lg_l, lg_d = strip(rd(os.path.join(B, 'synofurb-logo.svg'))), strip(rd(os.path.join(B, 'synofurb-logo-dark.svg')))
 def pair(l, d): return f'<span class="lg-l">{l}</span><span class="lg-d">{d}</span>'
 logo_js = f"const LOGO={json.dumps(pair(mk_l, mk_d))};const LOGO_FULL={json.dumps(pair(lg_l, lg_d))};"

@@ -14,6 +14,7 @@ Mockup, not the real app. Not approved by anyone. Open `index.html` in a browser
 python3 build.py             # src/*.js, src/app.css, tokens-v2.json, fonts, icons, UX-SPEC help topics -> index.html
 node check_words.js          # visible words per screen state, budget 60, prose inside "data" spans counted (--size=960x640 too)
 node check_contrast.js       # computed text / border colours, light + dark, 4.5:1 text, 3:1 non-text
+node check_tips.js           # tooltips are hover-only extras: every [data-tip] must sit on a focusable control, and keyboard focus must not raise one
 node check_scale.js          # type scale 12/14/16/24 (mono 12/13), weights 400/600/700, radii 4/8/12/pill
 node check_flows.js          # real clicks and keys: main path, gate, Enter on Erase, twins, command == plan, clocks, recovery, boot manager, Manage, select, sheet focus trap, text size, one scroller, no h-scroll
 node check_deadends.js       # clicks every enabled button of every screen: something visible must change

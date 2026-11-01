@@ -43,9 +43,9 @@ def bay(cx, cy, w, h, body, slot, led):
 
 def mark_body(arrow_col, body_col, slot_col, led_col, sw=8.6, bg=None, small=False):
     cx, cy = 50, 55
-    paths, heads = arrows(cx, cy, 40 if small else 38, sw, 17 if small else 14, 8, 0.0)
+    paths, heads = arrows(cx, cy, 41 if small else 38, sw, 18 if small else 14, 8, 0.0)
     g = ''.join(f'<path d="{d}" fill="none" stroke="{arrow_col}" stroke-width="{sw}" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="{h}" fill="{arrow_col}" stroke="{arrow_col}" stroke-width="1.6" stroke-linejoin="round"/>' for d, h in zip(paths, heads))
-    g += bay(cx, cy + 1, 22 if small else 23, 15 if small else 15.5, body_col, slot_col, led_col) if not small else f'<rect x="{cx-10}" y="{cy-5.5}" width="20" height="13" rx="4" fill="{body_col}"/><circle cx="{cx+5}" cy="{cy+1}" r="2.4" fill="{led_col}"/>'
+    if not small: g += bay(cx, cy + 1, 23, 15.5, body_col, slot_col, led_col)   # round-3: the 16-48 px artwork is arrows only (the bay block turned into a blob at 16 px)
     return g
 def svg(vb, body, title, extra=''):
     return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{vb}" role="img" aria-label="{title}"{extra}><title>{title}</title>{body}</svg>\n'
@@ -91,6 +91,7 @@ def mono(small=False):
     cx, cy, w, h = 50, 56, 23, 15.5
     x, y = cx - w / 2, cy - h / 2
     # bay as one path with the slot and LED cut out (evenodd)
+    if small: return svg('0 0 100 100', g, 'synofurb', ' color="#000"')   # round-3: arrows only at 16 to 32 px
     g += (f'<path fill="currentColor" fill-rule="evenodd" d="M{x+4.8:.2f} {y:.2f}H{x+w-4.8:.2f}A4.8 4.8 0 0 1 {x+w:.2f} {y+4.8:.2f}V{y+h-4.8:.2f}A4.8 4.8 0 0 1 {x+w-4.8:.2f} {y+h:.2f}H{x+4.8:.2f}A4.8 4.8 0 0 1 {x:.2f} {y+h-4.8:.2f}V{y+4.8:.2f}A4.8 4.8 0 0 1 {x+4.8:.2f} {y:.2f}Z'
           f'M{x+w*0.16:.2f} {cy-h*0.1:.2f}h{w*0.46:.2f}v{h*0.2:.2f}h-{w*0.46:.2f}ZM{x+w*0.80+h*0.15:.2f} {cy:.2f}a{h*0.15:.2f} {h*0.15:.2f} 0 1 0 -{h*0.30:.2f} 0a{h*0.15:.2f} {h*0.15:.2f} 0 1 0 {h*0.30:.2f} 0Z"/>')
     return svg('0 0 100 100', g, 'synofurb', ' color="#000"')
@@ -101,6 +102,6 @@ if __name__ == '__main__':
     W('synofurb-mark-mono.svg', mono())
     W('synofurb-logo.svg', logo(False)); W('synofurb-logo-dark.svg', logo(True))
     W('app-icon.svg', app_icon(0.0)); W('app-icon-macos.svg', app_icon(0.098))
-    W('app-icon-small.svg', app_icon(0.0, True)); W('synofurb-mark-mono-small.svg', mono(True))
+    W('app-icon-small.svg', app_icon(0.0, True)); W('synofurb-mark-small.svg', svg('0 0 100 100', mark_body(VIOLET, INK, WHITE, LED, sw=12.5, small=True), 'synofurb')); W('synofurb-mark-small-dark.svg', svg('0 0 100 100', mark_body(VIOLET_DK, WHITE, '#17122B', LED_DK, sw=12.5, small=True), 'synofurb')); W('synofurb-mark-mono-small.svg', mono(True))
     W('synofurb-logo-mono.svg', logo_mono())
     print('ok')

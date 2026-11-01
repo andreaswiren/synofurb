@@ -7,14 +7,13 @@ function place(el,anchor,pref='below'){ // position inside .win
   if(pref==='above'&&y<4) y=a.bottom-w.top+6;
   x=Math.max(8,Math.min(x,w.width-e.width-8)); el.style.left=x+'px'; el.style.top=y+'px';
 }
-/* tooltip: hover (400 ms) and keyboard focus; one sentence */
+/* tooltip: HOVER ONLY, like gpui-component's Tooltip (no focus path). It may only sit on controls that are already focusable and only carry non-essential extras; every sentence a keyboard user needs lives on a focusable info button (infoTxt) or is visible text. check_tips.js enforces it. */
 let tipEl=null,tipT=null;
 function showTip(t){hideTip();const txt=t.getAttribute('data-tip');if(!txt)return;tipEl=document.createElement('div');tipEl.className='tip';tipEl.setAttribute('role','tooltip');tipEl.id='tooltip';tipEl.textContent=txt;L().appendChild(tipEl);place(tipEl,t,'below');t.setAttribute('aria-describedby','tooltip')}
 function hideTip(){clearTimeout(tipT);if(tipEl){tipEl.remove();tipEl=null}$$('[aria-describedby=tooltip]').forEach(e=>e.removeAttribute('aria-describedby'))}
 document.addEventListener('mouseover',e=>{const t=e.target.closest('[data-tip]');if(!t)return;clearTimeout(tipT);tipT=setTimeout(()=>showTip(t),window.__fast?0:400)});
 document.addEventListener('mouseout',e=>{if(e.target.closest('[data-tip]'))hideTip()});
-document.addEventListener('focusin',e=>{const t=e.target.closest('[data-tip]');if(t&&e.target.matches(':focus-visible'))showTip(t)});
-document.addEventListener('focusout',hideTip);
+document.addEventListener('focusout',hideTip);document.addEventListener('keydown',()=>hideTip(),true);
 /* popover (and Select popup): GPUI tooltips are hover-only, so anything needed to act or stay safe is a focusable trigger that opens a popover */
 let popEl=null,popAnchor=null;
 function closePop(ret=true){if(popEl){popEl.remove();popEl=null;if(popAnchor&&popAnchor.getAttribute&&popAnchor.hasAttribute('aria-expanded'))popAnchor.setAttribute('aria-expanded','false');if(ret&&popAnchor&&document.contains(popAnchor))popAnchor.focus({preventScroll:true})}popAnchor=null}
@@ -53,7 +52,7 @@ function trap(root,ev){if(ev.key!=='Tab')return;const f=$$('button:not([aria-dis
 function openDialog({id,title,icon,body,buttons=[],wide=false,danger=false,onopen,onclose,initial}){
   hideTip();closePop(false);const prev=document.activeElement;
   const sc=document.createElement('div');sc.className='scrim';sc.dataset.dname=id;
-  sc.innerHTML=`<div class="dlg ${wide?'wide':''} ${danger?'dng':''}" role="dialog" aria-modal="true" aria-labelledby="dt-${id}"><div class="dlg-h">${icon?ic(icon,'l'):''}<span id="dt-${id}">${title}</span></div><div class="dlg-b">${body}</div><div class="dlg-f">${buttons.map((b,i)=>`<button class="btn ${b.cls||''}" data-dbtn="${i}"${b.off?' aria-disabled="true"':''}${b.tip?tip(b.tip):''}>${b.icon?ic(b.icon):''}${b.label}</button>`).join('')}</div></div>`;
+  sc.innerHTML=`<div class="dlg ${wide?'wide':''} ${danger?'dng':''}" role="dialog" aria-modal="true" aria-labelledby="dt-${id}"><div class="dlg-h">${icon?ic(icon,'l'):''}<span id="dt-${id}">${title}</span></div><div class="dlg-b">${body}</div><div class="dlg-f">${buttons.map((b,i)=>`<button class="btn ${b.cls||''}" data-dbtn="${i}"${b.off?` aria-disabled="true" tabindex="-1" data-reason="${esc(typeof b.off==='string'?b.off:'Type the phrase first.')}"`:''}>${b.icon?ic(b.icon):''}${b.label}</button>`).join('')}</div></div>`;
   L().appendChild(sc);const dlg=$('.dlg',sc);
   const close=()=>{sc.remove();dlgStack.pop();onclose&&onclose();if(prev&&document.contains(prev))prev.focus({preventScroll:true})};
   const api={el:sc,close,btn:i=>$(`[data-dbtn="${i}"]`,sc)};
@@ -68,7 +67,7 @@ function openSheet({title,body,foot,onopen}){
   sc.addEventListener('keydown',ev=>{if(ev.key==='Escape'){ev.stopPropagation();closeSheet()}trap($('.sheet',sc),ev)});
   sc.addEventListener('click',ev=>{if(ev.target.matches('.sheetscrim,[data-sheet-close]')||ev.target.closest('[data-sheet-close]'))closeSheet()});
   onopen&&onopen(sc);return sc}
-function closeSheet(ret=true){const s=$('#sheet');if(!s)return;const p=s._prev;s.remove();S.help.open=false;if(ret&&p&&document.contains(p))p.focus({preventScroll:true})}
+function closeSheet(ret=true){const s=$('#sheet');if(!s)return;const p=s._prev;s.remove();S.help.open=false;document.documentElement.dataset.sheet='';if(ret&&p&&document.contains(p))p.focus({preventScroll:true})}
 function toast(msg,icon='check'){const t=document.createElement('div');t.className='toast';t.setAttribute('role','status');t.innerHTML=ic(icon)+esc(msg);$('.toasts').appendChild(t);setTimeout(()=>t.remove(),2600)}
 function copy(text,label){try{navigator.clipboard&&navigator.clipboard.writeText(text)}catch(e){}toast(label||'Copied')}
 

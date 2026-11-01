@@ -2,7 +2,7 @@
 """Builds design/v2/tokens-v2.json and design/v2/synofurb-theme.json (a gpui-component ThemeSet) from one palette definition.
 Colours start from the already reviewed Direction-1 palette (design/mockups/ui/tokens.json) and add what the real gpui-component
 widgets need (status foregrounds, danger fill re-derived for the dark theme, selection, scrollbar, switch).  Run: python3 design/v2/build_v2.py
-Then: python3 design/mockups/ui/tools/contrast_v2.py   (must exit 0)."""
+Then: python3 design/v2/tools/contrast_v2.py   (must exit 0)."""
 import json, math, os
 HERE = os.path.dirname(os.path.abspath(__file__))
 V1 = json.load(open(os.path.join(HERE, '..', 'mockups', 'ui', 'tokens.json')))
@@ -102,6 +102,9 @@ def tokens():
     t.update({'motion.fast_ms': 120, 'motion.normal_ms': 180, 'motion.slow_ms': 280, 'motion.dialog_ms': 250, 'motion.sheet_ms': 150, 'motion.tooltip_ms': 150, 'motion.popover_ms': 150, 'tooltip.delay_ms': 400})
     for k, v in V1.items():
         if k.startswith('accent.'): t[k] = v
+    # one source of truth for the default accent: accent.purple.* is the palette above (round-2 review N9)
+    for th, P in (('light', L), ('dark', D)):
+        for k in ('accent', 'accent_hover', 'accent_pressed', 'on_accent', 'accent_bg', 'accent_fg', 'ring'): t[f'accent.purple.{th}.{k}'] = P[k]
     for k, v in MAP.items(): t[f'map.{k}'] = v
     return t
 def theme_set():

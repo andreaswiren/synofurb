@@ -11,7 +11,8 @@ Everything is generated: `python3 build.py` writes the SVGs, `python3 export.py`
 | `synofurb-mark.svg` / `synofurb-mark-dark.svg` | Mark only, for light / dark backgrounds (violet arrows, ink or white bay, green LED) |
 | `synofurb-logo.svg` / `synofurb-logo-dark.svg` | Mark + wordmark, "syno" in ink (white on dark) and "furb" in the accent violet |
 | `synofurb-logo-mono.svg` | Mark + wordmark in `currentColor` (print, one-colour use, white on the violet app-icon colour) |
-| `synofurb-mark-mono.svg`, `synofurb-mark-mono-small.svg` | One colour (`currentColor`), bay cut out; the **small** one has heavier strokes for 16 to 32 px: tray icon, favicon-like uses |
+| `synofurb-mark-mono.svg`, `synofurb-mark-mono-small.svg` | One colour (`currentColor`), bay cut out; the **small** one is arrows only with heavier strokes for 16 to 32 px (the bay block turned into a blob at 16 px): tray icon, favicon-like uses |
+| `synofurb-mark-small.svg` / `-dark.svg` | Colour mark for 16 to 24 px (title bar): arrows only, heavy strokes |
 | `app-icon.svg`, `app-icon-small.svg`, `app-icon-macos.svg` | Rounded-square application icon (white mark on `#5E24BC`). Small = for 16 to 48 px; macOS = with the system margin |
 | `png/synofurb-icon-{16,24,32,48,64,128,256,512,1024}.png` | App icon, full bleed (16 to 48 px use the small artwork) |
 | `png/macos-*.png`, `synofurb.iconset/`, `synofurb.icns` | macOS artwork (with margin). `iconutil -c icns synofurb.iconset` rebuilds the `.icns` on a Mac; the committed `.icns` is already valid |

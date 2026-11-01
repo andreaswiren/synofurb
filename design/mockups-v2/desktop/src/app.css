@@ -238,7 +238,7 @@ tr.sel .rad{background:var(--accent);border-color:var(--accent)}tr.sel .rad i{ba
 /* confirm: triad strip (always above the fold), details, danger-zone panel */
 .triad{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem}
 .tri{display:flex;flex-direction:column;gap:.125rem;padding:.5rem .75rem;border:1px solid var(--border);border-radius:var(--rl);background:var(--surface);min-width:0;border-left-width:4px}
-.tri .h{display:flex;gap:.5rem;align-items:center;font-weight:600}.tri .v{color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tri .h{display:flex;gap:.5rem;align-items:center;font-weight:600}.tri .v{color:var(--fg-2);overflow-wrap:anywhere}
 .tri.dn{border-left-color:var(--err-fg)}.tri.dn .h{color:var(--err-fg)}.tri.ch{border-left-color:var(--warn-fg)}.tri.ch .h{color:var(--warn-fg)}.tri.ok{border-left-color:var(--ok-fg)}.tri.ok .h{color:var(--ok-fg)}
 .gate{display:grid;grid-template-columns:minmax(0,1fr) 22rem;gap:1.25rem;align-items:start}
 .dz{border:1px solid var(--err-fg);border-radius:var(--rl);background:var(--surface);overflow:hidden}
@@ -312,3 +312,16 @@ tr.sel .rad{background:var(--accent);border-color:var(--accent)}tr.sel .rad i{ba
 .btn.pr{background:var(--surface-3)}.btn.primary.pr{background:var(--accent-pressed);border-color:var(--accent-pressed)}.btn.danger.pr{background:var(--danger-pressed);border-color:var(--danger-pressed)}.btn.ghost.pr{background:var(--surface-3)}
 @container win (max-width:52rem){.fgrid{grid-template-columns:minmax(0,1fr)}.grid2{grid-template-columns:minmax(0,1fr)}}
 .sheet-b .tbl td,.dlg-b .tbl td{white-space:normal}.sheet-b .tbl td:first-child{white-space:nowrap}
+/* round-3: Confirm grid (gate beside the consequences, never below them at 960x640), connectors, small fixes */
+.cgrid{display:grid;grid-template-columns:minmax(0,1fr) 22rem;grid-template-areas:"a g" "r g";gap:1rem 1.25rem;align-items:start}
+.ca{grid-area:a}.dz{grid-area:g;position:sticky;top:0}.cr{grid-area:r}
+.step-line.done{background:var(--accent)}
+.tri .h .ib{margin-left:auto}
+.dz-b{gap:.5rem}
+.chk{min-height:2rem}
+.btn[tabindex="-1"]:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+@container win (max-width:68.75rem){.cgrid{grid-template-columns:minmax(0,1fr) 20rem}}
+@container win (max-width:52rem){.cgrid{grid-template-columns:minmax(0,1fr);grid-template-areas:"a" "g" "r"}.dz{position:static}}
+:root[data-sheet=open] .statusbar .tag,:root[data-sheet=open] .statusbar .link{visibility:hidden}
+@container win (max-width:52rem){:root[data-screen=confirm] .unithdr{display:none}}
+@container win (max-width:52rem){:root[data-screen=confirm] .page{gap:.5rem}:root[data-screen=confirm] .cgrid{gap:.5rem}:root[data-screen=confirm] .ca{gap:.5rem}:root[data-screen=confirm] .alert{padding:.375rem .75rem}:root[data-screen=confirm] .main{padding-top:.75rem;padding-bottom:.75rem}}

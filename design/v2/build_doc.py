@@ -5,7 +5,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 import sys; sys.path.insert(0, HERE)
 from build_v2 import cr
 T = json.load(open(os.path.join(HERE, 'tokens-v2.json'))); TH = json.load(open(os.path.join(HERE, 'synofurb-theme.json')))
-CHK = os.path.join(HERE, '..', 'mockups', 'ui', 'tools', 'contrast_v2.py')
+CHK = os.path.join(HERE, 'tools', 'contrast_v2.py')
 out = subprocess.run(['python3', CHK, '-v'], capture_output=True, text=True).stdout
 summ = [l for l in out.splitlines() if l.startswith(('Checked', 'Passing'))]
 N = int(re.search(r'Checked (\d+)', summ[0]).group(1)); NM = int(re.search(r'(\d+) token-matrix', summ[0]).group(1)); NW = int(re.search(r'(\d+) on the generated', summ[0]).group(1))
@@ -64,7 +64,7 @@ DOC = f'''# synofurb design system v2
 
 Supersedes `design/mockups/ui/DESIGN-SYSTEM.md` (the first-round HTML mockups were rejected). The review artifact is now the real application: `synofurb gui --demo --screen <name>` and the web UI. This file therefore specifies **tokens, sizes and rules for the real `gpui-component` 0.8.1 widgets**, not screens. The Rust theme is **generated** from `tokens-v2.json`; nothing is eyeballed.
 
-Files: `tokens-v2.json` (flat tokens plus `map.*`), `synofurb-theme.json` (a gpui-component `ThemeSet`, generated), `build_v2.py` (tokens and theme), `build_doc.py` (this file), `../mockups/ui/tools/contrast_v2.py` (the gate). Brand: `assets/brand/`.
+Files: `tokens-v2.json` (flat tokens plus `map.*`), `synofurb-theme.json` (a gpui-component `ThemeSet`, generated), `build_v2.py` (tokens and theme), `build_doc.py` (this file), `tools/contrast_v2.py` (the gate). Brand: `assets/brand/`.
 
 ## 1. Rules (from BRIEF-v2)
 
@@ -154,7 +154,7 @@ Contrast of the widget pairs on the generated theme (light / dark): primary labe
 
 ## 8. Gate and numbers
 
-`python3 design/mockups/ui/tools/contrast_v2.py` checks **{N} pairs on both themes**: {NM} token-matrix pairs (every text token on every surface it may sit on, every non-text token on every surface it may touch, and the five web accent sets) and {NW} pairs on the *generated* gpui-component theme (what the widgets will paint: button, tag, alert 4% tints, tooltip, popover, kbd, tab, table, sidebar, link, selection, scrollbar thumb, switch, slider, progress track, input and checkbox border, focus ring). It also verifies the ThemeConfig keys against the crate's schema, and that no token font size is under 12 px. **Result: {N} of {N} pass; lowest text ratio {MT}:1, lowest non-text ratio {MN}:1.** It was run against deliberately bad tokens and fails as it should. Not covered: GPUI's real rendering and alpha blending beyond the 4% and 20% blends the widgets are known to use, text drawn over images, and hover/pressed states of text on arbitrary surfaces (links are only allowed on `canvas`, `surface` and the tint).
+`python3 design/v2/tools/contrast_v2.py` checks **{N} pairs on both themes**: {NM} token-matrix pairs (every text token on every surface it may sit on, every non-text token on every surface it may touch, and the five web accent sets) and {NW} pairs on the *generated* gpui-component theme (what the widgets will paint: button, tag, alert 4% tints, tooltip, popover, kbd, tab, table, sidebar, link, selection, scrollbar thumb, switch, slider, progress track, input and checkbox border, focus ring). It also verifies the ThemeConfig keys against the crate's schema, and that no token font size is under 12 px. **Result: {N} of {N} pass; lowest text ratio {MT}:1, lowest non-text ratio {MN}:1.** It was run against deliberately bad tokens and fails as it should. Not covered: GPUI's real rendering and alpha blending beyond the 4% and 20% blends the widgets are known to use, text drawn over images, and hover/pressed states of text on arbitrary surfaces (links are only allowed on `canvas`, `surface` and the tint).
 
 ## 9. Motion
 

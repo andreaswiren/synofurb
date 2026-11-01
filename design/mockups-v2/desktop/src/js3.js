@@ -2,7 +2,7 @@
 const STEPS=['Find','Connect','Goal','Setup','Confirm','Install'];
 const STEP_OF={find:0,connect:1,inspect:1,goal:2,boot:2,plan:3,system:3,setup:3,confirm:4,install:5,failed:5,done:5};
 const SCREEN_OF=['find','inspect','goal','plan','confirm','install'];
-const NOSTEPPER=['recovery','manage','settings','about'];
+const NOSTEPPER=['recovery','manage','settings','about','boot'];
 const SCREEN_HELP={find:'compat-status',connect:'troubleshooting',inspect:'backups',goal:'first-install',boot:'boot-manager',plan:'raid-levels',system:'first-install',setup:'raid-levels',confirm:'recovery',install:'first-install',failed:'recovery',done:'first-install',recovery:'recovery',manage:'troubleshooting',settings:null,about:null};
 const instN=()=>S.inst.step>=4?Math.min(12,S.inst.step-3):0;
 /* Risk Tag = ONE pure function of the unit's facts (S.F), never of the screen name. Settings and About are not about a unit: no Tag. */
@@ -27,7 +27,7 @@ function stepperHTML(){const s=S.screen,cur=STEP_OF[s],failed=s==='failed';let h
   STEPS.forEach((n,i)=>{const c=s==='done'?'done':i<cur?'done':i===cur?(failed?'fail':'cur'):'';
     const inner=`<span class="n">${c==='done'?ic('check','s'):c==='fail'?ic('circle-x','s'):i+1}</span><span class="lbl">${n}</span>`;
     const click=i<cur&&!['install','failed','done'].includes(s);
-    h+=`<div class="item">${click?`<button class="step ${c}" tabindex="-1" data-go="${SCREEN_OF[i]}" aria-label="Back to ${n}">${inner}</button>`:`<span class="step ${c}"${c==='cur'||c==='fail'?' aria-current="step"':''}>${inner}</span>`}<span class="step-line"></span></div>`});
+    h+=`<div class="item">${click?`<button class="step ${c}" tabindex="-1" data-go="${SCREEN_OF[i]}" aria-label="Back to ${n}">${inner}</button>`:`<span class="step ${c}"${c==='cur'||c==='fail'?' aria-current="step"':''}>${inner}</span>`}<span class="step-line${s==='done'||i<cur?' done':''}"></span></div>`});
   return h+'</nav>'}
 function unitHdr(){const u=cur(),t=S.screen;if(!S.unit||['find','settings','about'].includes(t))return '';
   const deb=S.F.debian||t==='manage',tw=twinOf(u);
@@ -42,10 +42,12 @@ function titlebar(){return `<header class="titlebar"><div class="brand"><span cl
 const F=(left,right)=>`<footer class="foot">${left||''}<span class="sp"></span>${right||''}</footer>`;
 /* A control that is unavailable keeps the widget's disabled look and stays focusable; the reason is a visible info icon and a popover (GPUI tooltips are hover only, a disabled Button cannot be focused). */
 const btn=(label,{cls='',icon='',go='',act='',off='',tipT='',id='',trail=''}={})=>{
-  const b=`<button class="btn ${cls}"${id?` id="${id}"`:''}${go?` data-go="${go}"`:''}${act?` data-act="${act}"`:''}${off?` aria-disabled="true" data-reason="${esc(off)}"`:''}${(!off&&tipT)?tip(tipT):''}>${icon?ic(icon):''}${label}${trail?ic(trail):''}</button>`;
+  const b=`<button class="btn ${cls}"${id?` id="${id}"`:''}${go?` data-go="${go}"`:''}${act?` data-act="${act}"`:''}${off?` aria-disabled="true" tabindex="-1" data-reason="${esc(off)}"`:''}${(!off&&tipT)?tip(tipT):''}>${icon?ic(icon):''}${label}${trail?ic(trail):''}</button>`;
   return off?`<span class="dbw">${b}<button type="button" class="ib" data-reason="${esc(off)}" aria-label="Why unavailable"${tip('Why unavailable')}>${ic('info','s')}</button></span>`:b};
 const back=(go)=>btn('Back',{cls:'ghost',icon:'arrow-left',go});
-const cmdBtn=()=>`<button class="btn ghost" data-act="cmd"${tip('Shows the equivalent command for the plan.')}>${ic('terminal')}Copy command</button>`;
+const cmdBtn=()=>`<button class="btn ghost" data-act="cmd"${tip('Shows the equivalent command for the plan.')}>${ic('terminal')}Command</button>`;
+const infoTxt=(text,l)=>`<button type="button" class="ib" data-ptext="${esc(text)}" aria-label="${esc(l||'More')}"${tip(l||'More')}>${ic('info','s')}</button>`;
+const lab=(l,text)=>`${l} ${infoTxt(text,l)}`;
 const infoBtn=(k,l)=>`<button class="ib" data-pop="${k}" aria-label="${l||'Info'}"${tip(l||'More')}>${ic('info','s')}</button>`;
 const alertH=(v,i,body,acts='')=>{const a=`<div class="alert ${v}" role="${v==='err'||v==='warn'?'alert':'status'}">${ic(i)}<div class="grow">${body}</div></div>`;return acts?`<div class="alrow">${a}${acts}</div>`:a};
 
@@ -55,7 +57,7 @@ function find(){
   let body;
   if(S.scan==='loading') body=`<div class="card"><table class="tbl"><tbody>${[1,2,3].map(()=>`<tr><td class="rc"></td>${[70,60,40,50,60].map(w=>`<td><div class="skel" style="width:${w}%"></div></td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
   else if(!list.length) body=`<div class="card"><div class="empty"><div class="big">${ic('search','xl')}</div><h2>No NAS found</h2><div class="row"><button class="btn" data-act="rescan">${ic('refresh-cw')}Scan again</button><button class="btn" data-dlg="addip">${ic('plus')}Add by IP</button><button class="link" data-help-open="troubleshooting">Help</button></div></div></div>`;
-  else body=`<div class="card cardtbl"><table class="tbl"><thead><tr><th class="rc"></th><th>Model</th><th>Address</th><th>DSM</th><th class="hide-md">Found by ${infoBtn('found','Scan details')}</th><th>Status ${infoBtn('status','Status')}</th></tr></thead><tbody>${list.map(u=>`<tr tabindex="0" role="row" data-sel="${u.id}" class="${S.sel===u.id?'sel':''}" aria-selected="${S.sel===u.id}"><td class="rc"><span class="rad" aria-hidden="true"><i></i></span></td><td><b>${d(u.model)}</b> ${mono('SN '+u.sn)}${twinOf(u)?' '+tag('Twin',{v:'warn',i:'triangle-alert',t:'Another '+u.model+' is on the network; check serials.'}):''}</td><td>${mono(u.ip)}</td><td>${d(u.dsm)}</td><td class="hide-md">${d(u.found.join(' · '))}</td><td>${compatTag(u.compat)}</td></tr>`).join('')}</tbody></table></div>`;
+  else body=`<div class="card cardtbl"><table class="tbl"><thead><tr><th class="rc"></th><th>Model</th><th>Address</th><th>DSM</th><th class="hide-md">Found by ${infoBtn('found','Scan details')}</th><th>Status ${infoBtn('status','Status')}</th></tr></thead><tbody>${list.map(u=>`<tr tabindex="0" role="row" data-sel="${u.id}" class="${S.sel===u.id?'sel':''}" aria-selected="${S.sel===u.id}"><td class="rc"><span class="rad" aria-hidden="true"><i></i></span></td><td><b>${d(u.model)}</b> ${mono('SN '+u.sn)}${twinOf(u)?' '+tag('Twin',{v:'warn',i:'triangle-alert',t:'Another '+u.model+' is on the network; check serials.'}):''}${S.boot.unit===u.id?' '+tag('Boot agent installed',{v:'info',i:'terminal',t:'Our entries are on the boot flash; remove them under Recovery.'}):''}</td><td>${mono(u.ip)}</td><td>${d(u.dsm)}</td><td class="hide-md">${d(u.found.join(' · '))}</td><td>${compatTag(u.compat)}</td></tr>`).join('')}</tbody></table></div>`;
   const deb=`<div class="col"><h2>Running Debian</h2><div class="card cardtbl"><table class="tbl sm"><tbody>${DEBIAN_UNITS.map(u=>`<tr><td><b>${d(u.model)}</b> ${d('attic')}</td><td>${mono(u.ip)}</td><td>${d(u.os+' · '+u.kernel)}</td><td class="r"><button class="btn ghost sm" data-act="manage">Manage</button></td></tr>`).join('')}</tbody></table></div></div>`;
   const upd=S.update&&S.update.state==='available';
   return {html:`<div class="page"><div class="ph"><div><h1 class="t-title">Find NAS</h1><div class="sub t-sub">Select the unit to work on.</div></div><span class="sp"></span><div class="inp" style="width:12.5rem">${ic('search','s')}<input id="flt" placeholder="Filter units" value="${esc(S.filter)}" aria-label="Filter units"></div>
@@ -74,8 +76,8 @@ function connect(){const c=S.conn,u=cur(),e=c.err;
   <div class="row gap12"><div class="fld grow"><span class="lab">User</span><input class="inp" id="c-user" value="${esc(c.user)}" aria-label="User"></div><div class="fld" style="width:6rem"><span class="lab">Port</span><input class="inp mono" id="c-port" value="${esc(c.port)}" aria-label="Port"></div></div>
   <div class="fld"><span class="lab">Sign in with</span><div class="seg" role="group" style="align-self:flex-start">${['Password','Key'].map(k=>`<button aria-pressed="${c.auth===k}" data-conn-auth="${k}">${k}</button>`).join('')}</div></div>
   <div class="fld"><span class="lab">${c.auth==='Key'?'Key':'Password'}</span><div class="inp ${e==='login'||c.field==='pw'?'err':''}"><input id="c-pw" type="password" value="${esc(c.pw)}" aria-label="${c.auth==='Key'?'Key passphrase':'Password'}"${c.field==='pw'?' aria-invalid="true" aria-describedby="c-pw-e"':''}><button class="btn ghost icon sm" data-act="peek" aria-label="Show password"${tip('Show or hide')}>${ic('eye','s')}</button></div>${c.field==='pw'?`<span class="ferr" id="c-pw-e">${ic('circle-x','s')}Enter a password</span>`:''}</div>
-  <label class="chk"><input type="checkbox" data-conn="sudo" ${c.sudo?'checked':''}><span class="bx">${ic('check')}</span><span${tip('DSM asks for the password to read disk details.')}>Same for sudo</span></label>
-  <label class="chk"><input type="checkbox" data-conn="keep" ${c.keep?'checked':''}><span class="bx">${ic('check')}</span><span${tip('Otherwise the password is forgotten on exit.')}>Keep in keychain</span></label></div></div></div>
+  <label class="chk"><input type="checkbox" data-conn="sudo" ${c.sudo?'checked':''}><span class="bx">${ic('check')}</span><span>Same for sudo</span>${infoTxt('DSM asks for the password to read disk details.','About sudo')}</label>
+  <label class="chk"><input type="checkbox" data-conn="keep" ${c.keep?'checked':''}><span class="bx">${ic('check')}</span><span>Keep in keychain</span>${infoTxt('Otherwise the password is forgotten when the app closes.','About the keychain')}</label></div></div></div>
   <div class="path" aria-hidden="true"><div class="node">${ic('laptop','xl')}${d('this computer')}</div><div class="line"></div><div class="node">${ic('server','xl')}${mono(u.ip+':'+c.port)}</div></div></div></div>`,
   foot:F(back('find'),btn(c.state==='busy'?'Connecting':'Connect',{cls:'primary '+(c.state==='busy'?'busy':''),act:'dosignin',icon:c.state==='busy'?'loader-circle':'',trail:c.state==='busy'?'':'arrow-right'}))}}
 /* ---- D3 Inspect ---- */
@@ -90,7 +92,7 @@ function acc(id,title,body,open=false,extra=''){const o=S.acc&&S.acc[id]!==undef
 S.acc={};
 /* ---- D4 Goal (with Quick setup) ---- */
 function goal(){const u=cur(),unsupported=u.compat==='unsupported',rec=u.compat==='untested';
- const card=(k,icon,title,line,tg,btnH,recd)=>`<section class="card goal ${recd?'rec':''}">${recd?`<span class="tag fill acc recd" data-tip="No one has reported this model; try the agent first.">${ic('star','s')}Recommended</span>`:''}<div class="big">${ic(icon,'xl')}</div><div><h2 class="row">${title} ${infoBtn(k,title)}</h2><div class="sub">${line}</div></div><div>${tg}</div><div class="row wrap gbtn">${btnH}</div></section>`;
+ const card=(k,icon,title,line,tg,btnH,recd)=>`<section class="card goal ${recd?'rec':''}">${recd?tag('Recommended',{v:'acc',fill:true,i:'star',t:'No one has reported this model; try the agent first.',attrs:' style="position:absolute;right:1rem;top:1rem"'}):''}<div class="big">${ic(icon,'xl')}</div><div><h2 class="row">${title} ${infoBtn(k,title)}</h2><div class="sub">${line}</div></div><div>${tg}</div><div class="row wrap gbtn">${btnH}</div></section>`;
  return {html:`<div class="page"><div class="ph"><div><h1 class="t-title">Choose goal</h1><div class="sub t-sub">What should happen to this NAS?</div></div></div><div class="cards3">
  ${card('bootmgr','terminal','Boot manager','Try Linux. Disks untouched.',tag('Disks untouched',{v:'ok',i:'shield-check'}),btn('Set up',{cls:rec?'primary':'',go:'boot'}),rec)}
  ${card('install','hard-drive','Install Debian','Replace DSM with Debian.',tag('Erases disks',{v:'err',i:'trash'}),btn('Quick setup',{cls:rec?'':'primary',act:'quick',off:unsupported?'Debian 13 cannot run on this hardware.':''})+btn('Customize',{go:'plan',off:unsupported?'Debian 13 cannot run on this hardware.':''}),false)}
