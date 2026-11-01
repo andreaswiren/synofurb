@@ -863,6 +863,79 @@ fn manage_update_checks_its_bundle_before_connecting() {
     }
 }
 
+/// `fake_bundle` plus the `mgmt/` folder `bundle create` writes (the embedded management app and its MANIFEST.sha256), listed in manifest.json.
+fn add_mgmt_to_bundle(dir: &std::path::Path) {
+    let b = synofurb_core::manage::MgmtBundle::embedded();
+    let md = dir.join("mgmt");
+    std::fs::create_dir_all(&md).unwrap();
+    let mut files = vec![];
+    let mut put = |name: &str, data: &[u8]| {
+        std::fs::write(md.join(name), data).unwrap();
+        files.push(FileEntry { path: format!("mgmt/{name}"), size: data.len() as u64, sha256: synofurb_core::debian::sha256_hex(data) });
+    };
+    for f in &b.files {
+        put(&f.name, &f.data);
+    }
+    put("MANIFEST.sha256", b.manifest().as_bytes());
+    let mut m: BundleManifest = serde_json::from_str(&std::fs::read_to_string(dir.join(MANIFEST_FILE)).unwrap()).unwrap();
+    m.files.extend(files);
+    std::fs::write(dir.join(MANIFEST_FILE), serde_json::to_string_pretty(&m).unwrap()).unwrap();
+}
+
+#[test]
+fn a_bundle_carries_the_management_app_for_offline_updates() {
+    let s = Sandbox::new("bundle-mgmt");
+    let env = [("SYNOFURB_PASSWORD", "x")];
+    let with = s.path("with");
+    fake_bundle(&with, &["amd64"], KernelChannel::Stable, &[], false);
+    add_mgmt_to_bundle(&with);
+    let ver = synofurb_core::manage::bundled_mgmt_version();
+
+    // verify: OK, says which management app it found, no note
+    let r = s.run(&["bundle", "verify", with.to_str().unwrap()]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    assert!(r.stdout.contains(&format!("management app {ver} in mgmt/ verified")) && r.stdout.contains("bundle OK"), "{}", r.stdout);
+    assert!(!r.stdout.contains("note:"), "{}", r.stdout);
+    // info (text and JSON)
+    let r = s.run(&["bundle", "info", with.to_str().unwrap()]);
+    assert!(r.stdout.contains(&format!("Mgmt app:  synofurb-mgmt {ver}")), "{}", r.stdout);
+    assert_eq!(s.run(&["bundle", "info", with.to_str().unwrap(), "--json"]).json()["mgmt_version"], ver);
+    // the bundle (or its mgmt/ folder) is accepted by `manage update` and gets as far as the connection (port 1: exit 1)
+    for dir in [with.clone(), with.join("mgmt")] {
+        let r = s.run_env(&["manage", "update", "--host", "127.0.0.1", "--port", "1", "--from-bundle", dir.to_str().unwrap()], &env);
+        assert_eq!(r.code, 1, "{}: {}", dir.display(), r.stderr);
+    }
+    // install still accepts it
+    assert_eq!(s.run(&["install", "--facts", "demo", "--dry-run", "--bundle", with.to_str().unwrap(), "--kernel", "stable"]).code, 0);
+
+    // a bundle from an older synofurb: still verifies, with a note; `manage update` explains what to do
+    let old = s.path("old");
+    fake_bundle(&old, &["amd64"], KernelChannel::Stable, &[], false);
+    let r = s.run(&["bundle", "verify", old.to_str().unwrap()]);
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    assert!(r.stdout.contains("note:") && r.stdout.contains("no mgmt/ folder") && r.stdout.contains("bundle OK"), "{}", r.stdout);
+    assert!(s.run(&["bundle", "info", old.to_str().unwrap()]).stdout.contains("Mgmt app:  not included"));
+    assert!(s.run(&["bundle", "info", old.to_str().unwrap(), "--json"]).json()["mgmt_version"].is_null());
+    let r = s.run_env(&["manage", "update", "--host", "127.0.0.1", "--port", "1", "--from-bundle", old.to_str().unwrap()], &env);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("no mgmt/ folder") && r.stderr.contains("bundle create"), "{}", r.stderr);
+
+    // tampering: verify fails (exit 1, MGMT/CHANGED lines) and so does `manage update`, before any connection (exit 2)
+    std::fs::write(with.join("mgmt/synofurb_mgmt.py"), "print('patched')\n").unwrap();
+    let r = s.run(&["bundle", "verify", with.to_str().unwrap()]);
+    assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
+    assert!(r.stdout.contains("CHANGED  mgmt/synofurb_mgmt.py") && r.stdout.contains("MGMT "), "{}", r.stdout);
+    assert!(!r.stdout.contains("bundle OK"));
+    for dir in [with.clone(), with.join("mgmt")] {
+        let r = s.run_env(&["manage", "update", "--host", "127.0.0.1", "--port", "1", "--from-bundle", dir.to_str().unwrap()], &env);
+        assert_eq!(r.code, 2, "{}: {}", dir.display(), r.stderr);
+        assert!(r.stderr.contains("--from-bundle"), "{}", r.stderr);
+    }
+    // ... and an install refuses the damaged bundle too (exit 2, nothing contacted)
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--bundle", with.to_str().unwrap(), "--kernel", "stable"]);
+    assert_eq!(r.code, 2, "{}{}", r.stdout, r.stderr);
+}
+
 #[test]
 fn manage_is_documented_and_completed() {
     let s = Sandbox::new("manage-help");

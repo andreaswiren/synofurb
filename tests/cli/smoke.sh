@@ -310,6 +310,53 @@ assert res and res[0]['ok'] is False and res[0]['data']['outcome']=='failed', re
         cli manage rollback $M --yes
         # the update above left a previous copy, so the unit tries; its (dry-run) service does not answer, which is reported as a failure
         expect "manage rollback reports what the unit said" 1 "Rollback failed" "NAS rollback"
+        # an offline bundle with a mgmt/ folder (what `bundle create` writes; hand-made here because building a real bundle needs the
+        # Internet): bundle verify/info see it, and `manage update --from-bundle <bundle>` pushes exactly those files over ssh
+        if python3 -I - "$F/bundle" "$REPO/apps/mgmt-plane/tools/make-update-bundle.py" <<'PYB'
+import hashlib, json, os, subprocess, sys
+d, tool = sys.argv[1], sys.argv[2]
+os.makedirs(d + "/mirror/debian/dists/trixie")
+open(d + "/mirror/debian/dists/trixie/InRelease", "w").write("Origin: Debian\nSuite: trixie\n")
+subprocess.check_call([sys.executable, "-I", tool, d + "/mgmt"], stdout=subprocess.DEVNULL)
+files = []
+for root, _, names in os.walk(d):
+    for n in sorted(names):
+        p = os.path.join(root, n)
+        data = open(p, "rb").read()
+        files.append({"path": os.path.relpath(p, d), "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+files.sort(key=lambda f: f["path"])
+arch = {"installer_kernel": None, "kernel_package_version": None, "kernel_from_backports": False, "packages": 0, "udebs": 0,
+        "pool_files": [], "installer_files": [], "agent_files": []}
+m = {"format": 1, "tool_version": "0.0.0", "created": "2026-11-01T00:00:00Z", "suite": "trixie", "suites": ["trixie"],
+     "kernel": "Stable", "with_firmware": False, "extra_packages": [], "release_dates": {}, "pgp_verified": False,
+     "warnings": [], "archs": {"amd64": arch}, "files": files}
+json.dump(m, open(d + "/manifest.json", "w"), indent=1)
+PYB
+        then
+            cli bundle verify "$F/bundle"
+            expect "bundle verify: the mgmt/ folder is checked" 0 "management app" "in mgmt/ verified" "bundle OK"
+            cli bundle info "$F/bundle"
+            expect "bundle info names the management app" 0 "Mgmt app:  synofurb-mgmt"
+            # shellcheck disable=SC2086
+            cli manage update $M --dry-run --from-bundle "$F/bundle"
+            expect "manage update --from-bundle <bundle> --dry-run" 0 "Dry run, nothing was changed" "$F/bundle/mgmt"
+            # shellcheck disable=SC2086
+            cli manage update $M --dry-run --from-bundle "$F/bundle/mgmt"
+            expect "manage update --from-bundle <bundle>/mgmt --dry-run" 0 "Dry run, nothing was changed" "$F/bundle/mgmt"
+            # shellcheck disable=SC2086
+            cli manage update $M --yes --force --from-bundle "$F/bundle"
+            # no systemd here: the real updater verifies and swaps, then the (dry-run) health wait fails and it rolls back (exit 1)
+            expect "manage update from a bundle over ssh reaches the real updater" 1 "NAS verify: ok" "NAS swap: ok"
+            ls /tmp/.synofurb-mgmt-stage-* >/dev/null 2>&1 && bad "bundle update left a staging folder in /tmp" || ok "bundle update cleaned its staging folder"
+            printf '# tampered\n' >>"$F/bundle/mgmt/synofurb_mgmt.py"
+            cli bundle verify "$F/bundle"
+            expect "bundle verify finds a changed management app" 1 "CHANGED  mgmt/synofurb_mgmt.py" "MGMT"
+            # shellcheck disable=SC2086
+            cli manage update $M --yes --force --from-bundle "$F/bundle"
+            expect "manage update refuses a tampered bundle before connecting" 2 "--from-bundle" "does not match"
+        else
+            skip "manage update --from-bundle <bundle>" "could not build the sample bundle"
+        fi
         kill "$SSHD_PID" 2>/dev/null; SSHD_PID=""
     else
         skip "manage against a fake appliance" "sshd would not start here: $(head -c 200 "$F/sshd.err" 2>/dev/null)"
