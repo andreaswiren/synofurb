@@ -52,6 +52,14 @@ impl<T> RunReport<T> {
     pub fn failure(&self) -> Option<CliError> {
         let e = self.result.as_ref().err()?;
         let mut message = format!("{e:#}");
+        // the typed failures keep their own exit code (the install had not reached a disk when they happen)
+        if synofurb_core::session::SessionError::find(e).is_some_and(|s| s.boot_default_unconfirmed()) && !self.past_ponr {
+            message.push_str(". No disk was changed");
+            if let Some(p) = &self.log_path {
+                message.push_str(&format!(". Log: {}", p.display()));
+            }
+            return Some(CliError::AgentTimeout(message));
+        }
         if self.past_ponr {
             message.push_str(". The point of no return had passed: the disks were changed. Look at the log, then see docs/RECOVERY.md");
         } else if self.cancel_requested || self.detached {
@@ -191,7 +199,7 @@ impl<T> RunReport<T> {
         if let Some(p) = &self.log_path {
             m.push_str(&format!(" (log: {})", p.display()));
         }
-        Some(CliError::Other(anyhow!(m)))
+        Some(CliError::typed(e, &m).unwrap_or_else(|| CliError::Other(anyhow!(m))))
     }
 }
 

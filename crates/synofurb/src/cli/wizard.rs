@@ -294,7 +294,6 @@ fn pick_host(out: &Out, p: &mut dyn Prompter, be: &mut dyn Backend) -> CliResult
 }
 
 fn ask_target(out: &Out, p: &mut dyn Prompter, host: &str) -> CliResult<SshTarget> {
-    let _ = out;
     let user = p.ask("SSH user (a DSM administrator)", Some("admin"))?;
     let port: u16 = loop {
         let t = p.ask("SSH port", Some("22"))?;
@@ -303,6 +302,8 @@ fn ask_target(out: &Out, p: &mut dyn Prompter, host: &str) -> CliResult<SshTarge
             Err(_) => p.note("  not a port number"),
         }
     };
+    // first contact: show the unit's host key and ask, before a password is typed
+    super::hostkey::install_policy(host, port, &super::args::HostKeyOpts::default(), out, p)?;
     let by_key = p.choose("Log in with", &["Password".to_string(), "Private key file".to_string()], 0)? == 1;
     if by_key {
         let path = p.ask("Path of the private key (OpenSSH format, no passphrase)", None)?;

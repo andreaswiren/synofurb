@@ -34,6 +34,8 @@ fn first_line_of(path: &Path) -> Result<String> {
 
 /// Build the SSH target: key file, or password from file / environment / prompt. Nothing is ever taken from argv.
 pub fn ssh_target(host: &str, o: &SshOpts, out: &Out, prompt: &mut dyn Prompter) -> CliResult<SshTarget> {
+    // the host key is settled (and, on a first contact, confirmed) before any password is asked for or sent
+    super::hostkey::install_policy(host, o.port, &o.hostkey, out, prompt)?;
     let sudo_env = std::env::var(&o.sudo_password_env).ok().filter(|s| !s.is_empty());
     let (auth, sudo) = match &o.key {
         Some(k) => {

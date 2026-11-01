@@ -14,6 +14,7 @@ EXIT CODES
   0 ok   1 error   2 usage   3 refused by the safety gate   4 plan has errors   5 unsupported hardware
   6 install failed AFTER the point of no return (disks changed)   7 install failed/cancelled BEFORE it (disks untouched)
   8 `manage health`: the unit reports WARN   9 `manage health`: the unit reports CRIT
+  10 the boot agent never answered (the unit's state is unknown: docs/RECOVERY.md)   11 SSH host key refused (nothing was sent)
 
 EXAMPLES
   synofurb-cli scan                                   find units on the LAN
@@ -111,8 +112,18 @@ pub enum Cmd {
         #[command(subcommand)]
         action: BootManagerCmd,
     },
-    /// Recovery: make the unit boot the original DSM again (from DSM, Debian or the boot agent)
-    Recover(ConnArgs),
+    /// Recovery: make the unit boot the original DSM again (from DSM, Debian or the boot agent); `recover status|wait|restore|remove|boot-dsm` read the unit's real boot state and act on it
+    #[command(
+        args_conflicts_with_subcommands = true,
+        subcommand_negates_reqs = true,
+        after_help = "EXAMPLES\n  synofurb-cli recover --host 192.168.1.20                       # set the default boot entry to DSM (no reboot)\n  synofurb-cli recover status --host 192.168.1.20                # what the unit's boot flash says (read-only)\n  synofurb-cli recover boot-dsm --host 192.168.1.20 --reboot --yes\n  synofurb-cli recover wait --host 192.168.1.20 --timeout 15     # is DSM answering again?\n  synofurb-cli recover restore --host 192.168.1.20 --backup FILE.img --yes\n  synofurb-cli recover remove --host 192.168.1.20 --yes          # take our entries out of the boot menu"
+    )]
+    Recover(RecoverArgs),
+    /// SSH host keys: list the pinned ones, forget one after you replaced a unit
+    HostKey {
+        #[command(subcommand)]
+        action: HostKeysCmd,
+    },
     /// Back up the unit's internal boot flash (DOM) to this computer, verified against the NAS, and change nothing
     BackupDom(BackupDomArgs),
     /// Back up the partition tables (first and last MiB) of the unit's disks to this computer
@@ -178,6 +189,45 @@ pub struct SshOpts {
     /// environment variable with the sudo password when it differs from the SSH password
     #[arg(long, default_value = "SYNOFURB_SUDO_PASSWORD", value_name = "VAR")]
     pub sudo_password_env: String,
+    #[command(flatten)]
+    pub hostkey: HostKeyOpts,
+}
+
+/// How the unit's SSH host key is checked before any password is sent (see `host-key --help`).
+#[derive(Args, Debug, Clone, Default)]
+pub struct HostKeyOpts {
+    /// the unit must present exactly this host key fingerprint (`SHA256:...` as `ssh-keygen -l` prints it, or `@FILE`)
+    #[arg(long, value_name = "SHA256:FP|@FILE", conflicts_with = "insecure_host_key")]
+    pub host_key: Option<String>,
+    /// remembered host keys (default: known_hosts.json in the data directory, see `config show`)
+    #[arg(long, value_name = "FILE")]
+    pub known_hosts: Option<PathBuf>,
+    /// pin the key of a unit seen for the first time without asking (scripts); a changed key is still refused
+    #[arg(long, conflicts_with_all = ["host_key", "insecure_host_key"])]
+    pub accept_new_host_key: bool,
+    /// DO NOT CHECK the host key at all. Anyone on the network path can read the password. Lab networks only
+    #[arg(long)]
+    pub insecure_host_key: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HostKeysCmd {
+    /// List the pinned host keys
+    List {
+        #[arg(long, value_name = "FILE")]
+        known_hosts: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Forget the pinned key of a unit (after you reinstalled or replaced it on purpose); the next connection asks again
+    Forget {
+        #[arg(long, value_name = "ADDRESS")]
+        host: String,
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        #[arg(long, value_name = "FILE")]
+        known_hosts: Option<PathBuf>,
+    },
 }
 
 /// A NAS reachable over SSH (required).
@@ -208,6 +258,63 @@ pub struct LiveOrFacts {
 pub struct ConnArgs {
     #[command(flatten)]
     pub conn: Conn,
+}
+
+/// `recover` alone (with `--host`) sets the default boot entry to DSM; the subcommands do the rest.
+#[derive(Args, Debug)]
+pub struct RecoverArgs {
+    /// IP address or name of the NAS (for plain `recover`)
+    #[arg(long, value_name = "ADDRESS", required = true)]
+    pub host: Option<String>,
+    #[command(flatten)]
+    pub ssh: SshOpts,
+    #[command(subcommand)]
+    pub action: Option<RecoverCmd>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RecoverCmd {
+    /// Read the unit's boot state over SSH (default entry, our entries, agent, flash backup). "Not known" is reported as such
+    Status {
+        #[command(flatten)]
+        conn: Conn,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait until DSM answers again (SSH banner + DSM web port); needs no login. Exit 0 when DSM is back, 1 otherwise
+    Wait {
+        /// IP address or name of the NAS
+        #[arg(long, value_name = "ADDRESS")]
+        host: String,
+        /// give up after this many minutes
+        #[arg(long, default_value_t = synofurb_core::timing::DSM_WAIT_MIN, value_name = "MINUTES")]
+        timeout: u32,
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set the default boot entry to DSM, verify it by reading it back, and (only with --reboot) ask the unit to reboot
+    BootDsm {
+        #[command(flatten)]
+        conn: Conn,
+        /// also reboot the unit now (needs --yes). The result only says "reboot requested"; use `recover wait` to see DSM come back
+        #[arg(long)]
+        reboot: bool,
+    },
+    /// Write a saved boot flash image back (`synofurb-dom restore` on the unit, with checks). Needs --yes
+    Restore {
+        #[command(flatten)]
+        conn: Conn,
+        /// the image saved by `backup-dom` / the install (`synofurb-dom-backup-*.img`)
+        #[arg(long, value_name = "FILE")]
+        backup: PathBuf,
+    },
+    /// Remove every boot entry synofurb added and set the default to DSM. Needs --yes
+    Remove {
+        #[command(flatten)]
+        conn: Conn,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -1072,7 +1179,34 @@ mod tests {
     #[test]
     fn recover_boot_manager_and_backups() {
         assert!(err(&["recover"]).contains("--host"));
-        assert!(matches!(ok(&["recover", "--host", "h"]).cmd, Cmd::Recover(_)));
+        assert!(matches!(ok(&["recover", "--host", "h"]).cmd, Cmd::Recover(RecoverArgs { action: None, .. })));
+        let Cmd::Recover(RecoverArgs { action: Some(RecoverCmd::Status { json: true, .. }), .. }) =
+            ok(&["recover", "status", "--host", "h", "--json"]).cmd
+        else {
+            panic!()
+        };
+        let Cmd::Recover(RecoverArgs { action: Some(RecoverCmd::Wait { timeout, port, .. }), .. }) =
+            ok(&["recover", "wait", "--host", "h"]).cmd
+        else {
+            panic!()
+        };
+        assert_eq!((timeout, port), (synofurb_core::timing::DSM_WAIT_MIN, 22));
+        let Cmd::Recover(RecoverArgs { action: Some(RecoverCmd::BootDsm { reboot, .. }), .. }) =
+            ok(&["recover", "boot-dsm", "--host", "h", "--reboot"]).cmd
+        else {
+            panic!()
+        };
+        assert!(reboot);
+        assert!(matches!(
+            ok(&["recover", "restore", "--host", "h", "--backup", "f.img"]).cmd,
+            Cmd::Recover(RecoverArgs { action: Some(RecoverCmd::Restore { .. }), .. })
+        ));
+        assert!(err(&["recover", "restore", "--host", "h"]).contains("--backup"));
+        assert!(matches!(
+            ok(&["recover", "remove", "--host", "h"]).cmd,
+            Cmd::Recover(RecoverArgs { action: Some(RecoverCmd::Remove { .. }), .. })
+        ));
+        assert!(err(&["recover", "--host", "h", "status"]).len() > 0, "plain recover flags do not mix with a subcommand");
         let Cmd::BootManager { action: BootManagerCmd::Install { arm, backup_dir, .. } } =
             ok(&["boot-manager", "install", "--host", "h", "--arm", "--backup-dir", "/b"]).cmd
         else {
@@ -1087,6 +1221,28 @@ mod tests {
         let Cmd::DiskBackup(d) = ok(&["disk-backup", "--host", "h", "--disk", "sata1,sata2"]).cmd else { panic!() };
         assert_eq!(d.disk, vec!["sata1", "sata2"]);
         assert!(matches!(ok(&["backup-dom", "--host", "h"]).cmd, Cmd::BackupDom(_)));
+    }
+
+    #[test]
+    fn host_key_flags_exclude_each_other() {
+        let Cmd::Inspect(i) = ok(&["inspect", "--host", "h", "--host-key", "@/k", "--known-hosts", "/kh"]).cmd else { panic!() };
+        let hk = &i.src.ssh.hostkey;
+        assert_eq!((hk.host_key.as_deref(), hk.known_hosts.as_deref()), (Some("@/k"), Some(std::path::Path::new("/kh"))));
+        assert!(!hk.insecure_host_key && !hk.accept_new_host_key);
+        for bad in [
+            &["inspect", "--host", "h", "--host-key", "SHA256:x", "--insecure-host-key"][..],
+            &["inspect", "--host", "h", "--accept-new-host-key", "--insecure-host-key"][..],
+            &["inspect", "--host", "h", "--accept-new-host-key", "--host-key", "SHA256:x"][..],
+        ] {
+            assert!(err(bad).contains("cannot be used with"), "{bad:?}");
+        }
+        assert!(matches!(ok(&["host-key", "list", "--json"]).cmd, Cmd::HostKey { action: HostKeysCmd::List { json: true, .. } }));
+        let Cmd::HostKey { action: HostKeysCmd::Forget { host, port, .. } } =
+            ok(&["host-key", "forget", "--host", "h", "--port", "2222"]).cmd
+        else {
+            panic!()
+        };
+        assert_eq!((host.as_str(), port), ("h", 2222));
     }
 
     #[test]

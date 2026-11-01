@@ -13,6 +13,7 @@ pub mod dryrun;
 pub mod exit;
 pub mod facts;
 pub mod gate;
+pub mod hostkey;
 pub mod install;
 pub mod logs_cmd;
 pub mod manage_cmd;
@@ -93,6 +94,7 @@ pub fn run(out: &Out, p: &Program, cmd: Cmd) -> CliResult<()> {
         Cmd::Wizard(a) => wizard::run_wizard(out, a),
         Cmd::BootManager { action } => boot::boot_manager(out, action),
         Cmd::Recover(a) => boot::recover(out, a),
+        Cmd::HostKey { action } => hostkey::host_key(out, action),
         Cmd::BackupDom(a) => boot::backup_dom(out, a),
         Cmd::DiskBackup(a) => boot::disk_backup(out, a),
         Cmd::Logs { action } => logs_cmd::logs(out, action),

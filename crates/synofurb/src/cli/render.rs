@@ -179,8 +179,8 @@ pub fn fallback_lines(fw: Firmware) -> [&'static str; 3] {
     match fw {
         Firmware::Dom => [
             "Saved on this computer before anything else: a full image of the unit's boot flash (checked against the NAS), then the first and last MiB of every disk the plan changes (partition tables only, never your files). Neither is a backup of your data.",
-            "Before the point of no return the disks are untouched and DSM stays the default boot entry. If a step fails, the installer sets the default to DSM and reboots the unit after 60 s; a power cycle does the same.",
-            "After the point of no return the default is set back to DSM and the unit reboots after 15 min (time to read the log). Only the DSM loader runs: DSM's operating system on the reclaimed partitions is gone. Reinstall DSM from find.synology.com with the .pat file for your model. Synology documents keeping data volumes on a reinstall, but synofurb cannot promise that any data survives.",
+            "Before the point of no return the disks are untouched. The boot agent is armed for one boot only and sets DSM as the default again as its first action; if a later step fails, the installer sets the default to DSM and reboots the unit after 60 s. If the agent never starts, the unit may keep booting it: see docs/RECOVERY.md (SYNOLOGY_2 in the boot menu, on a console).",
+            "After the point of no return the default is set back to DSM and the unit reboots after 15 min (time to read the log; there is no rescue shell). Only the DSM loader runs: DSM's operating system on the reclaimed partitions is gone. Reinstall DSM from find.synology.com with the .pat file for your model. Synology documents keeping data volumes on a reinstall, but synofurb cannot promise that any data survives.",
         ],
         Firmware::UBoot => [
             SAVED,
@@ -190,7 +190,7 @@ pub fn fallback_lines(fw: Firmware) -> [&'static str; 3] {
         _ => [
             SAVED,
             "Before the point of no return the disks are untouched. Cancelling or power-cycling boots DSM as before.",
-            "After it, the installer stops instead of guessing and keeps its log and a rescue shell; DSM's operating system is gone. Reinstall DSM from find.synology.com with the .pat file for your model. No data recovery is promised.",
+            "After it, the installer stops instead of guessing, keeps its log on the console and does NOT reboot by itself (there is no rescue shell: read the log on the console, then power-cycle the NAS). DSM's operating system is gone. Reinstall DSM from find.synology.com with the .pat file for your model. No data recovery is promised.",
         ],
     }
 }
@@ -243,7 +243,30 @@ mod tests {
             let all = fallback_lines(fw).join(" ");
             assert!(all.contains("never your files"), "{fw:?}");
             assert!(!all.to_lowercase().contains("will be restored"), "{fw:?}");
+            let l = all.to_lowercase();
+            for bad in ["rescue shell and", "keeps its log and a rescue shell", "keeps data volumes", "dsm stays the default"] {
+                assert!(!l.contains(bad), "{fw:?}: {bad}");
+            }
         }
+    }
+
+    /// The seconds and minutes in the texts are the ones the generated installer uses; only boot-flash units reboot by themselves.
+    #[test]
+    fn the_failure_times_in_the_texts_come_from_the_shared_constants() {
+        use synofurb_core::timing::{FAIL_REBOOT_AFTER_PONR_SECS, FAIL_REBOOT_BEFORE_PONR_SECS};
+        let dom = fallback_lines(Firmware::Dom).join(" ");
+        assert!(
+            dom.contains(&format!("after {FAIL_REBOOT_BEFORE_PONR_SECS} s"))
+                && dom.contains(&format!("after {} min", FAIL_REBOOT_AFTER_PONR_SECS / 60))
+        );
+        for fw in [Firmware::Uefi, Firmware::Bios, Firmware::UBoot] {
+            let all = fallback_lines(fw).join(" ");
+            assert!(
+                !all.contains(" s;") && !all.contains("15 min") && !all.contains("60 s"),
+                "{fw:?} units do not reboot by themselves: {all}"
+            );
+        }
+        assert!(fallback_lines(Firmware::Uefi).join(" ").contains("does NOT reboot by itself"));
     }
 
     #[test]

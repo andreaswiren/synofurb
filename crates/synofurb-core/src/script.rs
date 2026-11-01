@@ -12,6 +12,7 @@ use crate::config::{InstallConfig, sh_quote};
 use crate::inspect::DISK_SERIAL_FN;
 use crate::model::*;
 use crate::plan::*;
+use crate::timing::{FAIL_REBOOT_AFTER_PONR_SECS, FAIL_REBOOT_BEFORE_PONR_SECS};
 use anyhow::{Result, bail};
 use std::fmt::Write;
 
@@ -26,6 +27,32 @@ pub struct ScriptParams<'a> {
     pub log_host: &'a str,
     pub log_tcp_port: u16,
     pub dry_run: bool,
+}
+
+/// What the generated installer does when a step fails. The script has **no rescue shell and no SSH server**: the log is on the console
+/// and in the event stream, and what happens next depends on the plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct FailureHandling {
+    /// The unit reboots by itself after a failure (boot-flash units where the installer has `synofurb-dom`). Otherwise the installer halts
+    /// and the unit stays as it is until somebody power-cycles it: nothing reboots, there is no countdown.
+    pub reboots_by_itself: bool,
+    /// Seconds before that reboot when the failure happened before the point of no return.
+    pub before_ponr_secs: Option<u32>,
+    /// Seconds before that reboot after the point of no return (time to read the log).
+    pub after_ponr_secs: Option<u32>,
+}
+
+/// Failure behaviour of the script rendered for `plan` (the `60 s` and `15 min` of the app's texts exist only when this says so).
+pub fn failure_handling(plan: &Plan) -> FailureHandling {
+    if plan.dom_boot {
+        FailureHandling {
+            reboots_by_itself: true,
+            before_ponr_secs: Some(FAIL_REBOOT_BEFORE_PONR_SECS),
+            after_ponr_secs: Some(FAIL_REBOOT_AFTER_PONR_SECS),
+        }
+    } else {
+        FailureHandling { reboots_by_itself: false, before_ponr_secs: None, after_ponr_secs: None }
+    }
 }
 
 /// Udebs the script loads before touching disks (kernel module udebs are virtual `*-modules`).
@@ -97,17 +124,17 @@ fail() {
     emit "FALLBACK: switching the boot flash default back to DSM"
     [ "$DRY" = 1 ] || synofurb-dom default dsm --yes >> "$LOG" 2>&1 || emit "WARN  could not reset the default boot entry; power-cycle the NAS and pick DSM"
     if [ "$PONR" = 0 ]; then
-      emit "No disk was changed. The NAS reboots into DSM in 60 seconds. Full log: $LOG"
-      _w=60
+      emit "No disk was changed. The NAS reboots in @@FAIL_PRE@@ seconds and starts what its boot flash defaults to. Full log: $LOG"
+      _w=@@FAIL_PRE@@
     else
-      emit "Disks were already modified. The NAS reboots in 15 minutes into the DSM loader (recovery / reinstall DSM keeps data volumes). Full log: $LOG"
-      _w=900
+      emit "Disks were already modified. The NAS reboots in @@FAIL_POST_MIN@@ minutes (time to read the log) and starts what its boot flash defaults to: the DSM loader. DSM's operating system on the reclaimed partitions is gone, so the loader offers a reinstall (find.synology.com, the .pat file for your model). synofurb cannot promise that any data survives. Full log: $LOG"
+      _w=@@FAIL_POST@@
     fi
     [ "$DRY" = 1 ] && exit 1
     sleep "$_w"
     reboot -f 2>/dev/null || reboot
   fi
-  emit "Installation HALTED. No further changes will be made. Full log: $LOG"
+  emit "Installation HALTED. No further changes will be made and the NAS will NOT reboot by itself. Read the log on the console, then power-cycle the NAS. Full log: $LOG"
   sleep 5
   while :; do sleep 3600; done
 }
@@ -261,6 +288,9 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
             .replace("@@TOTAL@@", &TOTAL_STEPS.to_string())
             .replace("@@DRY@@", if p.dry_run { "1" } else { "0" })
             .replace("@@DOM@@", if plan.dom_boot { "1" } else { "0" })
+            .replace("@@FAIL_PRE@@", &FAIL_REBOOT_BEFORE_PONR_SECS.to_string())
+            .replace("@@FAIL_POST_MIN@@", &(FAIL_REBOOT_AFTER_PONR_SECS / 60).to_string())
+            .replace("@@FAIL_POST@@", &FAIL_REBOOT_AFTER_PONR_SECS.to_string())
             .replace("@@DISK_SERIAL_FN@@", DISK_SERIAL_FN),
     );
     let w = &mut s;
@@ -792,6 +822,31 @@ mod tests {
             "default switches only after a successful configuration"
         );
         assert!(!render(StorageMode::WipeAll).0.contains("synofurb-dom default debian"), "non-DOM units are untouched");
+    }
+
+    #[test]
+    fn the_failure_handler_makes_no_false_promises_and_its_times_come_from_one_place() {
+        let facts = dom_amd_facts();
+        let plan = build_plan(&facts, &PlanRequest::default());
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let dom = render_stage2(&params(&plan, &facts, &cfg)).unwrap();
+        sh_syntax_ok(&dom);
+        assert!(dom.contains("_w=60\n") && dom.contains("_w=900\n") && dom.contains("in 15 minutes") && dom.contains("in 60 seconds"));
+        assert!(!dom.contains("@@FAIL_"), "every placeholder is replaced");
+        let (plain, plain_plan) = render(StorageMode::WipeAll);
+        for (name, s) in [("dom", &dom), ("plain", &plain)] {
+            let l = s.to_lowercase();
+            for bad in ["keeps data volumes", "rescue shell", "data volumes are kept", "recovery / reinstall"] {
+                assert!(!l.contains(bad), "{name}: {bad}");
+            }
+        }
+        assert!(dom.contains("cannot promise that any data survives"));
+        assert!(plain.contains("will NOT reboot by itself") && plain.contains("power-cycle"));
+        // the text helper agrees with the script
+        let h = failure_handling(&plan);
+        assert_eq!((h.reboots_by_itself, h.before_ponr_secs, h.after_ponr_secs), (true, Some(60), Some(900)));
+        let n = failure_handling(&plain_plan);
+        assert_eq!((n.reboots_by_itself, n.before_ponr_secs, n.after_ponr_secs), (false, None, None));
     }
 
     #[test]

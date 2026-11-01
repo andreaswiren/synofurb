@@ -23,6 +23,12 @@ pub mod code {
     pub const HEALTH_WARN: u8 = 8;
     /// `manage health`: the unit answered and its verdict is CRIT (a degraded array, a failed disk, a full volume).
     pub const HEALTH_CRIT: u8 = 9;
+    /// The unit was asked to reboot into the boot agent and the agent never answered. The unit's state is unknown: it may boot the
+    /// agent again after every power cycle (docs/RECOVERY.md).
+    pub const AGENT_TIMEOUT: u8 = 10;
+    /// The SSH host key was refused (changed since it was pinned, does not match `--host-key`, or a first-time key was not trusted).
+    /// Nothing was sent to the unit, not even the password.
+    pub const HOST_KEY: u8 = 11;
 }
 
 #[derive(Debug)]
@@ -39,6 +45,10 @@ pub enum CliError {
     InstallFailed { after_ponr: bool, message: String },
     /// `manage health` found a problem (exit 8 for WARN, 9 for CRIT). The report was already printed.
     Health { critical: bool, message: String },
+    /// The boot agent did not answer after the reboot request (exit 10). The message states both possible outcomes.
+    AgentTimeout(String),
+    /// The SSH host key was refused (exit 11); nothing was sent.
+    HostKey(String),
     /// Everything else (exit 1).
     Other(anyhow::Error),
 }
@@ -54,6 +64,8 @@ impl CliError {
             CliError::InstallFailed { after_ponr: false, .. } => code::FAILED_BEFORE_PONR,
             CliError::Health { critical: true, .. } => code::HEALTH_CRIT,
             CliError::Health { critical: false, .. } => code::HEALTH_WARN,
+            CliError::AgentTimeout(_) => code::AGENT_TIMEOUT,
+            CliError::HostKey(_) => code::HOST_KEY,
             CliError::Other(_) => code::ERROR,
         }
     }
@@ -69,6 +81,8 @@ impl CliError {
             CliError::InstallFailed { after_ponr: false, .. } => "failed_before_point_of_no_return",
             CliError::Health { critical: true, .. } => "health_crit",
             CliError::Health { critical: false, .. } => "health_warn",
+            CliError::AgentTimeout(_) => "agent_timeout",
+            CliError::HostKey(_) => "host_key",
             CliError::Other(_) => "error",
         }
     }
@@ -84,7 +98,12 @@ impl CliError {
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CliError::Usage(m) | CliError::Refused(m) | CliError::PlanErrors(m) | CliError::Unsupported(m) => f.write_str(m),
+            CliError::Usage(m)
+            | CliError::Refused(m)
+            | CliError::PlanErrors(m)
+            | CliError::Unsupported(m)
+            | CliError::AgentTimeout(m)
+            | CliError::HostKey(m) => f.write_str(m),
             CliError::InstallFailed { message, .. } | CliError::Health { message, .. } => f.write_str(message),
             CliError::Other(e) => write!(f, "{e:#}"),
         }
@@ -93,9 +112,31 @@ impl fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
+impl CliError {
+    /// The typed engine failures get their own exit codes. `message` is what to print (it may carry more than the error's own text, such
+    /// as a log path). `None` for every other error.
+    pub fn typed(e: &anyhow::Error, message: &str) -> Option<CliError> {
+        use synofurb_core::hostkey::HostKeyError;
+        use synofurb_core::session::SessionError;
+        if matches!(SessionError::find(e), Some(SessionError::AgentTimeout { .. })) {
+            return Some(CliError::AgentTimeout(message.to_string()));
+        }
+        if matches!(e.downcast_ref::<HostKeyError>(), Some(h) if !matches!(h, HostKeyError::Store { .. })) {
+            return Some(CliError::HostKey(message.to_string()));
+        }
+        None
+    }
+}
+
 impl From<anyhow::Error> for CliError {
     fn from(e: anyhow::Error) -> Self {
-        CliError::Other(e)
+        let m = format!("{e:#}");
+        CliError::typed(&e, &m).unwrap_or(CliError::Other(e))
+    }
+}
+impl From<synofurb_core::hostkey::HostKeyError> for CliError {
+    fn from(e: synofurb_core::hostkey::HostKeyError) -> Self {
+        CliError::from(anyhow::Error::new(e))
     }
 }
 impl From<std::io::Error> for CliError {
@@ -116,6 +157,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn typed_engine_errors_get_their_own_codes_through_every_conversion() {
+        use synofurb_core::hostkey::HostKeyError;
+        use synofurb_core::session::SessionError;
+        let t: CliError = anyhow::Error::new(SessionError::AgentTimeout { waited_min: 10, watchdog_min: 30 }).into();
+        assert_eq!(t.code(), 10);
+        assert!(t.to_string().contains("SYNOLOGY_2") && !t.to_string().to_lowercase().contains("boot dsm normally"), "{t}");
+        // with context around it (the engine adds some) it is still found
+        let wrapped = anyhow::Error::new(SessionError::AgentTimeout { waited_min: 10, watchdog_min: 30 }).context("while installing");
+        assert_eq!(CliError::typed(&wrapped, "custom message").map(|e| e.code()), Some(10));
+        let c: CliError = wrapped.into();
+        assert_eq!(c.code(), 10);
+        let h: CliError =
+            anyhow::Error::new(HostKeyError::NotTrusted { host: "h".into(), port: 22, fingerprint: "SHA256:x".into() }).into();
+        assert_eq!(h.code(), 11);
+        let store: CliError = anyhow::Error::new(HostKeyError::Store { path: "p".into(), reason: "r".into() }).into();
+        assert_eq!(store.code(), 1, "an unreadable known-hosts file is an ordinary error");
+        assert_eq!(CliError::from(anyhow::anyhow!("boom")).code(), 1);
+        assert_eq!(CliError::from(anyhow::Error::new(SessionError::FlashBackupFailed { reason: "r".into() })).code(), 1);
+    }
+
+    #[test]
     fn exit_codes_are_stable() {
         assert_eq!(CliError::usage("x").code(), 2);
         assert_eq!(CliError::refused("x").code(), 3);
@@ -126,6 +188,9 @@ mod tests {
         assert_eq!(CliError::Other(anyhow::anyhow!("x")).code(), 1);
         assert_eq!(CliError::Health { critical: false, message: "x".into() }.code(), 8);
         assert_eq!(CliError::Health { critical: true, message: "x".into() }.code(), 9);
+        assert_eq!(CliError::AgentTimeout("x".into()).code(), 10);
+        assert_eq!(CliError::HostKey("x".into()).code(), 11);
+        assert_eq!((CliError::AgentTimeout("x".into()).kind(), CliError::HostKey("x".into()).kind()), ("agent_timeout", "host_key"));
         assert_eq!(CliError::Health { critical: true, message: "x".into() }.kind(), "health_crit");
         assert_eq!(CliError::Health { critical: false, message: "x".into() }.kind(), "health_warn");
     }

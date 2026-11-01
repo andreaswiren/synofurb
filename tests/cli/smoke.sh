@@ -181,6 +181,45 @@ LogLevel ERROR
 CFG
     if "$sshd_bin" -f "$S/sshd_config" 2>"$S/sshd.err" && sleep 1 && SSHD_PID="$(cat "$S/sshd.pid" 2>/dev/null)" && [ -n "$SSHD_PID" ]; then
         T="--host 127.0.0.1 --port $PORT --user root --key $S/id"
+        # ---- SSH host keys: nothing is sent before the key is trusted; a changed key is a hard error
+        FP="$(ssh-keygen -l -f "$S/hostkey.pub" | awk '{print $2}')"
+        # shellcheck disable=SC2086
+        cli inspect $T --json
+        expect "host key: a first contact without a terminal or a flag is refused (exit 11) and shows the fingerprint" 11 "$FP" "--host-key"
+        # shellcheck disable=SC2086
+        cli inspect $T --json --host-key "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        expect "host key: a wrong --host-key is refused (exit 11) with both fingerprints" 11 "does not match" "$FP" "AAAAAAAAAAAA"
+        # shellcheck disable=SC2086
+        cli inspect $T --json --host-key "$FP"
+        [ "$RC" = 0 ] && ok "host key: the right --host-key connects" || bad "host key: right --host-key, exit $RC"
+        # shellcheck disable=SC2086
+        cli inspect $T --json --insecure-host-key
+        expect "host key: --insecure-host-key connects and says so loudly" 0 "HOST KEY CHECKING IS OFF"
+        cli host-key list
+        expect "host key: nothing was pinned by the runs above" 0 "No pinned host keys"
+        # shellcheck disable=SC2086
+        cli inspect $T --json --accept-new-host-key
+        [ "$RC" = 0 ] && ok "host key: --accept-new-host-key pins and connects" || bad "host key: accept-new, exit $RC"
+        cli host-key list
+        expect "host key: the pin is listed" 0 "127.0.0.1:$PORT" "$FP"
+        # shellcheck disable=SC2086
+        cli inspect $T --json
+        [ "$RC" = 0 ] && ok "host key: a pinned unit connects without a flag" || bad "host key: pinned unit, exit $RC"
+        # the unit shows another key: hard error naming both, nothing sent
+        kill "$SSHD_PID" 2>/dev/null; sleep 1
+        cp "$S/hostkey" "$S/hostkey.orig"; cp "$S/hostkey.pub" "$S/hostkey.pub.orig"
+        rm -f "$S/hostkey" "$S/hostkey.pub"; ssh-keygen -q -t ed25519 -N '' -f "$S/hostkey"
+        FP2="$(ssh-keygen -l -f "$S/hostkey.pub" | awk '{print $2}')"
+        "$sshd_bin" -f "$S/sshd_config" 2>"$S/sshd.err" && sleep 1 && SSHD_PID="$(cat "$S/sshd.pid" 2>/dev/null)"
+        # shellcheck disable=SC2086
+        cli inspect $T --json --accept-new-host-key
+        expect "host key: a CHANGED key is a hard error (exit 11) with both fingerprints, even with --accept-new-host-key" 11 "CHANGED" "$FP" "$FP2" "host-key forget"
+        cli host-key forget --host 127.0.0.1 --port "$PORT"
+        expect "host key: forget removes the pin" 0 "Forgot"
+        # shellcheck disable=SC2086
+        cli inspect $T --json --accept-new-host-key
+        [ "$RC" = 0 ] && ok "host key: after forgetting, the new key can be pinned" || bad "host key: re-pin, exit $RC"
+        T="$T --accept-new-host-key"
         # shellcheck disable=SC2086
         cli inspect $T --json
         json_ok "real sshd: inspect --json (exit $RC)" "v['schema']==1 and v['facts']['arch'] in ('X86_64','Arm64','Armhf')"
@@ -218,6 +257,34 @@ assert last['event'] in ('result','failure'), last
         if [ "$RC" = 0 ]; then
             ls "$WORK"/diskbk/*/SHA256SUMS >/dev/null 2>&1 && ok "real sshd: disk-backup wrote SHA256SUMS" || bad "real sshd: disk-backup wrote no SHA256SUMS"
         fi
+        # ---- recovery: the state is READ from the unit; "not known" is not "DSM is the default"
+        # shellcheck disable=SC2086
+        cli recover status $T
+        expect "recover status: a unit without synofurb-dom is reported as NOT READ / NOT KNOWN" 0 "NOT READ" "NOT KNOWN" "not installed"
+        if printf '%s' "$OUT" | grep -qi "default entry: *DSM"; then bad "recover status claimed a DSM default it never read"; else ok "recover status does not claim a DSM default"; fi
+        # shellcheck disable=SC2086
+        cli recover status $T --json
+        json_ok "recover status --json: tool_missing, unknown default, pristine null" "v['state']['read']['result']=='tool_missing' and v['state']['default_entry']['kind']=='unknown' and v['pristine'] is None and v['schema']==1"
+        # destructive actions need --yes (no terminal here): refused before connecting
+        # shellcheck disable=SC2086
+        cli recover remove $T
+        expect "recover remove without --yes is refused (exit 3)" 3 "--yes"
+        # shellcheck disable=SC2086
+        cli recover restore $T --backup "$WORK/none.img"
+        expect "recover restore without --yes is refused (exit 3)" 3 "--yes"
+        # shellcheck disable=SC2086
+        cli recover boot-dsm $T --reboot
+        expect "recover boot-dsm --reboot without --yes is refused (exit 3)" 3 "--yes"
+        # with --yes the tool is looked for on the unit; there is none here, so nothing happens and it is said
+        # shellcheck disable=SC2086
+        cli recover remove $T --yes
+        expect "recover remove --yes on a unit without synofurb-dom fails clearly (exit 1)" 1 "not installed"
+        # shellcheck disable=SC2086
+        cli recover boot-dsm $T --yes
+        expect "recover boot-dsm --yes on a unit without synofurb-dom fails clearly (exit 1)" 1 "not installed"
+        # the probe: this host answers SSH (OpenSSH) but has no DSM web port, so DSM is not back and the answer says what it is
+        cli recover wait --host 127.0.0.1 --port "$PORT" --timeout 0
+        expect "recover wait: SSH without DSM's web port is not DSM (exit 1)" 1 "not DSM"
         kill "$SSHD_PID" 2>/dev/null; SSHD_PID=""
     else
         skip "real sshd tests" "sshd would not start here: $(head -c 200 "$S/sshd.err" 2>/dev/null)"
@@ -266,7 +333,7 @@ LogLevel ERROR
 ForceCommand $F/wrapper.sh
 CFG
     if "$sshd_bin" -f "$F/sshd_config" 2>"$F/sshd.err" && sleep 1 && SSHD_PID="$(cat "$F/sshd.pid" 2>/dev/null)" && [ -n "$SSHD_PID" ]; then
-        M="--host 127.0.0.1 --port $MPORT --user root --key $F/id"
+        M="--host 127.0.0.1 --port $MPORT --user root --key $F/id --accept-new-host-key"
         # shellcheck disable=SC2086
         cli manage health $M --json
         # no systemd services run here, so the unit's own verdict is warn (8) or crit (9); the document is printed either way
