@@ -1,0 +1,3 @@
+# Managed by synofurb: start a login prompt on every USB serial adapter (FTDI, PL2303, CP210x,
+# CH340, CDC-ACM, ...) the moment it is plugged in, so a dongle gives you a serial console.
+ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyUSB[0-9]*|ttyACM[0-9]*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="serial-getty@%k.service"

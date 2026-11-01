@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">%h</name>
+  <service>
+    <type>_synofurb._tcp</type>
+    <port>8443</port>
+    <txt-record>managed-by=synofurb</txt-record>
+    <txt-record>proto=https</txt-record>
+  </service>
+  <service>
+    <type>_ssh._tcp</type>
+    <port>22</port>
+  </service>
+</service-group>

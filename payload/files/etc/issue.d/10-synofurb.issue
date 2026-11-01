@@ -1,0 +1,6 @@
+
+  synofurb NAS - Debian GNU/Linux 13 (trixie)
+  IPv4: \4    IPv6: \6
+  Web management: https://\4:8443/    SSH: ssh <user>@\4
+  Serial console: this prompt also appears on the serial port and on USB serial adapters.
+

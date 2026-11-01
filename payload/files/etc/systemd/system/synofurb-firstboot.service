@@ -1,0 +1,13 @@
+[Unit]
+Description=synofurb first-boot report (writes login summary and SSH fingerprints)
+After=network-online.target ssh.service
+Wants=network-online.target
+ConditionPathExists=!/var/lib/synofurb/firstboot.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/synofurb-firstboot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

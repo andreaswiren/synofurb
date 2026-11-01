@@ -1,0 +1,13 @@
+#!/bin/sh
+# Writes /etc/motd and /var/lib/synofurb/login-summary.txt with the current addresses and host key fingerprints.
+mkdir -p /var/lib/synofurb
+OUT=/var/lib/synofurb/login-summary.txt
+{
+  echo "synofurb NAS - $(hostname)"
+  echo "Addresses:"; ip -br addr show scope global 2>/dev/null | sed 's/^/  /'
+  echo "SSH host key fingerprints:"
+  for k in /etc/ssh/ssh_host_*_key.pub; do [ -f "$k" ] && ssh-keygen -lf "$k" | sed 's/^/  /'; done
+  [ -f /var/lib/synofurb-mgmt/tls/fingerprint.txt ] && { echo "Management TLS fingerprint:"; sed 's/^/  /' /var/lib/synofurb-mgmt/tls/fingerprint.txt; }
+} > "$OUT"
+cp "$OUT" /etc/motd
+touch /var/lib/synofurb/firstboot.done

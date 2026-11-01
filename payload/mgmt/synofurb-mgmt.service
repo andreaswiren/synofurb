@@ -1,0 +1,37 @@
+[Unit]
+Description=synofurb NAS management plane (HTTPS web UI + JSON API)
+Documentation=file:///opt/synofurb-mgmt/README.md
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/synofurb-mgmt/synofurb_mgmt.py
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /opt/synofurb-mgmt/synofurb_mgmt.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+UMask=0027
+StateDirectory=synofurb-mgmt
+StateDirectoryMode=0700
+LogsDirectory=synofurb-mgmt
+LogsDirectoryMode=0750
+
+# Hardening that does NOT get in the way of managing disks, users and network.
+# IMPORTANT: do not add ProtectSystem=, ProtectHome=, PrivateTmp=, PrivateDevices=, ProtectKernel*=,
+# ProtectControlGroups=, ReadOnlyPaths= or ProtectHostname=. Each of them puts the service into its own
+# mount/UTS namespace with slave propagation, so mounts made by "mount /srv/..." would be invisible to
+# the rest of the system and hostname changes would not be seen by the service. It must also keep
+# write access to /etc, /dev, /srv, /mnt, /boot (initramfs), /home and /var.
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# (no MemoryDenyWriteExecute: ctypes/libffi needs it off for the libcrypt call; no MemoryMax: mkfs/mdadm children share the cgroup)
+
+[Install]
+WantedBy=multi-user.target

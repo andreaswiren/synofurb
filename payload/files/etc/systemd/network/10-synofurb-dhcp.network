@@ -1,0 +1,23 @@
+# Managed by synofurb (the management plane rewrites this per interface).
+# DHCPv4 + DHCPv6, and IPv6 SLAAC from router advertisements.
+[Match]
+Name=en* eth*
+Type=ether
+
+[Network]
+DHCP=yes
+IPv6AcceptRA=yes
+LinkLocalAddressing=ipv6
+MulticastDNS=yes
+
+[DHCPv4]
+ClientIdentifier=mac
+UseDNS=yes
+UseHostname=no
+
+[DHCPv6]
+UseDNS=yes
+UseHostname=no
+
+[IPv6AcceptRA]
+UseDNS=yes

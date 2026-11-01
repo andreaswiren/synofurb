@@ -293,8 +293,8 @@ pub fn parse_inspect(out: &str) -> Result<DeviceFacts> {
     Ok(f)
 }
 
-#[cfg(test)]
-pub(crate) mod fixtures {
+#[doc(hidden)]
+pub mod fixtures {
     /// A captured-style 4-bay DSM 7 NAS: 4x 4TB, SHR-ish layout (md0 system, md1 swap, md2 data RAID5+LVM).
     pub fn ds_4bay() -> String {
         let mut s = String::new();
