@@ -239,8 +239,8 @@ impl App {
                 h_flex()
                     .gap(px(8.0))
                     .items_center()
-                    .child(brand::mark(cx, 20.0))
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(copy::APP_NAME.short)),
+                    // the two-tone logotype (mark + outlined "synofurb"), not plain text
+                    .child(brand::logo(cx, 22.0)),
             )
             .child(right)
             .into_any_element()
@@ -322,7 +322,7 @@ impl App {
                     f.candidate_disks().len(),
                     super::format::size_2dp(f.candidate_disks().iter().map(|d| d.size_bytes()).sum())
                 ),
-                f.cpu.clone(),
+                super::format::short_cpu(&f.cpu),
                 format!("{:.0} GiB", f.mem_gib()),
                 f.dsm_version.clone(),
             ),

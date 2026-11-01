@@ -63,6 +63,21 @@ pub fn shorten_path(p: &str, max: usize) -> String {
     format!("{head}...{tail}")
 }
 
+/// The CPU as people say it: `Intel(R) Celeron(R) CPU J3455 @ 1.50GHz` becomes `Celeron J3455`, `AMD Ryzen Embedded V1500B with
+/// Radeon Vega Gfx` becomes `Ryzen V1500B`. Anything it cannot make shorter safely is returned as it is (the full string stays
+/// in Inspect).
+pub fn short_cpu(s: &str) -> String {
+    let mut t = s.replace("(R)", "").replace("(TM)", "").replace("(tm)", "");
+    if let Some(i) = t.find(" @ ") {
+        t.truncate(i);
+    }
+    if let Some(i) = t.find(" with ") {
+        t.truncate(i);
+    }
+    let words: Vec<&str> = t.split_whitespace().filter(|w| !matches!(*w, "Intel" | "AMD" | "CPU" | "Processor" | "Embedded")).collect();
+    if words.is_empty() { s.trim().to_string() } else { words.join(" ") }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +121,14 @@ mod tests {
         let s = shorten_path("/home/someone/.local/share/synofurb/keys/nas_ed25519", 30);
         assert_eq!(s.chars().count(), 30);
         assert!(s.contains("...") && s.ends_with("_ed25519"));
+    }
+
+    #[test]
+    fn cpu_names_are_shortened() {
+        assert_eq!(short_cpu("Intel(R) Celeron(R) CPU J3455 @ 1.50GHz"), "Celeron J3455");
+        assert_eq!(short_cpu("AMD Ryzen Embedded V1500B with Radeon Vega Gfx"), "Ryzen V1500B");
+        assert_eq!(short_cpu("Marvell Armada 385 (ARMv7)"), "Marvell Armada 385 (ARMv7)");
+        assert_eq!(short_cpu("CPU"), "CPU");
+        assert_eq!(short_cpu(""), "");
     }
 }

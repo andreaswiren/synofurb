@@ -1181,4 +1181,25 @@ mod tests {
         assert!(search_topics("zzzzqq").is_empty());
         assert!(search_topics("FIRST install").iter().any(|(id, _, _)| *id == "first-install"));
     }
+
+    #[test]
+    fn the_numbers_in_the_text_are_the_engines_timing_constants() {
+        use synofurb_core::timing as t;
+        let has = |it: &Item, n: u32, unit: &str| {
+            let w = format!("{n} {unit}");
+            assert!(it.short.contains(&w) || it.tip.contains(&w) || it.body.contains(&w), "{}: expected {w:?}", it.key);
+        };
+        has(&GOAL_BOOTMGR, t::BOOT_MANAGER_WATCHDOG_MIN, "minute");
+        has(&BM_WATCHDOG, t::BOOT_MANAGER_WATCHDOG_MIN, "min");
+        has(&BM_LOGIN_TIMEOUT, t::BOOT_MANAGER_WATCHDOG_MIN, "minutes");
+        has(&FAIL_AGENT_TEXT, t::AGENT_WAIT_MIN, "minutes");
+        has(&FAIL_CLOCK_AGENT, t::INSTALL_WATCHDOG_MIN, "minutes");
+        has(&DLG_NEXT_AGENT, t::AGENT_WAIT_MIN, "minutes");
+        has(&DLG_NEXT_PRE, t::FAIL_REBOOT_BEFORE_PONR_SECS, "seconds");
+        has(&INSTALL_CANCEL_DIALOG, t::FAIL_REBOOT_BEFORE_PONR_SECS, "seconds");
+        has(&DLG_NEXT_WIPE, t::FAIL_REBOOT_AFTER_PONR_SECS / 60, "minutes");
+        has(&FAIL_LOADER_IN, t::FAIL_REBOOT_AFTER_PONR_SECS / 60, "minutes");
+        assert_eq!(t::watchdog_minutes_possibly_left(t::INSTALL_WATCHDOG_MIN, t::AGENT_WAIT_MIN), 20);
+        assert!(FAIL_CLOCK_AGENT_VALUE.short.starts_with("20 min"));
+    }
 }

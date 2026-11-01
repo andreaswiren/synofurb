@@ -4,7 +4,7 @@ The desktop UI follows the owner-approved v2 mockup (`design/mockups-v2/desktop`
 `design/BRIEF-v2.md`). It uses stock `gpui-component` widgets through GPUI Kit 0.8.1, bundled Inter and JetBrains Mono,
 Lucide icons only, themed scrollbars, and at most 60 words of static prose per screen (enforced by tests in `copy.rs`).
 The widget map and the defects of the first UI are in `docs/GUI-COMPONENTS.md`; deviations from the mockup are in
-`design/v2/DESIGN-SYSTEM-V2.md` section 13 (DEV-UI-1 to DEV-UI-14).
+`design/v2/DESIGN-SYSTEM-V2.md` section 13 (DEV-UI-1 to DEV-UI-19).
 
 `synofurb` (no arguments) and `synofurb gui` open the wizard. All decisions (scan, inspect, plan, install, recovery,
 update, compatibility) stay in `synofurb-core`; the UI shows state and forwards clicks.
@@ -40,6 +40,7 @@ crates/synofurb/src/ui/
   copy.rs       every user-visible string, with a kind and a word budget per screen (tests)
   facts.rs      PURE: UnitFacts -> risk Tag, Way back, Recovery rows, Quick setup defaults, phrase suffix, agent timeout
   cli_cmd.rs    PURE: the Copy command text, and `matches(plan)` for the "Matches plan" Tag
+  trust.rs      PURE: the worker-to-UI bridge for the SSH host-key question (refuse on no answer), fingerprint lines
   mgmt.rs       PURE: Manage health reading, risk from health, update gate
   raid.rs       PURE: RAID/SHR labels, survives, slices, mdstat parsing
   state.rs      Screen, six-step Step, ConfirmGate, BootChoice, InstallView, demo targets and fixtures
@@ -128,8 +129,8 @@ dialogs and never cancels an install. Text size (Default, Large, Largest) scales
 
 * Tooltips are pointer-only in gpui-component (DEV-UI-1); keyboard users get the info button and its Popover.
 * Management update in the demo is simulated; the desktop Storage tab is read-only (DEV-UI-13).
-* Restore flash, Remove entries and Open agent produce a command rather than acting (DEV-UI-12).
-* The failure clocks are rules, not live counters (DEV-UI-11). No keychain, host-key trust dialog or rescue shell (DEV-UI-14).
+* The recovery actions run the engine but have never run against a real unit (DEV-UI-12); SSH host-key trust is a dialog over the engine's TOFU callback (DEV-UI-19), also unverified on a real unit.
+* The failure clocks are rules, not live counters (DEV-UI-11). No OS keychain (DEV-UI-14). No rescue shell exists in the installer, so the Failed page has no rescue panel (DEV-UI-18).
 * Native window decorations are replaced by the Kit title bar; Windows and macOS are untested.
 * The release signing key in core is a placeholder, so "Download and verify" is disabled with that explanation.
 
@@ -151,4 +152,4 @@ feature rebuilds the GPUI graph and does not fit the disk here); the gate logic 
 1. Keep "Boot manager mode" only for boot-flash units, or also offer the disk-partition variant (typed gate).
 2. Ship the release signing key so the update dialog can install.
 3. Wire the Manage update and rollback to the engine's `push_update` / `push_rollback`.
-4. Add an OS keychain and a host-key trust dialog (needs core support).
+4. Add an OS keychain for saved passwords (needs core support).

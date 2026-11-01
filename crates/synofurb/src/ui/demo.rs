@@ -88,9 +88,10 @@ impl DemoUnit {
 /// yet, and the screenshots should show every badge).
 pub fn status_override(model: &str) -> Option<Status> {
     Some(match model {
-        "DS918+" => Status::Verified,
+        // The default demo unit is untested like every real model; one other row shows the Verified badge so the list has them all.
+        "DS918+" => Status::Untested,
         "DS1621+" => Status::Community,
-        "DS923+" => Status::Untested,
+        "DS923+" => Status::Verified,
         "RS816" => Status::KnownIssues,
         "DS220j" => Status::Unsupported,
         _ => return None,
@@ -101,7 +102,7 @@ pub fn status_override(model: &str) -> Option<Status> {
 pub fn status_reason(model: &str) -> Option<&'static str> {
     Some(match model {
         "DS1621+" => "one user reported a successful install through the boot flash",
-        "DS923+" => "no report yet; read-only checks run first",
+        "DS918+" => "no report yet; read-only checks run first",
         "RS816" => "ARM U-Boot board: a serial console is mandatory",
         "DS220j" => "512 MiB RAM and no documented Debian path",
         _ => return None,
