@@ -1,0 +1,23 @@
+<title>Synofurb Desktop Mockup</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  :root { --bg:#f6f5f3; --fg:#1c1b1f; --muted:#5d5a63; --line:#d6d3cc; --accent:#5b3fd1; --surface:#fff; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#151418; --fg:#ecebef; --muted:#a9a6b1; --line:#35333c; --accent:#a99bff; --surface:#1e1d22; color-scheme: dark; } }
+  :root[data-theme="dark"] { --bg:#151418; --fg:#ecebef; --muted:#a9a6b1; --line:#35333c; --accent:#a99bff; --surface:#1e1d22; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+         display: flex; flex-direction: column; gap: 10px;
+         padding-block: 12px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+  h1 { font-size: 16px; margin: 0; }
+  p { margin: 0; color: var(--muted); }
+  a { color: var(--accent); }
+  iframe { flex: 1; min-height: 640px; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+</style>
+<header>
+  <h1>Desktop app mockup v2</h1>
+  <p>Clickable. Not the real app. Not approved. Press F1 for Help.</p>
+  <a href="mockup.html">Open full screen</a>
+</header>
+<iframe src="mockup.html" title="Synofurb desktop app mockup"></iframe>
