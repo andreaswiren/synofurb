@@ -155,3 +155,39 @@ pub fn identity_line(cx: &GpuiApp, p: &Palette, model: &str, host: &str, serial:
         .when_some(status, |d, st| d.child(compat_tag(p, st)))
         .into_any_element()
 }
+
+// ------------------------------------------------------------------------------------------------ disabled with a reason
+
+/// The disabled-reason pattern (DEV-UI-2): a REAL disabled `Button` (not a Tab stop, no click) followed by a sibling
+/// info button whose `Popover` carries the reason. A tooltip on a disabled control would be unreachable by keyboard and
+/// must never be the only carrier of the reason. When `reason` is `None` the button is returned alone, enabled.
+pub fn with_reason(id: impl Into<ElementId>, button: gpui_kit::component::button::Button, reason: Option<String>) -> AnyElement {
+    use gpui_kit::component::button::ButtonVariants as _;
+    use gpui_kit::component::popover::Popover;
+    use gpui_kit::component::{Disableable, Sizable};
+    let id: ElementId = id.into();
+    match reason {
+        None => button.into_any_element(),
+        Some(text) => {
+            let label: SharedString = format!("Why unavailable: {text}").into();
+            let body = text.clone();
+            h_flex()
+                .gap(px(4.0))
+                .items_center()
+                .child(button.disabled(true))
+                .child(
+                    Popover::new(id)
+                        .anchor(gpui_kit::Anchor::BottomRight)
+                        .trigger(
+                            gpui_kit::component::button::Button::new("why")
+                                .ghost()
+                                .xsmall()
+                                .icon(icons::icon(role::TIP))
+                                .accessibility_label(label),
+                        )
+                        .content(move |_, _, _| div().w(px(280.0)).text_sm().child(body.clone())),
+                )
+                .into_any_element()
+        }
+    }
+}

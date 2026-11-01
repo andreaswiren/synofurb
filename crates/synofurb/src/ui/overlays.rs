@@ -14,6 +14,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::{WindowExt, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AppContext, ClipboardItem, Context, IntoElement, Window, px};
+use gpui_kit::{Entity, div};
 use synofurb_core::plan::StorageMode;
 
 impl App {
@@ -199,15 +200,37 @@ impl App {
         })
     }
 
-    /// Ctrl+Shift+C and the "Copy command" buttons.
+    /// Ctrl+Shift+C and the "Copy command" button: the dialog with the command, editable, and the computed tag.
     pub fn copy_cli_command(&mut self, window: &mut Window, cx: &mut Context<App>) {
         if !matches!(self.screen, Screen::Plan | Screen::System | Screen::Confirm) {
             return;
         }
-        if let Some(text) = self.cli_text(cx) {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
-            self.toast(window, cx, "Command copied", true);
-        }
+        let Some(spec) = self.cli_spec(cx) else { return };
+        // the confirmation flags are in the command only after the gate is satisfied
+        let typed = self.input_value(&self.inp.typed, cx);
+        let phrase = self.phrase(cx);
+        let confirm = (self.screen == Screen::Confirm && self.gate(&typed, &phrase).is_open()).then_some(phrase);
+        let plan_only = self.screen == Screen::Plan || (self.screen == Screen::Confirm && confirm.is_none());
+        let text = if plan_only { spec.plan_command() } else { spec.install_command(confirm.as_deref()) };
+        let view = cx.new(|cx| CommandView::new(spec, confirm, plan_only, text, window, cx));
+        window.open_dialog(cx, move |d, _, _| {
+            d.title(copy::DLG_COMMAND.short).w(px(layout::DIALOG_W_WIDE)).child(view.clone()).footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("cmd-close").outline().label(copy::BTN_CLOSE.short).on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child({
+                        let view = view.clone();
+                        Button::new("cmd-copy").primary().icon(icons::icon(role::COPY)).label(copy::BTN_COPY.short).on_click(
+                            move |_, window, cx| {
+                                let text = view.read(cx).text(cx);
+                                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                window.push_notification(gpui_kit::component::notification::Notification::success("Command copied"), cx);
+                            },
+                        )
+                    }),
+            )
+        });
     }
 
     /// The icon button ("Copy command", terminal icon, tooltip only).
@@ -265,5 +288,184 @@ impl App {
                     Button::new("sl-close").primary().label(copy::BTN_CLOSE.short).on_click(|_, window, cx| window.close_dialog(cx)),
                 ))
         });
+    }
+}
+
+/// The body of the "Copy command" dialog: the command in an editable `Textarea` and the tag that is computed from what
+/// the text says right now ("Matches plan" or "Differs from plan"; the read-only plan form says so).
+pub struct CommandView {
+    spec: CliCommand,
+    confirm: Option<String>,
+    plan_only: bool,
+    input: Entity<gpui_kit::component::input::TextareaState>,
+    _sub: gpui_kit::Subscription,
+}
+
+impl CommandView {
+    pub fn new(
+        spec: CliCommand,
+        confirm: Option<String>,
+        plan_only: bool,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<CommandView>,
+    ) -> CommandView {
+        use gpui_kit::component::input::{InputEvent, TextareaState};
+        let input = cx.new(|cx| {
+            let mut s = TextareaState::new(window, cx);
+            s.set_value(text, window, cx);
+            s
+        });
+        let sub = cx.subscribe(&input, |_, _, ev: &InputEvent, cx| {
+            if matches!(ev, InputEvent::Change) {
+                cx.notify();
+            }
+        });
+        CommandView { spec, confirm, plan_only, input, _sub: sub }
+    }
+
+    pub fn text(&self, cx: &gpui_kit::App) -> String {
+        self.input.read(cx).value().to_string()
+    }
+
+    /// Does the current text still say what the plan says?
+    pub fn matches(&self, cx: &gpui_kit::App) -> bool {
+        let t = self.text(cx);
+        if self.plan_only {
+            super::cli_cmd::parse_flags(&t) == super::cli_cmd::parse_flags(&self.spec.plan_command())
+        } else {
+            self.spec.matches(&t, self.confirm.as_deref())
+        }
+    }
+}
+
+impl gpui_kit::Render for CommandView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use super::theme::{Themed, Tone};
+        use gpui_kit::component::input::Textarea;
+        let p = cx.pal();
+        let ok = self.matches(cx);
+        let tag = if !ok {
+            super::kit::tag(&p, Tone::Warn, Some(role::WARN), copy::CMD_DIFFERS.short)
+        } else if self.plan_only {
+            super::kit::tag(&p, Tone::Neutral, Some(role::LOCK), copy::CMD_READ_ONLY.short)
+        } else {
+            super::kit::tag(&p, Tone::Ok, Some(role::OK), copy::CMD_MATCHES.short)
+        };
+        v_flex()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .font_family(gpui_kit::component::ActiveTheme::theme(&**cx).mono_font_family.clone())
+                    .text_xs()
+                    .child(Textarea::new(&self.input).h(px(150.0)).aria_label(copy::DLG_COMMAND.short)),
+            )
+            .child(
+                gpui_kit::component::h_flex().gap(px(8.0)).items_center().child(tag).child(super::kit::caption(cx, copy::DLG_COMMAND.body)),
+            )
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ quick setup
+
+/// The Quick setup dialog: recommended defaults in one line and, when the disks differ, an explicit Hybrid vs RAID choice.
+pub struct QuickView {
+    opts: Vec<(synofurb_core::plan::DataRaid, String)>,
+    pub sel: usize,
+    summary: String,
+}
+
+impl gpui_kit::Render for QuickView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::radio::{Radio, RadioGroup};
+        let mut col = v_flex().gap(px(12.0)).child(super::kit::mono(cx, self.summary.clone()));
+        if self.opts.len() > 1 {
+            col = col.child(
+                RadioGroup::vertical("quick-raid")
+                    .selected_index(Some(self.sel))
+                    .children(self.opts.iter().enumerate().map(|(i, (_, l))| Radio::new(("qr", i)).label(l.clone())))
+                    .on_click(cx.listener(|v, ix: &usize, _, cx| {
+                        v.sel = *ix;
+                        cx.notify();
+                    })),
+            );
+        }
+        col
+    }
+}
+
+impl App {
+    pub fn open_quick_dialog(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        use synofurb_core::plan::{DataRaid, PlanRequest, build_plan};
+        let Some(f) = self.facts.clone() else { return };
+        let usable = |r: DataRaid| build_plan(&f, &PlanRequest { data_raid: r, ..PlanRequest::default() }).sizes.data_usable_bytes;
+        let tib = |b: u64| b as f64 / (1u64 << 40) as f64;
+        let sizes: Vec<f64> = f.candidate_disks().iter().map(|d| tib(d.size_bytes())).collect();
+        let (hyb, auto) = (usable(DataRaid::Shr1), usable(DataRaid::Auto));
+        let q = super::facts::quick_defaults(&sizes, tib(hyb), tib(auto));
+        let mut opts = vec![(q.raid, String::new())];
+        if q.mixed {
+            opts = vec![
+                (DataRaid::Shr1, format!("{} \u{00b7} {}", super::raid::raid_label(DataRaid::Shr1), super::format::size_2dp(hyb))),
+                (DataRaid::Auto, format!("{} \u{00b7} {}", super::raid::raid_label(DataRaid::Auto), super::format::size_2dp(auto))),
+            ];
+            if q.raid == DataRaid::Auto {
+                opts.swap(0, 1);
+            }
+        }
+        let summary = format!(
+            "Wipe all \u{00b7} system {} GiB \u{00d7} {} \u{00b7} free {} % \u{00b7} {}",
+            q.system_gib,
+            q.copies,
+            q.free_percent,
+            if q.mixed {
+                super::raid::raid_label(opts[0].0).to_string()
+            } else {
+                format!("{} \u{00b7} {}", super::raid::raid_label(q.raid), super::format::size_2dp(auto))
+            }
+        );
+        let raids: Vec<DataRaid> = opts.iter().map(|o| o.0).collect();
+        let view = cx.new(|_| QuickView { opts, sel: 0, summary });
+        let app = cx.entity();
+        window.open_dialog(cx, move |d, _, _| {
+            let (app, view2, raids) = (app.clone(), view.clone(), raids.clone());
+            d.title(copy::QUICK_TITLE.short).w(px(layout::DIALOG_W)).child(view.clone()).footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("q-cancel").outline().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(Button::new("q-use").primary().label(copy::QUICK_USE.short).on_click(move |_, window, cx| {
+                        let raid = raids[view2.read(cx).sel.min(raids.len() - 1)];
+                        window.close_dialog(cx);
+                        app.update(cx, |a, cx| a.apply_quick(raid, q.system_gib, q.copies, q.free_percent, window, cx));
+                    })),
+            )
+        });
+    }
+
+    /// Apply the Quick setup choices to the plan and go straight to Confirm.
+    pub fn apply_quick(
+        &mut self,
+        raid: synofurb_core::plan::DataRaid,
+        system_gib: u64,
+        copies: usize,
+        free: u8,
+        window: &mut Window,
+        cx: &mut Context<App>,
+    ) {
+        use gpui_kit::component::IndexPath;
+        self.form.req.mode = StorageMode::WipeAll;
+        self.form.req.data_raid = raid;
+        self.form.req.data_free_percent = free;
+        self.form.copies_auto = false;
+        self.form.copies = copies;
+        self.form.system_gib = system_gib as f32;
+        self.sys.boot = BootChoice::Auto;
+        if let Some(ix) = synofurb_core::plan::DataRaid::ALL.iter().position(|r| *r == raid) {
+            self.form.raid_select.update(cx, |s, cx| s.set_selected_index(Some(IndexPath::default().row(ix)), window, cx));
+        }
+        self.rebuild_plan();
+        self.goal = super::app::Goal::Install;
+        self.go(Screen::Confirm, window, cx);
     }
 }

@@ -13,7 +13,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::{ActiveTheme, Disableable, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Entity, IntoElement, Window, px};
+use gpui_kit::{AnyElement, Context, Entity, IntoElement, Window, px};
 use synofurb_core::compat::Status;
 
 impl App {
@@ -48,7 +48,7 @@ impl App {
         item: &'static Item,
         line: &'static Item,
         tag: Option<gpui_kit::component::tag::Tag>,
-        button: Button,
+        buttons: Vec<AnyElement>,
     ) -> impl IntoElement {
         GroupBox::new()
             .outline()
@@ -63,7 +63,7 @@ impl App {
                     .child(info_tip(gpui_kit::SharedString::from(format!("goal-info-{id}")), item, app))
                     .children(tag),
             )
-            .child(v_flex().gap(px(12.0)).child(kit::muted(cx, line.short)).child(h_flex().child(button)))
+            .child(v_flex().gap(px(12.0)).child(kit::muted(cx, line.short)).child(h_flex().gap(px(8.0)).children(buttons)))
     }
 
     pub(crate) fn page_goal(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
@@ -75,34 +75,41 @@ impl App {
         let try_first = bm.is_ok() && status == Status::Untested;
 
         let bm_btn = {
-            let b = Button::new("goal-bm").label(copy::GOAL_SET_UP.short).disabled(bm.is_err()).tooltip(bm.err().unwrap_or(""));
+            let b = Button::new("goal-bm").label(copy::GOAL_SET_UP.short);
             let b = if try_first { b.primary() } else { b.outline() };
-            b.on_click(cx.listener(|this, _, window, cx| {
+            let b = b.on_click(cx.listener(|this, _, window, cx| {
                 this.goal = Goal::BootManager;
                 this.continue_from_goal(window, cx);
-            }))
-        };
-        let rec_tag = try_first.then(|| {
-            // the Recommended tag explains itself in a tooltip through its info icon on the card title
-            kit::tag(&p, Tone::Info, Some(role::SPARKLES), copy::GOAL_RECOMMENDED.short)
-        });
-        let inst_btn = {
-            let b = Button::new("goal-install").label(copy::GOAL_PLAN_INSTALL.short).disabled(!install_ok).tooltip(if install_ok {
-                ""
-            } else {
-                copy::GOAL_PLAN_INSTALL.tip
-            });
-            let b = if try_first { b.outline() } else { b.primary() };
-            b.on_click(cx.listener(|this, _, window, cx| {
-                this.goal = Goal::Install;
-                this.continue_from_goal(window, cx);
-            }))
-        };
-        let rec_btn =
-            Button::new("goal-recover").outline().label(copy::GOAL_OPEN_RECOVERY.short).on_click(cx.listener(|this, _, window, cx| {
-                this.goal = Goal::Recover;
-                this.continue_from_goal(window, cx);
             }));
+            vec![kit::with_reason("bm-why", b, bm.err().map(String::from))]
+        };
+        let rec_tag = try_first.then(|| kit::tag(&p, Tone::Info, Some(role::SPARKLES), copy::GOAL_RECOMMENDED.short));
+        let unsupported_reason = (!install_ok).then(|| copy::GOAL_PLAN_INSTALL.tip.to_string());
+        let inst_btn = {
+            let quick = Button::new("goal-quick")
+                .label(copy::GOAL_QUICK.short)
+                .on_click(cx.listener(|this, _, window, cx| this.open_quick_dialog(window, cx)));
+            let custom =
+                Button::new("goal-custom").outline().label(copy::GOAL_CUSTOMIZE.short).on_click(cx.listener(|this, _, window, cx| {
+                    this.goal = Goal::Install;
+                    this.continue_from_goal(window, cx);
+                }));
+            let quick = if try_first { quick.outline() } else { quick.primary() };
+            vec![
+                kit::with_reason("quick-why", quick, unsupported_reason.clone()),
+                kit::with_reason("custom-why", custom, unsupported_reason),
+            ]
+        };
+        let rec_btn = vec![
+            Button::new("goal-recover")
+                .outline()
+                .label(copy::GOAL_OPEN_RECOVERY.short)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.goal = Goal::Recover;
+                    this.continue_from_goal(window, cx);
+                }))
+                .into_any_element(),
+        ];
 
         let body = h_flex()
             .w_full()

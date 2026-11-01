@@ -268,11 +268,12 @@ impl App {
             .w_full()
             .max_w(px(900.0))
             .gap(px(16.0))
+            .child(self.setup_tabs(cx))
             .child(form)
             .child(Accordion::new("sys-more").bordered(true).item(|i| i.title(copy::SYS_MORE.short).child(more)));
 
         let valid = errors.is_empty();
-        Page::new(copy::SYS_TITLE.short, body)
+        Page::new(copy::STEP_SETUP.short, body)
             .subtitle(copy::SYS_SUB.short)
             .left(vec![
                 Button::new("back")
@@ -283,16 +284,15 @@ impl App {
                     .into_any_element(),
                 self.copy_command_button(cx),
             ])
-            .right(vec![
+            .right(vec![kit::with_reason(
+                "next-why",
                 Button::new("next")
                     .primary()
                     .icon(icons::icon(role::NEXT))
                     .label(copy::SYS_NEXT.short)
-                    .disabled(!valid)
-                    .tooltip(if valid { "".to_string() } else { errors.iter().map(|(_, m)| m.clone()).collect::<Vec<_>>().join(" ") })
-                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Confirm, window, cx)))
-                    .into_any_element(),
-            ])
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Confirm, window, cx))),
+                (!valid).then(|| errors.iter().map(|(_, m)| m.clone()).collect::<Vec<_>>().join(" ")),
+            )])
     }
 }
 

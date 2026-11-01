@@ -163,6 +163,67 @@ impl CliCommand {
     }
 }
 
+/// Split a command line into words, honouring single and double quotes (POSIX-ish; enough for what we generate).
+pub fn shell_words(s: &str) -> Vec<String> {
+    let mut out = vec![];
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut started = false;
+    for c in s.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => cur.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                started = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if started || !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                    started = false;
+                }
+            }
+            (None, c) => cur.push(c),
+        }
+    }
+    if started || !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// `(program words, flag -> value)` of a command line; a flag without a value maps to an empty string.
+pub fn parse_flags(s: &str) -> (Vec<String>, std::collections::BTreeMap<String, String>) {
+    let words = shell_words(s);
+    let mut head = vec![];
+    let mut flags = std::collections::BTreeMap::new();
+    let mut i = 0;
+    while i < words.len() {
+        if let Some(name) = words[i].strip_prefix("--") {
+            let val = match words.get(i + 1) {
+                Some(v) if !v.starts_with("--") => {
+                    i += 1;
+                    v.clone()
+                }
+                _ => String::new(),
+            };
+            flags.insert(name.to_string(), val);
+        } else if flags.is_empty() {
+            head.push(words[i].clone());
+        }
+        i += 1;
+    }
+    (head, flags)
+}
+
+impl CliCommand {
+    /// Does `text` (what the user sees or edited in the Copy command dialog) say exactly what the plan says? The tag
+    /// "Matches plan" in the dialog is this function, computed from the text, not a constant.
+    pub fn matches(&self, text: &str, confirm: Option<&str>) -> bool {
+        parse_flags(text) == parse_flags(&self.install_command(confirm))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,6 +292,51 @@ mod tests {
         let s = c.install_command(Some("ERASE DS918+"));
         assert!(s.contains("--key '/home/me/.ssh/id ed25519'") && s.contains("--prompt-password"));
         assert!(!s.contains("password-env") && !s.to_lowercase().contains("passw0rd"));
+    }
+
+    #[test]
+    fn words_and_flags_round_trip() {
+        assert_eq!(shell_words("a 'b c' \"d e\" f"), vec!["a", "b c", "d e", "f"]);
+        assert_eq!(shell_words("--x ''"), vec!["--x", ""]);
+        let (head, flags) = parse_flags("synofurb-cli install --host 1.2.3.4 --have-backup --confirm 'ERASE X 3456'");
+        assert_eq!(head, vec!["synofurb-cli", "install"]);
+        assert_eq!(flags["host"], "1.2.3.4");
+        assert_eq!(flags["have-backup"], "");
+        assert_eq!(flags["confirm"], "ERASE X 3456");
+    }
+
+    #[test]
+    fn matches_plan_is_computed_from_the_text() {
+        let c = sample();
+        let text = c.install_command(None);
+        assert!(c.matches(&text, None));
+        assert!(c.matches(&text.replace("--mode wipe", "--mode   wipe"), None), "spacing does not matter");
+        assert!(!c.matches(&text.replace("--mode wipe", "--mode keep"), None), "a changed choice no longer matches");
+        assert!(!c.matches(&text.replace("--kernel stable", "--kernel newest"), None));
+        assert!(!c.matches(&format!("{text} --have-backup"), None), "an extra flag does not match");
+        let confirmed = c.install_command(Some("ERASE DS918+ 3456"));
+        assert!(c.matches(&confirmed, Some("ERASE DS918+ 3456")));
+        assert!(!c.matches(&confirmed, None), "the confirmation flags belong to the confirmed form only");
+        // every plan choice is in the command: dropping any one flag breaks the match
+        for (flag, _) in parse_flags(&text).1 {
+            let stripped: Vec<String> = {
+                let w = shell_words(&text);
+                let mut out = vec![];
+                let mut i = 0;
+                while i < w.len() {
+                    if w[i] == format!("--{flag}") {
+                        if w.get(i + 1).is_some_and(|v| !v.starts_with("--")) {
+                            i += 1;
+                        }
+                    } else {
+                        out.push(quote(&w[i]));
+                    }
+                    i += 1;
+                }
+                out
+            };
+            assert!(!c.matches(&stripped.join(" "), None), "dropping --{flag} must break the match");
+        }
     }
 
     #[test]

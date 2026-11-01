@@ -14,7 +14,6 @@ use super::theme::{self, Themed, Tone, layout};
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::badge::Badge;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::hover_card::HoverCard;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement;

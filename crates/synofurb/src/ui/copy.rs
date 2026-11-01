@@ -158,6 +158,11 @@ mod strings {
         BTN_OPEN_HELP: Button, "Open in Help", "", "", "";
         BTN_COPY_CMD: Button, "Copy command", "Copies the equivalent synofurb command.", "cli", "";
         BTN_COPY_CMD_CONFIRM: Button, "Copy command", "Includes the confirmation flags only after you confirm here.", "cli", "";
+        DLG_COMMAND: Dialog, "Copy command", "Includes the confirmation flags only after you confirm here.", "cli", "Edit the line if you like: the tag says whether it still matches the plan.";
+        CMD_MATCHES: Label, "Matches plan", "Every choice of the plan is on the line, with the same value.", "cli", "";
+        CMD_DIFFERS: Label, "Differs from plan", "A choice is missing, extra or different.", "cli", "";
+        CMD_READ_ONLY: Label, "Plan form", "Read-only: it shows the plan and changes nothing.", "cli", "";
+        BTN_COPY: Button, "Copy", "", "", "";
         BTN_LEARN_MORE: Button, "Learn more", "", "", "";
 
         // ===================================================================== D1 inventory
@@ -232,6 +237,11 @@ mod strings {
         GOAL_INSTALL: Label, "Install Debian", "Erases disks; needs your backup.", "first-install",
             "Wipe, or the advanced Keep mode. It takes about 25 minutes.";
         GOAL_INSTALL_LINE: Prose, "Replace DSM with Debian.", "", "", "";
+        GOAL_QUICK: Button, "Quick setup", "Recommended defaults, then straight to Confirm.", "first-install", "";
+        GOAL_CUSTOMIZE: Button, "Customize", "", "", "";
+        QUICK_TITLE: Dialog, "Quick setup", "Recommended defaults, then straight to Confirm.", "first-install", "";
+        QUICK_USE: Button, "Use these", "", "", "";
+        QUICK_HYBRID_LABEL: Label, "Hybrid 1-disk", "", "", "";
         GOAL_PLAN_INSTALL: Button, "Plan install", "Debian 13 cannot run on this hardware.", "", "";
         GOAL_RECOVER: Label, "Restore / Recover", "Reads the unit's state before offering anything.", "recovery", "";
         GOAL_RECOVER_LINE: Prose, "Undo or repair.", "", "", "";
@@ -239,6 +249,8 @@ mod strings {
         GOAL_BOOTMGR_OFF: Label, "Boot manager", "Needs an editable internal boot flash, which this unit does not have.", "boot-manager", "";
 
         // ===================================================================== D5 plan
+        SETUP_STORAGE: Label, "Storage", "", "", "";
+        SETUP_SYSTEM: Label, "System", "", "", "";
         PLAN_TITLE: Title, "Storage plan", "", "", "";
         PLAN_SUB: Subtitle, "Nothing is written yet.", "", "", "";
         PLAN_MODE: Label, "Mode", "Wipe erases all {n} disks.", "backups", "";
@@ -316,13 +328,19 @@ mod strings {
         CONF_UNTESTED: Label, "Untested", "No one has reported this model; your install is the test.", "compat-status", "";
         CONF_ABOUT_TIME: Label, "About 25 min", "Keep this computer awake and the NAS online.", "first-install",
             "Stay awake and on the network.\n\nThe NAS needs Internet unless Source is Offline.\n\nUnplug USB and eSATA disks.\n\nThe first RAID sync takes about 9 hours.";
-        CONF_BACKUP: Label, "Backup is tested", "", "", "";
+        CONF_BACKUP: Label, "I have a tested backup", "", "", "";
         CONF_LOSS: Label, "I accept data loss", "", "", "";
-        CONF_UNIT: Label, "This is the unit", "Compare the identity line with the label on the NAS.", "", "";
+        CONF_UNIT: Label, "This is {unit}", "Compare the identity line with the label on the NAS.", "", "";
         CONF_PHRASE: Label, "Type phrase", "Case matters; pasting is fine.", "", "";
         CONF_MATCH: Label, "Matches", "", "", "";
         CONF_NO_MATCH: Label, "No match", "", "", "";
-        CONF_FALLBACK: Prose, "Fallback: DSM stays default.", "", "", "";
+        CONF_FALLBACK: Prose, "Free to cancel until step 3; then no undo.", "", "", "";
+        CONF_NO_BACKUP: Label, "Test your backup.", "synofurb does not look at DSM's backup tasks; only you can confirm a backup.", "backups", "";
+        CONF_ERASED: Prose, "Everything on the disks is erased.", "", "", "";
+        CONF_AFTER: Label, "After", "", "", "";
+        CONF_ADD_SERIAL: Prose, "Add serial last 4.", "", "", "";
+        CONF_DETAILS: Label, "Details", "", "", "";
+        CONF_BACKED_UP: Prose, "Boot flash \u{b7} backed up first", "", "", "";
         CONF_HOW_RECOVERY: Button, "How recovery works", "DSM is the default; failures return to it.", "recovery", "";
         CONF_ERASE: Button, "Erase and install", "", "", "";
         CONF_FLASH: Label, "Boot flash", "Entries and files are added; the whole flash is backed up first.", "backups", "";
@@ -685,7 +703,8 @@ pub static SCREENS: &[ScreenCopy] = &[
             &GOAL_SET_UP,
             &GOAL_INSTALL,
             &GOAL_INSTALL_LINE,
-            &GOAL_PLAN_INSTALL,
+            &GOAL_QUICK,
+            &GOAL_CUSTOMIZE,
             &GOAL_RECOVER,
             &GOAL_RECOVER_LINE,
             &GOAL_OPEN_RECOVERY,
@@ -745,15 +764,14 @@ pub static SCREENS: &[ScreenCopy] = &[
             &CONF_DESTROYED,
             &CONF_CHANGED,
             &CONF_PRESERVED,
-            &CONF_DISK_WARNING,
-            &CONF_UNTESTED,
-            &CONF_ABOUT_TIME,
+            &CONF_NO_BACKUP,
+            &CONF_ERASED,
+            &CONF_FALLBACK,
+            &CONF_AFTER,
             &CONF_BACKUP,
             &CONF_LOSS,
             &CONF_UNIT,
-            &CONF_PHRASE,
-            &CONF_FALLBACK,
-            &CONF_HOW_RECOVERY,
+            &CONF_ADD_SERIAL,
             &CONF_ERASE,
             &BTN_BACK,
         ],

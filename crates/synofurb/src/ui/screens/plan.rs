@@ -234,7 +234,8 @@ impl App {
                         .child(crate::ui::disclosure::info_tip("hybrid-info", &copy::PLAN_HYBRID_TIP, &app)),
                 )
             });
-        let mut body = v_flex().w_full().gap(px(16.0)).child(controls).child(preview).child(diagram_box).child(summary);
+        let tabs = self.setup_tabs(cx);
+        let mut body = v_flex().w_full().gap(px(16.0)).child(tabs).child(controls).child(preview).child(diagram_box).child(summary);
         if let Some(shr) = &plan.shr {
             for (i, w) in shr.layout.warnings.iter().enumerate() {
                 body = body
@@ -248,7 +249,7 @@ impl App {
             body = body.child(Alert::warning(("plan-warn", i), w.clone()).icon(icons::icon(role::WARN)));
         }
         let ok = self.plan_ok();
-        Page::new(copy::PLAN_TITLE.short, body)
+        Page::new(copy::STEP_SETUP.short, body)
             .subtitle(copy::PLAN_SUB.short)
             .left(vec![
                 Button::new("back")
@@ -259,15 +260,31 @@ impl App {
                     .into_any_element(),
                 self.copy_command_button(cx),
             ])
-            .right(vec![
+            .right(vec![kit::with_reason(
+                "next-why",
                 Button::new("next")
                     .primary()
                     .icon(icons::icon(role::NEXT))
                     .label(copy::PLAN_NEXT.short)
-                    .disabled(!ok)
-                    .tooltip(if ok { "" } else { copy::PLAN_NEXT.tip })
-                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::System, window, cx)))
-                    .into_any_element(),
-            ])
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::System, window, cx))),
+                (!ok).then(|| plan.errors.first().cloned().unwrap_or_else(|| copy::PLAN_NEXT.tip.to_string())),
+            )])
+    }
+}
+
+impl App {
+    /// The Storage | System tabs of the Setup step (stock `TabBar`).
+    pub(crate) fn setup_tabs(&self, cx: &mut Context<App>) -> impl IntoElement {
+        use gpui_kit::component::tab::{Tab, TabBar};
+        TabBar::new("setup-tabs")
+            .underline()
+            .selected_index(usize::from(self.screen == Screen::System))
+            .children([Tab::new().label(copy::SETUP_STORAGE.short), Tab::new().label(copy::SETUP_SYSTEM.short)])
+            .on_click(cx.listener(|this, ix: &usize, window, cx| {
+                let target = if *ix == 1 { Screen::System } else { Screen::Plan };
+                if this.screen != target {
+                    this.go(target, window, cx);
+                }
+            }))
     }
 }
