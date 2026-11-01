@@ -65,7 +65,7 @@ impl App {
             .gap(px(2.0))
             .items_start()
             .child(
-                Alert::warning("backup", copy::CONF_NO_BACKUP.short)
+                Alert::warning("backup", copy::CONF_ERASED.short)
                     .title(copy::CONF_NO_BACKUP.short)
                     .icon(icons::icon(role::WARN))
                     .flex_1()

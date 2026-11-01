@@ -6,7 +6,6 @@ use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::state::Screen;
-use crate::ui::theme::Themed;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
@@ -18,7 +17,6 @@ use gpui_kit::{Context, IntoElement, Window, div, px};
 
 impl App {
     pub(crate) fn page_connect(&mut self, _window: &mut Window, cx: &mut Context<App>) -> Page {
-        let p = cx.pal();
         let app = cx.entity();
         let inspecting = self.inspecting;
 
@@ -46,9 +44,7 @@ impl App {
             self.password_input().into_any_element()
         };
 
-        let model = self.selected_unit_model();
         let host = crate::ui::format::display_host(&self.input_value(&self.inp.host, cx));
-        let identity = kit::identity_line(cx, &p, &model.0, &host, &model.1, Some(model.2));
 
         let mut form = Form::vertical()
             .child(kit::field_plain(copy::CONN_PORT.short, div().w(px(120.0)).child(Input::new(&self.inp.port))))
@@ -74,7 +70,7 @@ impl App {
                 .when(!self.same_sudo, |d| d.child(Input::new(&self.inp.sudo).mask_toggle())),
         ));
 
-        let mut body = v_flex().w_full().max_w(px(560.0)).gap(px(16.0)).child(identity);
+        let mut body = v_flex().w_full().max_w(px(560.0)).gap(px(16.0));
         if let Some(e) = &self.error {
             let off = e.to_lowercase().contains("refused") || e.to_lowercase().contains("timed out");
             let item = if off { &copy::CONN_SSH_OFF } else { &copy::CONN_LOGIN_FAILED };

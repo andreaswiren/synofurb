@@ -1,8 +1,10 @@
 # GUI components: what exists, what the app uses, what was wrong
 
 Source: `gpui-component` 0.8.1 (via `gpui-kit` 0.8.1) and `gpui-base` 0.8.1, read from `~/.cargo/registry/src/*/`.
-Status: phase 1 (infrastructure) is built and verified; the screens of phase 2 are a first pass on these widgets and
-will be reworked after the owner approves the new mockups (`design/mockups-v2/desktop/`).
+Status: phases 1 and 2 are built. The screens follow the approved mockup (`design/mockups-v2/desktop/`) on these widgets:
+`Stepper` (six steps), `Tag` (risk, status), `Alert` (no actions), `Popover` (info buttons, disabled reasons), `Dialog`
+(Copy command, Quick setup, typed confirms), `Sheet` (Help), `ToggleGroup` (segmented choices, DEV-UI-10), `Select`,
+`Checkbox`, `Input`, `TabBar`, `Accordion`, `DataTable`, `Progress`. Deviations: `design/v2/DESIGN-SYSTEM-V2.md` section 13.
 
 ## 1. Widget modules (one line each)
 
@@ -105,6 +107,15 @@ will be reworked after the owner approves the new mockups (`design/mockups-v2/de
 | Countdown clocks | no timer widget; shown as static text ("15 min") in this version | `screens/failed.rs` |
 | Logo | brand SVG drawn with `img` (multi-colour, so not `svg()`) | `brand.rs` |
 | Info icon keyboard path | the Kit's tooltip is pointer-only; the icon is a focusable `Button` whose label contains the tip and whose Enter/Space opens the same text in a popover | `disclosure.rs` |
+
+## 4b. Facts learned in phase 2
+
+* A global `enter` key binding swallows Enter on focused `Button`s; the page-level Enter is a root `on_key_down` that runs
+  only when the root has focus, and Erase wraps `capture_key_down` to stop Enter (DEV-UI-9).
+* `Tooltip` is pointer-only; keyboard parity needs a focusable info `Button` with a `Popover` (DEV-UI-1).
+* A disabled `Button` is not focusable; put the reason on a sibling info button (`kit::with_reason`).
+* `Keystroke::parse` needs `'static` strings, so shortcuts are written as GPUI keystroke strings.
+* Do not give a header toolbar `w_full()` inside a flex row: it overlaps the title.
 
 ## 5. Facts about this stack that matter
 

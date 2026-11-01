@@ -1,78 +1,76 @@
 # The desktop interface (GPUI Kit)
 
-> **v2 rebuild in progress.** The architecture below describes the first GPUI version. Phase 1 of the rebuild is done
-> (bundled Inter and JetBrains Mono, Lucide roles, the designer's theme set, themed scrollbars, `copy.rs` with word-budget
-> tests, info icons / Help sheet / About page, the logo); the screens are being redone on stock widgets after the owner approves
-> the new mockups. See `docs/GUI-COMPONENTS.md` for the widget map and the list of defects of the old UI. `widgets.rs` is gone;
-> `kit.rs`, `disclosure.rs`, `icons.rs`, `brand.rs`, `copy.rs` and `tokens.rs` (generated from `design/v2/tokens-v2.json`) replace it.
+The desktop UI follows the owner-approved v2 mockup (`design/mockups-v2/desktop`, spec `design/v2/UX-SPEC.md`, brief
+`design/BRIEF-v2.md`). It uses stock `gpui-component` widgets through GPUI Kit 0.8.1, bundled Inter and JetBrains Mono,
+Lucide icons only, themed scrollbars, and at most 60 words of static prose per screen (enforced by tests in `copy.rs`).
+The widget map and the defects of the first UI are in `docs/GUI-COMPONENTS.md`; deviations from the mockup are in
+`design/v2/DESIGN-SYSTEM-V2.md` section 13 (DEV-UI-1 to DEV-UI-14).
 
-`synofurb` (no arguments) and `synofurb gui` open the graphical wizard. It is written with **GPUI Kit** (`gpui-kit` 0.8.1:
-GPUI plus the gpui-component widget set), so one Rust codebase runs on Windows, macOS and Linux. The egui version
-(`gui.rs`, `eframe`, `rfd`) is gone. All decisions (scanning, inspection, planning, installing, recovery, updates, the
-compatibility list) stay in `synofurb-core`; the UI only shows state and forwards clicks.
+`synofurb` (no arguments) and `synofurb gui` open the wizard. All decisions (scan, inspect, plan, install, recovery,
+update, compatibility) stay in `synofurb-core`; the UI shows state and forwards clicks.
 
 ```
 synofurb gui                              # the real thing
 synofurb gui --demo --screen confirm      # built-in demo unit, nothing touches the network
 ```
 
-Demo screen names: `inventory connect inspect goal plan system confirm install failed done update settings bootmgr recover`
-(the old `layout` and `account` still work). In demo mode `install`, `failed` and `done` replay a scripted event stream.
-Demo-only environment variables (never needed in normal use):
+Demo screens (41, see `state::DEMO_SCREEN_NAMES`): `inventory connect inspect goal plan plan-keep system confirm install
+install-after-ponr failed failed-pre failed-post done update settings bootmgr recover manage manage-* recovery-* help
+help-topic about dlg-* first-launch`. `install`, `failed` and `done` replay a scripted event stream.
 
 | Variable | Effect |
 |---|---|
-| `SYNOFURB_DEMO_UNIT=ds918\|ds1621\|rs816` | Which built-in unit is inspected: Intel BIOS (default), AMD with boot flash and the raw `uart8250` console, or ARM U-Boot (shows the "ACTION NEEDED" U-Boot box) |
-| `SYNOFURB_THEME=light\|dark` | Theme for a demo run (otherwise follows the OS) |
-| `SYNOFURB_DEMO_SCROLL=bottom` | With `--screen confirm`: scroll to the confirmation fields (screenshots) |
-| `SYNOFURB_WINDOW=960x640` | Open at a given size (used to test the minimum window size) |
+| `SYNOFURB_DEMO_UNIT=ds918\|ds1621\|rs816` | Which built-in unit is inspected |
+| `SYNOFURB_THEME=light\|dark` | Theme for a demo run |
+| `SYNOFURB_DEMO_SCROLL=bottom` | With `--screen confirm`: scroll to the gate |
+| `SYNOFURB_DEMO_GATE=ready` | With `--screen confirm`: gate satisfied (checks the enabled Erase button) |
+| `SYNOFURB_WINDOW=960x640` | Open at a given size |
 
-Screenshots are in `design/screenshots/<screen>-<theme>.png` (light for every screen, plus `confirm-dark.png`).
+Screenshots of the implemented app: `design/screenshots/v2-app-<screen>-<theme>[-1180].png` (Xvfb + lavapipe).
 
 ## Architecture
 
 ```
 crates/synofurb/src/ui/
-  mod.rs        run(): window options, assets, theme, key bindings
-  theme.rs      ALL colours, sizes, radii and type styles; maps them onto GPUI Kit's Theme
-  settings.rs   per-user preferences (theme, text size, update channel) as JSON
-  widgets.rs    badge, banner, card, form row, table, choice card, log-palette code box ...
-  state.rs      pure state machine pieces: Screen, Step rail, Risk, ConfirmGate, BootChoice, InstallView
-  logview.rs    bounded log buffer, level/text filters with live counts, plain-text export
-  diagram.rs    Plan -> DiagramModel (pure) -> boxes (disk / partition / RAID / LVM)
-  format.rs     sizes (binary units, 2 decimals), percentages, masking
-  worker.rs     std::thread workers + the Msg enum (one channel back to the UI)
-  demo.rs       built-in units, demo compatibility statuses, scripted install events
-  app.rs        the root view `App`: all state, the message pump, actions
-  render.rs     window chrome: step rail, safety bar, update banner, pinned action bar, key bindings
-  screens/      one module per screen (+ logviewer, update dialog)
-  assets.rs     embedded Lucide SVGs (assets/icons/*.svg) on top of the Kit's default bundle
+  mod.rs        run(): window options, assets, fonts, theme, key bindings
+  theme.rs      tokens (generated from design/v2/tokens-v2.json) -> gpui-component Theme; accent; scrollbars
+  settings.rs   per-user preferences (theme, text size, accent, update channel) as JSON
+  kit.rs        small helpers over stock widgets: segmented (ToggleGroup), field, with_reason (disabled + info button)
+  disclosure.rs info_tip / info_popover / dialog: the "explanation lives behind an info button" pattern
+  copy.rs       every user-visible string, with a kind and a word budget per screen (tests)
+  facts.rs      PURE: UnitFacts -> risk Tag, Way back, Recovery rows, Quick setup defaults, phrase suffix, agent timeout
+  cli_cmd.rs    PURE: the Copy command text, and `matches(plan)` for the "Matches plan" Tag
+  mgmt.rs       PURE: Manage health reading, risk from health, update gate
+  raid.rs       PURE: RAID/SHR labels, survives, slices, mdstat parsing
+  state.rs      Screen, six-step Step, ConfirmGate, BootChoice, InstallView, demo targets and fixtures
+  app.rs        root view `App`: state, message pump, actions
+  render.rs     title bar, Stepper, unit header, status bar, update banner, action bar, key bindings
+  overlays.rs   Help sheet, Keep/Next/First-launch/Add/Slices dialogs, Copy command, Quick setup
+  screens/      one module per screen
+  worker.rs     std::thread workers + Msg; demo.rs scripted units and events; assets.rs embedded Lucide icons
 ```
 
-**Threads and the UI.** Slow work (scan, SSH inspect, install, recovery, update check/download, compatibility
-refresh) runs on plain `std::thread`s exactly as the egui version did. They send `Msg` values into one
-`futures::channel::mpsc::unbounded` sender; `App::new` spawns a GPUI task (`cx.spawn_in`) that awaits the receiver and
-calls `App::on_msg` on the UI thread, which updates state and `notify`s. The UI thread never blocks and nothing polls.
-The core's `Logger` still talks to a std channel; a small forwarder thread moves its events into the UI channel.
+**Six steps.** Find, Connect (with Inspect), Goal (with Quick setup), Setup (Storage and System tabs), Confirm, Install
+(with Done). Settings, About, Help, Manage, Boot manager and Recovery are side screens. The Stepper is the widget from
+GPUI Kit; the unit header under it always shows the unit and a risk Tag.
 
-**One root view.** `App` owns every input (`InputState` entities), the plan form, the install view and the update
-state. Screens are methods `App::page_<name>(&mut self, window, cx) -> Page` in their own files; `render.rs` wraps the
-returned `Page` (title, body, action-bar note and buttons) in the chrome. The flow is the linear guided wizard of UX
-concept A: nine steps in a persistent rail (Find NAS, Connect, Inspect, Goal, Storage, System, Confirm, Install, Done),
-plus Settings, boot manager and recover as side screens. The rail only goes back through completed steps and is locked
-while an install runs.
+**Risk Tag and Way back** are pure functions of the unit facts (`facts::risk`, `Risk::way_back`): the same state always
+shows the same Tag and the same way back; the status bar repeats it. **Recovery** rows come from `facts::recovery_rows`;
+when the boot agent never answered, "Manual recovery" is the primary.
 
-**Safety bar.** The "persistent safety rail" of concept A is a bar above every page, not a column: a four-level risk
-state (Reading only, Plan prepared, You confirmed, Disks modified), the sentence that goes with it, the unit name and
-address, and "Disks touched: Yes/No". A column did not fit next to the 212 px step rail at 960 px width. Moving it
-is a change in `render.rs` only.
+**The data-loss gate** (`screens/confirm.rs`, `state::ConfirmGate`): backup alert, Destroyed / Changed / Preserved
+triad, the After line, then the gate card: three checkboxes (tested backup, accept data loss, this is the unit) and the
+typed phrase `ERASE <MODEL>` (twin units get a serial suffix, `facts::confirm_phrase_for`). Erase stays a real disabled
+`Button` until everything passes; the reason is on a sibling info button with a Popover. `App::start_install` re-checks
+the gate. **Enter does not trigger Erase** (a `capture_key_down` wrapper stops it); Space and click do. Copy command opens
+a dialog with the whole plan as a CLI line and a "Matches plan" Tag computed by `cli_cmd::matches`.
 
-**The data-loss gate** (`screens/confirm.rs`, logic in `state::ConfirmGate`). Order: title with the unit, error
-banner, reversible/point-of-no-return strip, Will be destroyed and Will be preserved cards, new layout, backup
-finding, the fallback plan (wording follows `docs/RECOVERY.md`, per firmware: `state::fallback_lines`), two
-checkboxes, unit name, address and serial, the typed phrase `ERASE <MODEL>` (from `session::confirm_phrase`, paste is
-allowed, surrounding whitespace is ignored, case matters), live match text. The red button is disabled until every
-item passes, with the reason beside it; `App::start_install` re-checks the gate itself. Enter never triggers it.
+**Disabled-reason pattern.** A disabled `Button` is not focusable (stock behaviour), so the reason sits on a focusable
+info button next to it (`kit::with_reason`). Tooltips appear only on focusable controls and never carry the only copy of
+safety text (DEV-UI-1).
+
+**Threads and the UI.** Slow work runs on plain `std::thread`s and sends `Msg` values into one unbounded channel; a GPUI
+task calls `App::on_msg` on the UI thread. The UI thread never blocks.
 
 ## Theme mapping
 
@@ -93,7 +91,7 @@ palette into GPUI Kit's `Theme` through `Theme::update`, so stock widgets match:
 | ok / warn / info solid | success / warning / info (+ `button_*`) |
 | accent_bg, accent_fg | accent, accent_foreground, selection, list/table active |
 | sidebar, ring, scrim | sidebar, ring, overlay (alpha `scrim.alpha`) |
-| (not in Kit) ok/warn/err/info `*_fg *_bg *_border`, log colours | read directly: `Palette` / `Tone` in `widgets.rs` |
+| (not in Kit) ok/warn/err/info `*_fg *_bg *_border`, log colours | read directly: `Palette` / `Tone` in `theme.rs` |
 
 Theme choice is Follow system / Light / Dark (Settings; `observe_window_appearance` re-applies when the OS changes).
 Text size (100 / 115 / 130 %) sets the window's rem size; all type styles are in rems.
@@ -103,7 +101,7 @@ The log viewer uses the dark terminal palette in both themes, as the design says
 
 1. Add a variant to `state::Screen` (and to `DEMO_SCREEN_NAMES` / `DemoTarget::parse`, `Screen::step`, `risk_for`).
 2. Create `screens/<name>.rs` with `impl App { pub(crate) fn page_<name>(&mut self, window, cx) -> Page }`; register it
-   in `screens/mod.rs` and in `App::page_for` (`render.rs`). Use `cx.pal()` and the helpers in `widgets.rs`; no hex
+   in `screens/mod.rs` and in `App::page_for` (`render.rs`). Use `cx.pal()` and the helpers in `kit.rs`; no hex
    values or pixel constants in screens (add them to `theme.rs` instead).
 3. Navigate with `self.go(Screen::X, window, cx)`; put background work in `worker.rs` with a new `Msg` variant and
    handle it in `App::on_msg`.
@@ -126,67 +124,40 @@ To add an icon: copy the SVG from `gpui-kit-assets/assets/icons/` into `ui/asset
 * Fonts: the system UI font and the system monospace font are used. Inter and JetBrains Mono are not bundled yet (the
   design asks for them; it is a decision for the owner, see below).
 
+
 ## Accessibility
 
-GPUI Kit exposes an AccessKit tree (accesskit_unix/AT-SPI on Linux, UI Automation on Windows, NSAccessibility on
-macOS); the recommendation's claim that GPUI has none is out of date for this version. What is wired in our code:
-roles and labels on the step rail items ("Step 3: Inspect, current step"), the page title (`Heading`), the safety bar
-and the typed-phrase match text (`Status`), error banners (`Alert`), the install log (`Log`) and its level buttons,
-install steps (`ListItem` with "done/running/pending/failed"), accessible labels on sliders, selects, progress bars
-and the destructive button. Stock Kit widgets bring their own roles. Keyboard: Tab order follows layout, Space selects
-choice cards, Enter runs the screen's primary action (never the red button), Alt+Left/Right move between completed
-steps, Ctrl+, (Cmd+, on macOS) opens Settings, Ctrl+F/A/C work in the log, Esc closes dialogs and never cancels an
-install. Reduced motion replaces the spinner by a static glyph plus the word "running".
+GPUI Kit exposes an AccessKit tree; stock widgets bring their roles. Wired here: labels on info buttons (the word, not
+the icon), page title as heading, step labels, the typed-phrase match text, error alerts. Keyboard: Tab follows layout;
+Space or Enter activates the focused control; Enter on the page itself runs the primary action (never Erase); Alt+Left
+goes back, Ctrl+, opens Settings, F1 or ? opens Help at the current topic, Ctrl+Shift+C opens Copy command; Esc closes
+dialogs and never cancels an install. Text size (Default, Large, Largest) scales the rem; type scale 12/14/16/24 px.
 
 ## Known limitations
 
-* **Verification of accessibility is by construction only.** No screen reader (NVDA, Narrator, VoiceOver, Orca) was run.
-* Disabled buttons are not focusable in GPUI Kit, so the reason is shown as text beside them instead of a description.
-* The window has native decorations; there is no custom title bar.
-* The log viewer virtualises its rows and supports select all and copy of the filtered text, but not selecting a part
-  of a line with the mouse.
-* Pressed/hover/focus-visible/disabled/loading states come from the Kit's buttons and inputs and from `choice_card`;
-  other custom rows (rail steps, log level buttons) have hover only.
-* `danger_edge` and `ring_inverse` from the revised tokens are stored but not applied: the Kit's danger button has no
-  separate edge colour and filled buttons draw their own focus line.
-* Restore disk headers, rescue shell and "remove boot manager" are listed on the Restore screen as unavailable with a
-  reason (no core API); "Return to DSM" works through `session::recover_to_dsm` and is limited to boot-flash units.
-* Boot manager mode is only enabled for units with an editable boot flash (`session::boot_manager_install` requires it).
-* Updates: the dialog and download are real (`updater`), but the release signing key in core is still a placeholder,
-  so "Download and verify" is disabled with that explanation until it is configured.
-* The demo shows compatibility statuses from `demo.rs` (the shipped list has no Verified or Known-issues model yet),
-  labelled "demo data" on the inspect screen.
-
-## Gaps in `synofurb-core` (worked around in the UI layer)
-
-* `discovery::scan` returns only when every method is done: no streaming or cancel. `worker::spawn_scan` repeats its
-  orchestration with a partial-result hook (about 40 lines, calls the public per-method scanners).
-* No SMART data in `DeviceFacts`, so the "sdc has reallocated sectors" warning of the mockups cannot be shown.
-* No SSH host-key trust step before connecting (`fetch_host_fingerprint` exists but nothing records trust).
-* No timestamp of the first disk write; the UI only knows "point of no return passed" from the event.
-* The installer's point of no return is emitted at the start of step 3, not between steps 4 and 5 as in the mockup; the
-  UI follows the script.
-* `Event` carries no structured "disks touched" or failure kind; the failure screen derives it from `PointOfNoReturn`.
+* Tooltips are pointer-only in gpui-component (DEV-UI-1); keyboard users get the info button and its Popover.
+* Management update in the demo is simulated; the desktop Storage tab is read-only (DEV-UI-13).
+* Restore flash, Remove entries and Open agent produce a command rather than acting (DEV-UI-12).
+* Countdowns are static (DEV-UI-11). No keychain, host-key trust dialog or rescue shell (DEV-UI-14).
+* Native window decorations are replaced by the Kit title bar; Windows and macOS are untested.
+* The release signing key in core is a placeholder, so "Download and verify" is disabled with that explanation.
 
 ## What was and was not verified
 
-Verified here (Linux, headless): `cargo fmt`, `cargo clippy -p synofurb --all-targets -- -D warnings`, `cargo test -p
-synofurb` (unit tests for theme tokens against `tokens.json`, contrast, formatting, settings, screens/step rail, risk
-level, confirm gate, boot choice, serial parsing, install progress, log filtering, diagram model, scripted demo
-events, system-form validation); every demo screen renders under Xvfb with software Vulkan (lavapipe); the layout at the
-960 x 640 minimum (plan and connect checked).
+Verified (Linux, headless): per-file rustfmt, `cargo clippy -p synofurb --all-targets -- -D warnings`, `cargo test -p
+synofurb` (copy budgets, tokens vs JSON, accent contrast, risk Tag, Way back, recovery rows, Quick setup defaults,
+phrase gate, command-vs-plan, management health and update gate, RAID helpers); every demo screen renders under Xvfb with
+software Vulkan; Enter/Space behaviour of Erase and the Command button checked with injected XTest keys; screenshots in
+light and dark at 960 x 640 and 1180 x 760.
 
-Not verified: Windows and macOS builds, real hardware, a real scan/inspect/install over SSH, the update download path
-(placeholder signing key), IME and password-manager behaviour of the text inputs, screen readers, text scale 130 % on
-every screen, high-contrast OS modes, fonts other than the system defaults. UI integration tests with
-`gpui_kit::test` (the gate button disabled until the phrase is typed) were not added: the `test-support` feature
-rebuilds the whole GPUI graph with different features (several GB of extra build output), which did not fit on this
-machine; the gate logic itself is covered by `state::tests`.
+Not verified: Windows and macOS, real hardware, real SSH scan/inspect/install, the update download path, screen readers,
+IME and password managers, Largest text on every screen, Popover focus return, Select placement, RadioGroup/ToggleGroup
+roving focus, high-contrast OS modes. UI integration tests with `gpui_kit::test` were not added (the `test-support`
+feature rebuilds the GPUI graph and does not fit the disk here); the gate logic is covered by unit tests.
 
 ## Decisions for the owner
 
-1. Bundle Inter and JetBrains Mono (the design asks for them) or keep the system fonts.
-2. Safety rail as a bar (now) or a right-hand column at widths of 1100 px and up.
-3. Keep "Boot manager mode" enabled only for boot-flash units, or also offer the disk-partition variant (typed gate).
-4. Whether to ship the release signing key now so the update dialog can install.
-5. Window decorations: native (now) or a custom title bar.
+1. Keep "Boot manager mode" only for boot-flash units, or also offer the disk-partition variant (typed gate).
+2. Ship the release signing key so the update dialog can install.
+3. Wire the Manage update and rollback to the engine's `push_update` / `push_rollback`.
+4. Add an OS keychain and a host-key trust dialog (needs core support).

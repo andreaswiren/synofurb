@@ -55,7 +55,12 @@ impl UiSettings {
             "light" => ThemeChoice::Light,
             _ => ThemeChoice::System,
         };
-        UiSettings { theme, ..Default::default() }
+        let text_scale = match std::env::var("SYNOFURB_TEXT").unwrap_or_default().to_ascii_lowercase().as_str() {
+            "large" => TextScale::Large,
+            "largest" => TextScale::Largest,
+            _ => TextScale::Default,
+        };
+        UiSettings { theme, text_scale, ..Default::default() }
     }
 
     pub fn path(config_dir: &Path) -> PathBuf {
