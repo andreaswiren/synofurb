@@ -344,6 +344,7 @@ mod strings {
         CONF_FALLBACK: Prose, "Free to cancel until step 3; then no undo.", "", "", "";
         CONF_NO_BACKUP: Label, "Test your backup.", "synofurb does not look at DSM's backup tasks; only you can confirm a backup.", "backups", "";
         CONF_KEEP_RISK: Prose, "Kept volumes are best effort; data can still be lost.", "", "", "";
+        CONF_NOTHING_ELSE: Label, "Nothing else", "", "", "";
         CONF_LIST: Label, "Erased disks", "", "", "";
         CONF_LIST_KEEP: Label, "Rewritten disks", "", "", "";
         CONF_ERASED: Prose, "Everything on the disks is erased.", "", "", "";
@@ -395,6 +396,7 @@ mod strings {
         FAIL_EXPORT: Button, "Export diagnostics", "Do this before the clock ends; secrets are removed.", "troubleshooting", "";
         FAIL_RECOVERY: Button, "Recovery options", "", "", "";
         FAIL_NEXT: Button, "What happens next", "Order of actions and what survives.", "recovery", "";
+        FAIL_LOG_EMPTY: Label, "No log lines yet.", "", "", "";
         FAIL_LOG: Label, "Log excerpt", "", "", "";
         FAIL_AGENT_TITLE: Label, "Agent did not answer", "The engine message is in the log excerpt.", "recovery", "";
         FAIL_AGENT_TEXT: Prose, "No answer within 10 minutes. Nothing was reset after the wait.", "", "", "";
@@ -546,7 +548,7 @@ mod strings {
         HK_ENDED: Label, "Connection ended", "Close this dialog and start again.", "", "";
         HK_TRUST: Button, "Trust", "", "", "";
         DLG_HOSTKEY_CHANGED: Dialog, "Host key changed", "The NAS shows another key than the one saved.", "troubleshooting",
-            "This NAS now answers with a different key than the one saved for it. That can mean DSM was reinstalled, or that another device took this address. synofurb stopped before sending anything, not even your password. Do not sign in until you have checked the unit. If you replaced it on purpose, forget the old key with this command.";
+            "This NAS shows a different key than the one saved. DSM may have been reinstalled, or another device took this address. synofurb stopped before sending anything, not even your password. If you replaced the unit on purpose, forget the old key with the command below.";
         HK_PINNED_LABEL: Label, "Saved key", "", "", "";
         HK_NOW_LABEL: Label, "Key it shows now", "", "", "";
         HK_PIN: Label, "Host key", "The fingerprint saved when you first trusted this NAS; later connections must match it.", "troubleshooting", "";
@@ -557,6 +559,8 @@ mod strings {
         MAN_SIGNIN: Subtitle, "Sign in to read health", "Use the user and password or key of the NAS at this address.", "", "";
         MAN_READ_HEALTH: Button, "Read health", "", "", "";
         MAN_SIGNIN_WHY: Label, "Why unavailable", "Enter the user and the password or key of this NAS first.", "", "";
+        SET_REFRESH_OFFLINE: Label, "Why unavailable", "The app is offline; the list works from its cached copy.", "", "";
+        PLAN_SIZE_FIXED: Label, "Why unavailable", "These disks leave no room to choose another system size.", "", "";
         REC_RUN: Button, "Run", "", "", "";
         REC_SAVED: Label, "Saved here", "First and last 1 MiB of changed disks; not your files.", "backups", "";
         REC_OPEN_FOLDER: Button, "Open folder", "", "", "";
@@ -566,6 +570,7 @@ mod strings {
         REC_DEFAULT_DEBIAN: Label, "Default: Debian", "", "", "";
         REC_DEFAULT_UNKNOWN: Label, "Default: not confirmed", "We cannot tell if the agent ran; if it did not, a power cycle boots it again.", "recovery", "";
         REC_DISKS_MODIFIED: Label, "Disks: modified", "", "", "";
+        REC_DISKS_UNKNOWN: Label, "Disks: not checked", "", "", "";
         REC_DISKS_UNTOUCHED: Label, "Disks: untouched", "", "", "";
         REC_UNKNOWN_ALERT: Prose, "The agent may still be the default.", "DSM may not return by itself.", "recovery", "";
         REC_MANUAL: Button, "Manual recovery", "Steps that work without the unit answering.", "recovery", "";

@@ -87,7 +87,7 @@ impl App {
                 .child(kit::strong(copy::CONF_DESTROYED.short))
                 .into_any_element(),
             p.err_solid,
-            vec![kit::mono_sm(cx, destroyed_value).into_any_element()],
+            vec![div().text_sm().child(destroyed_value).into_any_element()],
         );
         let dom = self.sys.boot.resolve(&f) == BootChoice::Dom;
         let chg = self.triad_card(
@@ -101,7 +101,12 @@ impl App {
                 .child(info_tip("chg-info", &copy::CONF_FLASH, &app))
                 .into_any_element(),
             p.warn_solid,
-            vec![div().text_sm().child(if dom { "Boot flash \u{00b7} backed up first" } else { "-" }).into_any_element()],
+            vec![
+                div()
+                    .text_sm()
+                    .child(if dom { "Boot flash \u{00b7} backed up first" } else { copy::CONF_NOTHING_ELSE.short })
+                    .into_any_element(),
+            ],
         );
         let kept_text = if plan.preserved.is_empty() {
             copy::CONF_NOTHING_PRESERVED.short.to_string()

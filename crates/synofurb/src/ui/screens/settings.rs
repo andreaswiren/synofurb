@@ -150,17 +150,18 @@ impl App {
                         .gap(px(8.0))
                         .items_center()
                         .child(kit::caption(cx, format!("{list_note} \u{00b7} {origin}")))
-                        .child(
+                        .child(kit::with_reason(
+                            "refresh-why",
                             Button::new("refresh-compat")
                                 .outline()
                                 .small()
                                 .icon(icons::icon(role::REFRESH))
                                 .label(copy::SET_REFRESH.short)
                                 .loading(refreshing)
-                                .disabled(refreshing || offline)
-                                .tooltip(if offline { copy::TAG_OFFLINE.short } else { "" })
+                                .disabled(refreshing)
                                 .on_click(move |_, _, cx| app.update(cx, |a, cx| a.refresh_compat(cx))),
-                        )
+                            offline.then(|| copy::SET_REFRESH_OFFLINE.tip.to_string()),
+                        ))
                         .into_any_element()
                 }))
                 .item(SettingItem::render({

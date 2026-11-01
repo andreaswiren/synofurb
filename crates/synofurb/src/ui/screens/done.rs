@@ -147,7 +147,8 @@ impl App {
                         let lines = lines.clone();
                         window.open_dialog(cx, move |d, _, cx| {
                             let text = lines.join("\n");
-                            d.title("U-Boot commands")
+                            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                                .title("U-Boot commands")
                                 .w(px(560.0))
                                 .child(
                                     v_flex()
@@ -218,18 +219,27 @@ impl App {
         let url = self.report_url();
         window.open_dialog(cx, move |d, _, cx| {
             let url = url.clone();
-            d.title(copy::DLG_REPORT.short).w(px(crate::ui::theme::layout::DIALOG_W)).child(paragraphs(copy::DLG_REPORT.body, cx)).footer(
-                DialogFooter::new()
-                    .child(
-                        Button::new("rep-cancel").outline().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)),
-                    )
-                    .child(Button::new("rep-open").primary().icon(icons::icon(role::EXTERNAL)).label(copy::BTN_OPEN_ISSUE.short).on_click(
-                        move |_, window, cx| {
-                            cx.open_url(&url);
-                            window.close_dialog(cx);
-                        },
-                    )),
-            )
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::DLG_REPORT.short)
+                .w(px(crate::ui::theme::layout::DIALOG_W))
+                .child(paragraphs(copy::DLG_REPORT.body, cx))
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            Button::new("rep-cancel")
+                                .outline()
+                                .label(copy::BTN_CANCEL.short)
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            Button::new("rep-open").primary().icon(icons::icon(role::EXTERNAL)).label(copy::BTN_OPEN_ISSUE.short).on_click(
+                                move |_, window, cx| {
+                                    cx.open_url(&url);
+                                    window.close_dialog(cx);
+                                },
+                            ),
+                        ),
+                )
         });
     }
 }

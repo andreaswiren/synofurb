@@ -84,12 +84,18 @@ impl App {
                 )
                 .into_any_element()
             })
-            .child(kit::tag(
-                &p,
-                if uf.disks { Tone::Warn } else { Tone::Ok },
-                Some(if uf.disks { role::WARN } else { role::SAFE }),
-                if uf.disks { copy::REC_DISKS_MODIFIED.short } else { copy::REC_DISKS_UNTOUCHED.short },
-            ));
+            .child({
+                // The boot menu can be read from the unit; the disks cannot. When this session did not change them, say so only
+                // as "untouched" if the unit was not read from earlier sessions (otherwise: not checked).
+                let read = self.unit_state.as_ref().is_some_and(|s| s.read == synofurb_core::recovery::ReadOutcome::Read);
+                if uf.disks {
+                    kit::tag(&p, Tone::Warn, Some(role::WARN), copy::REC_DISKS_MODIFIED.short)
+                } else if read {
+                    kit::tag(&p, Tone::Neutral, Some(role::TIP), copy::REC_DISKS_UNKNOWN.short)
+                } else {
+                    kit::tag(&p, Tone::Ok, Some(role::SAFE), copy::REC_DISKS_UNTOUCHED.short)
+                }
+            });
 
         let mut body = v_flex().w_full().max_w(px(720.0)).gap(px(12.0)).child(chips);
         // What was read from the unit, or why nothing was (the chips fall back to this session's memory then).
@@ -292,7 +298,8 @@ impl App {
             }
             RecKind::ReinstallDsm => {
                 window.open_dialog(cx, move |d, _, cx| {
-                    d.title(copy::DLG_REINSTALL.short)
+                    d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                        .title(copy::DLG_REINSTALL.short)
                         .w(px(crate::ui::theme::layout::DIALOG_W))
                         .child(paragraphs(copy::DLG_REINSTALL.body, cx))
                         .footer(
@@ -322,7 +329,8 @@ impl App {
         let app = cx.entity();
         window.open_dialog(cx, move |d, _, cx| {
             let (a1, a2) = (app.clone(), app.clone());
-            d.title(copy::DLG_BOOT_DSM.short)
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::DLG_BOOT_DSM.short)
                 .w(px(crate::ui::theme::layout::DIALOG_W))
                 .child(paragraphs(copy::DLG_BOOT_DSM.body, cx))
                 .footer(
@@ -407,7 +415,8 @@ impl App {
         let app = cx.entity();
         window.open_dialog(cx, move |d, _, cx| {
             let app = app.clone();
-            d.title(copy::DLG_MANUAL.short)
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::DLG_MANUAL.short)
                 .w(px(crate::ui::theme::layout::DIALOG_W))
                 .child(
                     v_flex()
@@ -468,7 +477,12 @@ fn typed_confirm(
         });
         TypedConfirm { item, body, phrase, input, on_ok: std::rc::Rc::new(on_ok), app: a2, _sub: sub }
     });
-    window.open_dialog(cx, move |d, _, _| d.title(item.short).w(px(crate::ui::theme::layout::DIALOG_W)).child(view.clone()));
+    window.open_dialog(cx, move |d, _, cx| {
+        d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+            .title(item.short)
+            .w(px(crate::ui::theme::layout::DIALOG_W))
+            .child(view.clone())
+    });
 }
 
 impl Render for TypedConfirm {

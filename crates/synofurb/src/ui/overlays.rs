@@ -51,26 +51,30 @@ impl App {
         let keep = self.form.req.mode == StorageMode::KeepVolumes;
         window.open_dialog(cx, move |d, _, cx| {
             let app = app.clone();
-            d.title(copy::PLAN_KEEP_DIALOG.short).w(px(layout::DIALOG_W)).child(paragraphs(copy::PLAN_KEEP_DIALOG.body, cx)).footer(
-                DialogFooter::new()
-                    .child(
-                        Button::new("keep-cancel")
-                            .outline()
-                            .label(copy::BTN_CANCEL.short)
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                    )
-                    .child(
-                        Button::new("keep-use")
-                            .primary()
-                            .label(if keep { copy::PLAN_USE_WIPE.short } else { copy::PLAN_USE_KEEP.short })
-                            .on_click(move |_, window, cx| {
-                                window.close_dialog(cx);
-                                app.update(cx, |a, cx| {
-                                    a.set_storage_mode(if keep { StorageMode::WipeAll } else { StorageMode::KeepVolumes }, cx)
-                                });
-                            }),
-                    ),
-            )
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::PLAN_KEEP_DIALOG.short)
+                .w(px(layout::DIALOG_W))
+                .child(paragraphs(copy::PLAN_KEEP_DIALOG.body, cx))
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            Button::new("keep-cancel")
+                                .outline()
+                                .label(copy::BTN_CANCEL.short)
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            Button::new("keep-use")
+                                .primary()
+                                .label(if keep { copy::PLAN_USE_WIPE.short } else { copy::PLAN_USE_KEEP.short })
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    app.update(cx, |a, cx| {
+                                        a.set_storage_mode(if keep { StorageMode::WipeAll } else { StorageMode::KeepVolumes }, cx)
+                                    });
+                                }),
+                        ),
+                )
         });
     }
 
@@ -91,23 +95,27 @@ impl App {
         let app = cx.entity();
         window.open_dialog(cx, move |d, _, cx| {
             let app = app.clone();
-            d.title(copy::FIRST_LAUNCH.short).w(px(layout::DIALOG_W)).child(paragraphs(copy::FIRST_LAUNCH.body, cx)).footer(
-                DialogFooter::new()
-                    .child(Button::new("fl-help").ghost().icon(icons::icon(role::HELP)).label(copy::BTN_OPEN_HELP.short).on_click({
-                        let app = app.clone();
-                        move |_, window, cx| {
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::FIRST_LAUNCH.short)
+                .w(px(layout::DIALOG_W))
+                .child(paragraphs(copy::FIRST_LAUNCH.body, cx))
+                .footer(
+                    DialogFooter::new()
+                        .child(Button::new("fl-help").ghost().icon(icons::icon(role::HELP)).label(copy::BTN_OPEN_HELP.short).on_click({
+                            let app = app.clone();
+                            move |_, window, cx| {
+                                window.close_dialog(cx);
+                                app.update(cx, |a, cx| a.open_help_topic(Some("cli"), window, cx));
+                            }
+                        }))
+                        .child(Button::new("fl-ok").primary().label(copy::BTN_GOT_IT.short).on_click(move |_, window, cx| {
                             window.close_dialog(cx);
-                            app.update(cx, |a, cx| a.open_help_topic(Some("cli"), window, cx));
-                        }
-                    }))
-                    .child(Button::new("fl-ok").primary().label(copy::BTN_GOT_IT.short).on_click(move |_, window, cx| {
-                        window.close_dialog(cx);
-                        app.update(cx, |a, _| {
-                            a.settings.first_launch_done = true;
-                            a.save_settings();
-                        });
-                    })),
-            )
+                            app.update(cx, |a, _| {
+                                a.settings.first_launch_done = true;
+                                a.save_settings();
+                            });
+                        })),
+                )
         });
     }
 
@@ -115,9 +123,10 @@ impl App {
     pub fn open_add_dialog(&mut self, window: &mut Window, cx: &mut Context<App>) {
         let app = cx.entity();
         let input = self.inp.add_ip.clone();
-        window.open_dialog(cx, move |d, _, _| {
+        window.open_dialog(cx, move |d, _, cx| {
             let (app, input2) = (app.clone(), input.clone());
-            d.title(copy::INV_ADD_TITLE.short)
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::INV_ADD_TITLE.short)
                 .w(px(layout::DIALOG_W))
                 .child(v_flex().gap(px(8.0)).child(copy::INV_ADD_TITLE.body).child(Input::new(&input).cleanable(true)))
                 .footer(
@@ -212,23 +221,31 @@ impl App {
         let plan_only = self.screen == Screen::Plan || (self.screen == Screen::Confirm && confirm.is_none());
         let text = if plan_only { spec.plan_command() } else { spec.install_command(confirm.as_deref()) };
         let view = cx.new(|cx| CommandView::new(spec, confirm, plan_only, text, window, cx));
-        window.open_dialog(cx, move |d, _, _| {
-            d.title(copy::DLG_COMMAND.short).w(px(layout::DIALOG_W_WIDE)).child(view.clone()).footer(
-                DialogFooter::new()
-                    .child(
-                        Button::new("cmd-close").outline().label(copy::BTN_CLOSE.short).on_click(|_, window, cx| window.close_dialog(cx)),
-                    )
-                    .child({
-                        let view = view.clone();
-                        Button::new("cmd-copy").primary().icon(icons::icon(role::COPY)).label(copy::BTN_COPY.short).on_click(
-                            move |_, window, cx| {
-                                let text = view.read(cx).text(cx);
-                                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                                window.push_notification(gpui_kit::component::notification::Notification::success("Command copied"), cx);
-                            },
+        window.open_dialog(cx, move |d, _, cx| {
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::DLG_COMMAND.short)
+                .w(px(layout::DIALOG_W_WIDE))
+                .child(view.clone())
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            Button::new("cmd-close")
+                                .outline()
+                                .label(copy::BTN_CLOSE.short)
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
-                    }),
-            )
+                        .child({
+                            let view = view.clone();
+                            Button::new("cmd-copy").primary().icon(icons::icon(role::COPY)).label(copy::BTN_COPY.short).on_click(
+                                move |_, window, cx| {
+                                    let text = view.read(cx).text(cx);
+                                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                    window
+                                        .push_notification(gpui_kit::component::notification::Notification::success("Command copied"), cx);
+                                },
+                            )
+                        }),
+                )
         });
     }
 
@@ -280,7 +297,8 @@ impl App {
                         .child(TableCell::new().child(c.clone()))
                         .child(TableCell::new().text_right().child(super::kit::mono(cx, e.clone())))
                 })));
-            d.title(copy::DLG_SLICES.short)
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::DLG_SLICES.short)
                 .w(px(layout::DIALOG_W_WIDE))
                 .child(v_flex().gap(px(12.0)).child(table).child(paragraphs(copy::DLG_SLICES.body, cx)))
                 .footer(DialogFooter::new().child(
@@ -449,22 +467,29 @@ impl App {
         window.open_dialog(cx, move |d, _, cx| {
             let (app, view2, raids) = (app.clone(), view.clone(), raids.clone());
             let unchosen = !super::facts::quick_ready(view.read(cx).sel, n_opts);
-            d.title(copy::QUICK_TITLE.short).w(px(layout::DIALOG_W)).child(view.clone()).footer(
-                DialogFooter::new()
-                    .child(
-                        Button::new("q-cancel").outline().label(copy::BTN_CANCEL.short).on_click(|_, window, cx| window.close_dialog(cx)),
-                    )
-                    .child(super::kit::with_reason(
-                        "q-why",
-                        Button::new("q-use").primary().label(copy::QUICK_USE.short).on_click(move |_, window, cx| {
-                            let Some(sel) = view2.read(cx).sel else { return };
-                            let raid = raids[sel.min(raids.len() - 1)];
-                            window.close_dialog(cx);
-                            app.update(cx, |a, cx| a.apply_quick(raid, q.system_gib, q.copies, q.free_percent, window, cx));
-                        }),
-                        unchosen.then(|| copy::QUICK_CHOOSE.tip.to_string()),
-                    )),
-            )
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::QUICK_TITLE.short)
+                .w(px(layout::DIALOG_W))
+                .child(view.clone())
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            Button::new("q-cancel")
+                                .outline()
+                                .label(copy::BTN_CANCEL.short)
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(super::kit::with_reason(
+                            "q-why",
+                            Button::new("q-use").primary().label(copy::QUICK_USE.short).on_click(move |_, window, cx| {
+                                let Some(sel) = view2.read(cx).sel else { return };
+                                let raid = raids[sel.min(raids.len() - 1)];
+                                window.close_dialog(cx);
+                                app.update(cx, |a, cx| a.apply_quick(raid, q.system_gib, q.copies, q.free_percent, window, cx));
+                            }),
+                            unchosen.then(|| copy::QUICK_CHOOSE.tip.to_string()),
+                        )),
+                )
         });
     }
 
@@ -524,7 +549,8 @@ impl App {
             let (s_no, s_yes) = (slot.clone(), slot.clone());
             let (lines, full) = (lines.clone(), full.clone());
             let over = watch.state(std::time::Instant::now()) == super::trust::TrustState::Over;
-            d.title(copy::DLG_HOSTKEY.short)
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::DLG_HOSTKEY.short)
                 .w(px(layout::DIALOG_W))
                 .child(
                     v_flex()
@@ -590,7 +616,8 @@ impl App {
                         .child(gpui_kit::component::clipboard::Clipboard::new(id).value(fp.to_string()).tooltip("Copy")),
                 )
             };
-            d.title(copy::DLG_HOSTKEY_CHANGED.short)
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(copy::DLG_HOSTKEY_CHANGED.short)
                 .w(px(layout::DIALOG_W))
                 .child(
                     v_flex()

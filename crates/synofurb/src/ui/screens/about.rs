@@ -127,7 +127,8 @@ impl App {
                 .child(Button::new(("lic", i)).link().small().label(*lic).tooltip(copy::ABOUT_LICENCE.short).on_click(
                     move |_, window, cx| {
                         window.open_dialog(cx, move |d, _, cx| {
-                            d.title(format!("{name_s} \u{00b7} {lic_s}"))
+                            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                                .title(format!("{name_s} \u{00b7} {lic_s}"))
                                 .w(px(560.0))
                                 .child(
                                     div()

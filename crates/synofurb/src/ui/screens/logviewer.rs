@@ -28,13 +28,27 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
     ]);
 }
 
-fn level_color(p: &Palette, l: Level) -> gpui_kit::Hsla {
+pub(crate) fn level_color(p: &Palette, l: Level) -> gpui_kit::Hsla {
     match l {
         Level::Debug => p.log_dbg,
         Level::Info => p.log_inf,
         Level::Warn => p.log_wrn,
         Level::Error => p.log_err,
     }
+}
+
+/// The Lucide icon of a log level, in the level's colour (status is an icon plus the word, never colour alone).
+pub(crate) fn level_icon(p: &Palette, l: Level, size: f32) -> gpui_kit::component::Icon {
+    icons::icon_sized(
+        match l {
+            Level::Debug => role::BUG,
+            Level::Info => role::INFO,
+            Level::Warn => role::WARN,
+            Level::Error => role::ERR,
+        },
+        size,
+        level_color(p, l),
+    )
 }
 
 impl App {

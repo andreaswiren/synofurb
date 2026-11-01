@@ -18,7 +18,7 @@ use gpui_kit::component::hover_card::HoverCard;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::slider::Slider;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{Sizable, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, IntoElement, Window, div, px};
 use synofurb_core::plan::StorageMode;
@@ -79,16 +79,17 @@ impl App {
                     .child(Slider::new(&self.form.system_slider).disabled(!size_ok).accessibility_label(copy::PLAN_SYSTEM.short)),
             )
             .child(kit::mono(cx, format!("{chosen:.0} GiB")).w(px(72.0)))
-            .child(
+            .child(kit::with_reason(
+                "rec-size-why",
                 Button::new("rec-size")
                     .ghost()
                     .small()
                     .icon(icons::icon(role::SPARKLES))
                     .accessibility_label("Recommended")
                     .tooltip(format!("Recommended: {rec:.0} GiB"))
-                    .disabled(!size_ok)
                     .on_click(cx.listener(move |this, _, window, cx| this.set_system_gib(rec, window, cx))),
-            );
+                (!size_ok).then(|| copy::PLAN_SIZE_FIXED.tip.to_string()),
+            ));
         let labels: Vec<&'static str> = ["Auto", "1", "2", "3", "4"].into_iter().take((n_disks + 1).min(5)).collect();
         let sel = if self.form.copies_auto { 0 } else { self.form.copies.min(labels.len() - 1) };
         let copies = kit::segmented("copies", &labels, sel, {

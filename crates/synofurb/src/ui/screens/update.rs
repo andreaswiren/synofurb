@@ -210,6 +210,12 @@ impl App {
         let app = cx.entity();
         let view = cx.new(|cx| UpdateView::new(app, cx));
         let title = self.update_info().map(|i| format!("{} {}", copy::UPD_BANNER.short, i.latest)).unwrap_or_default();
-        window.open_dialog(cx, move |dialog, _, _| dialog.title(title.clone()).w(px(layout::DIALOG_W_WIDE)).child(view.clone()));
+        window.open_dialog(cx, move |dialog, _, cx| {
+            dialog
+                .bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(title.clone())
+                .w(px(layout::DIALOG_W_WIDE))
+                .child(view.clone())
+        });
     }
 }

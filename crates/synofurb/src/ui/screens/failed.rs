@@ -135,20 +135,30 @@ impl App {
                 },
             }
         };
-        let tail: Vec<String> = self
-            .install
-            .log
-            .tail_info(14)
-            .into_iter()
-            .map(crate::ui::logview::format_line)
-            .map(|l| crate::ui::facts::scrub_agent_promise(&l))
-            .collect();
-        let log = v_flex()
-            .gap(px(2.0))
-            .p(px(8.0))
-            .rounded(cx.theme_radius())
-            .bg(p.log_bg)
-            .children(tail.into_iter().map(|l| kit::mono_sm(cx, l).text_color(p.log_fg)));
+        let tail: Vec<synofurb_core::logs::LogLine> = self.install.log.tail_info(14).into_iter().cloned().collect();
+        let log = v_flex().gap(px(2.0)).p(px(8.0)).rounded(cx.theme_radius()).bg(p.log_bg).children(if tail.is_empty() {
+            vec![kit::mono_sm(cx, copy::FAIL_LOG_EMPTY.short).text_color(p.log_dim).into_any_element()]
+        } else {
+            tail.into_iter()
+                .map(|l| {
+                    let c = crate::ui::screens::logviewer::level_color(&p, l.level);
+                    h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .child(kit::mono_sm(cx, l.ts.clone()).text_color(p.log_dim))
+                        .child(
+                            h_flex()
+                                .gap(px(4.0))
+                                .items_center()
+                                .text_color(c)
+                                .child(crate::ui::screens::logviewer::level_icon(&p, l.level, 12.0))
+                                .child(kit::mono_sm(cx, crate::ui::logview::level_word(l.level)).text_color(c)),
+                        )
+                        .child(kit::mono_sm(cx, crate::ui::facts::scrub_agent_promise(&l.msg)).flex_1().min_w_0().text_color(p.log_fg))
+                        .into_any_element()
+                })
+                .collect()
+        });
         let acc = Accordion::new("fail-acc").bordered(true).item(|i| i.title(copy::FAIL_LOG.short).open(!waits).child(log));
 
         let body = v_flex()
