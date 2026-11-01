@@ -38,6 +38,8 @@ pub struct UnitRow {
 pub struct InventoryTable {
     rows: Vec<UnitRow>,
     selected: Option<usize>,
+    /// Text-size factor: the columns are in rem, so they grow with the text.
+    scale: f32,
     app: Option<WeakEntity<App>>,
 }
 
@@ -45,6 +47,11 @@ impl InventoryTable {
     pub fn set_rows(&mut self, rows: Vec<UnitRow>) -> bool {
         let changed = self.rows != rows;
         self.rows = rows;
+        changed
+    }
+    pub fn set_scale(&mut self, s: f32) -> bool {
+        let changed = (self.scale - s).abs() > f32::EPSILON;
+        self.scale = s;
         changed
     }
     pub fn set_selected(&mut self, ix: Option<usize>) {
@@ -70,12 +77,13 @@ impl TableDelegate for InventoryTable {
     }
     fn column(&self, ix: usize, _: &GpuiApp) -> Column {
         // Zero cell padding: every cell pads itself, so the selected row can draw its accent border edge to edge.
+        let k = if self.scale > 0.0 { self.scale } else { 1.0 };
         match ix {
-            0 => Column::new("model", copy::INV_COL_MODEL.short).width(px(170.0)).p_0(),
-            1 => Column::new("addr", copy::INV_COL_ADDR.short).width(px(140.0)).p_0(),
-            2 => Column::new("dsm", copy::INV_COL_DSM.short).width(px(90.0)).p_0(),
-            3 => Column::new("found", copy::INV_COL_FOUND.short).width(px(210.0)).p_0(),
-            _ => Column::new("status", copy::INV_COL_STATUS.short).width(px(190.0)).p_0(),
+            0 => Column::new("model", copy::INV_COL_MODEL.short).width(px(150.0 * k)).p_0(),
+            1 => Column::new("addr", copy::INV_COL_ADDR.short).width(px(150.0 * k)).p_0(),
+            2 => Column::new("dsm", copy::INV_COL_DSM.short).width(px(104.0 * k)).p_0(),
+            3 => Column::new("found", copy::INV_COL_FOUND.short).width(px(150.0 * k)).p_0(),
+            _ => Column::new("status", copy::INV_COL_STATUS.short).width(px(212.0 * k)).p_0(),
         }
     }
     fn render_th(&mut self, ix: usize, _: &mut Window, _cx: &mut Context<TableState<Self>>) -> impl IntoElement {
@@ -111,20 +119,13 @@ impl TableDelegate for InventoryTable {
         });
         match col {
             0 => cell
-                .child(
-                    Radio::new(("inv-radio", row))
-                        .checked(selected)
-                        .tab_stop(false)
-                        .accessibility_label(format!("Select {}", r.model)),
-                )
+                .child(Radio::new(("inv-radio", row)).checked(selected).tab_stop(false).accessibility_label(format!("Select {}", r.model)))
                 .child(kit::strong(r.model.clone()))
                 .when(r.twin, |d| d.child(kit::tag(&p, crate::ui::theme::Tone::Warn, Some(role::WARN), copy::INV_TWIN.short)))
                 .into_any_element(),
             1 => cell.child(kit::mono(cx, r.ip.clone())).into_any_element(),
             2 => cell.child(div().text_sm().child(r.dsm.clone())).into_any_element(),
-            3 => cell
-                .child(div().text_xs().text_color(cx.theme().muted_foreground).truncate().child(r.found.clone()))
-                .into_any_element(),
+            3 => cell.child(div().text_xs().text_color(cx.theme().muted_foreground).truncate().child(r.found.clone())).into_any_element(),
             _ => cell.child(kit::compat_tag(&p, r.status)).into_any_element(),
         }
     }
@@ -169,10 +170,12 @@ impl App {
         let sel_ix = selected.as_deref().and_then(|ip| rows.iter().position(|r| r.ip == ip));
         let n_rows = rows.len();
         let weak = cx.weak_entity();
+        let scale = self.settings.text_scale.factor();
         self.inv_table.update(cx, |t, cx| {
             t.delegate_mut().set_app(weak);
             t.delegate_mut().set_selected(sel_ix);
-            if t.delegate_mut().set_rows(rows) {
+            let scaled = t.delegate_mut().set_scale(scale);
+            if t.delegate_mut().set_rows(rows) || scaled {
                 t.refresh(cx);
             }
         });

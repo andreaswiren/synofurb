@@ -129,7 +129,7 @@ dialogs and never cancels an install. Text size (Default, Large, Largest) scales
 * Tooltips are pointer-only in gpui-component (DEV-UI-1); keyboard users get the info button and its Popover.
 * Management update in the demo is simulated; the desktop Storage tab is read-only (DEV-UI-13).
 * Restore flash, Remove entries and Open agent produce a command rather than acting (DEV-UI-12).
-* Countdowns are static (DEV-UI-11). No keychain, host-key trust dialog or rescue shell (DEV-UI-14).
+* The failure clocks are rules, not live counters (DEV-UI-11). No keychain, host-key trust dialog or rescue shell (DEV-UI-14).
 * Native window decorations are replaced by the Kit title bar; Windows and macOS are untested.
 * The release signing key in core is a placeholder, so "Download and verify" is disabled with that explanation.
 
@@ -139,7 +139,7 @@ Verified (Linux, headless): per-file rustfmt, `cargo clippy -p synofurb --all-ta
 synofurb` (copy budgets, tokens vs JSON, accent contrast, risk Tag, Way back, recovery rows, Quick setup defaults,
 phrase gate, command-vs-plan, management health and update gate, RAID helpers); every demo screen renders under Xvfb with
 software Vulkan; Enter/Space behaviour of Erase and the Command button checked with injected XTest keys; screenshots in
-light at 960 x 640 for every screen family, plus dark for Confirm, Manage, Recovery and Install, 1180 x 760 for Confirm and Plan, and large / largest text for Confirm and Plan. The rest of the matrix (dark, 1180 and larger text for every family, every dialog) is not captured yet.
+light at 960 x 640 for every screen family (`design/screenshots/v2-app-<screen>-light.png`, 20 states), dark for 14 of them, 1180 x 760 for Confirm, Plan, Inventory and Install, and Largest text for Confirm, Plan, Inventory and the agent-did-not-answer page. Not captured: dark and larger text for every family, most dialogs (only Quick setup with mixed disks and Manual recovery), hover, pressed and focus states.
 
 Not verified: Windows and macOS, real hardware, real SSH scan/inspect/install, the update download path, screen readers,
 IME and password managers, Largest text on every screen, Popover focus return, Select placement, RadioGroup/ToggleGroup
