@@ -2,7 +2,7 @@
 
 Scope: the implemented desktop app (`crates/synofurb/src/ui/**`, GPUI Kit 0.8.1) against the owner-approved mockup (`design/mockups-v2/APPROVED.md`, `design/mockups-v2/desktop/`), the design system (`design/v2/DESIGN-SYSTEM-V2.md`, deviations DEV-UI-9 to DEV-UI-14, `tokens-v2.json`) and `docs/GUI.md`, `docs/GUI-COMPONENTS.md`. This is a fidelity review to find what to fix before the real gate. It is **not** a release-gate verdict, and nothing was written to `design/approvals/`. I did not read other reviewers' files and did not edit code.
 
-Evidence used: the 27 shipped `design/screenshots/v2-app-*.png` (looked at 22 by eye, pixel-measured regions of 11), the Rust sources, the mockup screenshots `v2-mockup-desktop-*` for comparison. I did **not** run the app (no build here); every statement about behaviour that is not visible in a screenshot is from reading the source and is labelled as such.
+Evidence used: the 27 shipped `design/screenshots/v2-app-*.png` (looked at 23 by eye, pixel-measured regions in 9), the Rust sources, the mockup screenshots `v2-mockup-desktop-*` for comparison. I did **not** run the app (no build here); every statement about behaviour that is not visible in a screenshot is from reading the source and is labelled as such.
 
 ## Summary
 
@@ -37,7 +37,7 @@ Tooltips on disabled buttons are unreachable by keyboard, which the design syste
 
 ### B5 Non-Lucide glyphs in the UI
 * **Where:** `logview.rs:12-17` log level markers are the Unicode characters `\u{25cf}` `\u{25b2}` `\u{2716}` and `\u{00b7}`; `screens/manage.rs:153` uses `\u{2713}` for done update steps.
-* **Rule:** BRIEF-v2 item 4 (Lucide only) and DS sections 5 and 7 ("log level glyph = Lucide icon plus the word"). Inter's Latin subset has no ▲ or ✖, so the glyphs fall back to whichever system font exists and will differ per OS, which is the exact problem the bundled fonts exist to solve. The log viewer has no screenshot at all.
+* **Rule:** BRIEF-v2 item 4 (Lucide only) and DS sections 5 and 7 ("log level glyph = Lucide icon plus the word"). The bundled Inter is a Latin subset (`docs/GUI-COMPONENTS.md` section 5) and I would expect it to lack these symbols (not checked), in which case they fall back to whichever system font exists and differ per OS, the problem the bundled fonts exist to solve. The log viewer has no screenshot at all.
 * **Must change:** Lucide `circle-alert`, `triangle-alert`, `circle-x` (or the roles already in `icons.rs`) plus the 3-letter word.
 
 ## Non-blocking findings
@@ -101,7 +101,7 @@ Existing: 27 PNGs, all 960x640 except `confirm-light-1180` and `plan-light-1180`
 | Help | yes (sheet over Find) | **missing** | missing | missing | missing | no topic, search or shortcuts view |
 | About | yes | **missing** | missing | missing | missing | Credits closed |
 
-Totals: dark exists for 4 of 14 families (Confirm, Install, Manage, Recovery), 1180 for 2, Largest for 1. Never shown anywhere: the log viewer (a whole screen), every dialog except none (Help sheet only), the first-launch dialog, update dialog, keyboard focus ring on any control, hover or pressed states, a Tab-order walk, the Select popup, the Popover from a disabled reason (info buttons are drawn but never open), and any state at Largest on 960x640 other than Confirm.
+Totals: dark exists for 4 of 14 families (Confirm, Install, Manage, Recovery), 1180 for 2, Largest for 1. Never shown anywhere: the log viewer (a whole screen), any dialog (only the Help sheet appears), the first-launch and update dialogs, keyboard focus ring on any control, hover or pressed states, a Tab-order walk, the Select popup, the Popover from a disabled reason (info buttons are drawn but never open), and any state at Largest on 960x640 other than Confirm.
 
 ## What is missing for a real gate
 
