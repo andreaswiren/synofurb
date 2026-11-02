@@ -127,8 +127,8 @@ jobs:
           $gui = Subsystem 'target/x86_64-pc-windows-msvc/release/synofurb.exe'
           $cli = Subsystem 'target/x86_64-pc-windows-msvc/release/synofurb-cli.exe'
           Write-Host "synofurb.exe subsystem=$gui (2 = GUI), synofurb-cli.exe subsystem=$cli (3 = console)"
-          if ($gui -ne 2) { throw "synofurb.exe has subsystem $gui: it would open a console window" }
-          if ($cli -ne 3) { throw "synofurb-cli.exe has subsystem $cli: it must be a console program" }
+          if ($gui -ne 2) { throw "synofurb.exe has subsystem ${gui}: it would open a console window" }
+          if ($cli -ne 3) { throw "synofurb-cli.exe has subsystem ${cli}: it must be a console program" }
 
       - name: Package MSI and NSIS installer (unsigned)
         run: bash scripts/package-cargo-packager.sh --target x86_64-pc-windows-msvc --formats "wix,nsis" --out dist/release

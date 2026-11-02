@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
 
 ### Added
 - **Welcome guide** on the first launch of the desktop app: five short steps (what synofurb does, the six steps, before you start, if something goes wrong, ready), each with one icon, a headline and at most two lines; details sit behind info buttons. It replaces the old "Before you start" dialog and keeps its statements (nothing changes until you confirm, back up and test, screen readers are not supported). Reopen it from Help (first row) or the title-bar menu. Demo screens `welcome`, `welcome-2` to `welcome-5`; design notes in `design/v2/UX-SPEC.md` (D1b) and DEV-UI-23.
@@ -8,8 +8,6 @@
 
 ### Changed
 - The "seen" flag of the first-launch dialog is now `welcome_done` in `ui-settings.json`; the old `first_launch_done` flag is ignored on purpose, so everyone sees the new guide once.
-
-## 0.2.1
 
 ### Fixed
 - **Windows: opening the app no longer opens an empty console window.** `synofurb.exe` is now a GUI-subsystem program in release builds; when it is started
