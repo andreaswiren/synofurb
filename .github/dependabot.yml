@@ -1,0 +1,40 @@
+# Dependabot version updates. Status: DRAFT 2026-11-02 (docs/compliance/VULNERABILITY-HANDLING.md, "Dependency monitoring").
+# Dependabot SECURITY alerts and security updates are separate repository settings (Settings > Advanced Security): the owner must switch
+# them on. This file only configures the scheduled version-update pull requests.
+#
+# Not configured on purpose:
+#   * pip   - apps/mgmt-plane is Python standard library only and has no requirements file (the asset tools need fonttools and brotli
+#             but pin nothing). Add a `pip` entry here if a requirements file is ever added.
+#   * docker - the repository builds no container images.
+#   * Debian packages of the boot agent - resolved at build time from the Debian archive (boot/agent/build.sh); there is no manifest for Dependabot.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "rust"]
+    commit-message:
+      prefix: "deps"
+    groups:
+      # the GPUI stack moves together (gpui-kit pins "=0.3.10" for the gpui-pre-* crates): one pull request, tested as a whole
+      gpui:
+        patterns: ["gpui*", "zed-*"]
+      rust-minor-and-patch:
+        update-types: ["minor", "patch"]
+        exclude-patterns: ["gpui*", "zed-*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,67 @@
+# cargo-deny configuration for synofurb.   Run:  cargo deny --locked check          (needs `cargo install cargo-deny --locked`)
+# Status: DRAFT 2026-11-02, written WITHOUT running cargo-deny (not installed where this was written). The licence allow-list was
+# checked against Cargo.lock with scripts/gen-sbom.py's expression parser, not with cargo-deny itself. NOT wired into CI yet:
+# see docs/compliance/GAPS-AND-ACTIONS.md. Policy background: docs/compliance/VULNERABILITY-HANDLING.md.
+
+[graph]
+# The platforms the release builds for (docs/RELEASING.md). Dependencies that exist only on other targets are ignored.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+all-features = false
+
+[advisories]
+version = 2
+# RustSec advisory database (fetched by cargo-deny; needs network in CI).
+yanked = "deny"
+# Unmaintained crates: only direct workspace dependencies are errors; transitive ones are reported as warnings.
+unmaintained = "workspace"
+# Add an advisory id here ONLY with a dated reason and an owner, and record it in docs/compliance (VULNERABILITY-HANDLING.md).
+ignore = []
+
+[licenses]
+version = 2
+# synofurb is distributed under MIT. These licences are permissive and can be shipped in an MIT binary with a notice.
+# cargo-deny accepts an `A OR B` expression when ANY alternative is allowed, and `A AND B` only when ALL are.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "NCSA",
+]
+confidence-threshold = 0.8
+# MPL-2.0 is file-level copyleft: fine unmodified, but each crate is listed on purpose so that a NEW MPL crate is a conscious decision.
+# (Obligations: docs/compliance/SBOM.md, "Copyleft".)
+exceptions = [
+    { allow = ["MPL-2.0"], crate = "option-ext" },  # in every build, via directories -> dirs-sys
+    { allow = ["MPL-2.0"], crate = "dwrote" },      # Windows only (DirectWrite), via gpui-kit -> zed-font-kit
+    { allow = ["MPL-2.0"], crate = "cbindgen" },    # build-time tool on Apple targets, not linked
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"          # workspace path dependencies carry no version requirement
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

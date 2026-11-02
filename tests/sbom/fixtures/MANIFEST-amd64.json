@@ -1,0 +1,16 @@
+{
+  "agent_version": "0.2.0",
+  "arch": "amd64",
+  "suite": "trixie-backports",
+  "built": "2026-11-01T00:00:00Z",
+  "compression": "xz",
+  "dom_stub": false,
+  "pgp_verified": true,
+  "kernel": { "release": "7.2.11+deb13-amd64", "packages": ["linux-image-7.2.11+deb13-amd64"], "file": "agent-amd64.vmlinuz", "bytes": 14329792 },
+  "initrd": { "file": "agent-amd64.initrd", "bytes": 8505868, "cpio_bytes": 20000000 },
+  "packages": [
+    { "name": "linux-image-7.2.11+deb13-amd64", "version": "7.2.11-1~bpo13+1", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "source": "https://deb.debian.org/debian/pool/main/l/linux/linux-image-7.2.11+deb13-amd64_7.2.11-1~bpo13+1_amd64.deb" },
+    { "name": "busybox-static", "version": "1:1.37.0-6+b2", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "source": "https://deb.debian.org/debian/pool/main/b/busybox/busybox-static_1.37.0-6+b2_amd64.deb" },
+    { "name": "netcat-traditional", "version": "1.10-50", "sha256": "3333333333333333333333333333333333333333333333333333333333333333", "source": "https://deb.debian.org/debian/pool/main/n/netcat/netcat-traditional_1.10-50_amd64.deb" }
+  ]
+}
