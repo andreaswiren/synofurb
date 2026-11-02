@@ -316,6 +316,15 @@ pub fn resolve_live_identity(
     Ok(live.clone())
 }
 
+/// The engine's failure text starts in lower case ("the installer reported a failure: ..."); a sentence starts with a capital.
+pub fn capitalize_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
 // ------------------------------------------------------------------------------------------------ installer failure
 
 /// What the generated installer does after a failure, as the Failed page and the Cancel dialog say it. It comes from
@@ -697,5 +706,12 @@ mod tests {
         assert!(e.contains("SN-B") && e.contains("SN-A") && e.contains("Nothing was written"), "{e}");
         assert!(resolve_live_identity(&dialog, None).is_ok(), "no live reading: the dialog's identity, unconfirmed by the engine");
         assert!(resolve_live_identity(&dialog, Some(&id("", "DS918+"))).is_ok(), "a live unit without a serial does not refuse");
+    }
+
+    #[test]
+    fn a_failure_sentence_starts_with_a_capital() {
+        assert_eq!(capitalize_first("the installer reported a failure: x"), "The installer reported a failure: x");
+        assert_eq!(capitalize_first("Already fine"), "Already fine");
+        assert_eq!(capitalize_first(""), "");
     }
 }

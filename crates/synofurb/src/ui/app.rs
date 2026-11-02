@@ -219,6 +219,8 @@ pub struct App {
     /// Bumped whenever another unit is opened or selected (or the session starts over): worker results carry the number they were
     /// started with and are dropped when it no longer matches.
     pub unit_gen: u64,
+    /// Demo: Find shows no units (`Some(false)`: the scan finished empty, `Some(true)`: it never finishes).
+    pub demo_no_units: Option<bool>,
     /// Set by "Cancel" while Open agent waits for the agent; a fresh flag per action.
     pub rec_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub open_trust: Vec<super::trust::TrustWatch>,
@@ -462,6 +464,7 @@ impl App {
             flash_untouched: false,
             dsm_wait: DsmWaitState::Idle,
             unit_gen: 0,
+            demo_no_units: None,
             rec_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             open_trust: vec![],
             pin_cache: None,
@@ -594,7 +597,8 @@ impl App {
         }
         if let Some(scanning) = t.no_units {
             self.inv = Inventory::default();
-            self.scan.running = scanning;
+            self.demo_no_units = Some(scanning);
+            self.selected_ip = None;
         }
         if t.twin {
             self.inv.merge(demo::twin_of_ds918());
@@ -602,6 +606,10 @@ impl App {
         if t.keep {
             self.form.req.mode = StorageMode::KeepVolumes;
             self.rebuild_plan();
+        }
+        if t.screen == Screen::Failed {
+            // the state the dialogs read exists before the first frame (the replayed events only add to it)
+            self.install.past_no_return = t.past_no_return;
         }
         match t.screen {
             Screen::Confirm if t.ready || std::env::var("SYNOFURB_DEMO_GATE").as_deref() == Ok("ready") => {
@@ -849,8 +857,13 @@ impl App {
                     self.unit_state = Some(st);
                     self.unit_state_err = None;
                 }
-                self.rec_result =
-                    Some(super::screens::recover::RecResult { kind, level: o.level, title: o.title, detail: o.detail, commands: o.commands });
+                self.rec_result = Some(super::screens::recover::RecResult {
+                    kind,
+                    level: o.level,
+                    title: o.title,
+                    detail: o.detail,
+                    commands: o.commands,
+                });
             }
             Msg::UnitState(r) => {
                 self.unit_state_loading = false;
@@ -969,6 +982,18 @@ impl App {
             return;
         }
         self.scan = ScanState { running: true, methods: vec![], finished_once: self.scan.finished_once };
+        if let (Some(_), Some(scanning)) = (self.demo, self.demo_no_units) {
+            // Demo "no units": the scan never ends (skeleton rows) or ends with nothing found (the empty state).
+            if !scanning {
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                    let _ = tx.unbounded_send(Msg::ScanDone(Inventory::default()));
+                });
+            }
+            cx.notify();
+            return;
+        }
         if self.demo.is_some() {
             // Replay the demo inventory as if it were streaming in.
             let tx = self.tx.clone();
@@ -1578,7 +1603,15 @@ impl App {
         match self.target(cx) {
             Ok(t) => {
                 self.bootmgr = Job::Running;
-                worker::spawn_boot_manager(self.tx.clone(), self.unit_gen, t, hostname, arm, self.cfg_dir.join("dom-backups"), self.cfg_dir.join("logs"));
+                worker::spawn_boot_manager(
+                    self.tx.clone(),
+                    self.unit_gen,
+                    t,
+                    hostname,
+                    arm,
+                    self.cfg_dir.join("dom-backups"),
+                    self.cfg_dir.join("logs"),
+                );
             }
             Err(e) => self.bootmgr = Job::Done(Err(e)),
         }

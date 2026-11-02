@@ -316,6 +316,9 @@ pub fn apply(dark: bool, scale: TextScale, accent: Accent, cx: &mut App) {
         t.button_primary_active = pressed;
         t.button_primary_foreground = on;
         t.ring = ring;
+        // The widget's focus ring is a 3 px band at about 40 % alpha (2.3:1 on light, 2.5:1 on dark). Off, the Kit draws a solid 1 px line in
+        // `ring` (6.67:1 / 6.43:1 on the surface): DEV-UI-22.
+        t.focus_ring = false;
         t.link = fg;
         t.link_hover = hover;
         t.link_active = pressed;

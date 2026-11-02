@@ -102,7 +102,7 @@ impl CliCommand {
         self.conn(&mut a);
         self.plan_opts(&mut a);
         a.push(format!("--kernel {}", self.kernel_arg()));
-        a.join(" ")
+        wrap_command(&a)
     }
 
     /// `synofurb-cli install ...` with the current choices. `confirm` = the typed phrase once the confirmation screen is
@@ -159,18 +159,43 @@ impl CliCommand {
             a.push("--have-backup --accept-data-loss".into());
             a.push(format!("--confirm {}", quote(phrase)));
         }
-        a.join(" ")
+        wrap_command(&a)
     }
 }
 
 /// Split a command line into words, honouring single and double quotes (POSIX-ish; enough for what we generate).
+/// One flag (with its value) per line, joined by shell line continuations, so the line never breaks inside a flag. The program,
+/// `--host` and `--user` stay on the first line.
+pub fn wrap_command(a: &[String]) -> String {
+    let mut out = String::new();
+    for (i, w) in a.iter().enumerate() {
+        match i {
+            0 => out.push_str(w),
+            1 | 2 => {
+                out.push(' ');
+                out.push_str(w);
+            }
+            _ => {
+                out.push_str(" \\\n  ");
+                out.push_str(w);
+            }
+        }
+    }
+    out
+}
+
 pub fn shell_words(s: &str) -> Vec<String> {
     let mut out = vec![];
     let mut cur = String::new();
     let mut quote: Option<char> = None;
     let mut started = false;
-    for c in s.chars() {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
         match (quote, c) {
+            // a backslash before a newline is a line continuation (the wrapped command)
+            (None, '\\') if chars.peek() == Some(&'\n') => {
+                chars.next();
+            }
             (Some(q), c) if c == q => quote = None,
             (Some(_), c) => cur.push(c),
             (None, '\'' | '"') => {
@@ -282,7 +307,10 @@ mod tests {
         assert!(before.starts_with("synofurb-cli install --host 192.168.1.40"), "{before}");
         assert!(!before.contains("--have-backup") && !before.contains("--accept-data-loss") && !before.contains("--confirm"));
         let after = c.install_command(Some("ERASE DS918+"));
-        assert!(after.ends_with("--have-backup --accept-data-loss --confirm 'ERASE DS918+'"), "{after}");
+        assert!(
+            after.ends_with("--confirm 'ERASE DS918+'") && after.contains("--have-backup") && after.contains("--accept-data-loss"),
+            "{after}"
+        );
     }
 
     #[test]
@@ -365,5 +393,15 @@ mod tests {
             assert!(s.contains(want), "{want} in {s}");
         }
         assert!(!s.contains("--source online"));
+    }
+
+    #[test]
+    fn the_wrapped_command_breaks_between_flags_and_still_parses() {
+        let c = sample();
+        let text = c.install_command(None);
+        assert!(text.contains(" \\\n  --"), "{text}");
+        assert!(text.lines().all(|l| !l.trim_start().starts_with("raid") && !l.trim_end().ends_with(" --")), "no flag is split: {text}");
+        assert_eq!(parse_flags(&text), parse_flags(&text.replace(" \\\n  ", " ")), "continuations do not change the meaning");
+        assert!(c.matches(&text, None), "the wrapped line still matches the plan");
     }
 }

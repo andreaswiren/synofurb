@@ -104,7 +104,13 @@ impl App {
             vec![
                 div()
                     .text_sm()
-                    .child(if dom { "Boot flash \u{00b7} backed up first" } else { copy::CONF_NOTHING_ELSE.short })
+                    .child(if dom {
+                        "Boot flash \u{00b7} backed up first"
+                    } else if keep {
+                        copy::CONF_CHANGED_KEEP.short
+                    } else {
+                        copy::CONF_NOTHING_ELSE.short
+                    })
                     .into_any_element(),
             ],
         );

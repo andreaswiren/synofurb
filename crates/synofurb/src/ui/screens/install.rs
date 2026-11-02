@@ -212,6 +212,9 @@ impl App {
                 .show_cancel(true)
                 .ok_text(copy::INSTALL_STOP.short)
                 .cancel_text(copy::INSTALL_KEEP_GOING.short)
+                // the safe choice is the filled one; stopping is the red one
+                .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
+                .cancel_variant(gpui_kit::component::button::ButtonVariant::Primary)
                 .on_ok(move |_, _, cx| {
                     app.update(cx, |a, cx| a.cancel_install(cx));
                     true

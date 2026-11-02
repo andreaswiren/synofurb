@@ -78,6 +78,14 @@ pub fn short_cpu(s: &str) -> String {
     if words.is_empty() { s.trim().to_string() } else { words.join(" ") }
 }
 
+/// A path with the home directory written as `~` (shown to people; the shell expands it again when the text is copied).
+pub fn tilde(path: &str) -> String {
+    match std::env::var("HOME") {
+        Ok(h) if !h.is_empty() && h != "/" && (path == h || path.starts_with(&format!("{h}/"))) => format!("~{}", &path[h.len()..]),
+        _ => path.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +138,16 @@ mod tests {
         assert_eq!(short_cpu("Marvell Armada 385 (ARMv7)"), "Marvell Armada 385 (ARMv7)");
         assert_eq!(short_cpu("CPU"), "CPU");
         assert_eq!(short_cpu(""), "");
+    }
+
+    #[test]
+    fn the_home_directory_is_shown_as_a_tilde() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        if !home.is_empty() && home != "/" {
+            assert_eq!(tilde(&format!("{home}/.local/share/x")), "~/.local/share/x");
+            assert_eq!(tilde(&home), "~");
+            assert_eq!(tilde(&format!("{home}x/y")), format!("{home}x/y"), "another directory with the same prefix is not home");
+        }
+        assert_eq!(tilde("/opt/x"), "/opt/x");
     }
 }

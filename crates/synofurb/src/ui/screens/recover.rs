@@ -230,14 +230,15 @@ impl App {
         body = body.child(list);
 
         let backups = self.cfg_dir.join("dom-backups");
-        let saved = v_flex().gap(px(6.0)).child(kit::mono_sm(cx, backups.display().to_string())).child(h_flex().child(
-            Button::new("open-folder").outline().small().icon(icons::icon(role::FOLDER)).label(copy::REC_OPEN_FOLDER.short).on_click(
-                move |_, _, cx| {
-                    let _ = std::fs::create_dir_all(&backups);
-                    cx.reveal_path(&backups)
-                },
-            ),
-        ));
+        let saved =
+            v_flex().gap(px(6.0)).child(kit::mono_sm(cx, crate::ui::format::tilde(&backups.display().to_string()))).child(h_flex().child(
+                Button::new("open-folder").outline().small().icon(icons::icon(role::FOLDER)).label(copy::REC_OPEN_FOLDER.short).on_click(
+                    move |_, _, cx| {
+                        let _ = std::fs::create_dir_all(&backups);
+                        cx.reveal_path(&backups)
+                    },
+                ),
+            ));
         body = body.child(Accordion::new("rec-acc").bordered(true).item(|i| i.title(copy::REC_SAVED.short).child(saved)));
         Page::new(copy::REC_TITLE.short, body)
             .subtitle(if self.unit_state.as_ref().is_some_and(|s| s.read == ReadOutcome::Read) {
@@ -281,7 +282,10 @@ impl App {
                 let backup = synofurb_core::recovery::backups_for_unit(&backups, &id).into_iter().next();
                 let Some(backup) = backup else {
                     let why = if id.serial.is_empty() { copy::REC_NO_SERIAL.tip } else { copy::REC_NO_BACKUP.tip };
-                    self.rec_result = Some(RecResult::error(copy::REC_NO_BACKUP.short, format!("{why} {}", backups.display())));
+                    self.rec_result = Some(RecResult::error(
+                        copy::REC_NO_BACKUP.short,
+                        format!("{why} {}", crate::ui::format::tilde(&backups.display().to_string())),
+                    ));
                     cx.notify();
                     return;
                 };

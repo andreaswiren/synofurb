@@ -168,7 +168,7 @@ impl App {
             .child(if self.agent_unknown {
                 Alert::error("fail-banner", copy::FAIL_AGENT_TEXT.short).title(copy::FAIL_AGENT_TITLE.short).icon(icons::icon(role::ERR))
             } else {
-                Alert::error("fail-banner", err).icon(icons::icon(role::ERR))
+                Alert::error("fail-banner", crate::ui::facts::capitalize_first(&err)).icon(icons::icon(role::ERR))
             })
             .child(
                 h_flex().gap(px(8.0)).child(

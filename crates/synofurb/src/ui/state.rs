@@ -29,7 +29,7 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 51] = [
+pub const DEMO_SCREEN_NAMES: [&str; 54] = [
     "failed-agent",
     "manage-rebuild",
     "manage-faildisk",
@@ -80,6 +80,9 @@ pub const DEMO_SCREEN_NAMES: [&str; 51] = [
     "dlg-hostchanged",
     "dlg-manual",
     "dlg-next",
+    "dlg-next-pre",
+    "dlg-next-keep",
+    "dlg-next-agent",
     "first-launch",
 ];
 
@@ -221,6 +224,11 @@ impl DemoTarget {
             "dlg-quick" => DemoTarget { overlay: Overlay::Quick, ..DemoTarget::at(Screen::Goal) },
             "dlg-manual" => DemoTarget { overlay: Overlay::Manual, fixture: Fixture::Agent, ..DemoTarget::at(Screen::Recover) },
             "dlg-keep" => DemoTarget { overlay: Overlay::KeepDialog, keep: true, ..DemoTarget::at(Screen::Plan) },
+            "dlg-next-pre" => DemoTarget { overlay: Overlay::NextDialog, past_no_return: false, ..DemoTarget::at(Screen::Failed) },
+            "dlg-next-keep" => {
+                DemoTarget { overlay: Overlay::NextDialog, past_no_return: true, keep: true, ..DemoTarget::at(Screen::Failed) }
+            }
+            "dlg-next-agent" => DemoTarget { overlay: Overlay::NextDialog, fixture: Fixture::Agent, ..DemoTarget::at(Screen::Failed) },
             "dlg-next" => DemoTarget { overlay: Overlay::NextDialog, past_no_return: true, ..DemoTarget::at(Screen::Failed) },
             "first-launch" => DemoTarget { overlay: Overlay::FirstLaunch, ..DemoTarget::at(Screen::Inventory) },
             _ => return None,

@@ -344,6 +344,7 @@ mod strings {
         CONF_FALLBACK: Prose, "Free to cancel until step 3; then no undo.", "", "", "";
         CONF_NO_BACKUP: Label, "Test your backup.", "synofurb does not look at DSM's backup tasks; only you can confirm a backup.", "backups", "";
         CONF_KEEP_RISK: Prose, "Kept volumes are best effort; data can still be lost.", "", "", "";
+        CONF_CHANGED_KEEP: Label, "Partition tables", "", "", "";
         CONF_NOTHING_ELSE: Label, "Nothing else", "", "", "";
         CONF_LIST: Label, "Erased disks", "", "", "";
         CONF_LIST_KEEP: Label, "Rewritten disks", "", "", "";

@@ -63,7 +63,12 @@ impl App {
         };
         let ip = o.ip.map(|i| i.to_string()).unwrap_or_else(|| "?".into());
         let ssh_cmd = match &self.sys.generated_key {
-            Some((_, path)) => format!("ssh -i {} {}@{}", crate::ui::format::shorten_path(&path.display().to_string(), 40), o.username, ip),
+            Some((_, path)) => format!(
+                "ssh -i {} {}@{}",
+                crate::ui::format::shorten_path(&crate::ui::format::tilde(&path.display().to_string()), 40),
+                o.username,
+                ip
+            ),
             None => format!("ssh {}@{}", o.username, ip),
         };
         let label = |id: &'static str, it: &'static copy::Item| kit::labelled(id, it, &app);
