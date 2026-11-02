@@ -77,6 +77,10 @@ pub fn parse_response(data: &[u8], src: IpAddr) -> Option<Found> {
             _ => {}
         }
     }
+    // Our own query starts with the same magic and arrives back on the broadcast socket: a real reply names the unit.
+    if f.model.is_empty() && f.hostname.is_empty() && f.serial.is_empty() && f.mac.is_none() {
+        return None;
+    }
     f.dsm_version = match (ver.is_empty(), build) {
         (false, Some(b)) => format!("{ver}-{b}"),
         (false, None) => ver,
@@ -111,12 +115,23 @@ fn broadcast_targets() -> Vec<Ipv4Addr> {
     v
 }
 
+/// The IPv4 addresses of this computer's own network adapters.
+fn local_addrs() -> Vec<IpAddr> {
+    if_addrs::get_if_addrs().map(|v| v.into_iter().map(|i| i.ip()).collect()).unwrap_or_default()
+}
+
+/// True for our own broadcast coming back to us (same bytes as the query, or sent from one of our own addresses): never a NAS.
+fn is_own_packet(data: &[u8], src: IpAddr, query: &[u8], own: &[IpAddr]) -> bool {
+    data == query || own.contains(&src)
+}
+
 pub fn scan(timeout: Duration, tx: &Sender<Found>) -> Result<usize> {
     // Replies come back to the source port; some units reply to 9999, so try to bind it but fall back.
     let sock = UdpSocket::bind("0.0.0.0:9999").or_else(|_| UdpSocket::bind("0.0.0.0:0"))?;
     sock.set_broadcast(true)?;
     sock.set_read_timeout(Some(Duration::from_millis(300)))?;
     let q = build_query();
+    let own = local_addrs();
     for t in broadcast_targets() {
         let _ = sock.send_to(&q, SocketAddr::new(IpAddr::V4(t), PORT));
     }
@@ -130,6 +145,7 @@ pub fn scan(timeout: Duration, tx: &Sender<Found>) -> Result<usize> {
             resent = true;
         }
         if let Ok((len, src)) = sock.recv_from(&mut buf)
+            && !is_own_packet(&buf[..len], src.ip(), &q, &own)
             && let Some(f) = parse_response(&buf[..len], src.ip())
         {
             n += 1;
@@ -192,5 +208,25 @@ mod tests {
         let f = parse_response(&r, "1.2.3.4".parse().unwrap()).unwrap();
         assert_eq!(f.model, "DS918+");
         assert!(parse_response(&MAGIC[..4], "1.2.3.4".parse().unwrap()).is_none());
+    }
+
+    #[test]
+    fn our_own_query_is_not_a_reply() {
+        let q = build_query();
+        assert!(parse_response(&q, "192.168.1.5".parse().unwrap()).is_none());
+        let me: IpAddr = "192.168.69.100".parse().unwrap();
+        assert!(is_own_packet(&q, "10.0.0.9".parse().unwrap(), &q, &[]));
+        assert!(is_own_packet(b"anything", me, &q, &[me]));
+        assert!(!is_own_packet(b"anything", "10.0.0.9".parse().unwrap(), &q, &[me]));
+    }
+
+    #[test]
+    fn a_reply_that_names_the_unit_is_accepted() {
+        let mut p = MAGIC.to_vec();
+        tlv(&mut p, 0x78, b"DS918+");
+        tlv(&mut p, 0x11, b"nas1");
+        let f = parse_response(&p, "192.168.1.20".parse().unwrap()).expect("reply");
+        assert_eq!(f.model, "DS918+");
+        assert_eq!(f.hostname, "nas1");
     }
 }

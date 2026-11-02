@@ -452,8 +452,13 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\msi-install.log" -Tail 80; throw "msiexec /i exit code $($p.ExitCode)" }
           $exe = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA -Recurse -Filter synofurb.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $exe) { throw 'synofurb.exe not found after the MSI install' }
-          & $exe.FullName --version
-          if ($LASTEXITCODE -ne 0) { throw "synofurb --version failed ($LASTEXITCODE)" }
+          # synofurb.exe is a GUI-subsystem program: PowerShell does not wait for it with `&`, so start it and wait explicitly
+          $verOut = Join-Path $env:RUNNER_TEMP 'installed-version.txt'
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList '--version' -Wait -PassThru -RedirectStandardOutput $verOut
+          if ($p.ExitCode -ne 0) { throw "synofurb --version failed ($($p.ExitCode))" }
+          $ver = (Get-Content $verOut -Raw).Trim()
+          if (-not $ver) { throw 'synofurb --version printed nothing' }
+          Write-Host $ver
           $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "msiexec /x exit code $($p.ExitCode)" }
 

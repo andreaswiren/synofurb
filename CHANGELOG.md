@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+
+### Fixed
+- **Windows: opening the app no longer opens an empty console window.** `synofurb.exe` is now a GUI-subsystem program in release builds; when it is started
+  from a console for a command-line job (`synofurb.exe scan`, `--version`, ...) it attaches to that console so the output still appears. `synofurb-cli.exe`
+  stays a console program (use it in scripts). The release workflow checks both subsystems. Reported on the first Windows release (0.2.0).
+- **Discovery listed this computer's own network adapters as "Synology" units** (Find NAS showed the PC's LAN, Tailscale and virtual-adapter addresses).
+  The Synology UDP scan received its own broadcast query and accepted it as a reply. Our own packets and packets from our own addresses are now ignored,
+  and a reply must name a unit (model, host name, serial or MAC) to count.
+
 ## 0.2.0 (unreleased)
 
 ### Added

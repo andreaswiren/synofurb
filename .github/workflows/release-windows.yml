@@ -120,6 +120,16 @@ jobs:
           "${bin}" compat DS923+
           "${bin}" plan --facts demo > /dev/null
 
+      - name: synofurb.exe is a GUI-subsystem program (no console window), synofurb-cli.exe a console program
+        shell: pwsh
+        run: |
+          function Subsystem($path) { $b = [IO.File]::ReadAllBytes($path); $pe = [BitConverter]::ToInt32($b, 0x3C); [BitConverter]::ToUInt16($b, $pe + 0x5C) }
+          $gui = Subsystem 'target/x86_64-pc-windows-msvc/release/synofurb.exe'
+          $cli = Subsystem 'target/x86_64-pc-windows-msvc/release/synofurb-cli.exe'
+          Write-Host "synofurb.exe subsystem=$gui (2 = GUI), synofurb-cli.exe subsystem=$cli (3 = console)"
+          if ($gui -ne 2) { throw "synofurb.exe has subsystem $gui: it would open a console window" }
+          if ($cli -ne 3) { throw "synofurb-cli.exe has subsystem $cli: it must be a console program" }
+
       - name: Package MSI and NSIS installer (unsigned)
         run: bash scripts/package-cargo-packager.sh --target x86_64-pc-windows-msvc --formats "wix,nsis" --out dist/release
 
@@ -136,8 +146,13 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\msi-install.log" -Tail 80; throw "msiexec /i exit code $($p.ExitCode)" }
           $exe = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA -Recurse -Filter synofurb.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $exe) { throw 'synofurb.exe not found after the MSI install' }
-          & $exe.FullName --version
-          if ($LASTEXITCODE -ne 0) { throw "synofurb --version failed ($LASTEXITCODE)" }
+          # synofurb.exe is a GUI-subsystem program: PowerShell does not wait for it with `&`, so start it and wait explicitly
+          $verOut = Join-Path $env:RUNNER_TEMP 'installed-version.txt'
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList '--version' -Wait -PassThru -RedirectStandardOutput $verOut
+          if ($p.ExitCode -ne 0) { throw "synofurb --version failed ($($p.ExitCode))" }
+          $ver = (Get-Content $verOut -Raw).Trim()
+          if (-not $ver) { throw 'synofurb --version printed nothing' }
+          Write-Host $ver
           $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "msiexec /x exit code $($p.ExitCode)" }
 
