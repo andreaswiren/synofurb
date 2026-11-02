@@ -261,7 +261,7 @@ pub fn outcome_of_error(e: &synofurb_core::recovery::RecoveryError) -> RecOutcom
             detail: format!(
                 "{e}. {}",
                 if *flash_may_have_changed {
-                    "The boot flash may have changed: read the unit again before you do anything else."
+                    "The boot flash may have changed: read the unit again before you do anything else, and use Manual recovery if it does not start."
                 } else {
                     "Nothing was changed on the boot flash."
                 }
@@ -299,6 +299,18 @@ fn recovery_session(t: &SshTarget, unit: &str, log: &Logger) -> anyhow::Result<(
         return Ok((s, true));
     }
     Ok((SshSession::connect(&t.host, t.port, &t.user, &t.auth, log)?, false))
+}
+
+/// Who the connected unit is, read from the live session (`None` when the inspection cannot run there: the boot agent, a unit that
+/// refuses the script). Never from the page's memory of an earlier inspect.
+pub fn live_identity(
+    sh: &mut dyn synofurb_core::remote::RemoteShell,
+    is_root: bool,
+    sudo: Option<String>,
+    host: &str,
+    log: &Logger,
+) -> Option<synofurb_core::domboot::UnitIdentity> {
+    session::inspect_remote(sh, is_root, sudo, log).ok().map(|(f, _)| synofurb_core::domboot::UnitIdentity::from_facts(&f, host))
 }
 
 /// Run one recovery action on a worker thread (`unit` names the agent key: the serial number, else the address).
@@ -347,6 +359,9 @@ pub fn spawn_recovery(tx: Tx, epoch: u64, t: SshTarget, unit: String, action: Re
             };
             let is_root = agent || ssh.exec("id -u", None).map(|r| r.stdout.trim() == "0").unwrap_or(false);
             let sudo = if agent { None } else { t.sudo_password.clone() };
+            // Restore writes the flash of the unit this session is connected to: read WHO that is from the live session (after the
+            // connection and the host-key check, before anything is uploaded), never from what the page remembers of an earlier inspect.
+            let live = matches!(action, RecAction::Restore { .. }).then(|| live_identity(&mut ssh, is_root, sudo.clone(), &t.host, &log));
             let mut p = synofurb_core::remote::Privileged { sh: &mut ssh, is_root, sudo_password: sudo };
             let out = match &action {
                 RecAction::BootDsm { reboot } => match rec::boot_dsm_on(&mut p, *reboot, &log) {
@@ -359,20 +374,43 @@ pub fn spawn_recovery(tx: Tx, epoch: u64, t: SshTarget, unit: String, action: Re
                     },
                     Err(e) => outcome_of_error(&e),
                 },
-                RecAction::Restore { backup, unit: id } => {
-                    // the image must be this unit's (checked here again, not only when the dialog was built)
-                    // the engine checks the image belongs to this unit and refuses another unit's (allow_other_unit is never set here)
+                RecAction::Restore { backup, unit: dialog_id } => {
+                    // 1. the connected unit must be the one the dialog, the phrase and the image were chosen for
+                    let id = match crate::ui::facts::resolve_live_identity(dialog_id, live.as_ref().and_then(|l| l.as_ref())) {
+                        Ok(id) => id,
+                        Err(why) => {
+                            ssh.close();
+                            return RecOutcome::err("Refused: this is not the unit you chose", why);
+                        }
+                    };
+                    // 2. the engine checks the image belongs to that (live) unit and refuses another unit's
                     match rec::check_backup_file(backup)
-                        .and_then(|checks| rec::restore_flash_for_unit_on(&mut p, backup, checks, id, false, &log))
+                        .and_then(|checks| rec::restore_flash_for_unit_on(&mut p, backup, checks, &id, false, &log))
                     {
-                        Ok(o) => RecOutcome {
+                        Ok(o) if o.readback_verified => RecOutcome {
                             level: RecLevel::Done,
                             title: "Boot flash restored".into(),
                             detail: format!(
-                                "{} MiB written from {}, read back and compared{}.",
+                                "{} MiB written from {}; the flash was read back and its hash equals the image's{}.",
                                 o.bytes / 1_048_576,
                                 o.backup.display(),
                                 if o.checked_against_sidecar { "; the file matched its checksum file" } else { "" }
+                            ),
+                            commands: vec![],
+                            state: Some(o.state_after),
+                        },
+                        // the tool ran but the flash could not be read back: not a success
+                        Ok(o) => RecOutcome {
+                            level: RecLevel::Warn,
+                            title: "Restore ran but was not verified".into(),
+                            detail: format!(
+                                "{} MiB were written from {}, but the flash could not be read back to compare ({}). Check the unit with Recovery before you rely on it.",
+                                o.bytes / 1_048_576,
+                                o.backup.display(),
+                                match &o.readback {
+                                    rec::Readback::NotPossible(why) => why.clone(),
+                                    _ => "reason unknown".into(),
+                                }
                             ),
                             commands: vec![],
                             state: Some(o.state_after),
@@ -587,5 +625,54 @@ mod tests {
         assert!(t.starts_with("20"), "{t}");
         assert_eq!(&t[4..5], "-");
         assert_eq!(&t[10..11], " ");
+    }
+
+    /// A scripted unit: answers `id -u` and the inspection script like a DSM 7 DS918+ would.
+    struct ScriptedUnit {
+        serial: &'static str,
+    }
+
+    impl synofurb_core::remote::RemoteShell for ScriptedUnit {
+        fn exec(&mut self, cmd: &str, _stdin: Option<&[u8]>) -> anyhow::Result<synofurb_core::remote::ExecResult> {
+            let stdout = if cmd.trim() == "id -u" {
+                "0\n".to_string()
+            } else {
+                synofurb_core::inspect::fixtures::ds_4bay().replace("1920PDN123456", self.serial)
+            };
+            Ok(synofurb_core::remote::ExecResult { code: 0, stdout, stderr: String::new() })
+        }
+        fn exec_to(&mut self, _c: &str, _s: Option<&[u8]>, _o: &mut dyn std::io::Write) -> anyhow::Result<(u32, String)> {
+            Ok((0, String::new()))
+        }
+        fn upload(
+            &mut self,
+            _p: &str,
+            _d: &mut dyn std::io::Read,
+            _n: u64,
+            _m: u32,
+            _pr: &mut dyn FnMut(u64),
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn host_key_fingerprint(&self) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn restore_reads_the_identity_of_the_connected_unit_not_of_the_page() {
+        use synofurb_core::domboot::UnitIdentity;
+        let log = Logger::memory(None);
+        // the dialog was built for unit A (an earlier inspect); the address now answers as unit B
+        let dialog = UnitIdentity { serial: "SN-A-0001".into(), model: "DS918+".into(), host: "192.168.1.20".into() };
+        let mut b = ScriptedUnit { serial: "SN-B-0002" };
+        let live = live_identity(&mut b, true, None, "192.168.1.20", &log).expect("the scripted unit inspects");
+        assert_eq!((live.serial.as_str(), live.model.as_str()), ("SN-B-0002", "DS918+"));
+        let refused = crate::ui::facts::resolve_live_identity(&dialog, Some(&live));
+        assert!(refused.is_err(), "unit B must not receive unit A's image");
+        // the same unit goes through, with the live identity (the one the engine checks the image against)
+        let mut a = ScriptedUnit { serial: "SN-A-0001" };
+        let live = live_identity(&mut a, true, None, "192.168.1.20", &log).unwrap();
+        assert_eq!(crate::ui::facts::resolve_live_identity(&dialog, Some(&live)).unwrap().serial, "SN-A-0001");
     }
 }

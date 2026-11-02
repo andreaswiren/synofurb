@@ -297,6 +297,25 @@ pub fn agent_command(host: &str, user: &str) -> String {
     format!("synofurb-cli boot-manager enter --host {} --user {}", shell_quote(host), shell_quote(user))
 }
 
+/// Which unit a restore may write to: the one the dialog named, confirmed by the LIVE session. A live serial that differs refuses;
+/// a live unit that cannot say its serial (the boot agent, a running Debian) falls back to the dialog's identity, and the engine
+/// then reports the match as unconfirmed; a live identity with a serial is what the engine checks the image against.
+pub fn resolve_live_identity(
+    dialog: &synofurb_core::domboot::UnitIdentity,
+    live: Option<&synofurb_core::domboot::UnitIdentity>,
+) -> Result<synofurb_core::domboot::UnitIdentity, String> {
+    let Some(live) = live.filter(|l| !l.serial.trim().is_empty()) else { return Ok(dialog.clone()) };
+    let (d, l) = (dialog.serial.trim(), live.serial.trim());
+    if !d.is_empty() && !d.eq_ignore_ascii_case(l) {
+        return Err(format!(
+            "The unit you are connected to has serial {l} ({}), but the image, the dialog and the phrase were chosen for serial {d} ({}). Nothing was written. Open Recovery for the unit you mean.",
+            if live.model.is_empty() { "model unknown" } else { live.model.as_str() },
+            if dialog.model.is_empty() { "model unknown" } else { dialog.model.as_str() },
+        ));
+    }
+    Ok(live.clone())
+}
+
 // ------------------------------------------------------------------------------------------------ installer failure
 
 /// What the generated installer does after a failure, as the Failed page and the Cancel dialog say it. It comes from
@@ -666,5 +685,17 @@ mod tests {
         let rows = recovery_rows(&UnitFacts { flash: true, agent_running: true, ..f() });
         assert!(rows[1].off.unwrap().contains("already running"));
         assert!(recovery_rows(&UnitFacts { flash: true, ..f() })[1].off.is_none());
+    }
+
+    #[test]
+    fn restore_is_checked_against_the_live_unit() {
+        use synofurb_core::domboot::UnitIdentity;
+        let id = |s: &str, m: &str| UnitIdentity { serial: s.into(), model: m.into(), host: "10.0.0.5".into() };
+        let dialog = id("SN-A", "DS918+");
+        assert_eq!(resolve_live_identity(&dialog, Some(&id("sn-a", "DS918+"))).unwrap().serial, "sn-a", "same unit (any case)");
+        let e = resolve_live_identity(&dialog, Some(&id("SN-B", "DS918+"))).unwrap_err();
+        assert!(e.contains("SN-B") && e.contains("SN-A") && e.contains("Nothing was written"), "{e}");
+        assert!(resolve_live_identity(&dialog, None).is_ok(), "no live reading: the dialog's identity, unconfirmed by the engine");
+        assert!(resolve_live_identity(&dialog, Some(&id("", "DS918+"))).is_ok(), "a live unit without a serial does not refuse");
     }
 }
