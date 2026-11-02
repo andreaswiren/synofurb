@@ -24,6 +24,14 @@ on:
         description: "Mark the release as a pre-release (note: the installers' 'latest release' lookup ignores pre-releases)"
         type: boolean
         default: false
+      reuse_run_id:
+        description: "Publish the artifacts of this earlier run of this workflow instead of building again (empty = build)"
+        type: string
+        default: ""
+      target_sha:
+        description: "Commit the tag should point at when reusing a run (the head_sha of that run); empty = this run's commit"
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -38,6 +46,7 @@ env:
 jobs:
   build:
     name: build windows-x86_64 (msi, exe, zip)
+    if: inputs.reuse_run_id == ''
     runs-on: windows-latest
     timeout-minutes: 120
     permissions:
@@ -151,7 +160,7 @@ jobs:
   publish:
     name: GitHub Release (unsigned, Windows)
     needs: [build]
-    if: inputs.publish
+    if: ${{ !cancelled() && inputs.publish && (needs.build.result == 'success' || (inputs.reuse_run_id != '' && needs.build.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -160,14 +169,24 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-windows
-          path: dist
+          path: dl
+          run-id: ${{ inputs.reuse_run_id != '' && inputs.reuse_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: SHA256SUMS and release notes
         env:
           TAG: ${{ inputs.tag }}
-          VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
+          VERSION="${TAG#v}"
+          # the artifact keeps the paths it was uploaded with (dist/release/..., gate-report.txt): find them instead of assuming
+          msi="$(find dl -name 'synofurb-*-windows-x86_64.msi' | head -n 1)"
+          [ -n "${msi}" ] || { echo "::error::no msi in the artifact"; find dl -type f; exit 1; }
+          mkdir -p dist/release
+          cp "$(dirname "${msi}")"/synofurb-* dist/release/
+          gr="$(find dl -name gate-report.txt | head -n 1)"
+          if [ -n "${gr}" ]; then cp "${gr}" dist/gate-report.txt; fi
+          ls -l dist/release
           cd dist/release
           sha256sum synofurb-* > SHA256SUMS
           cat SHA256SUMS
@@ -207,8 +226,8 @@ jobs:
       - uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
         with:
           tag_name: ${{ inputs.tag }}
-          target_commitish: ${{ github.sha }}
-          name: synofurb ${{ needs.build.outputs.version }} (Windows, unsigned)
+          target_commitish: ${{ inputs.target_sha != '' && inputs.target_sha || github.sha }}
+          name: synofurb ${{ inputs.tag }} (Windows, unsigned)
           body_path: RELEASE_NOTES.md
           files: dist/release/*
           fail_on_unmatched_files: true
