@@ -256,10 +256,8 @@ mod tests {
         let e = rep.failure().unwrap();
         assert_eq!(e.code(), 6);
         assert!(e.to_string().contains("point of no return"));
-        for r in [&rep] {
-            if let Some(p) = &r.log_path {
-                let _ = std::fs::remove_file(p);
-            }
+        if let Some(p) = &rep.log_path {
+            let _ = std::fs::remove_file(p);
         }
     }
 

@@ -1,0 +1,217 @@
+name: release-windows-unsigned
+
+# Windows-only, UNSIGNED GitHub release (MSI + NSIS .exe installer + portable zip + headless CLI zip).
+#
+# This is NOT the full pipeline (release.yml: six platforms, boot agents, minisign, design gate).  It exists because the owner asked
+# for a first "real" release focused on the Windows installers, skipping signing.  What it deliberately does NOT do:
+#   * it does not enforce the design gate (scripts/release-gate.py is run and its result is printed and written into the notes);
+#   * it does not sign SHA256SUMS with minisign and the msi/exe are not Authenticode-signed (SmartScreen will warn);
+#   * it does not build macOS, Linux, the boot agents or the management-plane tarball.
+# The release notes say all of this.  install.ps1 verifies the SHA-256 from SHA256SUMS and warns that the signature was not checked.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, must equal v<version> of Cargo.toml (e.g. v0.2.0)"
+        type: string
+        default: "v0.2.0"
+      publish:
+        description: "Create the GitHub release (off = only build and keep the artifacts)"
+        type: boolean
+        default: true
+      prerelease:
+        description: "Mark the release as a pre-release (note: the installers' 'latest release' lookup ignores pre-releases)"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release-windows-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PACKAGER_VERSION: "0.11.8"
+
+jobs:
+  build:
+    name: build windows-x86_64 (msi, exe, zip)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Version must match the tag
+        id: v
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          cargo_version="$(bash -c '. scripts/package-lib.sh; pkg_version')"
+          printf '%s' "${TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$' || { echo "::error::tag '${TAG}' is not vMAJOR.MINOR.PATCH[-pre]"; exit 1; }
+          [ "${TAG#v}" = "${cargo_version}" ] || { echo "::error::tag ${TAG} but Cargo.toml version is ${cargo_version}"; exit 1; }
+          echo "version=${cargo_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Design gate (REPORT ONLY in this workflow)
+        run: |
+          { python3 scripts/release-gate.py --dry-run || python scripts/release-gate.py --dry-run; } 2>&1 | tee gate-report.txt || true
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+        with:
+          key: release-windows-unsigned
+
+      - name: Cache cargo-packager ${{ env.CARGO_PACKAGER_VERSION }}
+        id: cp-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-packager.exe
+          key: cargo-packager-${{ env.CARGO_PACKAGER_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install cargo-packager
+        if: steps.cp-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-packager --version "${CARGO_PACKAGER_VERSION}" --locked
+
+      - name: Build the desktop app (release, locked)
+        run: |
+          export SYNOFURB_GIT_DESCRIBE="${{ inputs.tag }}"
+          cargo build --release --locked -p synofurb --target x86_64-pc-windows-msvc
+
+      - name: Smoke test the app binary
+        run: |
+          out="$(./target/x86_64-pc-windows-msvc/release/synofurb.exe --version)"
+          echo "${out}"
+          echo "${out}" | grep -q "${{ steps.v.outputs.version }}"
+
+      - name: Build synofurb-cli (release, locked, no GUI)
+        run: |
+          export SYNOFURB_GIT_DESCRIBE="${{ inputs.tag }}"
+          cargo build --release --locked -p synofurb --no-default-features --bin synofurb-cli --target x86_64-pc-windows-msvc
+
+      - name: Smoke test the CLI
+        run: |
+          bin=./target/x86_64-pc-windows-msvc/release/synofurb-cli.exe
+          out="$("${bin}" --version)"
+          echo "${out}"
+          echo "${out}" | grep -q "${{ steps.v.outputs.version }}"
+          "${bin}" version --json
+          "${bin}" compat DS923+
+          "${bin}" plan --facts demo > /dev/null
+
+      - name: Package MSI and NSIS installer (unsigned)
+        run: bash scripts/package-cargo-packager.sh --target x86_64-pc-windows-msvc --formats "wix,nsis" --out dist/release
+
+      - name: Package the portable zip and the CLI zip
+        run: |
+          bash scripts/package-portable.sh --target x86_64-pc-windows-msvc --out dist/release
+          bash scripts/package-cli.sh --target x86_64-pc-windows-msvc --out dist/release
+
+      - name: Smoke test the MSI (silent install, run, uninstall)
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist/release -Filter 'synofurb-*-windows-*.msi').FullName
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart', '/L*v', "$env:RUNNER_TEMP\msi-install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\msi-install.log" -Tail 80; throw "msiexec /i exit code $($p.ExitCode)" }
+          $exe = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA -Recurse -Filter synofurb.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw 'synofurb.exe not found after the MSI install' }
+          & $exe.FullName --version
+          if ($LASTEXITCODE -ne 0) { throw "synofurb --version failed ($LASTEXITCODE)" }
+          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /x exit code $($p.ExitCode)" }
+
+      - name: The files the release needs exist
+        run: |
+          ls -l dist/release
+          for ext in msi exe zip; do
+            ls dist/release/synofurb-*-windows-x86_64.${ext} > /dev/null || { echo "::error::no .${ext} was produced"; exit 1; }
+          done
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows
+          path: |
+            dist/release/*
+            gate-report.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: GitHub Release (unsigned, Windows)
+    needs: [build]
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-windows
+          path: dist
+
+      - name: SHA256SUMS and release notes
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd dist/release
+          sha256sum synofurb-* > SHA256SUMS
+          cat SHA256SUMS
+          cd ../..
+          gate="$(tail -n 12 dist/gate-report.txt 2>/dev/null | sed 's/^/    /' || true)"
+          {
+            echo "# synofurb ${VERSION} (Windows, unsigned)"
+            echo
+            echo "**Read this first.** This is a first release built for the Windows installers. It is **not** the full release pipeline:"
+            echo
+            echo "- **Unsigned.** The \`.msi\` and \`.exe\` are not Authenticode-signed (Windows SmartScreen will warn) and \`SHA256SUMS\` has no minisign signature."
+            echo "  The checksums catch a damaged download, not a tampered release. The in-app updater refuses to install unsigned releases (it shows that an update exists)."
+            echo "- **Design gate not passed.** The UX and UI critic approvals required by \`docs/DESIGN-GATE.md\` do not exist for this design hash;"
+            echo "  the owner asked for this release anyway. Gate output:"
+            echo
+            echo '```'
+            echo "${gate}"
+            echo '```'
+            echo "- **Never run on real hardware.** Nothing has been tested on a real Synology (reinstall, boot flash, RAID/LVM steps). Back up your data first, and expect failures."
+            echo "- Windows x86-64 only. No macOS, Linux, boot-agent or NAS-side management assets in this release."
+            echo
+            echo "## Files"
+            echo
+            echo "| File | What |"
+            echo "|---|---|"
+            echo "| \`synofurb-${VERSION}-windows-x86_64.msi\` | Windows installer (MSI) |"
+            echo "| \`synofurb-${VERSION}-windows-x86_64.exe\` | Windows installer (NSIS setup) |"
+            echo "| \`synofurb-${VERSION}-windows-x86_64.zip\` | portable app (no install) |"
+            echo "| \`synofurb-cli-*\` | headless command line (zip) |"
+            echo "| \`SHA256SUMS\` | SHA-256 of every file above |"
+            echo
+            echo "Install (PowerShell): \`irm https://raw.githubusercontent.com/andreaswiren/synofurb/main/install.ps1 | iex\`"
+            echo "(it prints a warning that the signature was not verified; use \`-RequireSignature\` to refuse unsigned releases)."
+          } > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - uses: softprops/action-gh-release@e598afbe1493e6b1bafb1f389cabb956eab91231 # v3.0.3
+        with:
+          tag_name: ${{ inputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: synofurb ${{ needs.build.outputs.version }} (Windows, unsigned)
+          body_path: RELEASE_NOTES.md
+          files: dist/release/*
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: ${{ inputs.prerelease }}
+          make_latest: ${{ !inputs.prerelease }}
