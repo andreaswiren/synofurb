@@ -27,7 +27,7 @@ Enter-on-Erase handling, Select placement, RadioGroup roving focus, Popover focu
 
 **These changes were made by the implementation after the approval above. The owner has not signed off on them; this section records
 them so the approved mockup is not mistaken for the product. Nothing here is an approval.** The file hashes above refer to the
-approved versions; `design/v2/DESIGN-SYSTEM-V2.md` section 13 has been extended since (DEV-UI-9 to DEV-UI-20) and `design/v2/UX-SPEC.md`
+approved versions, which are recoverable from git at commit `69eaff9` (where this file was created); `design/v2/DESIGN-SYSTEM-V2.md` section 13 has been extended since (DEV-UI-9 to DEV-UI-22) and `design/v2/UX-SPEC.md`
 F3 was corrected.
 
 | What changed | Why | Where |
@@ -38,3 +38,10 @@ F3 was corrected.
 | Manage has its own sign-in and is bound to the unit on screen ("Sign in to read health"); Health, Update and Roll back never use the Connect form. | A release blocker found in review (wrong-unit actions). | `screens/manage.rs`, `mgmt.rs` |
 | First-contact SSH host-key dialog shows the remaining answer time and says "Connection ended" when the attempt is over. | The engine's answer window is 180 s. | `overlays.rs`, `trust.rs` |
 | Find columns share the table width instead of fixed widths; "Found by" ends in an ellipsis at large text. | No horizontal scrolling at Largest text. | `screens/inventory.rs` |
+| The failure clocks are rules, not live counters: "DSM returns in 1 min", "DSM loader in 15 min" (boot-flash units only) and "DSM may return in 20 min or more" (DEV-UI-11). The mockup animated a countdown. | No timer-driven repaint, and the engine reports no seconds. | `facts::fail_clock`, `screens/failed.rs` |
+| Management update and roll back run the engine against the unit on screen; the demo animation is only a demo (DEV-UI-13). Never run against a real unit. | The mockup only drew the buttons. | `screens/manage.rs`, `worker.rs` |
+| No OS keychain: nothing offers to save a password (DEV-UI-14). | The core has no keychain API. | -- |
+| At Largest text on 960 x 640 Confirm keeps two columns and scrolls; the hidden unit header and the reorder at 52 rem are not ported (DEV-UI-15). | Not implemented. | `screens/confirm.rs` |
+| The install progress is a custom 12-segment strip with the "No return" flag over step 3 (DEV-UI-17). | No widget has segments or a flag. | `screens/install.rs` |
+| The keyboard focus indicator is a solid 1 px accent line, not the 2 px ring with offset (DEV-UI-22). | The widget's ring rendered at 2.3:1 / 2.5:1. | `theme.rs` |
+

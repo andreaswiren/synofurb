@@ -17,6 +17,20 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+  gui-walk:
+    # Renders every desktop screen headless at the largest text size and fails on horizontal overflow (crates/synofurb/assets/tools/gui-walk.sh).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb imagemagick bc python3-pil mesa-vulkan-drivers libxtst6 libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev libvulkan-dev fonts-dejavu-core
+      - run: cargo build -p synofurb
+      - run: sh crates/synofurb/assets/tools/gui-walk.sh --text largest
+        env:
+          SYNOFURB_BIN: target/debug/synofurb
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
   shell-and-python:
     runs-on: ubuntu-24.04
     steps:
