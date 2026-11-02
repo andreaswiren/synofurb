@@ -1,0 +1,55 @@
+name: release-sbom
+
+# Attach the SBOM (CycloneDX 1.5 + SPDX 2.3) and THIRD-PARTY-LICENSES.txt to an EXISTING GitHub release (docs/compliance/SBOM.md).
+# Used for releases built by release-windows.yml, which does not generate an SBOM itself.  The SBOM is generated from the commit this
+# workflow runs on (it must have the same Cargo.lock / version as the release); the boot-agent components are listed as UNRESOLVED
+# because no agent manifest exists for a Windows-only release.  The files are NOT covered by a signed SHA256SUMS (there is none).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag (vX.Y.Z); must equal v<version> in Cargo.toml"
+        type: string
+        default: "v0.2.0"
+
+permissions: {}
+
+jobs:
+  sbom:
+    name: generate and attach the SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - name: Generate, validate and attach
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(bash -c '. scripts/package-lib.sh; pkg_version')"
+          [ "${TAG#v}" = "${version}" ] || { echo "::error::tag ${TAG} but Cargo.toml version is ${version}"; exit 1; }
+          python3 -m unittest discover -s tests/sbom -v
+          ts="$(date -u -d "$(git log -1 --format=%cI)" +%Y-%m-%dT%H:%M:%SZ)"
+          python3 scripts/gen-sbom.py --out dist/sbom --timestamp "$ts" --commit "$(git rev-parse HEAD)"
+          python3 scripts/gen-sbom.py --check "dist/sbom/synofurb-${version}-sbom.cdx.json" "dist/sbom/synofurb-${version}-sbom.spdx.json" --cargo-lock Cargo.lock
+          python3 scripts/gen-licenses.py --out dist/sbom/THIRD-PARTY-LICENSES.txt
+          ls -l dist/sbom
+          gh release upload "${TAG}" \
+            "dist/sbom/synofurb-${version}-sbom.cdx.json" \
+            "dist/sbom/synofurb-${version}-sbom.spdx.json" \
+            dist/sbom/THIRD-PARTY-LICENSES.txt \
+            --clobber --repo "${GITHUB_REPOSITORY}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-report
+          path: dist/sbom/*
+          retention-days: 14

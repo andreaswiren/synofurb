@@ -497,6 +497,12 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
           retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-manifest-${{ matrix.arch }}          # NOT release-*: it must not land in dist/release
+          path: dist/agent-${{ matrix.arch }}/MANIFEST-${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 14
 
   # ------------------------------------------------------------------------------------------------------------------
   # 6. architecture-independent assets: management plane, DOM manager, compatibility list
@@ -530,11 +536,59 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------------------------------------------------------------------
+  # 6b. SBOM (CycloneDX + SPDX) and third-party licence texts (docs/compliance/SBOM.md)
+  # ------------------------------------------------------------------------------------------------------------------
+  sbom:
+    name: SBOM + third-party licences
+    needs: [design-gate, meta, test, agent]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: agent-manifest-*
+          path: dist/agent-manifests
+          merge-multiple: true
+      - name: Generate and validate the SBOM, collect licence texts
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests/sbom -v
+          ts="$(date -u -d "$(git log -1 --format=%cI)" +%Y-%m-%dT%H:%M:%SZ)"
+          python3 scripts/gen-sbom.py --out dist/sbom --timestamp "$ts" --commit "$(git rev-parse HEAD)" \
+            --agent-manifest dist/agent-manifests --require-agent-manifest
+          python3 scripts/gen-sbom.py --check "dist/sbom/synofurb-${VERSION}-sbom.cdx.json" "dist/sbom/synofurb-${VERSION}-sbom.spdx.json" --cargo-lock Cargo.lock
+          python3 scripts/gen-licenses.py --out dist/sbom/THIRD-PARTY-LICENSES.txt
+          mkdir -p dist/sbom-release
+          cp "dist/sbom/synofurb-${VERSION}-sbom.cdx.json" "dist/sbom/synofurb-${VERSION}-sbom.spdx.json" dist/sbom/THIRD-PARTY-LICENSES.txt dist/sbom-release/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-sbom                                 # release-* is what the checksums job merges into dist/release
+          path: dist/sbom-release/*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-report                                  # not released; for the maintainer to read
+          path: dist/sbom/synofurb-${{ needs.meta.outputs.version }}-sbom-report.json
+          retention-days: 14
+
+  # ------------------------------------------------------------------------------------------------------------------
   # 7. collect, SHA256SUMS, minisign signature, release notes
   # ------------------------------------------------------------------------------------------------------------------
   checksums:
     name: SHA256SUMS + minisign signature
-    needs: [design-gate, meta, build, cli, agent, static]
+    needs: [design-gate, meta, build, cli, agent, static, sbom]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # `release` environment: put the signing secrets there and add required reviewers to approve every release
