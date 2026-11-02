@@ -91,26 +91,37 @@ impl App {
         dialog(window, cx, item, &app);
     }
 
-    /// The Welcome guide: on the first launch until dismissed, and whenever Help or the menu asks for it. `step` is
-    /// 0-based (the demo screens `welcome-2`..`welcome-5` open on a later step).
-    pub fn open_welcome(&mut self, step: usize, window: &mut Window, cx: &mut Context<App>) {
+    /// The Welcome guide: on the first launch until it is dismissed for good, and whenever Help or the menu asks for it.
+    /// `step` is 0-based (the demo screens `welcome-2`..`welcome-5` open on a later step). On a `replay` the "Don't show
+    /// again" box shows the stored flag (and unticking it clears the flag); on the first launch it starts ticked.
+    pub fn open_welcome(&mut self, step: usize, replay: bool, window: &mut Window, cx: &mut Context<App>) {
         let app = cx.entity();
-        let view = cx.new(|cx| WelcomeView::new(app.clone(), step, cx));
-        let focus = view.read(cx).focus_handle().clone();
+        let dont_show = if replay { self.settings.welcome_done } else { true };
+        let view = cx.new(|cx| WelcomeView::new(app.clone(), step, dont_show, cx));
+        let focus = view.read(cx).primary_focus().clone();
         window.open_dialog(cx, move |d, _, cx| {
             let view = view.clone();
-            // Esc and the close button dismiss the guide; Skip and Start close it themselves (and decide what is stored)
-            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover).w(px(layout::DIALOG_W_WIDE)).child(view.clone()).on_close(
-                move |_, _, cx| {
-                    let (seen, app) = {
-                        let v = view.read(cx);
-                        (v.should_remember(), v.app().clone())
-                    };
-                    if seen {
-                        WelcomeView::store_seen(&app, cx);
+            let title = view.read(cx).title();
+            // Esc, the close button and a click outside close it like Skip; only the last step stores anything
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
+                .title(title)
+                .w(px(layout::DIALOG_W_WIDE))
+                .child(view.clone())
+                // Enter is bound to "confirm" before a focused button sees it: hand it to the view (never close here)
+                .on_ok({
+                    let view = view.clone();
+                    move |_, window, cx| {
+                        view.update(cx, |v, cx| v.confirm(window, cx));
+                        false
                     }
-                },
-            )
+                })
+                .on_close(move |_, _, cx| {
+                    let (value, app) = {
+                        let v = view.read(cx);
+                        (v.stores_on_close(), v.app().clone())
+                    };
+                    WelcomeView::store(&app, value, cx);
+                })
         });
         cx.defer_in(window, move |_, window, cx| window.focus(&focus, cx));
     }

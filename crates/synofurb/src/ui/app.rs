@@ -761,7 +761,7 @@ impl App {
             Overlay::Quick => self.open_quick_dialog(window, cx),
             Overlay::Manual => self.open_manual_recovery(window, cx),
             Overlay::NextDialog => self.open_next_dialog(window, cx),
-            Overlay::Welcome(step) => self.open_welcome(step, window, cx),
+            Overlay::Welcome(step) => self.open_welcome(step, false, window, cx),
         }
     }
 

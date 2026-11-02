@@ -236,8 +236,8 @@ impl App {
                         )
                         .item(
                             PopupMenuItem::new(copy::WELCOME_MENU.short)
-                                .icon(icons::icon(role::SPARKLES))
-                                .on_click(move |_, window, cx| a3.update(cx, |t, cx| t.open_welcome(0, window, cx))),
+                                .icon(icons::icon(role::ROCKET))
+                                .on_click(move |_, window, cx| a3.update(cx, |t, cx| t.open_welcome(0, true, window, cx))),
                         )
                     }),
             );

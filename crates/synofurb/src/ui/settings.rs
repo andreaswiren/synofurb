@@ -23,7 +23,8 @@ pub struct UiSettings {
     pub reduce_motion: bool,
     /// Offer to report an install result (off by default; a report always asks first).
     pub send_results: bool,
-    /// The Welcome guide was dismissed (Skip, Esc, or Start with "Don't show again" ticked): it no longer opens by itself.
+    /// The Welcome guide was ended with "Don't show again" ticked on its last step: it no longer opens by itself (Skip and
+    /// Esc before the last step store nothing; a replay unticking the box clears this flag).
     /// Files written before the guide called this `first_launch_done` (the old "Before you start" dialog).
     #[serde(alias = "first_launch_done")]
     pub welcome_done: bool,

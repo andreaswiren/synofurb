@@ -53,14 +53,18 @@ crates/synofurb/src/ui/
 ```
 
 **Welcome guide** (UX spec D1b, `welcome.rs` + `screens/welcome.rs`). A five-step dialog on the first launch: what
-synofurb does, the six steps, before you start (disks erased, tested backup, NAS on and online), the way back, ready.
-Each step has one Lucide icon, one headline and at most two short lines; details sit behind an info button (the
-screen-reader note and "only reads until you confirm" on step 3, Boot manager and Recovery on step 4). It replaces the old
-"Before you start" dialog and keeps its safety statements. Back / Next / Skip, a dots row, Left and Right arrow keys, Esc
-and the close button; the last step has "Don't show again" (ticked) and Start. `UiSettings.welcome_done` stores "seen"
-(old files with `first_launch_done` still count). Skip, or Esc on steps 1 to 4, dismisses it; on the last step Start and Esc
-follow the box. Reopen it from Help (first row of the topic list) or the title-bar menu; replaying never clears the flag.
-Demo: `--screen welcome` and `welcome-2` to `welcome-5`; screenshots `design/screenshots/v2-app-welcome-<n>-<theme>[-largest].png`.
+synofurb does (with the screen-reader statement in plain view), the six steps (with a caption for each), before you start
+(disks erased, back up your files and test it, what synofurb saves), if something goes wrong (conditional: before the disks
+change a failure returns the NAS to DSM, after that DSM must be reinstalled; the caveats are behind the info button), ready.
+Each step has one Lucide icon, a headline (the dialog title), at most two short lines and an info button for details.
+Position is the stock `CarouselPagination`; Back (not on step 1), Next / Skip, `Left` / `Right`, `Esc`; focus starts on the
+primary so `Enter` works. The text block has one height on every step and at every text size (all steps are laid out
+invisibly in one grid cell). It replaces the old "Before you start" dialog. `UiSettings.welcome_done` stores "seen"
+(old `first_launch_done` files still count); only the last step's "Don't show again" box decides: Skip, `Esc`, the close
+button and a click outside close it for this launch only on steps 1 to 4, and on a replay the box shows the stored flag
+(unticking clears it). Reopen it from Help (first row) or the title-bar menu. Demo: `--screen welcome` and
+`welcome-2` to `welcome-5`; screenshots `design/screenshots/v2-app-welcome-*.png` (steps, popovers, unticked box, menu
+path, 1180 x 760, key walk).
 
 **Six steps.** Find, Connect (with Inspect), Goal (with Quick setup), Setup (Storage and System tabs), Confirm, Install
 (with Done). Settings, About, Help, Manage, Boot manager and Recovery are side screens. The Stepper is the widget from

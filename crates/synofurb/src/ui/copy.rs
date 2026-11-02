@@ -189,28 +189,41 @@ mod strings {
         // ===================================================================== D1b welcome guide (first launch, Help, menu)
         WELCOME_MENU: Label, "Welcome guide", "Replay the short intro.", "", "";
         WELCOME_1_TITLE: Title, "Replace DSM with Debian", "", "", "";
-        WELCOME_1_A: Prose, "synofurb installs Debian 13 on your Synology over SSH.", "", "", "";
+        WELCOME_1_A: Prose, "synofurb installs Debian 13 on supported Synology units over SSH.", "", "", "";
         WELCOME_1_B: Prose, "Nothing changes until you confirm.", "", "", "";
+        WELCOME_1_NOTE: Prose, "Screen readers are not supported; use the command line.", "", "", "";
+        WELCOME_1_INFO: Label, "Good to know", "The Find list shows which models are supported.", "cli",
+            "synofurb only reads until you confirm.\n\nThe same steps work from the command line (see Help, Command line).";
         WELCOME_2_TITLE: Title, "Six steps to Debian", "", "", "";
-        WELCOME_2_A: Prose, "Review each step; go back until Install starts.", "", "", "";
+        WELCOME_2_A: Prose, "Changes begin after Confirm.", "", "", "";
+        WELCOME_2_B: Prose, "The NAS restarts; installing takes a while.", "", "", "";
+        WELCOME_2_INFO: Label, "More about the steps", "Find to Setup only read from the NAS.", "first-install",
+            "You can go back to any earlier step until Install starts.\n\nBefore the disks change, synofurb saves the boot flash and the first and last MiB of each changed disk on this computer.";
+        WELCOME_FLOW_FIND: Label, "Look for it", "", "", "";
+        WELCOME_FLOW_CONNECT: Label, "Sign in", "", "", "";
+        WELCOME_FLOW_GOAL: Label, "Pick a goal", "", "", "";
+        WELCOME_FLOW_SETUP: Label, "Plan disks", "", "", "";
+        WELCOME_FLOW_CONFIRM: Label, "You agree", "", "", "";
+        WELCOME_FLOW_INSTALL: Label, "Changes begin", "", "", "";
         WELCOME_3_TITLE: Title, "Before you start", "", "", "";
         WELCOME_3_A: Prose, "The disks you pick will be erased.", "", "", "";
-        WELCOME_3_B: Prose, "Make a tested backup; keep the NAS on and online.", "", "", "";
-        WELCOME_3_INFO: Label, "Good to know", "Screen readers are not supported in this window.", "cli",
-            "synofurb only reads until you confirm.\n\nThe same steps work from the command line (see Help, Command line).";
-        WELCOME_4_TITLE: Title, "The way back", "", "", "";
-        WELCOME_4_A: Prose, "DSM stays the default boot entry; Recovery restores it.", "", "", "";
-        WELCOME_4_B: Prose, "Boot manager tries other systems. F1 opens Help.", "", "", "";
-        WELCOME_4_INFO: Label, "More ways back", "Boot manager mode tries other systems without touching DSM.", "boot-manager",
-            "Boot manager adds a one-shot entry to the boot flash; DSM's entry stays the default.\n\nRecovery restores the flash that was saved before the install.";
+        WELCOME_3_B: Prose, "Back up your files and test it; keep the NAS on.", "", "", "";
+        WELCOME_3_INFO: Dialog, "What synofurb saves", "synofurb saves the boot flash and disk headers, not your files.", "backups",
+            "Before it writes anything, synofurb saves on this computer the whole boot flash and the first and last MiB of each changed disk.\n\nThat is not a backup of your files: make and test your own.\n\nKeep the NAS powered on and on the network until the install ends.";
+        WELCOME_4_TITLE: Title, "If something goes wrong", "", "", "";
+        WELCOME_4_A: Prose, "Before the disks change, a failure returns the NAS to DSM.", "", "", "";
+        WELCOME_4_B: Prose, "After that, DSM must be reinstalled. Keep your backup.", "", "", "";
+        WELCOME_4_INFO: Dialog, "More about recovery", "The Way back link in the status bar shows what applies now.", "recovery",
+            "After a finished install the default boot entry is Debian. Past the point of no return DSM's own system may be gone; reinstall it from Synology.\n\nIf the boot agent never starts, a power cycle may boot it again: see Manual recovery in Help.\n\nRecovery restores the saved boot flash only when an image of this unit exists and the unit answers.";
         WELCOME_5_TITLE: Title, "Ready when you are", "", "", "";
-        WELCOME_5_A: Prose, "Pick your NAS in Find to begin.", "", "", "";
-        WELCOME_5_B: Prose, "Reopen this guide from Help any time.", "", "", "";
-        WELCOME_HIDE: Label, "Don't show again", "The guide stays in Help and the menu.", "", "";
+        WELCOME_5_A: Prose, "Press F1 any time for Help.", "", "", "";
+        WELCOME_5_B: Prose, "Reopen this guide from Help or the menu.", "", "", "";
+        WELCOME_PAGES: Label, "Guide steps", "", "", "";
+        WELCOME_GOTO: Label, "Go to step {n}", "", "", "";
+        WELCOME_HIDE: Label, "Don't show again", "", "", "";
         WELCOME_NEXT: Button, "Next", "", "", "";
-        WELCOME_SKIP: Button, "Skip", "Close the guide.", "", "";
-        WELCOME_START: Button, "Start", "", "", "";
-        WELCOME_FIRST: Label, "Already at the start.", "", "", "";
+        WELCOME_SKIP: Button, "Skip", "Close for now; the guide returns at the next launch.", "", "";
+        WELCOME_START: Button, "Find NAS", "", "", "";
 
         // ===================================================================== D2 connect
         CONN_TITLE: Title, "Connect", "Hardware, disks and RAID state; nothing is written.", "first-install",
@@ -1065,16 +1078,26 @@ pub static SCREENS: &[ScreenCopy] = &[
         ],
     },
     // D1b Welcome guide: one entry per step (a dialog over Find; the shell is counted anyway, to stay conservative)
-    ScreenCopy { name: "welcome", visible: &[&WELCOME_1_TITLE, &WELCOME_1_A, &WELCOME_1_B, &WELCOME_SKIP, &BTN_BACK, &WELCOME_NEXT] },
-    ScreenCopy { name: "welcome-2", visible: &[&WELCOME_2_TITLE, &WELCOME_2_A, &WELCOME_SKIP, &BTN_BACK, &WELCOME_NEXT] },
+    ScreenCopy { name: "welcome", visible: &[&WELCOME_1_TITLE, &WELCOME_1_A, &WELCOME_1_B, &WELCOME_1_NOTE, &WELCOME_SKIP, &WELCOME_NEXT] },
     ScreenCopy {
-        name: "welcome-3",
-        visible: &[&WELCOME_3_TITLE, &WELCOME_3_A, &WELCOME_3_B, &WELCOME_3_INFO, &WELCOME_SKIP, &BTN_BACK, &WELCOME_NEXT],
+        name: "welcome-2",
+        visible: &[
+            &WELCOME_2_TITLE,
+            &WELCOME_2_A,
+            &WELCOME_2_B,
+            &WELCOME_FLOW_FIND,
+            &WELCOME_FLOW_CONNECT,
+            &WELCOME_FLOW_GOAL,
+            &WELCOME_FLOW_SETUP,
+            &WELCOME_FLOW_CONFIRM,
+            &WELCOME_FLOW_INSTALL,
+            &WELCOME_SKIP,
+            &BTN_BACK,
+            &WELCOME_NEXT,
+        ],
     },
-    ScreenCopy {
-        name: "welcome-4",
-        visible: &[&WELCOME_4_TITLE, &WELCOME_4_A, &WELCOME_4_B, &WELCOME_4_INFO, &WELCOME_SKIP, &BTN_BACK, &WELCOME_NEXT],
-    },
+    ScreenCopy { name: "welcome-3", visible: &[&WELCOME_3_TITLE, &WELCOME_3_A, &WELCOME_3_B, &WELCOME_SKIP, &BTN_BACK, &WELCOME_NEXT] },
+    ScreenCopy { name: "welcome-4", visible: &[&WELCOME_4_TITLE, &WELCOME_4_A, &WELCOME_4_B, &WELCOME_SKIP, &BTN_BACK, &WELCOME_NEXT] },
     ScreenCopy { name: "welcome-5", visible: &[&WELCOME_5_TITLE, &WELCOME_5_A, &WELCOME_5_B, &WELCOME_HIDE, &BTN_BACK, &WELCOME_START] },
     ScreenCopy { name: "help", visible: &[&HELP_TITLE, &HELP_SEARCH, &HELP_TOPICS, &HELP_SHORTCUTS, &HELP_DOCS, &BTN_BACK, &WELCOME_MENU] },
     ScreenCopy {

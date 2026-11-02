@@ -115,13 +115,13 @@ impl Render for HelpView {
                                 h_flex()
                                     .w_full()
                                     .items_center()
-                                    .gap(px(8.0))
-                                    .child(icons::icon(role::SPARKLES))
-                                    .child(div().text_sm().child(copy::WELCOME_MENU.short)),
+                                    .justify_between()
+                                    .child(div().text_sm().child(copy::WELCOME_MENU.short))
+                                    .child(icons::icon(role::COLLAPSE)),
                             )
                             .on_click(move |_, window, cx| {
                                 window.close_sheet(cx);
-                                app.update(cx, |a, cx| a.open_welcome(0, window, cx));
+                                app.update(cx, |a, cx| a.open_welcome(0, true, window, cx));
                             }),
                     )
                 })

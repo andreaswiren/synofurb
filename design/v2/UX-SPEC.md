@@ -108,7 +108,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | Reinstall DSM | D14 Recovery | Open find.synology.com / Close | 46 | The NAS boots Synology's loader, which shows an install page. Open find.synology.com or Synology Assistant, find the unit and install DSM with the .pat file for your model. Synology documents a reinstall that can keep data volumes; check its current documentation. This project cannot guarantee it. |
 | Restore boot flash? | D14 Recovery | Restore / Cancel | 29 | This writes the saved image {dom-backups/....img} back to the boot flash. It needs a working Linux on the unit, such as the agent or Debian. Type RESTORE FLASH to continue. |
 | Report a result | D10 Done | Open issue / Cancel | 32 | Opens a pre-filled GitHub issue with: model, DSM version, synofurb version, result, boot method and a log excerpt without secrets. The serial number is left out. Nothing is sent without your click. |
-| Good to know (Welcome guide, step 3) | D1b Welcome guide | Learn more | 26 | Screen readers are not supported in this window. synofurb only reads until you confirm. The same steps work from the command line (see Help, Command line). |
+| What synofurb saves / More about recovery (Welcome guide, steps 3 and 4) | D1b Welcome guide | Learn more | 49 / 61 | Step 3: the boot flash and the first and last MiB of each changed disk are saved on this computer, not your files; keep the NAS on. Step 4: after a finished install the default is Debian; past the point of no return DSM's own system may be gone; agent exception; Recovery needs a saved image of this unit and an answering unit; the Way back link shows what applies now. |
 | Apply with rollback? (web) | W6 Network | Apply / Cancel | 36 | After applying, open {https://192.168.1.45:8443}. The browser warns again; the certificate is the same: {SHA-256 5E:91:C4:0B:7A:D2:38:F6 ... 2D:83:3C:A1}. Passkeys do not work on an IP address. You have 90 seconds; you can also confirm over SSH {ssh andreas@192.168.1.45 sudo synofurb-net confirm}. Do nothing and it rolls back. |
 | Enable write? (web) | W5 Mounts | Enable write / Cancel | 24 | DSM btrfs volumes can use features Debian handles poorly. Read-only is the safe default. Write only if you have a copy of the files. |
 | Hybrid slices (desktop Plan) | D5 Plan (Slices link) | Close | 89 | Hybrid (SHR-style) cuts your disks' data space into slices at the sizes of the different disks. Each slice present on two or more disks becomes one array: RAID 1 for two members, RAID 5 for three or more (Hybrid 2-disk: RAID 6 for four or more). A slice on one disk has no partner and stays unused. The arrays are joined by LVM into one volume. This is built by synofurb with mdadm and LVM; DSM may not adopt it, and nothing here has run on a real Synology. |
@@ -152,7 +152,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | Connect disabled | Tooltip | Connect | Select a unit first. | - |
 | Add by IP | Dialog | Add NAS | Enter an address to probe. | Input IP + port; buttons Add / Cancel |
 | Offline tag | Tooltip | Offline | Compatibility list is {n} days old; LAN scan still works. | help: offline-mode |
-| Welcome guide | Dialog (first launch until dismissed; Help and menu any time) | Replace DSM with Debian | Nothing changes until you confirm. | Five steps, see D1b. The old "Before you start" dialog is merged into it. |
+| Welcome guide | Dialog (first launch until ended with the last step's box; Help and menu replay it) | Replace DSM with Debian | Nothing changes until you confirm. | Five steps, see D1b. The old "Before you start" dialog is merged into it. |
 
 **Primary:** Connect (selected row). **Secondary:** Rescan, Add by IP, Manage.
 
@@ -162,27 +162,31 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 
 ### D1b Welcome guide
 
-**Purpose:** Tell a new user in under a minute what synofurb does, what the process is and how to get back. Opens on top of D1 on the first launch until it is dismissed; also from Help (first row of the topic list) and the title-bar menu. It replaces the D1 "Before you start" dialog and keeps its three statements (read-only until you confirm; make a tested backup; screen readers are not supported, use the command line).
+**Purpose:** Tell a new user in under a minute what synofurb does, what the process is, what can go wrong and how to get back. Opens on top of D1 on the first launch until the user ends it with "Don't show again" on the last step; also from Help (first row of the topic list) and the title-bar menu (both replay it). It replaces the D1 "Before you start" dialog and keeps its three statements (read-only until you confirm; a backup you test; screen readers are not supported, use the command line). Revised after the UX and UI critic reviews (`design/reviews/v2/*-welcome-round1.md`).
 
-**Pattern (every step):** one Lucide icon in a neutral tile, one headline (type.title), at most two short lines (type.body), an info button for details, the dots row, then Skip on the left and Back plus the one primary on the right. Dialog width 640. The text block keeps one height on all steps, so the buttons do not move.
+**Pattern (every step):** the headline is the dialog title (type.section, so the dialog has an accessible name); one Lucide icon in a neutral 40 px tile; at most two short lines (type.body); an info button behind the last visible line for details; a pagination row (stock `CarouselPagination`: one button per step, accessible name "Go to step N", the current one a longer pill); Skip on the left and Back plus the one primary on the right. Dialog width 640, inner padding 16 like every dialog. **One height on every step and at every text size:** all five steps are laid out invisibly in the same grid cell and the live step is drawn over them, so the text block is as tall as the tallest step (step 2) by construction; the buttons and the pagination do not move (measured, see below).
 
-| Step | Icon | Headline | Lines | Info button (opened on purpose) |
+| Step | Icon | Headline (dialog title) | Visible lines | Info button (opened on purpose) |
 |---|---|---|---|---|
-| 1 | Server | Replace DSM with Debian | synofurb installs Debian 13 on your Synology over SSH. / Nothing changes until you confirm. | - |
-| 2 | Layers | Six steps to Debian | Review each step; go back until Install starts. Below: the six steps as a row (the window's Stepper, not clickable). | - |
-| 3 | Warning | Before you start | The disks you pick will be erased. / Make a tested backup; keep the NAS on and online. | Good to know: screen readers; only reads until you confirm; link Command line |
-| 4 | Undo | The way back | DSM stays the default boot entry; Recovery restores it. / Boot manager tries other systems. F1 opens Help. | More ways back: Boot manager mode, Recovery; link Boot manager |
-| 5 | Rocket | Ready when you are | Pick your NAS in Find to begin. / Reopen this guide from Help any time. | - (checkbox "Don't show again" with a tooltip) |
+| 1 | Server | Replace DSM with Debian | synofurb installs Debian 13 on supported Synology units over SSH. / Nothing changes until you confirm. / (muted note) Screen readers are not supported; use the command line. | Good to know: the Find list shows which models are supported; synofurb only reads until you confirm; same steps from the command line (link: Command line) |
+| 2 | Layers | Six steps to Debian | Changes begin after Confirm. / The NAS restarts; installing takes a while. Below: the six steps as a row (the window's Stepper look, current step bold, the rest muted, not clickable), each with a caption: Look for it, Sign in, Pick a goal, Plan disks, You agree, Changes begin. | More about the steps: Find to Setup only read; go back to any earlier step until Install starts; what synofurb saves first (link: First install) |
+| 3 | Warning | Before you start | The disks you pick will be erased. / Back up your files and test it; keep the NAS on. | What synofurb saves: the boot flash and the first and last MiB of each changed disk on this computer, not your files; keep the NAS on and on the network (link: Backups) |
+| 4 | Undo | If something goes wrong | Before the disks change, a failure returns the NAS to DSM. / After that, DSM must be reinstalled. Keep your backup. | More about recovery: after a finished install the default boot entry is Debian; past the point of no return DSM's own system may be gone; if the boot agent never starts a power cycle may boot it again (Manual recovery in Help); Recovery restores the saved boot flash only when an image of this unit exists and the unit answers; the Way back link in the status bar shows what applies now (link: Recovery) |
+| 5 | Rocket | Ready when you are | Press F1 any time for Help. / Reopen this guide from Help or the menu. Checkbox "Don't show again". | - |
 
-**Word budget:** 15 to 23 words of its own per step (steps 3, 4 and 5 are the largest with 23: headline, lines, Skip or the checkbox, Back and the primary) + shell 11 = at most **34** of 60. Counted: headline, lines, visible buttons and the checkbox label. Not counted: the info bodies (a click away), icons, dots. Enforced by `welcome.rs` and `copy.rs` tests.
+The wording of step 4 follows `docs/RECOVERY.md`, `docs/BOOT.md` and the "How recovery works" dialog: it is conditional (before the disks change / after), it never says "DSM stays the default" without that condition, it names the agent exception and the image condition, and it does not mention a rescue shell. Boot manager is not part of the guide (it writes the boot flash and is a goal, not a way back). A test fails if the unconditional sentence returns.
 
-**Primary:** Next (steps 1 to 4), Start (step 5): one primary per step. **Secondary:** Back (disabled on step 1 with the reason "Already at the start." behind an info button), Skip (steps 1 to 4; on step 5 Start is the way out).
+**Word budget:** 24 to 32 words of its own per step (30, 32, 24, 27, 24; step 2 is the largest with its six captions) + shell 11 = at most **43** of 60. Counted: lines, note, captions, visible buttons and the checkbox label (the headline is the dialog title, counted too). Not counted: the info bodies (a click away), icons, the pagination. Enforced by `welcome.rs` and `copy.rs` tests.
 
-**Keyboard:** `Right` next step (never presses Start), `Left` previous step, `Tab` / `Shift+Tab` through info button, checkbox, Back and primary, `Enter`/`Space` activate the focused control, `Esc` closes. Focus starts inside the dialog and returns to the page when it closes, like every other dialog.
+**Primary:** Next (steps 1 to 4), **Find NAS** (step 5; it closes the guide on the page where the first step is): one primary per step. **Secondary:** Back (not drawn on step 1), Skip (steps 1 to 4; on step 5 the primary is the way out).
 
-**What "seen" means (`UiSettings.welcome_done`):** Skip, or Esc / the close button on steps 1 to 4, dismisses the guide for good. On step 5, Start and Esc follow "Don't show again", which is ticked by default; unticked, the guide opens again at the next launch. Replaying from Help or the menu never clears the flag. Files from before the guide (`first_launch_done`) count as seen.
+**Keyboard:** focus starts on the primary button (visible ring), so `Enter` works at once. `Enter` activates the focused control (Back goes back, Skip skips, anything else is the primary; implemented through the dialog's confirm action, which the dialog binds before a focused button sees `Enter`). `Left` / `Right` move between steps from anywhere in the dialog (`Right` never presses the last primary). `Tab` / `Shift+Tab` walk the close button, the info button, the five pagination buttons, the checkbox (step 5), Back and the primary; `Space` activates; `Esc`, the close button and a click outside close the dialog. Recorded walk: `design/screenshots/v2-app-welcome-keywalk-light.png`.
 
-**States:** no loading or error state (static content). Demo names `welcome`, `welcome-2` to `welcome-5`. Largest text: the dialog grows, nothing clips (gui-walk).
+**What "seen" means (`UiSettings.welcome_done`):** only the last step's "Don't show again" box decides. Skip, `Esc`, the close button and a click outside close the guide **for this launch only** on steps 1 to 4: nothing is stored and it opens again at the next launch (the Skip tooltip says so). On step 5, whatever closes it (the primary, `Esc`, the close button) stores the box: ticked = seen, unticked = not seen. The box starts ticked on the first launch. On a **replay** from Help or the menu it starts with the stored flag, so it always shows what is stored, and unticking it then clears the flag. Files from before the guide (`first_launch_done`) count as seen.
+
+**States:** no loading or error state (static content). Demo names `welcome`, `welcome-2` to `welcome-5`.
+
+**Measured** (pixel scan of `design/screenshots/v2-app-welcome-<n>-<theme>[-largest].png`): the bottom edge of the primary button is at y = 376 on all five steps at 960 x 640 default text and at y = 425 on all five at Largest (light and dark identical), so the dialog has one height and Skip / Back / the primary do not move; the six captions do not run into each other at Largest; `gui-walk` finds no overflow on the five screens at default and Largest, light and dark.
 
 ### D2 Connect
 
@@ -1688,7 +1692,7 @@ A scrub reads every block and compares copies or parity to find silent errors. C
 | Screen | Own | Shell | Total | Budget |
 |---|---|---|---|---|
 | D1 Inventory | 24 | 11 | 35 | ok |
-| D1b Welcome guide (worst steps: 3, 4, 5) | 23 | 11 | 34 | ok |
+| D1b Welcome guide (worst step: 2) | 32 | 11 | 43 | ok |
 | D2 Connect | 23 | 12 | 35 | ok |
 | D3 Inspect | 24 | 12 | 36 | ok |
 | D4 Goal | 32 | 12 | 44 | ok |
