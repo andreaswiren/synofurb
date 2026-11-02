@@ -4,7 +4,7 @@ The desktop UI follows the owner-approved v2 mockup (`design/mockups-v2/desktop`
 `design/BRIEF-v2.md`). It uses stock `gpui-component` widgets through GPUI Kit 0.8.1, bundled Inter and JetBrains Mono,
 Lucide icons only, themed scrollbars, and at most 60 words of static prose per screen (enforced by tests in `copy.rs`).
 The widget map and the defects of the first UI are in `docs/GUI-COMPONENTS.md`; deviations from the mockup are in
-`design/v2/DESIGN-SYSTEM-V2.md` section 13 (DEV-UI-1 to DEV-UI-21).
+`design/v2/DESIGN-SYSTEM-V2.md` section 13 (DEV-UI-1 to DEV-UI-22).
 
 `synofurb` (no arguments) and `synofurb gui` open the wizard. All decisions (scan, inspect, plan, install, recovery,
 update, compatibility) stay in `synofurb-core`; the UI shows state and forwards clicks.
@@ -140,15 +140,25 @@ Verified (Linux, headless): per-file rustfmt, `cargo clippy --workspace --all-ta
 the tie between the copy and `synofurb_core::timing`, tokens vs JSON, accent contrast, risk Tag, Way back, recovery rows, Quick setup
 defaults and its "Use these" state, phrase gates, command-vs-plan, Manage binding to one unit, per-unit saved images, host-key bridge,
 Find column widths, management health and update gate, RAID helpers). Every demo screen renders under Xvfb with software Vulkan;
-`crates/synofurb/assets/tools/gui-walk.sh` renders them all at a text size and fails when content reaches the page gutter or a
-horizontal scrollbar appears (run at Largest on all 51 screens: clean; the Help sheet is excluded from the gutter test because it
-is a panel over the page). Enter/Space behaviour of Erase and the Command button were checked with injected XTest keys.
+`crates/synofurb/assets/tools/gui-walk.sh` renders every demo screen (pages, dialogs, the Help sheet) at a text size and fails when content
+reaches the page gutter or a horizontal scrollbar appears; it also scrolls each page by one and two viewports and walks the log
+viewer, the Copy command and Cancel install dialogs and the disabled-reason Popover. The `gui-walk` CI job runs it at Largest on
+ubuntu-24.04 (Xvfb, lavapipe); that job has not run yet. The Help sheet is excluded from the gutter test because it is a panel over
+the page; content hidden by `overflow: hidden` without a scrollbar cannot be seen by it. Enter/Space behaviour of Erase and the Command button were checked with injected XTest keys.
 
-Screenshots: `design/screenshots/v2-app-*.png` (about 105): light 960 x 640 for every family, dark for 20, Largest text for 18 (dark
-once), 1180 x 760 for 7, plus the log viewer, the Copy command, Cancel install, Report, Add by IP, host-key and changed-key dialogs,
-Quick setup with mixed disks, Manual recovery (light and dark), Confirm with Erase enabled, in Keep mode and for a twin unit, Find
-empty and scanning, Manage sign-in, a keyboard focus ring, hover and pressed states of the primary button, and the Popover opened by a
-disabled-reason info button. Not captured: hover and pressed for every control class, dark for every family, Largest for dialogs.
+Screenshots: `design/screenshots/v2-app-*.png`. Each file shows what its name says; the states that need an input were produced with
+injected XTest events (mouse motion, button down, Tab, key combinations), and two files with different names are never byte-identical
+(checked by hash). Light 960 x 640 for every demo screen (`failed-pre` is an alias of `failed` and `manage-health-ok` of `manage`: one file each), 73
+files; dark 45, Largest text 27 (pages and the dialogs Manual recovery, host-key, changed key, next-step, first launch, update,
+Keep, Quick setup and Copy command), 1180 x 760 for 8 pages. Dialogs and states: Copy command, Cancel install, Report, Add by IP,
+Keep, the seven "What happens next" variants (reboot or halt, before or after the point of no return, Wipe or Keep, agent), host-key
+(waiting, ended and changed), Quick setup, Manual recovery, Restore flash (typed phrase), Remove entries (typed phrase), Open agent on
+Debian, Boot DSM (and its outcome), Confirm with Erase enabled, Keep and twin, Find empty and scanning, Manage sign-in and every
+Manage state, the log viewer. Interaction states: a keyboard focus line on a checkbox and a primary button (light and dark), hover and
+pressed of the primary button (light and dark), the disabled-reason Popover.
+Not captured: hover and pressed for other control classes, the focus line on text inputs and on segmented choices (the segmented
+group showed no focus under Tab in the headless run: unverified), a recorded Tab order, Restore flash and Open agent outcomes (the typed
+phrase cannot be typed through XTest keysyms), dark for every dialog, Largest in dark except Confirm.
 
 **Window controls and the black strip in captures.** With no window manager (Xvfb) GPUI falls back to server-side decorations on X11
 and `TitleBar` then draws no minimise, maximise or close buttons (the window manager is expected to); a window manager supplies them.

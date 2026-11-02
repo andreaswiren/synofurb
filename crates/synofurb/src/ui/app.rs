@@ -740,6 +740,16 @@ impl App {
                 });
                 self.open_hostkey_dialog(ask, window, cx)
             }
+            Overlay::HostKeyEnded => {
+                let fp = "SHA256:q3Zb1c8mPvX0dT7nKfL2yHrW9sUeJ5aG4oB6iNxVwYc".to_string();
+                let ask = super::trust::TrustAsk::demo(synofurb_core::hostkey::HostKeyPrompt {
+                    host: "192.168.1.20".into(),
+                    port: 22,
+                    fingerprint: fp,
+                });
+                ask.watch().end();
+                self.open_hostkey_dialog(ask, window, cx)
+            }
             Overlay::HostKeyChanged => self.open_hostkey_changed(
                 "192.168.1.20".into(),
                 22,
