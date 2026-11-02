@@ -6,6 +6,7 @@ use super::copy::{self, Item};
 use super::disclosure::{dialog, paragraphs};
 use super::icons::{self, role};
 use super::screens::help::HelpView;
+use super::screens::welcome::WelcomeView;
 use super::state::{BootChoice, KeyMode, Screen};
 use super::theme::layout;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -90,33 +91,28 @@ impl App {
         dialog(window, cx, item, &app);
     }
 
-    /// "Before you start": once, on the first launch.
-    pub fn open_first_launch(&mut self, window: &mut Window, cx: &mut Context<App>) {
+    /// The Welcome guide: on the first launch until dismissed, and whenever Help or the menu asks for it. `step` is
+    /// 0-based (the demo screens `welcome-2`..`welcome-5` open on a later step).
+    pub fn open_welcome(&mut self, step: usize, window: &mut Window, cx: &mut Context<App>) {
         let app = cx.entity();
+        let view = cx.new(|cx| WelcomeView::new(app.clone(), step, cx));
+        let focus = view.read(cx).focus_handle().clone();
         window.open_dialog(cx, move |d, _, cx| {
-            let app = app.clone();
-            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
-                .title(copy::FIRST_LAUNCH.short)
-                .w(px(layout::DIALOG_W))
-                .child(paragraphs(copy::FIRST_LAUNCH.body, cx))
-                .footer(
-                    DialogFooter::new()
-                        .child(Button::new("fl-help").ghost().icon(icons::icon(role::HELP)).label(copy::BTN_OPEN_HELP.short).on_click({
-                            let app = app.clone();
-                            move |_, window, cx| {
-                                window.close_dialog(cx);
-                                app.update(cx, |a, cx| a.open_help_topic(Some("cli"), window, cx));
-                            }
-                        }))
-                        .child(Button::new("fl-ok").primary().label(copy::BTN_GOT_IT.short).on_click(move |_, window, cx| {
-                            window.close_dialog(cx);
-                            app.update(cx, |a, _| {
-                                a.settings.first_launch_done = true;
-                                a.save_settings();
-                            });
-                        })),
-                )
+            let view = view.clone();
+            // Esc and the close button dismiss the guide; Skip and Start close it themselves (and decide what is stored)
+            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover).w(px(layout::DIALOG_W_WIDE)).child(view.clone()).on_close(
+                move |_, _, cx| {
+                    let (seen, app) = {
+                        let v = view.read(cx);
+                        (v.should_remember(), v.app().clone())
+                    };
+                    if seen {
+                        WelcomeView::store_seen(&app, cx);
+                    }
+                },
+            )
         });
+        cx.defer_in(window, move |_, window, cx| window.focus(&focus, cx));
     }
 
     /// "Add NAS": probe an address that discovery did not find.

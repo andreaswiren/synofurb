@@ -506,8 +506,8 @@ impl App {
             None => {
                 app.start_scan(cx);
                 app.maybe_check_updates();
-                if !app.settings.first_launch_done {
-                    app.pending_overlay = Overlay::FirstLaunch;
+                if !app.settings.welcome_done {
+                    app.pending_overlay = Overlay::Welcome(0);
                     cx.defer_in(window, |this, window, cx| this.open_pending_overlay(window, cx));
                 }
             }
@@ -721,7 +721,7 @@ impl App {
         }
     }
 
-    /// Open the dialog or sheet a demo target asked for (and, in a real run, the first-launch dialog once).
+    /// Open the dialog or sheet a demo target asked for (and, in a real run, the Welcome guide until it is dismissed).
     pub fn open_pending_overlay(&mut self, window: &mut Window, cx: &mut Context<App>) {
         let o = std::mem::take(&mut self.pending_overlay);
         let app = cx.entity();
@@ -761,7 +761,7 @@ impl App {
             Overlay::Quick => self.open_quick_dialog(window, cx),
             Overlay::Manual => self.open_manual_recovery(window, cx),
             Overlay::NextDialog => self.open_next_dialog(window, cx),
-            Overlay::FirstLaunch => self.open_first_launch(window, cx),
+            Overlay::Welcome(step) => self.open_welcome(step, window, cx),
         }
     }
 

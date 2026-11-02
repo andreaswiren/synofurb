@@ -12,7 +12,7 @@ use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::text::TextView;
-use gpui_kit::component::{Sizable, h_flex, v_flex};
+use gpui_kit::component::{Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AppContext, Context, Entity, IntoElement, Keystroke, Render, SharedString, Subscription, Window, div, px};
 
@@ -88,6 +88,8 @@ impl Render for HelpView {
         }
 
         let topics = copy::search_topics(&query);
+        // the Welcome guide is the first row of the list (a dialog, not a topic, so it has no chevron)
+        let welcome = query.trim().is_empty() || copy::WELCOME_MENU.matches(&query);
         let list: gpui_kit::AnyElement = if self.tab == 1 {
             v_flex()
                 .gap(px(6.0))
@@ -100,11 +102,29 @@ impl Render for HelpView {
                     h_flex().gap(px(12.0)).items_center().child(div().w(px(120.0)).child(kbd)).child(div().text_sm().child(*what))
                 }))
                 .into_any_element()
-        } else if topics.is_empty() {
+        } else if topics.is_empty() && !welcome {
             Empty::new().header(EmptyHeader::new().title(EmptyTitle::new().child(copy::HELP_NO_TOPICS.short))).into_any_element()
         } else {
             v_flex()
                 .gap(px(2.0))
+                .when(welcome, |d| {
+                    let app = self.app.clone();
+                    d.child(
+                        ListItem::new("help-welcome")
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .child(icons::icon(role::SPARKLES))
+                                    .child(div().text_sm().child(copy::WELCOME_MENU.short)),
+                            )
+                            .on_click(move |_, window, cx| {
+                                window.close_sheet(cx);
+                                app.update(cx, |a, cx| a.open_welcome(0, window, cx));
+                            }),
+                    )
+                })
                 .children(topics.iter().enumerate().map(|(i, (id, item, _))| {
                     let (this, id) = (this.clone(), *id);
                     ListItem::new(("topic", i))
@@ -135,7 +155,6 @@ impl Render for HelpView {
             .label(copy::HELP_DOCS.short)
             .tooltip(copy::HELP_DOCS.tip)
             .on_click(|_, _, cx| cx.open_url("https://github.com/andreaswiren/synofurb/tree/main/docs"));
-        let _ = &self.app;
         v_flex()
             .size_full()
             .gap(px(12.0))

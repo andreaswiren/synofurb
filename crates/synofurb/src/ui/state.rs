@@ -29,7 +29,7 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 55] = [
+pub const DEMO_SCREEN_NAMES: [&str; 59] = [
     "failed-agent",
     "manage-rebuild",
     "manage-faildisk",
@@ -84,7 +84,11 @@ pub const DEMO_SCREEN_NAMES: [&str; 55] = [
     "dlg-next-pre",
     "dlg-next-keep",
     "dlg-next-agent",
-    "first-launch",
+    "welcome",
+    "welcome-2",
+    "welcome-3",
+    "welcome-4",
+    "welcome-5",
 ];
 
 /// What a demo run opens on top of its screen.
@@ -112,8 +116,8 @@ pub enum Overlay {
     Manual,
     /// "What happens next" dialog of the failure screen.
     NextDialog,
-    /// "Before you start" dialog of the first launch.
-    FirstLaunch,
+    /// The Welcome guide (first launch, Help, menu) on a 0-based step.
+    Welcome(usize),
 }
 
 /// Where a demo run starts: a screen, optionally with something open on top.
@@ -234,7 +238,11 @@ impl DemoTarget {
             }
             "dlg-next-agent" => DemoTarget { overlay: Overlay::NextDialog, fixture: Fixture::Agent, ..DemoTarget::at(Screen::Failed) },
             "dlg-next" => DemoTarget { overlay: Overlay::NextDialog, past_no_return: true, ..DemoTarget::at(Screen::Failed) },
-            "first-launch" => DemoTarget { overlay: Overlay::FirstLaunch, ..DemoTarget::at(Screen::Inventory) },
+            "welcome" | "first-launch" => DemoTarget { overlay: Overlay::Welcome(0), ..DemoTarget::at(Screen::Inventory) },
+            "welcome-2" => DemoTarget { overlay: Overlay::Welcome(1), ..DemoTarget::at(Screen::Inventory) },
+            "welcome-3" => DemoTarget { overlay: Overlay::Welcome(2), ..DemoTarget::at(Screen::Inventory) },
+            "welcome-4" => DemoTarget { overlay: Overlay::Welcome(3), ..DemoTarget::at(Screen::Inventory) },
+            "welcome-5" => DemoTarget { overlay: Overlay::Welcome(4), ..DemoTarget::at(Screen::Inventory) },
             _ => return None,
         };
         Some(t)
@@ -723,6 +731,9 @@ mod tests {
         assert!(DemoTarget::parse("system-offline").unwrap().offline);
         assert!(DemoTarget::parse("plan-keep").unwrap().keep);
         assert_eq!(DemoTarget::parse("help-topic").unwrap().overlay, Overlay::Help(Some("recovery")));
+        for (n, step) in [("welcome", 0), ("first-launch", 0), ("welcome-2", 1), ("welcome-3", 2), ("welcome-4", 3), ("welcome-5", 4)] {
+            assert_eq!(DemoTarget::parse(n).unwrap().overlay, Overlay::Welcome(step), "{n}");
+        }
         assert!(DemoTarget::parse("nope").is_none());
         assert_eq!(DemoTarget::parse("  Confirm ").unwrap().screen, Screen::Confirm);
     }

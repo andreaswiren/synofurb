@@ -4,7 +4,7 @@ The desktop UI follows the owner-approved v2 mockup (`design/mockups-v2/desktop`
 `design/BRIEF-v2.md`). It uses stock `gpui-component` widgets through GPUI Kit 0.8.1, bundled Inter and JetBrains Mono,
 Lucide icons only, themed scrollbars, and at most 60 words of static prose per screen (enforced by tests in `copy.rs`).
 The widget map and the defects of the first UI are in `docs/GUI-COMPONENTS.md`; deviations from the mockup are in
-`design/v2/DESIGN-SYSTEM-V2.md` section 13 (DEV-UI-1 to DEV-UI-22).
+`design/v2/DESIGN-SYSTEM-V2.md` section 13 (DEV-UI-1 to DEV-UI-23).
 
 `synofurb` (no arguments) and `synofurb gui` open the wizard. All decisions (scan, inspect, plan, install, recovery,
 update, compatibility) stay in `synofurb-core`; the UI shows state and forwards clicks.
@@ -14,9 +14,9 @@ synofurb gui                              # the real thing
 synofurb gui --demo --screen confirm      # built-in demo unit, nothing touches the network
 ```
 
-Demo screens (41, see `state::DEMO_SCREEN_NAMES`): `inventory connect inspect goal plan plan-keep system confirm install
+Demo screens (59, see `state::DEMO_SCREEN_NAMES`): `inventory connect inspect goal plan plan-keep system confirm install
 install-after-ponr failed failed-pre failed-post done update settings bootmgr recover manage manage-* recovery-* help
-help-topic about dlg-* first-launch`. `install`, `failed` and `done` replay a scripted event stream.
+help-topic about dlg-* welcome welcome-2..welcome-5` (`first-launch` is an alias of `welcome`). `install`, `failed` and `done` replay a scripted event stream.
 
 | Variable | Effect |
 |---|---|
@@ -46,10 +46,21 @@ crates/synofurb/src/ui/
   state.rs      Screen, six-step Step, ConfirmGate, BootChoice, InstallView, demo targets and fixtures
   app.rs        root view `App`: state, message pump, actions
   render.rs     title bar, Stepper, unit header, status bar, update banner, action bar, key bindings
-  overlays.rs   Help sheet, Keep/Next/First-launch/Add/Slices dialogs, Copy command, Quick setup
+  welcome.rs    PURE: the Welcome guide's step machine (five steps, Back/Next/Skip, what "seen" means) and its content table
+  overlays.rs   Help sheet, Welcome guide, Keep/Next/Add/Slices dialogs, Copy command, Quick setup
   screens/      one module per screen
   worker.rs     std::thread workers + Msg; demo.rs scripted units and events; assets.rs embedded Lucide icons
 ```
+
+**Welcome guide** (UX spec D1b, `welcome.rs` + `screens/welcome.rs`). A five-step dialog on the first launch: what
+synofurb does, the six steps, before you start (disks erased, tested backup, NAS on and online), the way back, ready.
+Each step has one Lucide icon, one headline and at most two short lines; details sit behind an info button (the
+screen-reader note and "only reads until you confirm" on step 3, Boot manager and Recovery on step 4). It replaces the old
+"Before you start" dialog and keeps its safety statements. Back / Next / Skip, a dots row, Left and Right arrow keys, Esc
+and the close button; the last step has "Don't show again" (ticked) and Start. `UiSettings.welcome_done` stores "seen"
+(old files with `first_launch_done` still count). Skip, or Esc on steps 1 to 4, dismisses it; on the last step Start and Esc
+follow the box. Reopen it from Help (first row of the topic list) or the title-bar menu; replaying never clears the flag.
+Demo: `--screen welcome` and `welcome-2` to `welcome-5`; screenshots `design/screenshots/v2-app-welcome-<n>-<theme>[-largest].png`.
 
 **Six steps.** Find, Connect (with Inspect), Goal (with Quick setup), Setup (Storage and System tabs), Confirm, Install
 (with Done). Settings, About, Help, Manage, Boot manager and Recovery are side screens. The Stepper is the widget from
@@ -143,13 +154,13 @@ Find column widths, management health and update gate, RAID helpers). Every demo
 `crates/synofurb/assets/tools/gui-walk.sh` renders every demo screen (pages, dialogs, the Help sheet) at a text size and fails when content
 reaches the page gutter or a horizontal scrollbar appears; it also scrolls each page by one and two viewports and walks the log
 viewer, the Copy command and Cancel install dialogs and the disabled-reason Popover. The `gui-walk` CI job runs it at Largest on
-ubuntu-24.04 (Xvfb, lavapipe); that job has not run yet. A local run at Largest (light, 960 x 640, three viewports per screen) found no overflow on all 55 demo screens and the 4 extra states. The Help sheet is excluded from the gutter test because it is a panel over
+ubuntu-24.04 (Xvfb, lavapipe); that job has not run yet. A local run at Largest (light, 960 x 640, three viewports per screen) found no overflow on all 55 demo screens (the five Welcome guide screens were walked separately at default and Largest, light and dark: clean) and the 4 extra states. The Help sheet is excluded from the gutter test because it is a panel over
 the page; content hidden by `overflow: hidden` without a scrollbar cannot be seen by it. Enter/Space behaviour of Erase and the Command button were checked with injected XTest keys.
 
 Screenshots: `design/screenshots/v2-app-*.png`. Each file shows what its name says; the states that need an input were produced with
 injected XTest events (mouse motion, button down, Tab, key combinations), and two files with different names are never byte-identical
 (checked by hash). Light 960 x 640 for every demo screen (`failed-pre` is an alias of `failed` and `manage-health-ok` of `manage`: one file each), 73
-files; dark 45, Largest text 27 (pages and the dialogs Manual recovery, host-key, changed key, next-step, first launch, update,
+files; dark 45, Largest text 27 (pages and the dialogs Manual recovery, host-key, changed key, next-step, welcome guide (five steps, light and dark, plus Largest), update,
 Keep, Quick setup and Copy command), 1180 x 760 for 8 pages. Dialogs and states: Copy command, Cancel install, Report, Add by IP,
 Keep, the seven "What happens next" variants (reboot or halt, before or after the point of no return, Wipe or Keep, agent), host-key
 (waiting, ended and changed), Quick setup, Manual recovery, Restore flash (typed phrase), Remove entries (typed phrase), Open agent on

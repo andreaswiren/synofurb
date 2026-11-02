@@ -23,8 +23,10 @@ pub struct UiSettings {
     pub reduce_motion: bool,
     /// Offer to report an install result (off by default; a report always asks first).
     pub send_results: bool,
-    /// The "Before you start" dialog has been shown once.
-    pub first_launch_done: bool,
+    /// The Welcome guide was dismissed (Skip, Esc, or Start with "Don't show again" ticked): it no longer opens by itself.
+    /// Files written before the guide called this `first_launch_done` (the old "Before you start" dialog).
+    #[serde(alias = "first_launch_done")]
+    pub welcome_done: bool,
     /// Folder of the offline bundle chosen for Source: Offline.
     pub bundle_dir: Option<String>,
 }
@@ -41,7 +43,7 @@ impl Default for UiSettings {
             remind_after: None,
             reduce_motion: false,
             send_results: false,
-            first_launch_done: false,
+            welcome_done: false,
             bundle_dir: None,
         }
     }
@@ -117,6 +119,17 @@ mod tests {
         assert_eq!(s.theme, ThemeChoice::Dark);
         assert!(s.check_updates);
         assert_eq!(s.update_channel, "stable");
+    }
+
+    #[test]
+    fn the_old_first_launch_flag_still_counts_as_seen() {
+        let s: UiSettings = serde_json::from_str(r#"{"first_launch_done":true}"#).unwrap();
+        assert!(s.welcome_done, "someone who dismissed 'Before you start' is not welcomed again");
+        let s: UiSettings = serde_json::from_str(r#"{"welcome_done":true}"#).unwrap();
+        assert!(s.welcome_done);
+        assert!(!UiSettings::default().welcome_done);
+        let json = serde_json::to_string(&UiSettings { welcome_done: true, ..Default::default() }).unwrap();
+        assert!(json.contains("welcome_done") && !json.contains("first_launch_done"));
     }
 
     #[test]

@@ -185,9 +185,32 @@ mod strings {
         INV_ADD_TITLE: Dialog, "Add NAS", "", "", "Enter the address of a unit that discovery did not find.";
         INV_ADD_ADDR: Label, "Address", "", "", "";
         INV_ADD_BTN: Button, "Add", "", "", "";
-        FIRST_LAUNCH: Dialog, "Before you start", "Read-only until you confirm.", "cli",
-            "synofurb only reads until you confirm.\n\nMake a tested backup first.\n\nScreen readers are not supported in this window; the same steps work from the command line (see Help, Command line).";
-        BTN_GOT_IT: Button, "Got it", "", "", "";
+
+        // ===================================================================== D1b welcome guide (first launch, Help, menu)
+        WELCOME_MENU: Label, "Welcome guide", "Replay the short intro.", "", "";
+        WELCOME_1_TITLE: Title, "Replace DSM with Debian", "", "", "";
+        WELCOME_1_A: Prose, "synofurb installs Debian 13 on your Synology over SSH.", "", "", "";
+        WELCOME_1_B: Prose, "Nothing changes until you confirm.", "", "", "";
+        WELCOME_2_TITLE: Title, "Six steps to Debian", "", "", "";
+        WELCOME_2_A: Prose, "Review each step; go back until Install starts.", "", "", "";
+        WELCOME_3_TITLE: Title, "Before you start", "", "", "";
+        WELCOME_3_A: Prose, "The disks you pick will be erased.", "", "", "";
+        WELCOME_3_B: Prose, "Make a tested backup; keep the NAS on and online.", "", "", "";
+        WELCOME_3_INFO: Label, "Good to know", "Screen readers are not supported in this window.", "cli",
+            "synofurb only reads until you confirm.\n\nThe same steps work from the command line (see Help, Command line).";
+        WELCOME_4_TITLE: Title, "The way back", "", "", "";
+        WELCOME_4_A: Prose, "DSM stays the default boot entry; Recovery restores it.", "", "", "";
+        WELCOME_4_B: Prose, "Boot manager tries other systems. F1 opens Help.", "", "", "";
+        WELCOME_4_INFO: Label, "More ways back", "Boot manager mode tries other systems without touching DSM.", "boot-manager",
+            "Boot manager adds a one-shot entry to the boot flash; DSM's entry stays the default.\n\nRecovery restores the flash that was saved before the install.";
+        WELCOME_5_TITLE: Title, "Ready when you are", "", "", "";
+        WELCOME_5_A: Prose, "Pick your NAS in Find to begin.", "", "", "";
+        WELCOME_5_B: Prose, "Reopen this guide from Help any time.", "", "", "";
+        WELCOME_HIDE: Label, "Don't show again", "The guide stays in Help and the menu.", "", "";
+        WELCOME_NEXT: Button, "Next", "", "", "";
+        WELCOME_SKIP: Button, "Skip", "Close the guide.", "", "";
+        WELCOME_START: Button, "Start", "", "", "";
+        WELCOME_FIRST: Label, "Already at the start.", "", "", "";
 
         // ===================================================================== D2 connect
         CONN_TITLE: Title, "Connect", "Hardware, disks and RAID state; nothing is written.", "first-install",
@@ -1041,7 +1064,19 @@ pub static SCREENS: &[ScreenCopy] = &[
             &RAID_OPEN_WEB,
         ],
     },
-    ScreenCopy { name: "help", visible: &[&HELP_TITLE, &HELP_SEARCH, &HELP_TOPICS, &HELP_SHORTCUTS, &HELP_DOCS, &BTN_BACK] },
+    // D1b Welcome guide: one entry per step (a dialog over Find; the shell is counted anyway, to stay conservative)
+    ScreenCopy { name: "welcome", visible: &[&WELCOME_1_TITLE, &WELCOME_1_A, &WELCOME_1_B, &WELCOME_SKIP, &BTN_BACK, &WELCOME_NEXT] },
+    ScreenCopy { name: "welcome-2", visible: &[&WELCOME_2_TITLE, &WELCOME_2_A, &WELCOME_SKIP, &BTN_BACK, &WELCOME_NEXT] },
+    ScreenCopy {
+        name: "welcome-3",
+        visible: &[&WELCOME_3_TITLE, &WELCOME_3_A, &WELCOME_3_B, &WELCOME_3_INFO, &WELCOME_SKIP, &BTN_BACK, &WELCOME_NEXT],
+    },
+    ScreenCopy {
+        name: "welcome-4",
+        visible: &[&WELCOME_4_TITLE, &WELCOME_4_A, &WELCOME_4_B, &WELCOME_4_INFO, &WELCOME_SKIP, &BTN_BACK, &WELCOME_NEXT],
+    },
+    ScreenCopy { name: "welcome-5", visible: &[&WELCOME_5_TITLE, &WELCOME_5_A, &WELCOME_5_B, &WELCOME_HIDE, &BTN_BACK, &WELCOME_START] },
+    ScreenCopy { name: "help", visible: &[&HELP_TITLE, &HELP_SEARCH, &HELP_TOPICS, &HELP_SHORTCUTS, &HELP_DOCS, &BTN_BACK, &WELCOME_MENU] },
     ScreenCopy {
         name: "about",
         visible: &[&ABOUT_TITLE, &ABOUT_TAGLINE, &ABOUT_COPY_DIAG, &ABOUT_DOCS, &ABOUT_SOURCE, &ABOUT_REPORT, &ABOUT_CREDITS],
@@ -1191,6 +1226,11 @@ mod tests {
             "manage",
             "help",
             "about",
+            "welcome",
+            "welcome-2",
+            "welcome-3",
+            "welcome-4",
+            "welcome-5",
         ] {
             assert!(SCREENS.iter().any(|s| s.name == n), "screen {n} has no copy declaration");
         }

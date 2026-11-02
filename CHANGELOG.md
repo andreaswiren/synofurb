@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Welcome guide** on the first launch of the desktop app: five short steps (what synofurb does, the six steps, before you start, the way back, ready), each with one icon, one headline and at most two lines; Back, Next, Skip, a dots row, arrow keys and Esc; details sit behind info buttons. It replaces the old "Before you start" dialog and keeps its statements (read-only until you confirm, make a tested backup, screen readers are not supported). Reopen it any time from Help (first row) or the title-bar menu. Demo screens `welcome`, `welcome-2` to `welcome-5`; design notes in `design/v2/UX-SPEC.md` (D1b) and DEV-UI-23.
+
+### Changed
+- The "seen" flag of the first-launch dialog is now `welcome_done` in `ui-settings.json`; files with the old `first_launch_done` are still read.
+
 ## 0.2.1
 
 ### Fixed

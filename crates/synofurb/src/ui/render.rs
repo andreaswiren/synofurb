@@ -223,7 +223,7 @@ impl App {
                     .icon(icons::icon(gpui_kit::assets::IconName::Menu))
                     .accessibility_label("Menu")
                     .dropdown_menu(move |menu, _, _| {
-                        let (a1, a2) = (app.clone(), app.clone());
+                        let (a1, a2, a3) = (app.clone(), app.clone(), app.clone());
                         menu.item(
                             PopupMenuItem::new(copy::MENU_ABOUT.short)
                                 .icon(icons::icon(role::ABOUT))
@@ -233,6 +233,11 @@ impl App {
                             PopupMenuItem::new(copy::MENU_UPDATES.short)
                                 .icon(icons::icon(role::REFRESH))
                                 .on_click(move |_, _, cx| a2.update(cx, |t, cx| t.check_updates_now(cx))),
+                        )
+                        .item(
+                            PopupMenuItem::new(copy::WELCOME_MENU.short)
+                                .icon(icons::icon(role::SPARKLES))
+                                .on_click(move |_, window, cx| a3.update(cx, |t, cx| t.open_welcome(0, window, cx))),
                         )
                     }),
             );

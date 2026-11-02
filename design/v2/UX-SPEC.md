@@ -108,7 +108,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | Reinstall DSM | D14 Recovery | Open find.synology.com / Close | 46 | The NAS boots Synology's loader, which shows an install page. Open find.synology.com or Synology Assistant, find the unit and install DSM with the .pat file for your model. Synology documents a reinstall that can keep data volumes; check its current documentation. This project cannot guarantee it. |
 | Restore boot flash? | D14 Recovery | Restore / Cancel | 29 | This writes the saved image {dom-backups/....img} back to the boot flash. It needs a working Linux on the unit, such as the agent or Debian. Type RESTORE FLASH to continue. |
 | Report a result | D10 Done | Open issue / Cancel | 32 | Opens a pre-filled GitHub issue with: model, DSM version, synofurb version, result, boot method and a log excerpt without secrets. The serial number is left out. Nothing is sent without your click. |
-| Before you start (first launch) | D1 Inventory | Got it / Open Help | 31 | synofurb only reads until you confirm. Make a tested backup first. Screen readers are not supported in this window; the same steps work from the command line (see Help, Command line). |
+| Good to know (Welcome guide, step 3) | D1b Welcome guide | Learn more | 26 | Screen readers are not supported in this window. synofurb only reads until you confirm. The same steps work from the command line (see Help, Command line). |
 | Apply with rollback? (web) | W6 Network | Apply / Cancel | 36 | After applying, open {https://192.168.1.45:8443}. The browser warns again; the certificate is the same: {SHA-256 5E:91:C4:0B:7A:D2:38:F6 ... 2D:83:3C:A1}. Passkeys do not work on an IP address. You have 90 seconds; you can also confirm over SSH {ssh andreas@192.168.1.45 sudo synofurb-net confirm}. Do nothing and it rolls back. |
 | Enable write? (web) | W5 Mounts | Enable write / Cancel | 24 | DSM btrfs volumes can use features Debian handles poorly. Read-only is the safe default. Write only if you have a copy of the files. |
 | Hybrid slices (desktop Plan) | D5 Plan (Slices link) | Close | 89 | Hybrid (SHR-style) cuts your disks' data space into slices at the sizes of the different disks. Each slice present on two or more disks becomes one array: RAID 1 for two members, RAID 5 for three or more (Hybrid 2-disk: RAID 6 for four or more). A slice on one disk has no partner and stays unused. The arrays are joined by LVM into one volume. This is built by synofurb with mdadm and LVM; DSM may not adopt it, and nothing here has run on a real Synology. |
@@ -152,13 +152,37 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | Connect disabled | Tooltip | Connect | Select a unit first. | - |
 | Add by IP | Dialog | Add NAS | Enter an address to probe. | Input IP + port; buttons Add / Cancel |
 | Offline tag | Tooltip | Offline | Compatibility list is {n} days old; LAN scan still works. | help: offline-mode |
-| First launch | Dialog (once) | Before you start | Read-only until you confirm. | Three lines: read-only until Confirm; make a backup; screen readers are not supported in this window, use the CLI (help: cli). Button Got it, link Open Help. |
+| Welcome guide | Dialog (first launch until dismissed; Help and menu any time) | Replace DSM with Debian | Nothing changes until you confirm. | Five steps, see D1b. The old "Before you start" dialog is merged into it. |
 
 **Primary:** Connect (selected row). **Secondary:** Rescan, Add by IP, Manage.
 
 **Keyboard:** `Ctrl+F` filter; `Up`/`Down` row; `Enter` Connect; `R` rescan; `A` add; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
 **States:** *empty*: Empty: "No NAS found" + buttons Scan again, Add by IP, link Help; *error*: A failing discovery method is a warning Tag in the Scan details popover; no page error; *loading*: Skeleton rows + Spinner on Rescan; rows stream in; *offline*: StatusBar Tag "Offline"; compatibility column uses the cached list.
+
+### D1b Welcome guide
+
+**Purpose:** Tell a new user in under a minute what synofurb does, what the process is and how to get back. Opens on top of D1 on the first launch until it is dismissed; also from Help (first row of the topic list) and the title-bar menu. It replaces the D1 "Before you start" dialog and keeps its three statements (read-only until you confirm; make a tested backup; screen readers are not supported, use the command line).
+
+**Pattern (every step):** one Lucide icon in a neutral tile, one headline (type.title), at most two short lines (type.body), an info button for details, the dots row, then Skip on the left and Back plus the one primary on the right. Dialog width 640. The text block keeps one height on all steps, so the buttons do not move.
+
+| Step | Icon | Headline | Lines | Info button (opened on purpose) |
+|---|---|---|---|---|
+| 1 | Server | Replace DSM with Debian | synofurb installs Debian 13 on your Synology over SSH. / Nothing changes until you confirm. | - |
+| 2 | Layers | Six steps to Debian | Review each step; go back until Install starts. Below: the six steps as a row (the window's Stepper, not clickable). | - |
+| 3 | Warning | Before you start | The disks you pick will be erased. / Make a tested backup; keep the NAS on and online. | Good to know: screen readers; only reads until you confirm; link Command line |
+| 4 | Undo | The way back | DSM stays the default boot entry; Recovery restores it. / Boot manager tries other systems. F1 opens Help. | More ways back: Boot manager mode, Recovery; link Boot manager |
+| 5 | Rocket | Ready when you are | Pick your NAS in Find to begin. / Reopen this guide from Help any time. | - (checkbox "Don't show again" with a tooltip) |
+
+**Word budget:** 15 to 23 words of its own per step (steps 3, 4 and 5 are the largest with 23: headline, lines, Skip or the checkbox, Back and the primary) + shell 11 = at most **34** of 60. Counted: headline, lines, visible buttons and the checkbox label. Not counted: the info bodies (a click away), icons, dots. Enforced by `welcome.rs` and `copy.rs` tests.
+
+**Primary:** Next (steps 1 to 4), Start (step 5): one primary per step. **Secondary:** Back (disabled on step 1 with the reason "Already at the start." behind an info button), Skip (steps 1 to 4; on step 5 Start is the way out).
+
+**Keyboard:** `Right` next step (never presses Start), `Left` previous step, `Tab` / `Shift+Tab` through info button, checkbox, Back and primary, `Enter`/`Space` activate the focused control, `Esc` closes. Focus starts inside the dialog and returns to the page when it closes, like every other dialog.
+
+**What "seen" means (`UiSettings.welcome_done`):** Skip, or Esc / the close button on steps 1 to 4, dismisses the guide for good. On step 5, Start and Esc follow "Don't show again", which is ticked by default; unticked, the guide opens again at the next launch. Replaying from Help or the menu never clears the flag. Files from before the guide (`first_launch_done`) count as seen.
+
+**States:** no loading or error state (static content). Demo names `welcome`, `welcome-2` to `welcome-5`. Largest text: the dialog grows, nothing clips (gui-walk).
 
 ### D2 Connect
 
@@ -1664,6 +1688,7 @@ A scrub reads every block and compares copies or parity to find silent errors. C
 | Screen | Own | Shell | Total | Budget |
 |---|---|---|---|---|
 | D1 Inventory | 24 | 11 | 35 | ok |
+| D1b Welcome guide (worst steps: 3, 4, 5) | 23 | 11 | 34 | ok |
 | D2 Connect | 23 | 12 | 35 | ok |
 | D3 Inspect | 24 | 12 | 36 | ok |
 | D4 Goal | 32 | 12 | 44 | ok |
