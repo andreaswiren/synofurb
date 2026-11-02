@@ -32,7 +32,10 @@ pub enum Msg {
     ManageHealth(Result<Box<synofurb_core::manage::Health>, String>),
     /// A result of work started for one unit context (`App::unit_gen`): the UI drops it when the page now shows another unit
     /// (or, for Manage results, when the user left Manage), so one unit's answer never lands on another unit's page.
-    Scoped { epoch: u64, msg: Box<Msg> },
+    Scoped {
+        epoch: u64,
+        msg: Box<Msg>,
+    },
     Inspected(Result<(Box<DeviceFacts>, String), String>),
     Ev(Event),
     /// What kind of failure the install ended with (typed, from the engine), sent just before `Finished(Err)`.
@@ -644,14 +647,7 @@ mod tests {
         fn exec_to(&mut self, _c: &str, _s: Option<&[u8]>, _o: &mut dyn std::io::Write) -> anyhow::Result<(u32, String)> {
             Ok((0, String::new()))
         }
-        fn upload(
-            &mut self,
-            _p: &str,
-            _d: &mut dyn std::io::Read,
-            _n: u64,
-            _m: u32,
-            _pr: &mut dyn FnMut(u64),
-        ) -> anyhow::Result<()> {
+        fn upload(&mut self, _p: &str, _d: &mut dyn std::io::Read, _n: u64, _m: u32, _pr: &mut dyn FnMut(u64)) -> anyhow::Result<()> {
             Ok(())
         }
         fn host_key_fingerprint(&self) -> Option<String> {

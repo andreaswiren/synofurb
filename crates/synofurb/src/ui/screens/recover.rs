@@ -398,8 +398,10 @@ impl App {
             RecKind::RestoreFlash => {
                 // only an image made for this unit (same serial); an unknown unit gets the placeholder, never "the newest of anything"
                 let id = self.unit_id(cx);
-                let image =
-                    synofurb_core::recovery::backups_for_unit(&backups, &id).into_iter().next().map(|b| crate::ui::format::tilde(&b.path.display().to_string()));
+                let image = synofurb_core::recovery::backups_for_unit(&backups, &id)
+                    .into_iter()
+                    .next()
+                    .map(|b| crate::ui::format::tilde(&b.path.display().to_string()));
                 (
                     "Run on this computer, or on another Linux computer",
                     "Writes the saved image back. On another computer use the second line and replace /dev/sdX with the 128 MB flash; check twice.",

@@ -179,7 +179,10 @@ impl App {
                 began.then(|| copy::BM_CANCEL_WHY.short.to_string()),
             )]);
         } else if done {
-            let returned = self.rec_result.as_ref().is_some_and(|r| r.kind == Some(crate::ui::facts::RecKind::BootDsm) && r.level == crate::ui::worker::RecLevel::Done);
+            let returned = self
+                .rec_result
+                .as_ref()
+                .is_some_and(|r| r.kind == Some(crate::ui::facts::RecKind::BootDsm) && r.level == crate::ui::worker::RecLevel::Done);
             page = page.right(vec![
                 if returned {
                     Button::new("bm-rec")
