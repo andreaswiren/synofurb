@@ -143,7 +143,7 @@ Find column widths, management health and update gate, RAID helpers). Every demo
 `crates/synofurb/assets/tools/gui-walk.sh` renders every demo screen (pages, dialogs, the Help sheet) at a text size and fails when content
 reaches the page gutter or a horizontal scrollbar appears; it also scrolls each page by one and two viewports and walks the log
 viewer, the Copy command and Cancel install dialogs and the disabled-reason Popover. The `gui-walk` CI job runs it at Largest on
-ubuntu-24.04 (Xvfb, lavapipe); that job has not run yet. The Help sheet is excluded from the gutter test because it is a panel over
+ubuntu-24.04 (Xvfb, lavapipe); that job has not run yet. A local run at Largest (light, 960 x 640, three viewports per screen) found no overflow on all 55 demo screens and the 4 extra states. The Help sheet is excluded from the gutter test because it is a panel over
 the page; content hidden by `overflow: hidden` without a scrollbar cannot be seen by it. Enter/Space behaviour of Erase and the Command button were checked with injected XTest keys.
 
 Screenshots: `design/screenshots/v2-app-*.png`. Each file shows what its name says; the states that need an input were produced with
