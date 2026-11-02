@@ -1111,6 +1111,30 @@ def check_spdx(doc) -> tuple:
     return err, warn
 
 
+def check_against_lock(doc, lock_text):
+    """Consumer-side cross-check: every crates.io component's SHA-256 equals the Cargo.lock checksum for that name+version and no lock
+    checksum is missing from the SBOM. -> (errors, warnings)"""
+    lock = {(n, v): c for (n, v, src), c in parse_cargo_lock(lock_text).items()}
+    seen, err = set(), []
+    for c in doc.get("components", []):
+        props = {p.get("name"): p.get("value") for p in c.get("properties", [])}
+        if props.get("synofurb:cargo-source") != "crates.io":
+            continue
+        key = (c.get("name"), c.get("version"))
+        want = lock.get(key)
+        got = next((h["content"] for h in c.get("hashes", []) if h.get("alg") == "SHA-256"), None)
+        if want is None and got is None:
+            pass
+        elif want is None:
+            err.append("%s %s has a hash in the SBOM but no checksum in Cargo.lock" % key)
+        elif got != want:
+            err.append("%s %s: SBOM hash %s != Cargo.lock %s" % (key + (got, want)))
+        seen.add(key)
+    for key in sorted(set(lock) - seen):
+        err.append("Cargo.lock has %s %s but the SBOM does not" % key)
+    return err, []
+
+
 def check_file(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -1151,7 +1175,7 @@ def main(argv=None) -> int:
     ap.add_argument("--require-agent-manifest", action="store_true", help="fail when the boot-agent package versions are not pinned by a manifest")
     ap.add_argument("--strict", action="store_true", help="also fail on unknown licences, unrecognised SPDX ids and unresolved versions")
     ap.add_argument("--format", choices=("both", "cyclonedx", "spdx"), default="both")
-    ap.add_argument("--check", nargs="+", metavar="FILE", help="validate existing SBOM file(s) and exit")
+    ap.add_argument("--check", nargs="+", metavar="FILE", help="validate existing SBOM file(s) and exit (add --cargo-lock Cargo.lock to also cross-check the crate hashes of a CycloneDX file)")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args(argv)
 
@@ -1159,6 +1183,14 @@ def main(argv=None) -> int:
         bad = 0
         for f in a.check:
             e, w = check_file(f)
+            if a.cargo_lock and not e:
+                doc = load_json(f)
+                if doc.get("bomFormat") == "CycloneDX":
+                    lt = read_text(a.cargo_lock)
+                    if lt is None:
+                        e.append("cannot read %s" % a.cargo_lock)
+                    else:
+                        e += check_against_lock(doc, lt)[0]
             for m in e:
                 print("%s: ERROR: %s" % (f, m), file=sys.stderr)
             if not a.quiet:

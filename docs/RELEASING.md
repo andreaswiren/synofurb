@@ -70,6 +70,8 @@ Third-party actions are pinned by commit SHA with the version in a comment. Bump
    * `CHANGELOG.md`: add a `## [X.Y.Z] - YYYY-MM-DD` section (Keep a Changelog style). The release notes are taken from it; if it is missing they fall back to the git log since the previous tag.
 3. **Check locally**: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`, `python3 -m unittest discover -s apps/mgmt-plane/tests`,
    `python3 -m unittest discover -s tests/gate`, `tests/install/run-tests.sh`, `tests/install/test-package-scripts.sh`.
+3a. **SBOM and security checks** (until the workflow does it): `python3 -m unittest discover -s tests/sbom`; `python3 scripts/gen-sbom.py --out dist/sbom --timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)"` and read the summary (licence unknown, copyleft, unresolved agent versions); `python3 scripts/gen-sbom.py --check dist/sbom/*.cdx.json dist/sbom/*.spdx.json --cargo-lock Cargo.lock`;
+   `python3 scripts/gen-licenses.py --out dist/sbom/THIRD-PARTY-LICENSES.txt`; `cargo deny --locked check` once cargo-deny is installed (`deny.toml`). For the exact boot-agent versions pass the agent build's `MANIFEST-<arch>.json` (`--agent-manifest DIR --require-agent-manifest`). Details and the workflow steps: [compliance/SBOM.md](compliance/SBOM.md).
 4. **Run the critics** (`docs/DESIGN-GATE.md`): commit design changes and screenshots, run `ux-critic` and `ui-critic`, fix every blocking finding, re-run, commit `design/approvals/*.json`.
    `python3 scripts/release-gate.py` must print `PASSED`.
 5. **Dry run**: Actions > *release* > *Run workflow* with *dry_run* ticked (the default) on the commit you intend to tag. It builds and packages everything, validates the asset set and
@@ -96,6 +98,7 @@ Attached to the GitHub Release (names are a contract - `docs/UPDATES.md` - the u
 | `synofurb-dom` | `boot/dom/synofurb-dom` |
 | `compat-models.json` | `compat/models.json` |
 | `synofurb-mgmt-<mgmt-version>.tar.gz` | `scripts/package-mgmt.sh` from `apps/mgmt-plane/` (flat archive for `/opt/synofurb-mgmt`) |
+| `synofurb-<v>-sbom.cdx.json`, `synofurb-<v>-sbom.spdx.json`, `THIRD-PARTY-LICENSES.txt` | `scripts/gen-sbom.py`, `scripts/gen-licenses.py` (not in the workflow yet: [compliance/SBOM.md](compliance/SBOM.md) section 5 lists the exact steps; `package-collect.sh` already accepts them as optional) |
 | `SHA256SUMS` | every file above, `sha256sum` format, sorted |
 | `SHA256SUMS.minisig` | minisign signature of `SHA256SUMS`, trusted comment `synofurb <v>` |
 

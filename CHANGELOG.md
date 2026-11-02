@@ -3,6 +3,7 @@
 ## 0.2.0 (unreleased)
 
 ### Added
+- **SBOM and EU Cyber Resilience Act self-assessment** (engineering documents, not legal advice, no conformity claim): `scripts/gen-sbom.py` (CycloneDX 1.5 + SPDX 2.3 + licence report from `cargo metadata --locked`, with the management plane, fonts, icons, installers, payload and boot-agent build inputs; reproducible; `--check` validator, `--cargo-lock` cross-check), `scripts/gen-licenses.py` (`THIRD-PARTY-LICENSES.txt` from the cargo registry sources), 30 tests in `tests/sbom`, `docs/compliance/` (scope and classification, Annex I mapping, risk assessment, technical-file index, vulnerability handling, user information, unsigned declaration template, gap list), a draft `SECURITY.md`, `deny.toml` and `.github/dependabot.yml` (neither wired into CI), and optional SBOM/licence names in `scripts/package-collect.sh`. Generated SBOMs are release artefacts and are not committed.
 - **Boot through the internal boot flash (DOM)** for x86 Synology units, Intel and AMD, over SSH only: `boot/dom/synofurb-dom` (copy-edit-verify-write with
   automatic rollback and a full backup streamed to the user's computer first), the SSH-controlled **boot agent** (`boot/agent`) that `kexec`s the Debian
   installer, and `BootMethod::Dom` in the engine. DSM stays the default boot entry; every failure path resets it (docs/RECOVERY.md).

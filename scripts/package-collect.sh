@@ -9,6 +9,7 @@
 #   synofurb-cli-<version>-<os>-<arch>.<tar.gz|zip>                      headless command line (no GUI libraries)
 #   synofurb-agent-<amd64|arm64|armhf>-<version>.vmlinuz / .initrd       boot agent
 #   synofurb-dom   compat-models.json   synofurb-mgmt-<mgmt-version>.tar.gz
+#   synofurb-<version>-sbom.cdx.json / .spdx.json, THIRD-PARTY-LICENSES.txt   (optional for now: docs/compliance/SBOM.md)
 #   SHA256SUMS (written here)   SHA256SUMS.minisig (written by the signing step)
 # Fails when a REQUIRED asset is missing or a file does not match the contract. Optional assets (.pkg, Windows
 # aarch64) only produce a warning when absent.
@@ -51,6 +52,9 @@ for plat in linux-x86_64 linux-aarch64; do
 done
 for a in amd64 arm64 armhf; do required+=("synofurb-agent-$a-$VERSION.vmlinuz" "synofurb-agent-$a-$VERSION.initrd"); done
 required+=("synofurb-dom" "compat-models.json" "synofurb-mgmt-$MGMT_VERSION.tar.gz")
+# SBOMs and the third-party licence file (scripts/gen-sbom.py, scripts/gen-licenses.py; docs/compliance/SBOM.md). OPTIONAL until the release
+# workflow has the `sbom` job; then move them to required+=.
+optional+=("synofurb-$VERSION-sbom.cdx.json" "synofurb-$VERSION-sbom.spdx.json" "THIRD-PARTY-LICENSES.txt")
 
 fail=0
 for f in "${required[@]}"; do

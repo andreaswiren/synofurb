@@ -112,7 +112,8 @@ and a refresh from this repository keep it current ([docs/COMPAT.md](docs/COMPAT
 | `payload/` | files copied to the NAS during install |
 | `compat/` | the model compatibility list, schema and sources |
 | `design/` | mockups, critic reviews, screenshots, approvals ([docs/DESIGN-GATE.md](docs/DESIGN-GATE.md)) |
-| `scripts/`, `packaging/`, `.github/` | release engineering |
+| `scripts/`, `packaging/`, `.github/` | release engineering, SBOM and licence generators (`scripts/gen-sbom.py`, `scripts/gen-licenses.py`) |
+| `docs/compliance/` | EU Cyber Resilience Act self-assessment, SBOM, risk assessment, vulnerability handling |
 
 ## Releases need design approval
 
@@ -145,11 +146,19 @@ Done for real in the development sandbox (no Synology available):
 * Synology's UDP 9999 discovery format (from third-party sources) and mDNS field names.
 * U-Boot recipes on real boards; `scripts/build-kexec.sh` (never run; the sandbox blocks compiling downloaded sources).
 
+## Security and compliance
+
+* **Reporting a vulnerability:** see [SECURITY.md](SECURITY.md) (private reporting through GitHub; the policy is a draft until the maintainer fills in the contact details).
+* **SBOM:** `python3 scripts/gen-sbom.py --out dist/sbom` writes a CycloneDX 1.5 and an SPDX 2.3 file (no release carries one yet); `python3 scripts/gen-licenses.py` collects the third-party licence texts. Details: [docs/compliance/SBOM.md](docs/compliance/SBOM.md).
+* **EU Cyber Resilience Act:** [docs/compliance/](docs/compliance/README.md) holds an engineering self-assessment (scope and classification, Annex I mapping, risk assessment, technical-file index, vulnerability handling, user information, gap list).
+  It is **not legal advice and makes no claim of conformity**; synofurb is not CE marked and has no EU declaration of conformity. Several gaps are open (no signed release yet, no real-hardware testing, no vulnerability scanning in CI): see [docs/compliance/GAPS-AND-ACTIONS.md](docs/compliance/GAPS-AND-ACTIONS.md).
+
 ## Before the first release (owner's checklist)
 
 1. Approve the designs (or ask for changes); then run the two critics and commit their verdicts ([docs/DESIGN-GATE.md](docs/DESIGN-GATE.md)).
 2. `minisign -G`, paste the public key where [docs/RELEASING.md](docs/RELEASING.md) lists it, add the GitHub secrets, run the workflow once with `dry_run`.
 3. (Closed) synodeb is credit only, no code used ([docs/BOOT.md](docs/BOOT.md#credit-to-synodeb)).
+4. Compliance: fill the `<OWNER: ...>` placeholders in [SECURITY.md](SECURITY.md) and enable private vulnerability reporting; take the decisions listed in [docs/compliance/GAPS-AND-ACTIONS.md](docs/compliance/GAPS-AND-ACTIONS.md) (section A); add the SBOM job to the release workflow ([docs/compliance/SBOM.md](docs/compliance/SBOM.md), section 5).
 
 
 License: MIT.

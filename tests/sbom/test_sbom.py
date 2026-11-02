@@ -384,6 +384,16 @@ class TestValidator(Workspace):
             self.assertEqual(sb.main(["--check", bad]), 1)
             self.assertEqual(sb.main(["--check", os.path.join(self.tmp, "missing.json")]), 1)
 
+    def test_lock_cross_check(self):
+        self.run_main()
+        path = os.path.join(self.out, "synofurb-1.2.3-sbom.cdx.json")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(sb.main(["--check", path, "--cargo-lock", self.lock_path]), 0)
+            bad_lock = os.path.join(self.tmp, "bad.lock")
+            with open(bad_lock, "w") as f:
+                f.write(LOCK.replace("a" * 64, "d" * 64))
+            self.assertEqual(sb.main(["--check", path, "--cargo-lock", bad_lock]), 1)
+
     def test_spdx_validator(self):
         self.run_main()
         with open(os.path.join(self.out, "synofurb-1.2.3-sbom.spdx.json")) as f:
