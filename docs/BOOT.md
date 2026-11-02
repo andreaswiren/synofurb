@@ -104,12 +104,13 @@ AMD Synology models (Ryzen V1000 / R1000 / R1600, EPYC) are first-class: the ins
 DSM's kernel command line contains something like `console=uart8250,mmio32,0xfedc9000,115200n8`. `synofurb` copies that argument verbatim
 into the agent's and Debian's kernel command lines (and `systemd` starts a login on that console automatically), instead of assuming `ttyS0`.
 
-## Licence note on synodeb
+## Credit to synodeb
 
-synodeb is licensed **GPL-2.0-only** and `synofurb` is MIT. `synofurb` contains **none of synodeb's code**: the DOM manager was written from a
-behavioural description (partition magics, menu structure, copy-edit-verify-write). If you would rather integrate synodeb itself, for example as
-the installer for the DS923+ where it ships a model-specific kernel with fan/LED/bay drivers, keep it a separate download that the user runs, or
-decide on GPL-2.0 for the combined work. Please decide on this before release.
+[synodeb](https://github.com/rylos/synodeb) (GPL-2.0-only) is the inspiration for booting Debian from the DOM through boot entries, and
+its DS923+ report is cited in the compatibility data as a third-party report. `synofurb` uses **none of synodeb's code**: the DOM manager was
+written from a behavioural description (partition magics, menu structure, copy-edit-verify-write), so synodeb's licence does not apply to
+`synofurb` (MIT). The owner confirmed on 2026-11-02 that synodeb is used only as inspiration and a how-to. If its code is ever copied or
+bundled, this note and the licence question must be revisited first.
 
 ## What is verified
 

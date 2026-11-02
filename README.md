@@ -149,6 +149,7 @@ Done for real in the development sandbox (no Synology available):
 
 1. Approve the designs (or ask for changes); then run the two critics and commit their verdicts ([docs/DESIGN-GATE.md](docs/DESIGN-GATE.md)).
 2. `minisign -G`, paste the public key where [docs/RELEASING.md](docs/RELEASING.md) lists it, add the GitHub secrets, run the workflow once with `dry_run`.
-3. Decide the synodeb licence question ([docs/BOOT.md](docs/BOOT.md#licence-note-on-synodeb)).
+3. (Closed) synodeb is credit only, no code used ([docs/BOOT.md](docs/BOOT.md#credit-to-synodeb)).
+
 
 License: MIT.

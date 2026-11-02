@@ -45,3 +45,11 @@ F3 was corrected.
 | The install progress is a custom 12-segment strip with the "No return" flag over step 3 (DEV-UI-17). | No widget has segments or a flag. | `screens/install.rs` |
 | The keyboard focus indicator is a solid 1 px accent line, not the 2 px ring with offset (DEV-UI-22). | The widget's ring rendered at 2.3:1 / 2.5:1. | `theme.rs` |
 
+
+## Owner confirmation after implementation (2026-11-02)
+
+After the implemented desktop app and the list of changes made since the mockup approval were summarised to the owner, the owner wrote:
+"V2 is approved." This is recorded as the owner's approval of the v2 desktop design as implemented, including the changes listed in the
+section above (no installer rescue panel, Newest kernel default, no keychain). If the owner meant only the mockup, say so and this
+paragraph is corrected. It is not the release gate: `design/approvals/` still needs the critics' verdicts for a design hash, which
+also needs Windows and macOS evidence.
