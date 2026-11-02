@@ -60,7 +60,7 @@ Each step has one Lucide icon, a headline (the dialog title), at most two short 
 Position is the stock `CarouselPagination`; Back (not on step 1), Next / Skip, `Left` / `Right`, `Esc`; focus starts on the
 primary so `Enter` works. The text block has one height on every step and at every text size (all steps are laid out
 invisibly in one grid cell). It replaces the old "Before you start" dialog. `UiSettings.welcome_done` stores "seen"
-(old `first_launch_done` files still count); only the last step's "Don't show again" box decides: Skip, `Esc`, the close
+(the old `first_launch_done` flag is ignored: everyone sees the new guide once); only the last step's "Don't show again" box decides: Skip, `Esc`, the close
 button and a click outside close it for this launch only on steps 1 to 4, and on a replay the box shows the stored flag
 (unticking clears it). Reopen it from Help (first row) or the title-bar menu. Demo: `--screen welcome` and
 `welcome-2` to `welcome-5`; screenshots `design/screenshots/v2-app-welcome-*.png` (steps, popovers, unticked box, menu

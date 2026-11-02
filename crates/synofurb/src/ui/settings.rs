@@ -25,8 +25,7 @@ pub struct UiSettings {
     pub send_results: bool,
     /// The Welcome guide was ended with "Don't show again" ticked on its last step: it no longer opens by itself (Skip and
     /// Esc before the last step store nothing; a replay unticking the box clears this flag).
-    /// Files written before the guide called this `first_launch_done` (the old "Before you start" dialog).
-    #[serde(alias = "first_launch_done")]
+    /// The old `first_launch_done` flag (the "Before you start" dialog) is deliberately not read: everyone sees the new guide once.
     pub welcome_done: bool,
     /// Folder of the offline bundle chosen for Source: Offline.
     pub bundle_dir: Option<String>,
@@ -123,9 +122,9 @@ mod tests {
     }
 
     #[test]
-    fn the_old_first_launch_flag_still_counts_as_seen() {
+    fn the_old_first_launch_flag_does_not_count_as_seen() {
         let s: UiSettings = serde_json::from_str(r#"{"first_launch_done":true}"#).unwrap();
-        assert!(s.welcome_done, "someone who dismissed 'Before you start' is not welcomed again");
+        assert!(!s.welcome_done, "the new guide is shown once to people who only saw the old 'Before you start' dialog");
         let s: UiSettings = serde_json::from_str(r#"{"welcome_done":true}"#).unwrap();
         assert!(s.welcome_done);
         assert!(!UiSettings::default().welcome_done);

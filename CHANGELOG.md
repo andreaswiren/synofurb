@@ -7,7 +7,7 @@
 - Review fixes (UX and UI critics): step 4 is conditional and consistent with `docs/RECOVERY.md` (before the disks change a failure returns the NAS to DSM; after that DSM must be reinstalled; the caveats are behind the info button); Skip, Esc, the close button and a click outside close the guide for this launch only, and only the last step's "Don't show again" box stores "seen" (a replay shows the stored flag and unticking clears it); the screen-reader statement is visible on step 1; step 2 says where changes begin and captions each step; stock carousel pagination for the position; one dialog height on every step and text size; the headline is the dialog title; focus starts on the primary button and Enter works; no Back on step 1.
 
 ### Changed
-- The "seen" flag of the first-launch dialog is now `welcome_done` in `ui-settings.json`; files with the old `first_launch_done` are still read.
+- The "seen" flag of the first-launch dialog is now `welcome_done` in `ui-settings.json`; the old `first_launch_done` flag is ignored on purpose, so everyone sees the new guide once.
 
 ## 0.2.1
 
