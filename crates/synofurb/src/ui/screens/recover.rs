@@ -399,7 +399,7 @@ impl App {
                 // only an image made for this unit (same serial); an unknown unit gets the placeholder, never "the newest of anything"
                 let id = self.unit_id(cx);
                 let image =
-                    synofurb_core::recovery::backups_for_unit(&backups, &id).into_iter().next().map(|b| b.path.display().to_string());
+                    synofurb_core::recovery::backups_for_unit(&backups, &id).into_iter().next().map(|b| crate::ui::format::tilde(&b.path.display().to_string()));
                 (
                     "Run on this computer, or on another Linux computer",
                     "Writes the saved image back. On another computer use the second line and replace /dev/sdX with the 128 MB flash; check twice.",
@@ -430,7 +430,7 @@ impl App {
     pub fn open_manual_recovery(&mut self, window: &mut Window, cx: &mut Context<App>) {
         let id = self.unit_id(cx);
         let backup = synofurb_core::recovery::backups_for_unit(&self.cfg_dir.join("dom-backups"), &id).into_iter().next().map(|b| b.path);
-        let cmds = facts::manual_recovery_commands(backup.as_ref().map(|p| p.display().to_string()).as_deref());
+        let cmds = facts::manual_recovery_commands(backup.as_ref().map(|p| crate::ui::format::tilde(&p.display().to_string())).as_deref());
         let app = cx.entity();
         window.open_dialog(cx, move |d, _, cx| {
             let app = app.clone();
