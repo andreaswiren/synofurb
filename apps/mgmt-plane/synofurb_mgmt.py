@@ -83,6 +83,7 @@ class Config:
     rollback_seconds: int = 90
     fail_delay: float = 0.4
     login_group: str = "sudo"
+    trust_proxy: bool = False         # the HAProxy front (docs/CERTIFICATES.md): believe X-Forwarded-For from a loopback peer
     sys_root: str = "/sys"            # where md sysfs attributes are read/written (tests point it into a temp dir)
     proc_root: str = "/proc"
     state_dir: str = "/var/lib/synofurb-mgmt"
@@ -109,6 +110,8 @@ class Config:
                 setattr(self, key, data[key])
         if isinstance(data.get("bind"), str) and data["bind"]:
             self.bind = data["bind"]
+        if data.get("trust_proxy") is True:
+            self.trust_proxy = True
         if isinstance(data.get("login_group"), str) and valid_group_name_ok(data["login_group"]):
             self.login_group = data["login_group"]
 
@@ -1637,7 +1640,7 @@ def api_me(req: Request) -> dict:
     s = req.session
     assert s is not None
     return {"ok": True, "user": s.user, "csrf": s.csrf, "hostname": socket.gethostname(), "version": VERSION,
-            "dry_run": req.app.cfg.dry_run, "net_pending": net_pending_info(req.app)}
+            "dry_run": req.app.cfg.dry_run, "net_pending": net_pending_info(req.app), "edge_pending": edge_pending_info(req.app)}
 
 
 def parse_os_release(text: str) -> dict[str, str]:
@@ -3692,6 +3695,18 @@ def client_ip(addr: str) -> str:
     return addr[7:] if addr.startswith("::ffff:") else addr
 
 
+def forwarded_ip(peer: str, header: str | None, trust: bool) -> str:
+    """Behind the HAProxy front the peer is always 127.0.0.1; the real client is in X-Forwarded-For, which HAProxy overwrites (never appends).
+    It is believed only from a loopback peer and only when /etc/synofurb/mgmt.json says trust_proxy; anything that is not an IP address is ignored."""
+    if trust and peer in ("127.0.0.1", "::1") and header:
+        cand = header.split(",")[-1].strip()
+        try:
+            return str(ipaddress.ip_address(cand))
+        except ValueError:
+            pass
+    return peer
+
+
 def origin_ok(origin: str, host: str) -> bool:
     if origin == "null":
         return False
@@ -3805,7 +3820,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle(self, method: str) -> None:
         app = self.app
-        ip = client_ip(self.client_address[0])
+        ip = forwarded_ip(client_ip(self.client_address[0]), self.headers.get("X-Forwarded-For"), app.cfg.trust_proxy)
         path = urllib.parse.urlsplit(self.path).path
         if method == "GET" and path in ("/", "/index.html"):
             return self._serve_ui()
@@ -3986,6 +4001,78 @@ def addons_cli(args: argparse.Namespace, extra: list[str], cfg: Config, runner: 
 
 
 # ============================================================================
+# 17c. Certificates and the HAProxy front. The implementation is synofurb_edge.py (docs/CERTIFICATES.md); this block is the whole glue:
+#      environment, routes, CLI, the pending banner. A bundle without that module simply has neither.
+# ============================================================================
+
+try:
+    import synofurb_edge as edge_mod
+except ImportError:                                           # pragma: no cover - an update bundle from before certificates existed
+    edge_mod = None
+
+
+def edge_env(app: App) -> Any:
+    cfg, runner = app.cfg, app.runner
+    dry = isinstance(runner, DryRunRunner)
+
+    def sites() -> list[dict]:                                # installed add-ons that have a web page: what the front can publish
+        if addons_mod is None:
+            return []
+        try:
+            mgr = addons_manager(app)
+            return [{"id": a.id, "name": a.name, "icon": a.icon, "port": a.web["port"], "scheme": a.web["scheme"], "path": a.web["path"], "hint": a.web["hostname_hint"]}
+                    for a in mgr.catalog().order() if a.web and mgr.installed(a.id)]
+        except Exception:                                     # noqa: BLE001 - the Hostnames page must not fail because the add-on catalog does
+            return []
+
+    def run_fn(argv: list[str], input: str | None = None, timeout: int = 60, env: dict | None = None) -> Any:
+        r = runner.run(argv, input=input, timeout=timeout)
+        return edge_mod.Result(r.rc, r.out, r.err)
+    extra: dict = {}
+    if dry:
+        extra = dict(run_fn=run_fn, which_fn=lambda name: "/usr/bin/" + name, sleep=lambda s_: None, port_busy=lambda port: False)
+    return edge_mod.EdgeEnv(root=cfg.root, state_dir=cfg.state_dir, script_path=INSTALL_DIR + "/synofurb_mgmt.py", audit=app.audit.log, job_lock=_AddonJobLock(cfg),
+                            local_ips=app.ip_addresses, sites=sites, mgmt_port=cfg.port, defer=app.defer,
+                            restart_mgmt=lambda: runner.run(["systemctl", "restart", "synofurb-mgmt.service"], timeout=60), **extra)
+
+
+def edge_for(app: App) -> Any:
+    """One Edge (certificates + proxy) per App, created on first use."""
+    e = getattr(app, "_edge", None)
+    if e is None:
+        e = app._edge = edge_mod.Edge(edge_env(app))        # type: ignore[attr-defined]
+    return e
+
+
+def edge_pending_info(app: App) -> dict | None:
+    """An unconfirmed front change (the banner in every page offers Keep); None when certificates are not part of this bundle."""
+    if edge_mod is None:
+        return None
+    try:
+        return edge_for(app).proxy.pending()
+    except Exception:                                         # noqa: BLE001
+        return None
+
+
+if edge_mod is not None:
+    edge_mod.register_routes(sys.modules[__name__], edge_for)
+
+
+def edge_cli(args: argparse.Namespace, extra: list[str], cfg: Config, runner: Runner) -> int:
+    if edge_mod is None:
+        print("error: this management plane has no certificate module", file=sys.stderr)
+        return 2
+    if getattr(args, "json", False):
+        extra = extra + ["--json"]
+    if getattr(args, "force", False):
+        extra = extra + ["--force"]
+    app = App(cfg, runner)
+    e = edge_for(app)
+    e.env.defer = lambda fn, delay: fn()                      # a console session has no response to deliver first
+    return edge_mod.cli_main(extra, e, args.command)
+
+
+# ============================================================================
 # 18a. CLI contract for the desktop app (no server, usable over SSH as root)
 #      synofurb_mgmt.py health --json
 #      synofurb_mgmt.py update --from DIR [--force] [--json]  /  update --rollback [--json]
@@ -4121,6 +4208,12 @@ def collect_health(app: App, quick: bool = False, budget_s: float = 40.0) -> dic
     mm = doc["mem"] or {}
     if mm.get("total") and mm.get("avail") is not None and mm["avail"] < mm["total"] * 0.05:
         warnings.append("memory almost full")
+    if edge_mod is not None:                                # certificates: expiring / failed ones feed the verdict; absent when there are none
+        sect, cw, cc = part("certificates", lambda: edge_mod.health_section(edge_env(app)), (None, [], []))
+        if sect:
+            doc["certs"] = sect
+        warnings += cw
+        crit += cc
     doc["overall"] = "crit" if crit else "warn" if warnings else "ok"
     doc["warnings"] = (crit + warnings)[:20]
     return doc
@@ -5333,7 +5426,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--dry-run", action="store_true", help="never modify the system; record commands only")
     ap.add_argument("--no-tls", action="store_true", help="plain HTTP (development only, requires --dry-run)")
     ap.add_argument("--net-rollback", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("command", nargs="?", choices=("health", "update", "addons"), help="health --json | update --from DIR | update --rollback (no server is started)")
+    ap.add_argument("command", nargs="?", choices=("health", "update", "addons", "certs", "proxy"), help="health --json | update --from DIR | update --rollback (no server is started)")
     ap.add_argument("--json", action="store_true", help="machine-readable output (health, update)")
     ap.add_argument("--quick", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--from", dest="src", help="update: directory with the new version and MANIFEST.sha256")
@@ -5353,7 +5446,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--restart-delay", type=float, default=0.0, help=argparse.SUPPRESS)
     ap.add_argument("--raid-scrub", action="store_true", help=argparse.SUPPRESS)
     args, extra = ap.parse_known_args(argv)
-    if extra and args.command != "addons":              # `addons <command> ...` has its own parser (synofurb_addons.cli_main)
+    if extra and args.command not in ("addons", "certs", "proxy"):      # these have their own parsers (synofurb_addons.cli_main, synofurb_edge.cli_main)
         ap.error("unrecognized arguments: %s" % " ".join(extra))
     args.addons_argv = extra
     return args
@@ -5381,6 +5474,8 @@ def main(argv: list[str] | None = None) -> int:
     runner: Runner = DryRunRunner(passthrough=True, verbose=not args.command) if args.dry_run else RealRunner()
     if args.command == "addons":
         return addons_cli(args, args.addons_argv, cfg, runner)
+    if args.command in ("certs", "proxy"):
+        return edge_cli(args, args.addons_argv, cfg, runner)
     if args.command:
         return run_cli(args, cfg, runner)
     if args.dry_run:
@@ -5395,6 +5490,12 @@ def main(argv: list[str] | None = None) -> int:
         app.audit.log("system", "-", "raid-scrub", {}, "ok: started %d check(s)" % n)
         return 0
     startup_recovery(app)
+    if edge_mod is not None:
+        try:
+            if edge_for(app).proxy.startup_recovery():
+                app.audit.log("system", "-", "proxy.revert", {}, "ok: unconfirmed front change reverted at startup")
+        except Exception:                                     # noqa: BLE001 - never stop the web UI from starting
+            traceback.print_exc(file=sys.stderr)
     reap_jobs(cfg)
     ctx = None
     if cfg.tls:
@@ -5616,6 +5717,7 @@ _LUCIDE = {
     'camera': '<path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z" /> <circle cx="12" cy="13" r="3" />',
     'play': '<path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" />',
     'square': '<rect width="18" height="18" x="3" y="3" rx="2" />',
+    'globe': '<circle cx="12" cy="12" r="10" /> <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /> <path d="M2 12h20" />',
 }
 _BRAND = {
     'mark': ('0 0 100 100', '<path d="M68.43 48.92L78.91 67.07Q82.91 74.00 74.91 74.00L65.63 74.00" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="52.63,74.00 66.63,63.64 66.63,84.36" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><path d="M46.05 74.00L25.09 74.00Q17.09 74.00 21.09 67.07L25.73 59.04" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="32.23,47.78 34.20,65.08 16.26,54.72" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><path d="M35.52 42.08L46.00 23.93Q50.00 17.00 54.00 23.93L58.64 31.96" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="65.14,43.22 49.17,36.28 67.11,25.92" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><rect x="38.50" y="48.25" width="23" height="15.5" rx="4.34" fill="#0A0A0A"/><rect x="42.18" y="54.45" width="10.58" height="3.10" rx="1.55" fill="#FFFFFF"/><circle cx="56.90" cy="56.00" r="2.32" fill="#04853A"/>'),
@@ -5886,6 +5988,17 @@ HELP_TOPICS.append(
              "Releases are not signed yet. synofurb checks the SHA-256 listed in the same release, which catches a damaged download but not a tampered release, so you confirm once per update.\n\n"
              "The web UI restarts for a few seconds. If the new version does not answer within 30 seconds, the previous one comes back by itself; Roll back returns to it later.\n\n"
              "The desktop app can push an update without Internet; it appears in the history as Desktop app. Checks go to GitHub only, over https, with no account or token."})
+
+
+# ---- Certificates and Hostnames pages (synofurb_edge.py owns their copy, help topics and script; docs/CERTIFICATES.md) ----
+_EDGE_NAV = _EDGE_CSS = _EDGE_JS = ""
+if edge_mod is not None:
+    _ec, _es, _eshell, _eh = edge_mod.ui_copy(_c)
+    COPY.update(_ec)
+    COPY_SCREENS.update(_es)
+    COPY_SHELL.extend(_eshell)
+    HELP_TOPICS.extend(_eh)
+    _EDGE_NAV, _EDGE_CSS, _EDGE_JS = edge_mod.UI_NAV, edge_mod.UI_CSS, edge_mod.UI_JS
 
 
 _UI_TEMPLATE = r"""<!doctype html>
@@ -6210,6 +6323,7 @@ textarea.mono{width:100%}
 .sec{margin:20px 0 12px}
 .dsec{margin:0 0 16px}.dsec>h4{margin:0 0 8px;font:600 14px/20px var(--font-ui)}
 .dsec .row{margin-bottom:6px}
+/*__EDGE_CSS__*/
 pre.code.log2{max-height:50vh;min-height:120px}
 .chips .chip{white-space:normal;height:auto;min-height:24px;padding:4px 8px;max-width:100%;overflow-wrap:anywhere}
 #main:focus,#main:focus-visible{outline:none}
@@ -6485,7 +6599,7 @@ async function showLogin() {
 }
 /*ENDPAGE*/
 /* ---------- shell ---------- */
-const NAV = [['dashboard', 'gauge'], ['storage', 'database'], ['raid', 'layers'], ['mounts', 'package'], ['addons', 'container'], ['network', 'network'], ['users', 'users'], ['boot', 'panel-top'], ['system', 'settings'], ['updates', 'download'], ['help', 'life-buoy'], ['about', 'info']];
+const NAV = [['dashboard', 'gauge'], ['storage', 'database'], ['raid', 'layers'], ['mounts', 'package'], ['addons', 'container'], /*__EDGE_NAV__*/['network', 'network'], ['users', 'users'], ['boot', 'panel-top'], ['system', 'settings'], ['updates', 'download'], ['help', 'life-buoy'], ['about', 'info']];
 const TABBAR = ['dashboard', 'storage', 'raid', 'network', 'boot'];
 /*PAGE:shell*/
 /*copy: nav.dashboard nav.storage nav.raid nav.mounts nav.network nav.users nav.boot nav.system nav.help nav.about*/
@@ -6522,6 +6636,7 @@ async function start() {
   document.title = me.hostname + ' - synofurb';
   buildShell();
   setPending(me.net_pending);
+  if (typeof edgePending === 'function') edgePending(me.edge_pending);
   show(S.page);
 }
 async function show(page) {
@@ -6938,6 +7053,7 @@ PAGES.addons = async () => {
   return h('div', {}, parts);
 };
 /*ENDPAGE*/
+/*__EDGE_PAGES__*/
 /* ---------- Network ---------- */
 /*PAGE:network*/
 PAGES.network = async () => {
@@ -7528,6 +7644,7 @@ showLogin().then(async () => { try { await start(); } catch (e) { /* not signed 
 </script></body></html>
 """
 
+_UI_TEMPLATE = _UI_TEMPLATE.replace("/*__EDGE_NAV__*/", _EDGE_NAV).replace("/*__EDGE_CSS__*/", _EDGE_CSS).replace("/*__EDGE_PAGES__*/", _EDGE_JS)
 INDEX_HTML = _UI_TEMPLATE.replace("/*__COPY__*/null", json.dumps(COPY, separators=(",", ":")).replace("</", "<\\/")).replace("/*__HELP__*/null", json.dumps(HELP_TOPICS, separators=(",", ":")).replace("</", "<\\/")).replace("/*__TOKENS__*/", theme_css()).replace("<!--__SPRITE__-->", _ICON_SPRITE).replace("/*__FONTS__*/", _font_css()).replace("__FAVICON__", _FAVICON_B64).replace("/*__LIC__*/null", json.dumps(_LICENSES).replace("</", "<\\/"))
 
 

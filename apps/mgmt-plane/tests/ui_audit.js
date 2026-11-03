@@ -3,7 +3,7 @@
 const { chromium } = require('playwright');
 const BASE = process.argv[2];
 const LIB = require('./ui_lib.js');
-const PAGES = ['dashboard', 'storage', 'raid', 'mounts', 'addons', 'network', 'users', 'boot', 'system', 'updates', 'help', 'about'];
+const PAGES = ['dashboard', 'storage', 'raid', 'mounts', 'addons', 'certs', 'proxy', 'network', 'users', 'boot', 'system', 'updates', 'help', 'about'];
 // words a person reads by default: headings, labels, column headers, buttons, prose. Data (values from the system) is not counted; row buttons count once per label.
 // Manifest prose (add-on summaries, data-d="prose") is not exempt: it is counted separately in `man` and capped on its own (see MANIFEST_BUDGET in test_ui.py).
 const COUNT = `(() => {

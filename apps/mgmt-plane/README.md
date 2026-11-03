@@ -24,6 +24,8 @@ shown in the UI (login and sidebar footer) and returned by `GET /api/me`, `/api/
 | Boot manager | units that boot through the internal boot flash (`/usr/local/sbin/synofurb-dom`): entries (DSM, Debian, previous kernel, boot agent), current default, DSM fail-safe note, **Return to DSM**, set default, reboot into an entry, boot-flash free space and DOM backup location. Other units get a "not a boot-flash unit" notice |
 | System | sshd state and host key fingerprints, serial-getty units, restart of an allow-list of services, reboot/poweroff |
 | Add-ons | Docker apps as small definitions (`addons/<id>/addon.json` + compose template): catalog cards, install dialog with settings, **privileges, devices and storage shown before install**, jobs with progress, logs, update, remove (delete data needs the typed name); built in: Docker, Portainer, Frigate NVR, Plex; contract in [docs/ADDONS.md](../../docs/ADDONS.md) |
+| Certificates | Let's Encrypt certificates through `lego`: DNS-01 via challenges.addr.tools (one CNAME, a secret that is hashed with SHA-224), HTTP-01, TLS-ALPN-01; several certificates and wildcards, staging switch, rate-limit messages, Check DNS and a port pre-check, jobs with progress, **automatic renewal** (systemd timer), expiring or failed certificates in `health --json`; [docs/CERTIFICATES.md](../../docs/CERTIFICATES.md) |
+| Hostnames | one **HAProxy front** (default off) for the management plane and every add-on web page: hostname and certificate per target, `haproxy -c` before every reload, snapshot and a **revert timer unless Keep is pressed**, recovery with `proxy disable` from the console; [docs/CERTIFICATES.md](../../docs/CERTIFICATES.md) |
 | Updates | installed and available version, channel **Stable** (newest release asset) or **Main** (`apps/mgmt-plane` of a branch or tag), Check, release notes, **Update now** (consent while unsigned, typed commit for Main), live progress that survives the restart, automatic rollback, **Roll back**, History of every update (desktop app, command line, GitHub, who, result); see "Self-update" below |
 | Help | twelve-plus short topics with search (sign-in, certificate, storage, imports, boot, recovery, report, RAID levels, Hybrid RAID, replace, scrub, safe apply); every (i) button in the UI opens the matching topic |
 | About | logo, version, **Copy diagnostics** (version, host, OS, kernel, service state; no secrets), links to documentation, source and issue tracker, Credits with licence texts (Debian, Lucide ISC, Inter and JetBrains Mono OFL 1.1, Montserrat, synodeb note) |
@@ -59,6 +61,21 @@ lose data; an array in use by LVM or a mount cannot be stopped; only conversions
 the plan is re-derived at execution time; the typed phrase is the array (or volume) name. After a grow the follow-up steps (`pvresize`,
 `lvextend`, filesystem grow) are offered and run through `POST /api/raid/after-grow` once the array is idle.
 The monthly check is a pair of units the service writes on request (`synofurb-raid-scrub.timer`, runs `synofurb_mgmt.py --raid-scrub`).
+
+## Certificates and the HAProxy front
+
+`synofurb_edge.py` (standard library only, loaded by `synofurb_mgmt.py`; an update bundle without it simply has neither page) issues, stores and renews certificates and manages one HAProxy in front of the management plane and the add-ons.
+Everything goes through `lego` (Debian `lego` 4.9.1, installed on demand with apt) and `haproxy` as argv lists; the secret of the challenge service (challenges.addr.tools) lives in one 0600 file and never in an argv, a log or an API answer.
+**Nothing of it has run against a real Let's Encrypt, DNS, lego, HAProxy or systemd yet**; the tests use fake executables and loopback servers. Design, files, flags to verify on the unit, recovery path and the full list of what is unverified: [docs/CERTIFICATES.md](../../docs/CERTIFICATES.md).
+
+```
+synofurb_mgmt.py certs list|show ID|issue NAME... [--challenge dns-01|http-01|tls-alpn-01] [--environment staging|production]|change ID NAME...|renew [--id ID] [--force]|remove ID --confirm ID|check-dns NAME...
+synofurb_mgmt.py certs settings [--email E] [--accept-tos] [--generate-secret|--secret-stdin] [--check-secret] [--environment E] [--key-type T]
+synofurb_mgmt.py proxy status|enable|apply|disable|test|confirm|revert|assign TARGET HOSTNAME CERT|unassign TARGET      # disable is the way back from a console or SSH
+```
+
+With the front on, the web UI is at `https://<ip>/` (or its hostname), the management plane listens on `127.0.0.1:8443` only, and `/etc/synofurb/mgmt.json` has `bind` and `trust_proxy` set by the front (`trust_proxy` makes it believe `X-Forwarded-For` from a loopback peer, so login throttling and the audit log see the real client).
+Update bundles carry the module as `synofurb_edge.py`.
 
 ## Command-line contract (for the desktop app and SSH)
 
@@ -118,7 +135,7 @@ No `color-mix()`, gradients or inset shadows (tested). Type floor 12 px, weights
 **A control that is off says why in text.** A disabled button swallows hover, focus and touch, so a tooltip on it is never seen. Controls that are off for a reason (Update now, Install without Docker, Install before the privileges are accepted, Remove before the name is typed, Roll back while a job runs) use `aria-disabled` plus a visible line of text the control points to with `aria-describedby` (`setOff()` and `whyLine()` in the script): the button stays focusable, clicks are ignored, keyboard and touch users read the reason. The browser tests fail on a native `disabled` control without a reason and on a reason that is hidden or outside the viewport (`tests/ui_lib.js`).
 **No stray text.** The same library fails any page state that shows the words `null`, `undefined`, `NaN`, `[object ...]` or an unresolved `{placeholder}` (it caught the "null" under the Health step of the update card); `tests/test_ui.py` also proves that the check detects them.
 
-**Screenshots of the new pages** (`design/screenshots/mgmt-demo-<state>-<light|dark>[-phone].png`, 1280 and 390 wide; the demo shows Add-ons states with `?addons=states|problems|nodocker`, Updates states with `?update=available|current|offline|rollback|busy|unhealthy`):
+**Screenshots of the new pages** (`design/screenshots/mgmt-demo-<state>-<light|dark>[-phone].png`, 1280 and 390 wide; the demo shows Add-ons states with `?addons=states|problems|nodocker`, Updates states with `?update=available|current|offline|rollback|busy|unhealthy`, Certificates states with `?certs=states|unset|empty` and Hostnames states with `?proxy=on|pending`):
 
 ```sh
 python3 apps/mgmt-plane/tools/build-demo.py                       # rebuild apps/mgmt-plane/demo/index.html
@@ -187,6 +204,11 @@ public routes needs the session cookie; every POST also needs `X-CSRF-Token` and
 | POST | `/api/addons/<id>/remove` | `{delete_data, confirm}` (`confirm` = the id when data is deleted) -> **202** `{job}` |
 | GET | `/api/addons/<id>/logs?tail=N` | container (or journal) log, secret values masked |
 | GET | `/api/jobs`, `/api/jobs/<id>` | add-on jobs: state, step, progress, log; 409 on a second job
+| GET | `/api/certs`, `/api/certs/<id>`, `/api/certs/job/<id>` | certificates with state, expiry, CNAME targets, hostnames using them; settings (the secret only as `{set, target}`); jobs |
+| POST | `/api/certs/settings`, `/issue`, `/<id>/renew`, `/<id>/change`, `/<id>/remove` | settings (a created secret is returned once as `secret_once`), issue / renew / change -> **202** `{job}`, remove `{confirm: id}` |
+| POST | `/api/certs/precheck`, `/check-dns`, `/check-secret` | what can be known without asking Let's Encrypt: names, ports, the CNAME, the service |
+| GET | `/api/proxy` | the front: on/off, rows (management plane and add-ons with hostname, certificate, backend scheme), HAProxy state, the pending change, addresses, the recovery command |
+| POST | `/api/proxy/hostnames`, `/test`, `/enable`, `/apply`, `/disable`, `/confirm`, `/revert` | save while off, `haproxy -c` on a candidate, jobs (**202**), Keep, go back; `/api/me` has `edge_pending` for the banner |
 
 ## Security model
 
@@ -215,7 +237,8 @@ public routes needs the session cookie; every POST also needs `X-CSRF-Token` and
   the link is reconfigured, cancelled only by `POST /api/network/confirm`. An unconfirmed change surviving a reboot is rolled back at startup.
   Older-sorting `.network` files that would shadow ours for that interface are renamed to `*.disabled-by-synofurb` (restored on rollback).
 
-Configuration (all optional) in `/etc/synofurb/mgmt.json`: `port`, `bind`, `idle_timeout`, `abs_timeout`, `rollback_seconds`, `login_group`.
+Configuration (all optional) in `/etc/synofurb/mgmt.json`: `port`, `bind`, `idle_timeout`, `abs_timeout`, `rollback_seconds`, `login_group`, `trust_proxy` (set by the HAProxy front: see above; believe `X-Forwarded-For` only from a loopback peer).
+* **Certificates and the HAProxy front** (`synofurb_edge.py`): no shell, every name through a strict validator (punycode, no path or control characters) before it reaches an argv, a file name or the HAProxy configuration; the challenge secret in one 0600 file, scrubbed from job logs, never in the audit log; every HAProxy change is checked with `haproxy -c` first and has an automatic way back; the front's loopback PROXY port (127.0.0.1:8444) can be reached by local users. Details: [docs/CERTIFICATES.md](../../docs/CERTIFICATES.md).
 
 ## Development without root (dry run)
 

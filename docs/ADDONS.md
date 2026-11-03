@@ -95,8 +95,9 @@ Field rules (the loader validates and rejects the whole add-on with a clear mess
 * `files[]`: extra templates rendered into `${DATA_DIR}`; `once: true` means render only when the destination does not exist (never overwrite user edits). The UI says
   "used on first install only" for settings that feed only such files (a later "re-render" action is out of scope). Files that contain a secret are written 0600, root.
 * `changes[]` (optional, mostly system add-ons): short sentences shown before install about what changes on the unit. `handler` (system add-ons): the name of built-in code (`docker`).
-* `web`: the add-on's web UI behind the host (`scheme` http or https to the container). Stage 1 shows `http(s)://<host>:<port>`; Stage 2 publishes it through HAProxy
-  under a hostname with its own certificate (`hostname_hint` is the suggested name).
+* `web`: the add-on's web UI behind the host (`scheme` http or https to the container). Without the front the UI shows `http(s)://<host>:<port>`; with the HAProxy front (Stage 2, [CERTIFICATES.md](CERTIFICATES.md)) the person assigns a hostname and a certificate to each installed add-on that has a `web` section
+  (`hostname_hint` is the suggested name, shown as the placeholder). HAProxy terminates TLS and talks to `127.0.0.1:<web.port>`: **plain HTTP when `web.scheme` is `http`, re-encrypted without verification (loopback, self-signed) when it is `https`** (Frigate 8971, Portainer 9443); the Hostnames page can override the scheme per add-on.
+  The add-on keeps its published port: HAProxy does not change containers, so the direct `http(s)://<host>:<port>` link keeps working on the LAN unless the manifest binds that port to `127.0.0.1`. Hostnames, certificates and the override live in `/etc/synofurb/edge/proxy.json`, not in the add-on's state.
 * `healthcheck`: `http` (`http(s)://127.0.0.1:<port>/...` only; status < 500 counts as up; certificates are not verified on loopback), `tcp` (port opens) or `container` (compose reports running);
   `timeout` (seconds, default 120) is how long install waits and how long "Starting" is shown before "Not answering".
 * Unknown manifest fields are rejected (typos); fields starting with `x-` or `_` are ignored.
@@ -131,7 +132,7 @@ Images are pulled at first boot (Internet needed); the installation does not fai
 ## Stage 2 (not part of the first delivery): certificates and the HAProxy front
 
 One HAProxy fronts the management plane and every add-on web UI; certificates are managed in one place (several certificates, per hostname), issued by Let's Encrypt with DNS-01
-(through `challenges.addr.tools`, see `docs/CERTIFICATES.md` when it exists), HTTP-01 and TLS-ALPN-01, renewed automatically.
+(through `challenges.addr.tools`), HTTP-01 and TLS-ALPN-01, renewed automatically. **Implemented** (never run against a real Let's Encrypt or HAProxy): `docs/CERTIFICATES.md`, pages **Certificates** and **Hostnames**, module `apps/mgmt-plane/synofurb_edge.py`.
 
 ## Implementation notes: installer side (`synofurb-core::addons`, `payload/`)
 
@@ -175,10 +176,13 @@ runs `/usr/local/sbin/synofurb-addons-firstboot`, which makes sure Docker is ins
 (two minutes apart) until the pending folder is empty, writes `/var/lib/synofurb/addons-firstboot.json` (`docker`: present|installed|failed, `apply_pending_exit`, `attempts`,
 `remaining`: ids still pending) and always exits 0. The pending folder survives reboots, so the unit tries again at the next boot until the management plane has taken everything over.
 
-**Desktop app.** Setup has an **Add-ons** tab (after Storage and System): a checkbox per catalog entry with its summary and Tags (Needs Docker, Needs Internet, privileges), the
-settings above under a ticked row, Docker shown on and locked with "Required by ..." while something ticked needs it. Quick setup has presets (None, Docker + Portainer, Frigate NVR, Plex,
-Frigate + Plex; each with Docker and Portainer as the base). Confirm lists "Will be installed after first boot: ..." and the Internet need. "Copy command" writes one `--addon` per ticked
-add-on (a secret as `key=@env:KEY`). The CLI is `--addon ID[:KEY=VALUE,...]` on `plan` and `install` and `addons list [--json]` (docs/CLI.md, secrets as `KEY=@env:VAR` or `KEY=@file:PATH`).
+**Desktop app.** Setup has an **Add-ons** tab (after Storage and System): a checkbox per catalog entry with its summary, at most one risk Tag (the privilege) and one info button (needs, size, minutes, data-volume need), the
+settings above under a ticked row, Docker shown on and locked with "Required by ..." while something ticked needs it, and an **Untested** Tag (these add-ons have only run against simulated Docker). An add-on that keeps data below `/srv/data`
+(`needs_data_volume`: Frigate and Plex, as the manifests' bulk storage says; a core test compares) cannot be ticked while the plan creates no data volume (Keep mode, `Plan::has_data_volume`): its row says why and Next is disabled with the same reason. Quick setup has presets
+(None, Docker + Portainer, Frigate NVR, Plex, Frigate + Plex; each with Docker and Portainer as the base) and every preset names everything it installs. **Confirm** shows, whichever way the add-ons were ticked, the names, the Untested Tag, the lines of
+`addons::notes` that must not be missed (`NoteKind::is_loud`: privileges, tight system volume, no data volume, no Docker in the offline bundle) and the rest in Details; a fourth confirmation **Accept privileges** (`addons::consent_items`, tied to
+`consent_signature`) is part of the erase gate while a privileged add-on is chosen. **Done** has a card per add-on (`addons::after_install`: address from the manifest's `web`, minutes at 150 MiB a minute, size, `first_use`; nothing is read back from the
+unit). "Copy command" writes one `--addon` per ticked add-on (a secret as `key=@env:KEY`). The CLI is `--addon ID[:KEY=VALUE,...]` on `plan` and `install` and `addons list [--json]` (docs/CLI.md, secrets as `KEY=@env:VAR` or `KEY=@file:PATH`).
 
 ## Implementation notes: management plane (`apps/mgmt-plane/synofurb_addons.py`)
 

@@ -53,7 +53,7 @@ Status: **DRAFT engineering self-assessment** | Date: 2026-11-02 | Owner: `<OWNE
 4. **SBOM:** the generator and tests exist, but nothing publishes the SBOM yet, and the boot-agent Debian package versions are only known if the build manifest is passed in
    (the release workflow does not upload it yet). 79 of 920 shipped Rust crates ship no licence file in their published source. (Part II 1.)
 5. **Weak defaults in places:** the boot agent gives a root shell on a physical console unless `AGENT_CONSOLE_SHELL=0`; SSH password login is enabled on installed units; no host firewall
-   is configured; the management plane listens on all interfaces with password-only authentication (no second factor) and a self-signed certificate; no opt-out for logging; no secure-erase feature. (Part I 2(b), (d), (j), (l), (m).)
+   is configured; the management plane listens on all interfaces with password-only authentication (no second factor) and a self-signed certificate (optionally behind a HAProxy front with Let's Encrypt certificates: written, not yet run against the real services); no opt-out for logging; no secure-erase feature. (Part I 2(b), (d), (j), (l), (m).)
 6. **No independent security testing:** no penetration test, no code audit, no fuzzing. (Part II 3.)
 7. **Legal and organisational items nobody has decided:** manufacturer identity and address, the support period, whether the project is a "manufacturer" or an "open-source software steward",
    the product category (a "boot manager" is listed in Annex III class I, see the classification file), the conformity route, the licence-compliance position on GPL components inside the boot agent. These are in [GAPS-AND-ACTIONS.md](GAPS-AND-ACTIONS.md) as lawyer/owner decisions.

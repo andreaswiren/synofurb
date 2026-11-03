@@ -39,7 +39,7 @@ class WordBudgetTests(unittest.TestCase):
         pages = set(re.findall(r"^PAGES\.([a-z]+) = ", script_source(), re.M))
         self.assertEqual(pages | {"login"}, set(m.COPY_SCREENS))
         shell = sum(words(m.COPY[k]["short"]) for k in m.COPY_SHELL)
-        self.assertLessEqual(shell, 14, "shell")
+        self.assertLessEqual(shell, 16, "shell")                # 14 + the two nav labels of Certificates and Hostnames
         for page, keys in m.COPY_SCREENS.items():
             for k in keys:
                 self.assertIn(k, m.COPY, "%s: %s" % (page, k))
@@ -166,7 +166,7 @@ class AboutAndNavTests(unittest.TestCase):
     def test_nav_and_about(self):
         src = script_source()
         nav = re.search(r"const NAV = \[(.*?)\];", src, re.S).group(1)
-        self.assertEqual(re.findall(r"\['([a-z]+)', '", nav), ["dashboard", "storage", "raid", "mounts", "addons", "network", "users", "boot", "system", "updates", "help", "about"])
+        self.assertEqual(re.findall(r"\['([a-z]+)', '", nav), ["dashboard", "storage", "raid", "mounts", "addons", "certs", "proxy", "network", "users", "boot", "system", "updates", "help", "about"])
         for needle in ("PAGES.about", "about.copy", "LIC[id]", "navigator.clipboard", "popover(T('about.synodeb')", "Montserrat", "'Lucide'", "'Inter'", "'JetBrains Mono'"):
             self.assertIn(needle, src)
         self.assertIn('"Lucide"', json.dumps(m._LICENSES))

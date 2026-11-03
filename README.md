@@ -79,7 +79,7 @@ Machine-friendly: `--log-format json` (NDJSON events), `--json` documents, stabl
 | SSH | enabled; key login preferred (generated or yours), password login allowed |
 | Network | systemd-networkd: DHCPv4 + DHCPv6 + **SLAAC**, mDNS `<host>.local` |
 | Consoles | serial on the port DSM used (incl. AMD `uart8250,mmio32,...`) **and** on any USB serial adapter when plugged in; VGA/HDMI, USB keyboard and mouse |
-| Management plane | `https://<ip>:8443`: status, users, network (safe apply with auto-rollback), volumes, mounts, imported DSM volumes, boot manager. Its own project: [apps/mgmt-plane](apps/mgmt-plane/README.md). The app and `synofurb-cli manage ...` check its health and update it over SSH, with rollback ([docs/MANAGE.md](docs/MANAGE.md)) |
+| Management plane | `https://<ip>:8443`: status, users, network (safe apply with auto-rollback), volumes, mounts, imported DSM volumes, boot manager, Docker add-ons, **certificates** (Let's Encrypt through lego, auto-renewing) and an optional **HAProxy front** on 443 ([docs/CERTIFICATES.md](docs/CERTIFICATES.md); written and tested with doubles, not yet run against the real services). Its own project: [apps/mgmt-plane](apps/mgmt-plane/README.md). The app and `synofurb-cli manage ...` check its health and update it over SSH, with rollback ([docs/MANAGE.md](docs/MANAGE.md)) |
 
 ## If it fails
 

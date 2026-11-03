@@ -36,7 +36,7 @@ with hashes. Without them the agent components appear as version `UNRESOLVED` wi
 release workflow** (`scripts/package-agent.sh` copies only the kernel and initrd), so a release built today would have unresolved agent versions: workflow change 1 below fixes that.
 
 **Runtime-downloaded inputs are references, not components** (top-level `externalReferences` in the CycloneDX file): the Debian archive (installer netboot kernel/initrd, packages for the install and for the offline bundle),
-Debian security and firmware archives, the GitHub release API used by the updater, the kexec-tools tarball, and Synology DSM on the target unit (not redistributed).
+Debian packages the management plane installs on the unit on demand (`docker.io`, `docker-cli`, `docker-compose` for add-ons; `lego` and `haproxy` for certificates and the front; all from the configured Debian mirror, not redistributed), Debian security and firmware archives, the GitHub release API used by the updater, the kexec-tools tarball, and Synology DSM on the target unit (not redistributed).
 
 **Determinism.** Components, edges and properties are sorted; there is no wall-clock time. `--timestamp` (or `SOURCE_DATE_EPOCH`) is the only time recorded; without it CycloneDX has no timestamp and SPDX uses the required-field placeholder
 `1970-01-01T00:00:00Z` and says so in its comment. `serialNumber` and the SPDX namespace are `uuid5` of the document content. Two runs with the same inputs are byte-identical (tested).

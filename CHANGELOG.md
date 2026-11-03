@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.4 (unreleased)
+
+### Added (management plane: certificates and the HAProxy front, Stage 2 of docs/ADDONS.md; the management-plane version is not bumped here)
+- **Certificates** (new page, `synofurb_mgmt.py certs ...`, `/api/certs`): Let's Encrypt through `lego` for all three challenges. DNS-01 through https://challenges.addr.tools (one CNAME `_acme-challenge.<name>` to `<sha224(secret)>.challenges.addr.tools`; the secret is generated or chosen, stored 0600, shown once; lego's `exec` provider with a generated adapter that POSTs `secret` + `txt` and wants HTTP 201), HTTP-01 and TLS-ALPN-01 through lego's own servers on loopback ports behind HAProxy. Several certificates, wildcard names, a staging switch, rate-limit awareness (refuses before the call that would be refused), Check DNS, a pre-check for ports and names, jobs with progress under the shared job lock, audit log, **automatic renewal** by a generated systemd timer (twice a day, randomised delay, 30 days or fewer left, HAProxy reloaded only when a served certificate changed).
+- **Hostnames** (new page, `synofurb_mgmt.py proxy ...`, `/api/proxy`): one HAProxy in front of the management plane and every add-on web page, default off. Enabling it checks the configuration (`haproxy -c` on a private copy first), snapshots, arms a revert timer, applies, and keeps the change **pending until Keep is pressed** (two minutes, banner on every page); the management plane then listens on loopback only and trusts `X-Forwarded-For` from loopback. `proxy disable` from the console restores the direct listener. Unknown names and IP addresses still reach the management plane.
+- `health --json` has an optional `certs` section (only when certificates exist): warn at 14 days or fewer, critical at 3 days or fewer, failed renewals; the schema is unchanged.
+- New update-bundle member `synofurb_edge.py` (bundle contract, `tools/make-update-bundle.py`, `scripts/package-mgmt.sh`, the desktop app's embedded copy and staging script, the installer payload). Lucide icon `globe`.
+- Tests: `apps/mgmt-plane/tests/test_edge.py` (about 130 tests: fake lego/haproxy/systemctl/systemd-run/apt-get/ss/dig executables, a loopback challenges.addr.tools server, a loopback DNS server, golden `haproxy.cfg` files, the pages in a real browser) and `tests/ui_edge.js`; demo states `?certs=states|unset|empty`, `?proxy=on|pending`; screenshots `design/screenshots/mgmt-demo-certs-*` and `mgmt-demo-proxy-*`.
+- **Not verified**: nothing ran against the real Let's Encrypt, a real DNS zone, a real lego, a real HAProxy or a real systemd unit. The lego flags are from memory of 4.9.1 and must be checked with `lego --help` on the unit (docs/CERTIFICATES.md, "What is NOT verified").
+
 ## 0.2.3
 
 ### Fixed (installer: the installed Debian boots on the DS918+)

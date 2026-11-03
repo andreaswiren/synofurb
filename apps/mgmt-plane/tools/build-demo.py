@@ -326,6 +326,8 @@ def build() -> str:
     blob = json.dumps(data, separators=(",", ":")).replace("</", "<\\/").replace("<!--", "<\\!--")
     with open(os.path.join(HERE, "demo-mock.js"), encoding="utf-8") as fh:
         mock = fh.read().replace("/*__DATA__*/null", blob)
+    with open(os.path.join(HERE, "demo-mock-edge.js"), encoding="utf-8") as fh:          # certificates and the HAProxy front (tools/demo-mock-edge.js)
+        mock = mock.replace("/*__EDGE_MOCK__*/", fh.read())
     with open(os.path.join(HERE, "demo-mock.css"), encoding="utf-8") as fh:
         css = fh.read()
     html = m.INDEX_HTML.replace("__NONCE__", "demo").replace("__VERSION__", m.VERSION)

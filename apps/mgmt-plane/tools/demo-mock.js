@@ -788,6 +788,7 @@
       msgs: ['Checking Docker', 'Writing the configuration', 'Downloading images (needs Internet)', 'Starting', 'Waiting for Frigate NVR to answer'], final: {status: 'running', installed: true}};
   }
 
+/*__EDGE_MOCK__*/
   window.fetch = async function (url, opt) {
     const u = new URL(typeof url === 'string' ? url : url.url, location.href);
     if (!/\/api\//.test(u.pathname)) return origFetch ? origFetch(url, opt) : Promise.reject(new Error('offline demo'));

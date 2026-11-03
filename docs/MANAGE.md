@@ -61,8 +61,8 @@ shows the installed version.
 
 ### 2. `... update --from DIR --json`
 
-`DIR` holds exactly `synofurb_mgmt.py`, `VERSION`, `README.md`, optionally `synofurb-mgmt.service` and the add-on framework (`synofurb_addons.py`, `addons.pack.json`: the add-on definitions of
-`addons/<id>/*` as one file, [ADDONS.md](ADDONS.md)), and `MANIFEST.sha256` (`sha256sum`
+`DIR` holds exactly `synofurb_mgmt.py`, `VERSION`, `README.md`, optionally `synofurb-mgmt.service`, the add-on framework (`synofurb_addons.py`, `addons.pack.json`: the add-on definitions of
+`addons/<id>/*` as one file, [ADDONS.md](ADDONS.md)) and the certificate module (`synofurb_edge.py`, [CERTIFICATES.md](CERTIFICATES.md)), and `MANIFEST.sha256` (`sha256sum`
 format, every file listed, no others). The unit verifies the manifest, compiles the script (syntax only), copies to `/opt/synofurb-mgmt.new`,
 swaps it with `/opt/synofurb-mgmt` (the old tree is kept as `/opt/synofurb-mgmt.prev`), installs the unit file when packaged, restarts
 `synofurb-mgmt.service`, waits up to 30 s for the new code to answer `health --json` with the expected version, and on any failure restores
@@ -83,6 +83,14 @@ Exit codes: **0** updated, **2** refused before anything changed, **3** failed a
 takes the same job lock as `update` (so an add-on job and a management-plane update never run together: the second is refused), and `apply-pending` is what the first-boot unit calls to take over the installer's
 choices. A management plane update replaces the whole `/opt/synofurb-mgmt` tree: add-on state (`/var/lib/synofurb-mgmt/addons*.json`) and data (`/srv/addons`, `/srv/data/addons`) are outside it and untouched, and the
 bundle must carry `synofurb_addons.py` and `addons.pack.json` or the unit loses the add-on page until the next update that has them. Full description: [ADDONS.md](ADDONS.md).
+
+### 2c. `... certs ...`, `... proxy ...` (certificates and the HAProxy front, not used by the health/update flow)
+
+`synofurb_mgmt.py certs list|show|issue|change|renew|remove|check-dns|settings` and `proxy status|enable|apply|disable|test|confirm|revert|assign|unassign` manage Let's Encrypt certificates (through `lego`, DNS-01 via challenges.addr.tools, HTTP-01, TLS-ALPN-01) and one HAProxy in
+front of the management plane and the add-ons. They run as root, take the same job lock as `update`, and `certs renew` is what a generated systemd timer runs twice a day. After `proxy enable` the management plane listens on `127.0.0.1` only and is reached on port 443;
+`python3 /opt/synofurb-mgmt/synofurb_mgmt.py proxy disable` (console or SSH) is the way back, and an unconfirmed change reverts itself after two minutes. **The front changes the address `manage open` prints**: with it on, `https://<ip>:8443` no longer answers and `https://<ip>/` does (the engine still prints the :8443 address; `manage health` and `manage update` are unaffected because
+they use SSH and the CLI). `health --json` gains an optional `certs` object (`count`, `min_days`, `expiring[]`, `failed[]`) only when certificates exist; the engine ignores unknown fields. A management plane update replaces `/opt/synofurb-mgmt` and leaves `/etc/synofurb`, the generated units and HAProxy's files alone; the bundle must carry `synofurb_edge.py` or the unit loses the two pages and the
+renewal CLI (the renewal timer then fails visibly until a later update brings the module back). Full description: [CERTIFICATES.md](CERTIFICATES.md).
 
 ### 3. `... update --rollback --json`
 
@@ -109,7 +117,7 @@ needs no Internet at all (a test makes any network use on it fail).
 branch or tag, default `main` in the web UI): the `apps/mgmt-plane` folder of `andreaswiren/synofurb` at `R`. The check resolves `R` to the
 newest commit that touches that folder (shown in the UI, with the last commit subjects as the "release notes"), and the download is pinned to
 that commit (`codeload.github.com/.../tar.gz/<sha>`), so what was shown is what is installed. Only the files the bundle contract allows are taken
-(`BUNDLE_FILES`: `synofurb_mgmt.py`, `VERSION`, `README.md`, `synofurb-mgmt.service`, `synofurb_addons.py`) by exact name, never by the archive's path; the
+(`BUNDLE_FILES`: `synofurb_mgmt.py`, `VERSION`, `README.md`, `synofurb-mgmt.service`, `synofurb_addons.py`, `synofurb_edge.py`) by exact name, never by the archive's path; the
 add-on definitions `addons/<id>/<file>` are validated (names, sizes, counts) and packed into `addons.pack.json` by the installed `synofurb_addons.build_pack`, exactly as
 `tools/make-update-bundle.py` does; links, duplicates and a second top directory are refused; `MANIFEST.sha256` is written by `write_manifest`, whose output a test compares
 with the tool's, byte for byte. `VERSION` must equal the version that was checked and `DEFAULT_VERSION` in the script.
@@ -208,7 +216,7 @@ engine reports the state it finds when it looks again. Ctrl-C before the update 
 ## Offline copies
 
 `--from-bundle DIR` takes the files from a folder instead of the copy built into the program. `DIR` is either the files themselves
-(`synofurb_mgmt.py`, `VERSION`, `README.md`, optionally `synofurb-mgmt.service`, `synofurb_addons.py`, `addons.pack.json`; `python3 apps/mgmt-plane/tools/make-update-bundle.py OUT`
+(`synofurb_mgmt.py`, `VERSION`, `README.md`, optionally `synofurb-mgmt.service`, `synofurb_addons.py`, `addons.pack.json`, `synofurb_edge.py`; `python3 apps/mgmt-plane/tools/make-update-bundle.py OUT`
 makes such a folder, including its `MANIFEST.sha256`) or an **offline bundle** made by `synofurb bundle create`, which carries the same files in `mgmt/`
 ([OFFLINE.md](OFFLINE.md#the-management-app-mgmt)). Give either the bundle or its `mgmt/` folder:
 
