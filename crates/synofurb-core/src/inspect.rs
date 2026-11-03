@@ -89,7 +89,8 @@ for b in /sys/block/*; do
     mbr=$(dd if="/dev/$n" bs=1 skip=510 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
     [ "$mbr" = "55aa" ] && tbl=msdos
   fi
-  printf 'DISK|%s|%s|%s|%s|%s|%s|%s|%s\n' "$n" "$model" "$serial" "$size" "${lss:-512}" "${rot:-1}" "${rem:-0}" "$tbl"
+  dpath=$(readlink -f "$b/device" 2>/dev/null | clean)
+  printf 'DISK|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$n" "$model" "$serial" "$size" "${lss:-512}" "${rot:-1}" "${rem:-0}" "$tbl" "$dpath"
   for p in "$b"/"$n"*; do
     [ -f "$p/partition" ] || continue
     printf 'PART|%s|%s|%s|%s|%s\n' "$n" "${p##*/}" "$(cat "$p/partition")" "$(cat "$p/start")" "$(cat "$p/size")"
@@ -121,8 +122,9 @@ for m in /sys/block/md*; do
     uuid=$(printf '%s\n' "$det" | sed -n 's/^ *UUID : *//p' | head -n1 | clean)
     label=$(printf '%s\n' "$det" | sed -n 's/^ *Name : *\([^ ]*\).*/\1/p' | head -n1 | clean)
   fi
-  printf 'MD|%s|%s|%s|%s|%s|%s|%s|%s\n' "$n" "$(clean < "$m/md/level")" "$(clean < "$m/md/array_state")" \
-    "$(cat "$m/size")" "$mem" "$uuid" "$label" "$(clean < "$m/md/metadata_version" 2>/dev/null)"
+  printf 'MD|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$n" "$(clean < "$m/md/level")" "$(clean < "$m/md/array_state")" \
+    "$(cat "$m/size")" "$mem" "$uuid" "$label" "$(clean < "$m/md/metadata_version" 2>/dev/null)" \
+    "$(clean < "$m/md/sync_action" 2>/dev/null)" "$(clean < "$m/md/sync_completed" 2>/dev/null | tr ' ' '_')" "$(clean < "$m/md/degraded" 2>/dev/null)"
 done
 
 LVM=$(command -v lvm 2>/dev/null)
@@ -148,6 +150,14 @@ printf 'END|ok\n'
 /// The script with shared helpers spliced in.
 pub fn inspect_script() -> String {
     INSPECT_SCRIPT.replace("@@DISK_SERIAL_FN@@", DISK_SERIAL_FN)
+}
+
+/// `md/sync_completed` is `<sectors done> / <sectors total>` (spaces may have been turned into `_`) or `none`.
+fn parse_sync_permille(v: &str) -> Option<u32> {
+    let v = v.replace('_', " ");
+    let (done, total) = v.split_once('/')?;
+    let (done, total) = (done.trim().parse::<u64>().ok()?, total.trim().parse::<u64>().ok()?);
+    (total > 0).then(|| ((done.min(total) as u128 * 1000) / total as u128) as u32)
 }
 
 fn num(s: &str) -> u64 {
@@ -227,6 +237,8 @@ pub fn parse_inspect(out: &str) -> Result<DeviceFacts> {
                     _ => PartTable::None,
                 },
                 parts: vec![],
+                transport: c.get(9).map(|p| crate::model::Transport::from_sysfs_path(p)).unwrap_or_default(),
+                device_path: c.get(9).map(|p| p.trim().to_string()).unwrap_or_default(),
             }),
             Some("PART") if c.len() >= 6 => {
                 if let Some(d) = f.disks.iter_mut().find(|d| d.name == c[1]) {
@@ -244,6 +256,9 @@ pub fn parse_inspect(out: &str) -> Result<DeviceFacts> {
                 metadata: c[8].into(),
                 role: ArrayRole::Data,
                 vg: None,
+                sync_action: c.get(9).map(|v| v.trim().to_string()).unwrap_or_default(),
+                sync_permille: c.get(10).and_then(|v| parse_sync_permille(v)),
+                degraded: c.get(11).map(|v| num(v) as u32).unwrap_or(0),
             }),
             Some("DOM") if c.len() >= 6 => {
                 f.dom = Some(DomFacts {
@@ -347,6 +362,48 @@ pub mod fixtures {
         s.push_str("END|ok\n");
         s
     }
+    /// The owner's real DS918+ (4x 8 TB, Synology Hybrid RAID-like: md2 + md3 are PVs of `vg1`, two volumes behind `cachedev_N`).
+    /// Disk paths, md layout, LV sizes and mounts are from the unit's own output; the mount sizes/usage and serials are sample data.
+    /// sda/sdb sit behind an add-in SATA controller and report `removable=1`; md2 was resyncing (90.8 %) when it was captured.
+    pub fn ds918_two_volumes() -> String {
+        let mut s = String::new();
+        s.push_str("KV|uname_m|x86_64\nKV|kernel|4.4.302+\nKV|id_u|0\nKV|hostname|awss01\n");
+        s.push_str("KV|unique|synology_apollolake_918+\nKV|model|DS918+\nKV|serial|18A0PDN014408\n");
+        s.push_str("KV|dsm_version|7.2.1-69057\nKV|mem_kib|3900000\nKV|cpu|Intel(R) Celeron(R) CPU J3455 @ 1.50GHz\n");
+        s.push_str("KV|uefi|0\nKV|kexec|1\nKV|cmdline|root=/dev/md0 console=ttyS2,115200n8 quiet\n");
+        s.push_str("NIC|eth0|00:11:32:AA:BB:01\n");
+        let sectors: u64 = 15_628_053_168;
+        let paths = [
+            ("sda", "1", "ata3", "0000:01:00.0", "2:0:0:0", "ZA1EJ7BG"),
+            ("sdb", "1", "ata4", "0000:01:00.0", "3:0:0:0", "ZA1DWBT2"),
+            ("sdc", "0", "ata1", "0000:00:12.0", "0:0:0:0", "ZA1EH7W8"),
+            ("sdd", "0", "ata2", "0000:00:12.0", "1:0:0:0", "ZA1EHWQG"),
+        ];
+        for (d, rem, ata, pci, scsi, serial) in paths {
+            let host = scsi.split(':').next().unwrap();
+            let dev = if pci == "0000:01:00.0" { format!("pci0000:00/0000:00:13.0/{pci}") } else { format!("pci0000:00/{pci}") };
+            s.push_str(&format!(
+                "DISK|{d}|ST8000NM0055-1RM112|{serial}|{sectors}|512|1|{rem}|gpt|/sys/devices/{dev}/{ata}/host{host}/target{host}:0:0/{scsi}\n"
+            ));
+            s.push_str(&format!("PART|{d}|{d}1|1|8192|4980480\nPART|{d}|{d}2|2|4988672|4194304\n"));
+            s.push_str(&format!("PART|{d}|{d}5|5|9437184|3897559296\nPART|{d}|{d}6|6|3907000000|11720813056\n"));
+        }
+        s.push_str("DISK|synoboot|DiskStation|SYNO0001|245760|512|1|1|msdos|/sys/devices/pci0000:00/0000:00:15.0/usb1/1-1/1-1:1.0/host4/target4:0:0/4:0:0:0\n");
+        s.push_str("PART|synoboot|synoboot1|1|2048|241664\n");
+        s.push_str("MD|md0|raid1|clean|4980352|sdd1,sdc1,sdb1,sda1|u0|DiskStation:0|0.9|idle|none|0\n");
+        s.push_str("MD|md1|raid1|clean|4194176|sdd2,sdc2,sdb2,sda2|u1|DiskStation:1|0.9|idle|none|0\n");
+        s.push_str("MD|md2|raid5|active|11692677888|sdd5,sda5,sdb5,sdc5|u2|awss01:2|1.2|resync|1770222464_/_1948779648|0\n");
+        s.push_str("MD|md3|raid5|clean|35162439168|sda6,sdd6,sdc6,sdb6|u3|awss01:3|1.2|idle|none|0\n");
+        s.push_str("PV|/dev/md2|vg1\nPV|/dev/md3|vg1\n");
+        s.push_str("LV|vg1|syno_vg_reserved_area|12582912\nLV|vg1|volume_1|17581000000000\nLV|vg1|volume_2|6410000000000\n");
+        s.push_str("MNT|/dev/md0|/|ext4|2385000|1500000\n");
+        s.push_str("MNT|/dev/mapper/cachedev_0|/volume1|ext4|16990000000|9100000000\n");
+        s.push_str("MNT|/dev/mapper/cachedev_1|/volume2|btrfs|6100000000|2500000000\n");
+        s.push_str("MNT|/dev/mapper/cachedev_1|/volume2/@docker|btrfs|6100000000|2500000000\n");
+        s.push_str("MNT|synodedup-fused|/volume2/ActiveBackupforBusiness/ActiveBackupData|fuse.synodedup-fused|0|0\n");
+        s.push_str("END|ok\n");
+        s
+    }
 }
 
 #[cfg(test)]
@@ -407,6 +464,70 @@ mod tests {
         let f = parse_inspect(s).unwrap();
         assert_eq!(f.arch, Arch::Arm64);
         assert_eq!(f.firmware, Firmware::UBoot);
+    }
+
+    #[test]
+    fn the_real_ds918_keeps_all_four_internal_disks_even_though_two_report_removable() {
+        let f = parse_inspect(&fixtures::ds918_two_volumes()).unwrap();
+        assert_eq!(f.candidate_disks().len(), 4, "sda/sdb report removable=1 but are SATA disks");
+        let names: Vec<&str> = f.candidate_disks().iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["sda", "sdb", "sdc", "sdd"]);
+        assert_eq!(f.disks[0].transport, crate::model::Transport::Sata);
+        assert!(f.disks[0].removable && !f.disks[2].removable);
+        let ex = f.excluded_disks();
+        assert_eq!(ex.len(), 1);
+        assert_eq!(ex[0].0.name, "synoboot");
+        assert_eq!(ex[0].1, crate::model::Exclusion::BootFlash);
+    }
+
+    #[test]
+    fn usb_and_unknown_removable_disks_stay_excluded_and_old_lines_still_parse() {
+        use crate::model::Exclusion;
+        // a USB stick (usb transport, even if it does not say removable)
+        let usb = fixtures::ds_4bay().replace(
+            "DISK|synoboot|Disk Module|SYNO0001|245760|512|0|1|msdos",
+            "DISK|sde|SanDisk Ultra|X1|62500000|512|0|0|gpt|/sys/devices/pci0000:00/0000:00:15.0/usb2/2-1/2-1:1.0/host9/target9:0:0/9:0:0:0",
+        );
+        let f = parse_inspect(&usb).unwrap();
+        assert_eq!(f.disk("sde").unwrap().exclusion(), Some(Exclusion::Usb));
+        // removable and no transport information (a 9-field line from an older unit script): not silently a target
+        let old = fixtures::ds_4bay().replace("WD-WCC7K0000|7814037168|512|1|0|gpt", "WD-WCC7K0000|7814037168|512|1|1|gpt");
+        let f = parse_inspect(&old).unwrap();
+        assert_eq!(f.disk("sda").unwrap().exclusion(), Some(Exclusion::Removable));
+        assert_eq!(f.candidate_disks().len(), 3);
+    }
+
+    #[test]
+    fn dsm_volumes_are_found_behind_cachedev_devices_and_joined_with_lvm_and_the_arrays() {
+        let f = parse_inspect(&fixtures::ds918_two_volumes()).unwrap();
+        let v = f.volumes();
+        assert_eq!(v.len(), 2, "sub-mounts like /volume2/@docker and FUSE mounts are not volumes");
+        assert_eq!(
+            (v[0].name.as_str(), v[0].fstype.as_str(), v[0].lv.as_deref(), v[0].vg.as_deref()),
+            ("volume1", "ext4", Some("volume_1"), Some("vg1"))
+        );
+        assert_eq!((v[1].name.as_str(), v[1].fstype.as_str(), v[1].lv.as_deref()), ("volume2", "btrfs", Some("volume_2")));
+        assert_eq!(v[0].arrays, ["md2", "md3"]);
+        assert_eq!(v[0].disks, ["sda", "sdb", "sdc", "sdd"]);
+        assert_eq!(v[0].levels, ["raid5"]);
+        assert_eq!(v[0].used_percent(), 54);
+    }
+
+    #[test]
+    fn a_running_resync_is_reported() {
+        let f = parse_inspect(&fixtures::ds918_two_volumes()).unwrap();
+        let busy = f.busy_arrays();
+        assert_eq!(busy.len(), 1);
+        assert_eq!(busy[0].name, "md2");
+        assert_eq!(busy[0].health_note().as_deref(), Some("resyncing 90.8%"));
+        assert!(f.arrays.iter().filter(|a| a.name != "md2").all(|a| a.health_note().is_none()));
+    }
+
+    #[test]
+    fn dm_names_split_with_doubled_dashes() {
+        assert_eq!(crate::model::split_dm_name_for_test("vg1-volume_1"), Some(("vg1".into(), "volume_1".into())));
+        assert_eq!(crate::model::split_dm_name_for_test("my--vg-lv--x"), Some(("my-vg".into(), "lv-x".into())));
+        assert_eq!(crate::model::split_dm_name_for_test("cachedev_0"), None);
     }
 
     #[test]

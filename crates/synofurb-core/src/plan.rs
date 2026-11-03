@@ -644,6 +644,25 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         plan.warnings
             .push("Less than 1 GiB of RAM: installation works but the system will be tight; keep the management services light.".into());
     }
+    // Arrays that are still resyncing or missing members: an install now would start from a pool that is not redundant.
+    for a in facts.busy_arrays() {
+        if let Some(note) = a.health_note() {
+            plan.warnings.push(format!(
+                "DSM array {} is {note}. Let it finish before installing; until then the pool is not fully redundant.",
+                a.name
+            ));
+        }
+    }
+    // Disks the plan will not touch, other than the boot flash: never leave them out silently.
+    let left: Vec<String> = facts
+        .excluded_disks()
+        .into_iter()
+        .filter(|(_, e)| !matches!(e, crate::model::Exclusion::BootFlash))
+        .map(|(d, e)| format!("{} ({})", d.name, e.reason().to_lowercase()))
+        .collect();
+    if !left.is_empty() {
+        plan.warnings.push(format!("Not used and not touched: {}. DSM data on them stays as it is.", left.join(", ")));
+    }
     if fw == Firmware::UBoot {
         plan.warnings.push("This ARM board has no UEFI. Debian boots from raw disk sectors through U-Boot; the U-Boot environment must be changed once over the serial console (Debian wiki: InstallingDebianOn/Synology). Keep a TTL serial adapter ready (115200 baud).".into());
     }
@@ -1912,5 +1931,31 @@ mod tests {
         assert!(root > 20 * 1024);
         assert!(swap + root + free <= 32 * 1024);
         assert_eq!(swap_mib_for(256 * 1024), 1024);
+    }
+
+    #[test]
+    fn the_real_ds918_plan_uses_all_four_disks_and_warns_about_the_running_resync() {
+        let f = crate::inspect::parse_inspect(&crate::inspect::fixtures::ds918_two_volumes()).unwrap();
+        let plan = build_plan(&f, &PlanRequest::default());
+        assert!(plan.errors.is_empty(), "{:?}", plan.errors);
+        assert!(plan.warnings.iter().any(|w| w.contains("md2") && w.contains("resyncing 90.8%")), "{:?}", plan.warnings);
+        assert!(!plan.warnings.iter().any(|w| w.contains("Not used and not touched")), "{:?}", plan.warnings);
+        // a USB stick that is plugged in is named, not silently ignored
+        let mut f2 = f.clone();
+        f2.disks.push(crate::model::Disk {
+            name: "sde".into(),
+            model: "SanDisk".into(),
+            serial: "X".into(),
+            sectors: 62_500_000,
+            logical_sector: 512,
+            rotational: false,
+            removable: true,
+            table: crate::model::PartTable::Gpt,
+            parts: vec![],
+            transport: crate::model::Transport::Usb,
+            device_path: String::new(),
+        });
+        let plan2 = build_plan(&f2, &PlanRequest::default());
+        assert!(plan2.warnings.iter().any(|w| w.contains("Not used and not touched") && w.contains("sde")), "{:?}", plan2.warnings);
     }
 }
