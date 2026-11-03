@@ -591,6 +591,8 @@ The wording of step 4 follows `docs/RECOVERY.md`, `docs/BOOT.md` and the "How re
 
 ### D11 Update
 
+**Revision (updates, 0.2.2).** The update line (Settings, Updates and About) has five states: not checked, checking (spinner), current, available (Details, primary), "Couldn't check: <reason>" (full reason in the (i), "Check again"); the dot on the Settings button shows only while an update waits. A failed check is typed (private repository: "Releases not found"; rate limit with the time; no release; transport failure: "No Internet connection", the only state that sets the Offline chip). The dialog for a release that is not signed has plain-text notes in a scroll area, one warning line ("This release is not signed. synofurb checks its SHA-256 only."), the required checkbox "I understand and want to install it" with an (i), and "Download and install" disabled with a visible reason until ticked; afterwards "Unsigned, checksum verified". Words: Settings and About add at most 14 words of their own (status, note, button); the dialog at most 24. Details and the failure table: `docs/UPDATES.md`.
+
 **Purpose:** Offer an app update without interrupting work.
 
 | # | Visible element (reading order) | Widget | Words |

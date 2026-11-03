@@ -43,6 +43,7 @@ pub mod state;
 pub mod theme;
 pub mod tokens;
 pub mod trust;
+pub mod updates;
 pub mod welcome;
 pub mod worker;
 

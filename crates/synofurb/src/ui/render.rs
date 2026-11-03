@@ -191,7 +191,7 @@ impl App {
 
     fn render_title_bar(&self, cx: &mut Context<App>) -> AnyElement {
         let app = cx.entity();
-        let dot = matches!(self.update, UpdateState::Available(_));
+        let dot = super::screens::update_status::update_pending(&self.update);
         let right = h_flex()
             .gap(px(4.0))
             .items_center()
@@ -204,18 +204,19 @@ impl App {
                     .accessibility_label(copy::MENU_HELP.short)
                     .on_click(cx.listener(|this, _, window, cx| this.open_help_topic(None, window, cx))),
             )
-            .child(
-                Badge::new().dot().count(usize::from(dot)).child(
-                    Button::new("tb-settings")
-                        .ghost()
-                        .small()
-                        .icon(icons::icon(role::SETTINGS))
-                        .tooltip(copy::MENU_SETTINGS.tip)
-                        .accessibility_label(copy::MENU_SETTINGS.short)
-                        .disabled(self.install_running())
-                        .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Settings, window, cx))),
-                ),
-            )
+            .child({
+                let settings = Button::new("tb-settings")
+                    .ghost()
+                    .small()
+                    .icon(icons::icon(role::SETTINGS))
+                    .tooltip(if dot { copy::MENU_SETTINGS_UPDATE.tip } else { copy::MENU_SETTINGS.tip })
+                    .accessibility_label(if dot { copy::MENU_SETTINGS_UPDATE.short } else { copy::MENU_SETTINGS.short })
+                    .disabled(self.install_running())
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Settings, window, cx)));
+                // the dot only while an update waits: `Badge::dot()` is drawn whatever its count, so without a
+                // waiting update the button carries no badge at all
+                if dot { Badge::new().dot().count(1).child(settings).into_any_element() } else { settings.into_any_element() }
+            })
             .child(
                 Button::new("tb-menu")
                     .ghost()

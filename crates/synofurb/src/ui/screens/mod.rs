@@ -18,4 +18,5 @@ pub mod recover;
 pub mod settings;
 pub mod system;
 pub mod update;
+pub mod update_status;
 pub mod welcome;

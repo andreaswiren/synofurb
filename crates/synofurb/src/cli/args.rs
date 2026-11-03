@@ -145,7 +145,7 @@ pub enum Cmd {
     },
     /// Download and verify the Debian installer files (kernel/initrd) for an architecture
     FetchInstaller(FetchArgs),
-    /// Check for (and install) a newer version from the GitHub releases; verifies the minisign signature and SHA-256
+    /// Check for (and install) a newer version from the GitHub releases; verifies the minisign signature and SHA-256 (`--allow-unsigned`: SHA-256 only, while no signing key exists)
     SelfUpdate(SelfUpdateArgs),
     /// Show the effective configuration and where files live
     Config {
@@ -903,6 +903,10 @@ pub struct SelfUpdateArgs {
     /// with --check: print the result as JSON
     #[arg(long, requires = "check")]
     pub json: bool,
+    /// install a release that cannot be signature-checked: only the SHA-256 in SHA256SUMS of the same GitHub release is verified, so a
+    /// tampered release would not be detected. Valid only while this build has no real update signing key; needs --yes without a terminal
+    #[arg(long, conflicts_with = "check")]
+    pub allow_unsigned: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1294,6 +1298,10 @@ mod tests {
         let Cmd::SelfUpdate(u) = ok(&["self-update", "--check", "--channel", "prerelease", "--json"]).cmd else { panic!() };
         assert!(u.check && u.json && u.channel.as_deref() == Some("prerelease"));
         assert!(err(&["self-update", "--json"]).contains("--check"));
+        let Cmd::SelfUpdate(u) = ok(&["self-update", "--allow-unsigned"]).cmd else { panic!() };
+        assert!(u.allow_unsigned && !u.check);
+        assert!(!matches!(ok(&["self-update"]).cmd, Cmd::SelfUpdate(SelfUpdateArgs { allow_unsigned: true, .. })), "never the default");
+        assert!(err(&["self-update", "--check", "--allow-unsigned"]).contains("cannot be used with"));
         let Cmd::FetchInstaller(f) = ok(&["fetch-installer", "arm64", "--suite", "trixie", "--firmware"]).cmd else { panic!() };
         assert_eq!((f.arch, f.firmware), (ArchArg::Arm64, true));
         let Cmd::Compat(c) = ok(&["compat", "DS923+", "--json", "--refresh"]).cmd else { panic!() };

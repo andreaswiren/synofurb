@@ -75,6 +75,21 @@ fn popover_for(id: ElementId, item: &'static Item, app: &Entity<App>, no_tooltip
     })
 }
 
+/// An `(i)` button whose popover carries a text computed at run time (the full reason of a failed update check).
+/// Enter/Space on the icon opens it, like [`info_popover`]; the accessible name contains the title.
+pub fn info_note(id: impl Into<ElementId>, title: &'static str, body: String) -> impl IntoElement {
+    let label: SharedString = format!("{title}: {body}").into();
+    let trigger = Button::new("info").ghost().xsmall().icon(icons::icon(role::TIP)).accessibility_label(label);
+    Popover::new(id.into()).anchor(Anchor::TopLeft).trigger(trigger).content(move |_, _, _| {
+        v_flex()
+            .w(px(POPOVER_W))
+            .gap(px(8.0))
+            .text_sm()
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+            .child(div().child(SharedString::from(body.clone())))
+    })
+}
+
 /// A modal with the item's title and paragraphs and a Close button; a Help link when the item has a topic.
 pub fn dialog(window: &mut Window, cx: &mut GpuiApp, item: &'static Item, app: &Entity<App>) {
     let app = app.clone();

@@ -210,6 +210,41 @@ pub fn update_info() -> UpdateInfo {
     }
 }
 
+/// The update state a demo screen starts in.
+pub fn update_state(d: super::state::DemoUpdate) -> super::app::UpdateState {
+    use super::app::UpdateState;
+    use super::state::DemoUpdate as D;
+    match d {
+        D::None => UpdateState::Unknown,
+        D::Checking => UpdateState::Checking,
+        D::Current => UpdateState::UpToDate,
+        D::Available | D::Unsigned => UpdateState::Available(Box::new(update_info())),
+        D::NotFound | D::Offline => UpdateState::CheckFailed(update_failure(d)),
+    }
+}
+
+/// What a check ends in for a demo state (the click on "Check for updates").
+pub fn update_check_result(d: super::state::DemoUpdate) -> Result<Box<UpdateInfo>, super::updates::CheckFailure> {
+    use super::state::DemoUpdate as D;
+    match d {
+        D::Current => Ok(Box::new(UpdateInfo { update_available: false, latest: env!("CARGO_PKG_VERSION").into(), ..update_info() })),
+        D::NotFound | D::Offline => Err(update_failure(d)),
+        _ => Ok(Box::new(update_info())),
+    }
+}
+
+fn update_failure(d: super::state::DemoUpdate) -> super::updates::CheckFailure {
+    use super::updates::{CheckFailure, FailKind};
+    if d == super::state::DemoUpdate::Offline {
+        CheckFailure {
+            kind: FailKind::Offline,
+            detail: "request to https://api.github.com/repos/andreaswiren/synofurb/releases failed: dns error".into(),
+        }
+    } else {
+        CheckFailure { kind: FailKind::NotFound, detail: "repository or releases not found: andreaswiren/synofurb".into() }
+    }
+}
+
 // ------------------------------------------------------------------------------------------------ scripted install
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

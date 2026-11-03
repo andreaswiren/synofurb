@@ -8,24 +8,29 @@ use crate::ui::format::{human, percent};
 use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::theme::{Themed, Tone, layout};
-use gpui_kit::component::Sizable;
+use crate::ui::updates;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{AppContext, Context, Entity, IntoElement, Render, Window, div, px};
-use synofurb_core::updater;
+use synofurb_core::updater::{self, InstallMode};
 
 pub struct UpdateView {
     app: Entity<App>,
+    /// "I understand and want to install it": required before an unsigned release can be downloaded.
+    consent: bool,
     _sub: gpui_kit::Subscription,
 }
 
 impl UpdateView {
     pub fn new(app: Entity<App>, cx: &mut Context<UpdateView>) -> UpdateView {
         let sub = cx.observe(&app, |_, _, cx| cx.notify());
-        UpdateView { app, _sub: sub }
+        UpdateView { app, consent: false, _sub: sub }
     }
 }
 
@@ -33,11 +38,13 @@ impl Render for UpdateView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = cx.pal();
         let app = self.app.clone();
+        let consent = self.consent;
         let a = app.read(cx);
         let Some(info) = a.update_info().cloned() else {
             return v_flex().child(kit::muted(cx, "-")).into_any_element();
         };
-        let key_missing = updater::signing_key_is_placeholder(updater::UPDATE_PUBLIC_KEY);
+        let mode = a.install_mode(&info);
+        let unsigned = matches!(mode, InstallMode::UnsignedWithConsent);
         let install_running = a.install_running();
         let size = info.asset.as_ref().map(|x| human(x.size)).unwrap_or_else(|| "-".into());
         let published = info.published_at.clone().unwrap_or_default().split('T').next().unwrap_or("").to_string();
@@ -50,34 +57,46 @@ impl Render for UpdateView {
             .child(kit::chip(&p, size))
             .when(!published.is_empty(), |d| d.child(kit::chip(&p, published)))
             .when(info.prerelease, |d| d.child(kit::tag(&p, Tone::Warn, Some(role::WARN), "Pre-release")));
+        // Release notes as plain text (the engine strips the Markdown), in their own scroll area: a long list never
+        // pushes the buttons off the dialog.
         let notes = div()
             .id("update-notes")
-            .max_h(px(200.0))
+            .max_h(px(180.0))
             .w_full()
             .p(px(8.0))
             .rounded(cx.theme().radius)
             .bg(cx.theme().muted)
-            .overflow_y_scroll()
-            .child(v_flex().gap(px(2.0)).text_sm().children(info.notes.lines().map(|l| {
-                let l = l.trim_end();
-                if let Some(h) = l.strip_prefix("## ") {
-                    div().font_weight(gpui_kit::FontWeight::SEMIBOLD).mt(px(4.0)).child(h.to_string())
-                } else if l.is_empty() {
-                    div().h(px(4.0))
-                } else {
-                    div().text_color(cx.theme().muted_foreground).child(l.to_string())
-                }
-            })));
+            .child(v_flex().gap(px(2.0)).text_sm().children(info.notes_plain().lines().map(|l| {
+                let l = l.trim_end().to_string();
+                if l.is_empty() { div().h(px(4.0)) } else { div().child(l) }
+            })))
+            .overflow_y_scrollbar();
         let mut col = v_flex().w_full().gap(px(12.0)).child(meta).child(notes);
-        if key_missing {
-            col = col.child(
-                Alert::warning("key-missing", "Installing updates is switched off in this build: the signing key is a placeholder.")
-                    .small()
-                    .icon(icons::icon(role::WARN)),
-            );
+        // ONE warning: the unsigned line, or why the release cannot be installed at all
+        match &mode {
+            InstallMode::UnsignedWithConsent => {
+                col = col.child(Alert::warning("upd-unsigned", copy::UPD_ST_UNSIGNED.short).small().icon(icons::icon(role::WARN)));
+            }
+            InstallMode::Blocked(why) => {
+                col = col.child(Alert::warning("upd-blocked", why.clone()).small().icon(icons::icon(role::WARN)));
+            }
+            InstallMode::Signed => {}
         }
-        for (i, pr) in info.problems.iter().enumerate() {
-            col = col.child(Alert::warning(("upd-problem", i), pr.clone()).small().icon(icons::icon(role::WARN)));
+
+        let waiting = matches!(a.update, UpdateState::Available(_) | UpdateState::Failed(..));
+        if unsigned && waiting {
+            col = col.child(
+                h_flex()
+                    .gap(px(4.0))
+                    .items_center()
+                    .child(Checkbox::new("upd-consent").label(copy::UPD_CONSENT.short).checked(consent).on_click(cx.listener(
+                        |v, checked: &bool, _, cx| {
+                            v.consent = *checked;
+                            cx.notify();
+                        },
+                    )))
+                    .child(crate::ui::disclosure::info_tip("consent-info", &copy::UPD_CONSENT_INFO, &app)),
+            );
         }
 
         let (state_ui, buttons): (gpui_kit::AnyElement, Vec<gpui_kit::AnyElement>) = match &a.update {
@@ -107,18 +126,28 @@ impl Render for UpdateView {
             }
             UpdateState::Verified(_, vd) => {
                 let app2 = app.clone();
-                (
+                let sha: String = vd.sha256.chars().take(12).collect();
+                let tag = if vd.signed {
+                    h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .child(kit::tag(&p, Tone::Ok, Some(role::OK), format!("{} \u{00b7} {sha}", copy::UPD_SIGNATURE.short)))
+                        .child(crate::ui::disclosure::info_tip("sig-info", &copy::UPD_SIGNATURE, &app))
+                } else {
+                    // calm, and honest: the checksum matched, nothing was signed
                     h_flex()
                         .gap(px(6.0))
                         .items_center()
                         .child(kit::tag(
                             &p,
-                            Tone::Ok,
-                            Some(role::OK),
-                            format!("{} \u{00b7} {}", copy::UPD_SIGNATURE.short, vd.sha256.chars().take(12).collect::<String>()),
+                            Tone::Neutral,
+                            Some(role::CHECK),
+                            format!("{} \u{00b7} {sha}", copy::UPD_VERIFIED_UNSIGNED.short),
                         ))
-                        .child(crate::ui::disclosure::info_tip("sig-info", &copy::UPD_SIGNATURE, &app))
-                        .into_any_element(),
+                        .child(crate::ui::disclosure::info_tip("sig-info", &copy::UPD_VERIFIED_UNSIGNED, &app))
+                };
+                (
+                    tag.into_any_element(),
                     vec![kit::with_reason(
                         "apply-why",
                         Button::new("upd-apply")
@@ -137,14 +166,15 @@ impl Render for UpdateView {
                         Button::new("upd-retry")
                             .outline()
                             .label("Try again")
-                            .on_click(move |_, _, cx| app2.update(cx, |a, cx| a.start_update_download(cx)))
+                            .disabled(updates::download_blocker(&mode, consent).is_some())
+                            .on_click(move |_, _, cx| app2.update(cx, |a, cx| a.start_update_download(consent, cx)))
                             .into_any_element(),
                     ],
                 )
             }
             _ => {
                 let (a1, a2, a3) = (app.clone(), app.clone(), app.clone());
-                let dis = key_missing || !info.installable();
+                let label = if unsigned { &copy::UPD_DOWNLOAD_INSTALL } else { &copy::UPD_DOWNLOAD };
                 (
                     div().into_any_element(),
                     vec![
@@ -169,24 +199,23 @@ impl Render for UpdateView {
                             Button::new("upd-download")
                                 .primary()
                                 .icon(icons::icon(role::DOWNLOAD))
-                                .label(copy::UPD_DOWNLOAD.short)
-                                .on_click(move |_, _, cx| a3.update(cx, |a, cx| a.start_update_download(cx))),
-                            dis.then(|| {
-                                if key_missing { copy::UPD_DOWNLOAD_KEY_WHY.tip } else { copy::UPD_DOWNLOAD_ASSET_WHY.tip }.to_string()
-                            }),
+                                .label(label.short)
+                                .on_click(move |_, _, cx| a3.update(cx, |a, cx| a.start_update_download(consent, cx))),
+                            updates::download_blocker(&mode, consent),
                         ),
                     ],
                 )
             }
         };
-        let url = info.html_url.clone();
+        let url = Some(updates::release_url(&info, updater::DEFAULT_REPO));
         col.child(state_ui)
             .child(
                 h_flex()
                     .w_full()
                     .items_center()
+                    .flex_wrap()
                     .gap(px(8.0))
-                    .child(div().flex_1().when_some(url, |d, u| {
+                    .child(div().flex_1().min_w(px(120.0)).when_some(url, |d, u| {
                         d.child(
                             Button::new("upd-page")
                                 .link()
@@ -196,7 +225,7 @@ impl Render for UpdateView {
                                 .on_click(move |_, _, cx| cx.open_url(&u)),
                         )
                     }))
-                    .children(buttons),
+                    .child(h_flex().gap(px(8.0)).items_center().flex_wrap().children(buttons)),
             )
             .into_any_element()
     }

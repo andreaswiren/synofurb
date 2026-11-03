@@ -3,8 +3,33 @@
 The desktop app can update itself (`synofurb self-update`, or the update button in the app once it is wired up). It does
 this only for releases that are **signed by the project key**, and it never installs anything it could not verify.
 
-**Status: the signing key is still a placeholder. Until the maintainer sets it up (below), `check` works but every
-install is refused with an explanation.** Nothing is silently skipped.
+**Status: the signing key is still a placeholder. Until the maintainer sets it up (below), `check` works and an install
+is refused with an explanation, unless you explicitly opt in to the [unsigned path](#the-unsigned-path-opt-in-placeholder-key-only)
+(SHA-256 only, clearly labelled).** Nothing is silently skipped.
+
+## The unsigned path (opt-in, placeholder key only)
+
+The project has not set up a signing key yet, and its releases carry `SHA256SUMS` but no `SHA256SUMS.minisig`. So that updates can work
+anyway, there is one deliberate, narrow exception:
+
+* `updater::unsigned_allowed()` is true **exactly while** `UPDATE_PUBLIC_KEY` is the placeholder. The moment a build embeds a real key,
+  `updater::download_unchecked_signature` refuses with `UpdateError::UnsignedNotAllowed`, `UpdateInfo::install_mode()` stops saying
+  `UnsignedWithConsent`, and signatures are mandatory with no other change (no downgrade).
+* Nothing happens without the person's consent: `download_unchecked_signature(info, dest, UnsignedConsent::acknowledged(), progress)` needs the
+  token, which a front end creates only after showing `updater::UNSIGNED_WARNING` and getting an explicit yes. CLI: `synofurb self-update
+  --allow-unsigned` (`--yes` as well when there is no terminal; `--yes` alone never enables it).
+* What is checked: same host policy (https, `github.com` / `githubusercontent.com` only, every redirect hop), same size limits, the
+  `SHA256SUMS` asset **of the same release** must exist, and the asset's SHA-256 is streamed and compared with its line there; a mismatch
+  deletes the partial file. What is **not** checked: any signature. This catches a damaged download. It does **not** catch a tampered
+  release or a hijacked GitHub account, because whoever can change the asset can change `SHA256SUMS` too.
+* The result says so: `VerifiedDownload { signed: false, integrity: Integrity::ChecksumOnly, .. }` (the signed path gives `signed: true`,
+  `Integrity::Signed`). Show that wherever the install is shown. Nothing is installed by the download; `apply` is a separate step.
+* `UpdateInfo::install_mode()` tells a front end what is possible for a release: `Signed`, `UnsignedWithConsent` (placeholder key, asset
+  and `SHA256SUMS` present) or `Blocked(reason)` (no asset for this system, no `SHA256SUMS`, or a real key and no `.minisig`).
+  `self-update --check --json` reports it as `install_mode` / `install_blocked_reason`, plus `signature_asset`, `unsigned_allowed` and
+  `notes_plain`.
+* Release notes: `UpdateInfo.notes` is the Markdown body (64 KiB at most); `UpdateInfo::notes_plain()` / `updater::plain_release_notes(md)`
+  turn it into readable text (headings, bold, code, `-` bullets to a bullet sign, links as `text (url)`).
 
 ## How an update works
 
@@ -131,6 +156,44 @@ What it does not protect against:
 * **Legacy-mode minisign signatures are accepted** (plain Ed25519 over the file) as well as the default pre-hashed mode.
   Both need the same secret key.
 
+## What the desktop app shows
+
+Everywhere an update is mentioned (Settings, Updates; the About page; the dot on the Settings button) the app shows one of these
+states, and a click on "Check for updates" always ends in one of them and stays on screen:
+
+| State | Text | Button |
+|---|---|---|
+| never checked | Not checked yet | Check for updates |
+| checking | Checking for updates (spinner) | Check for updates (disabled while it runs) |
+| current | `<version> is current` | Check for updates |
+| available | `<version> available` | Details (primary): opens the update dialog |
+| failed | Couldn't check: `<short reason>`, with the full reason behind the (i) | Check again |
+
+Why a check fails, and what the app says (the kind is typed in `ui/updates.rs`, never read from message text):
+
+| Engine error | Reason shown | Offline chip? |
+|---|---|---|
+| `Http`, and GitHub's API host cannot be reached (a TCP connection fails) | No Internet connection | **yes**, the only case |
+| `Http`, and GitHub is reachable (an error status) | GitHub error, with the engine's text | no |
+| `NotFound` (HTTP 404) | Releases not found: "GitHub did not find the releases. If the repository is private, the update check cannot see them." | no |
+| `RateLimited` | GitHub rate limit, with the engine's hint ("try again in about N minute(s)") | no |
+| `NoRelease` | No release found: "No release found for this system." | no |
+| `Parse` | Unreadable answer, with the engine's text | no |
+| anything else | Check failed, with the engine's text | no |
+
+**A private repository.** The check sends no credentials, so while the repository is private GitHub answers 404 and the app says
+"Releases not found" (it is not "offline"). Making the repository public, or publishing releases in a public one, fixes it. A
+manual check always shows what it finds, even a version you skipped or snoozed; the automatic check at start respects those.
+
+**An unsigned release.** While the build's signing key is the placeholder (see the unsigned path above) the update dialog shows
+the plain-text release notes in a scroll area, one calm warning line ("This release is not signed. synofurb checks its SHA-256
+only."), a required checkbox "I understand and want to install it" (its (i) explains in plain words that a tampered release would
+not be detected), and a primary "Download and install" that stays disabled, with the reason beside it, until the box is ticked.
+After the download the dialog shows "Unsigned, checksum verified" with the first characters of the SHA-256 and "Restart and
+update". A release that cannot be installed at all (no build for this system, no `SHA256SUMS`) shows its reason as the one
+warning and a disabled button. With a real key and a signed release nothing of this appears: the signed path, no checkbox. The
+"Release page" link (always a github.com address) stays in every state.
+
 ## Limits
 
 * No background polling; checks happen when you ask (or when the app's UI asks).
@@ -138,4 +201,5 @@ What it does not protect against:
 * `.zip` is never installed automatically.
 * Linux package installs need `pkexec` (polkit) for the privilege prompt; without it you get the command to run.
 * On Windows the installer replaces the app after it exits; if the installer is cancelled, nothing changes.
-* The `check` call works with a placeholder key, but any install is refused until the real key is in place.
+* The `check` call works with a placeholder key, but a signed install is refused until the real key is in place; the only way to install
+  before that is the explicit unsigned path above.

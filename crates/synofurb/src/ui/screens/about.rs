@@ -58,8 +58,9 @@ impl App {
     pub fn diagnostics_text(&self, cx: &gpui_kit::App) -> String {
         use gpui_kit::component::ActiveTheme;
         format!(
-            "synofurb {}\nos: {} {}\nrenderer: GPUI (wgpu/native)\ntheme: {:?} ({}), text size {}\ncompatibility list: {} models, dated {}\nlog folder: {}\ndemo: {}\n",
+            "synofurb {} ({})\nos: {} {}\nrenderer: GPUI (wgpu/native)\ntheme: {:?} ({}), text size {}\ncompatibility list: {} models, dated {}\nlog folder: {}\ndemo: {}\n",
             version(),
+            crate::ui::updates::build_label(env!("SYNOFURB_GIT_DESCRIBE_BUILD"), version()),
             std::env::consts::OS,
             std::env::consts::ARCH,
             self.settings.theme,
@@ -88,7 +89,7 @@ impl App {
                     &p,
                     Tone::Neutral,
                     None,
-                    format!("{} \u{00b7} {}", version(), option_env!("SYNOFURB_BUILD").unwrap_or("dev")),
+                    format!("{} \u{00b7} {}", version(), crate::ui::updates::build_label(env!("SYNOFURB_GIT_DESCRIBE_BUILD"), version())),
                 ))
                 .when(self.demo.is_some(), |d| d.child(kit::tag(&p, Tone::Info, None, copy::TAG_DEMO.short))),
         );
@@ -161,7 +162,9 @@ impl App {
         let acc = Accordion::new("credits")
             .bordered(true)
             .item(|i| i.title(copy::ABOUT_CREDITS.short).child(v_flex().gap(px(6.0)).child(credits).child(h_flex().child(synodeb))));
-        let body = v_flex().w_full().max_w(px(640.0)).gap(px(16.0)).child(header).child(links).child(acc);
+        let update_line = crate::ui::screens::update_status::status_line(&self.update, self.update_unsigned(), &app, "a-upd", cx);
+        let pending = crate::ui::screens::update_status::update_pending(&self.update);
+        let body = v_flex().w_full().max_w(px(640.0)).gap(px(16.0)).child(header).child(update_line).child(links).child(acc);
         Page::new(copy::ABOUT_TITLE.short, body)
             .left(vec![
                 Button::new("back")
@@ -173,7 +176,9 @@ impl App {
             ])
             .right(vec![
                 Button::new("copy-diag")
-                    .primary()
+                    // one primary per screen: a waiting update ("Details") takes it
+                    .when(!pending, |b| b.primary())
+                    .when(pending, |b| b.outline())
                     .icon(icons::icon(role::COPY))
                     .label(copy::ABOUT_COPY_DIAG.short)
                     .tooltip(copy::ABOUT_COPY_DIAG.tip)

@@ -101,7 +101,23 @@ pub fn run(out: &Out, p: &Program, cmd: Cmd) -> CliResult<()> {
         Cmd::Manage { action } => manage_cmd::manage(out, action),
         Cmd::Bundle { action } => bundle::bundle(out, action),
         Cmd::FetchInstaller(a) => boot::fetch_installer(out, a),
-        Cmd::SelfUpdate(a) => crate::update_cmd::run(out, a.check, a.channel, a.json, p.gui).map_err(CliError::from),
+        Cmd::SelfUpdate(a) => {
+            if a.allow_unsigned && !synofurb_core::updater::unsigned_allowed() {
+                return Err(CliError::usage(
+                    "--allow-unsigned is not available: this build contains a real update signing key, so releases must be signed",
+                ));
+            }
+            // before any network traffic: an unsigned install needs --yes when nobody can be asked
+            if a.allow_unsigned && !out.yes && !out.interactive {
+                return Err(CliError::refused(
+                    "--allow-unsigned installs a release that cannot be signature-checked; without a terminal to ask on it also needs --yes. Nothing was changed.",
+                ));
+            }
+            crate::update_cmd::run(out, a.check, a.channel, a.json, p.gui, a.allow_unsigned).map_err(|e| match e.downcast::<CliError>() {
+                Ok(c) => c,
+                Err(e) => CliError::from(e),
+            })
+        }
         Cmd::Config { action } => misc::config(out, p, action),
         Cmd::Completions { shell } => misc::completions(p, shell),
         Cmd::Version { json } => misc::version(out, p, json),

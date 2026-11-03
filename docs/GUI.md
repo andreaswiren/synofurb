@@ -14,9 +14,9 @@ synofurb gui                              # the real thing
 synofurb gui --demo --screen confirm      # built-in demo unit, nothing touches the network
 ```
 
-Demo screens (59, see `state::DEMO_SCREEN_NAMES`): `inventory connect inspect goal plan plan-keep system confirm install
+Demo screens (67, see `state::DEMO_SCREEN_NAMES`): `inventory connect inspect goal plan plan-keep system confirm install
 install-after-ponr failed failed-pre failed-post done update settings bootmgr recover manage manage-* recovery-* help
-help-topic about dlg-* welcome welcome-2..welcome-5` (`first-launch` is an alias of `welcome`). `install`, `failed` and `done` replay a scripted event stream.
+help-topic about dlg-* welcome welcome-2..welcome-5 update-unsigned updates-{checking,current,available,failed-notfound,failed-offline,unsigned} settings-updates` (`first-launch` is an alias of `welcome`). `install`, `failed` and `done` replay a scripted event stream.
 
 | Variable | Effect |
 |---|---|
@@ -65,6 +65,17 @@ button and a click outside close it for this launch only on steps 1 to 4, and on
 (unticking clears it). Reopen it from Help (first row) or the title-bar menu. Demo: `--screen welcome` and
 `welcome-2` to `welcome-5`; screenshots `design/screenshots/v2-app-welcome-*.png` (steps, popovers, unticked box, menu
 path, 1180 x 760, key walk).
+
+**Update states** (`updates.rs` pure, `screens/update_status.rs`, `screens/update.rs`; text and failure table in `docs/UPDATES.md`). One line
+(`status_line`) is used in Settings, Updates and on the About page: checking (spinner), current, available (Details), or "Couldn't
+check: <reason>" with the full reason behind an (i) and "Check again"; a click on "Check for updates" always ends in one of them and
+stays. `updates::classify` turns the engine's `UpdateError` into a typed `FailKind`; only `Offline` (a failed TCP connection to
+GitHub's API host, asked once for the engine's ambiguous `Http` error, never read from message text) sets the Offline chip
+(`App::offline_app`). The dot on the Settings button shows only while an update waits (the stock `Badge::dot` ignores its count, so
+the badge is not added otherwise). The update dialog follows `UpdateInfo::install_mode()`: signed (unchanged), unsigned with consent
+(one warning, a required checkbox, "Download and install" disabled with a reason until ticked, then "Unsigned, checksum verified"), or
+blocked (the reason as the one warning). About shows `release` / `dev <commit>` / `local build` from `SYNOFURB_GIT_DESCRIBE_BUILD`.
+On About, a waiting update takes the page's primary (Details) and Copy diagnostics becomes an outline button.
 
 **Six steps.** Find, Connect (with Inspect), Goal (with Quick setup), Setup (Storage and System tabs), Confirm, Install
 (with Done). Settings, About, Help, Manage, Boot manager and Recovery are side screens. The Stepper is the widget from
