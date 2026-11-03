@@ -501,17 +501,32 @@ pub struct Straddle {
     pub left: Vec<String>,
 }
 
-impl Straddle {
-    /// The warning sentence: `md2 spans sda, sdb (erased) and sde (not touched): it is lost as a whole, including its part on sde.`
-    pub fn warning(&self) -> String {
-        format!(
-            "{} spans {} (erased) and {} (not touched): it is lost as a whole, including its part on {}.",
-            self.array,
-            self.erased.join(", "),
-            self.left.join(", "),
-            if self.left.len() == 1 { "that disk" } else { "those disks" }
-        )
+/// One warning sentence per group of arrays that span the same disks: `md2 and md3 span sda, sdc, sdd (erased) and sdb (not touched):
+/// they are lost as a whole, including their part on that disk.`
+pub fn straddle_warnings(all: &[Straddle]) -> Vec<String> {
+    let mut groups: Vec<(Vec<&str>, &Straddle)> = vec![];
+    for s in all {
+        match groups.iter_mut().find(|(_, g)| g.erased == s.erased && g.left == s.left) {
+            Some((names, _)) => names.push(s.array.as_str()),
+            None => groups.push((vec![s.array.as_str()], s)),
+        }
     }
+    groups
+        .into_iter()
+        .map(|(names, s)| {
+            let many = names.len() > 1;
+            format!(
+                "{} {} {} (erased) and {} (not touched): {} lost as a whole, including {} part on {}.",
+                names.join(" and "),
+                if many { "span" } else { "spans" },
+                s.erased.join(", "),
+                s.left.join(", "),
+                if many { "they are" } else { "it is" },
+                if many { "their" } else { "its" },
+                if s.left.len() == 1 { "that disk" } else { "those disks" }
+            )
+        })
+        .collect()
 }
 
 /// The disks that hold members of `a` (sorted, without duplicates).
@@ -708,9 +723,7 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     // Arrays that are still resyncing or missing members: an install now would start from a pool that is not redundant.
     for a in facts.busy_arrays() {
         if let Some(note) = a.health_note() {
-            // only a resync, a rebuild, a reshape or a missing member means less protection; a check leaves every copy intact
-            let tail = if a.reduces_redundancy() { "; until then your data is not fully protected" } else { "" };
-            plan.warnings.push(format!("DSM array {} is {note}. Let it finish before installing{tail}.", a.name));
+            plan.warnings.push(format!("DSM array {} is {note}. {}", a.name, a.advice()));
         }
     }
     // Disks the plan will not touch, other than the boot flash: never leave them out silently.
@@ -729,7 +742,10 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     };
     plan.straddling = straddling_arrays(facts, &kept_for_straddle);
     if !left.is_empty() {
-        let mut msg = format!("Not used and not touched: {}. synofurb does not write to them.", left.iter().map(|l| l.1.as_str()).collect::<Vec<_>>().join(", "));
+        let mut msg = format!(
+            "Not used and not touched: {}. synofurb does not write to them.",
+            left.iter().map(|l| l.1.as_str()).collect::<Vec<_>>().join(", ")
+        );
         // "DSM data stays as it is" is only said for a disk that holds DSM data and none of it belongs to an array that is erased
         let safe: Vec<&str> = left
             .iter()
@@ -744,9 +760,7 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         }
         plan.warnings.push(msg);
     }
-    for s in &plan.straddling {
-        plan.warnings.push(s.warning());
-    }
+    plan.warnings.extend(straddle_warnings(&plan.straddling));
     if fw == Firmware::UBoot {
         plan.warnings.push("This ARM board has no UEFI. Debian boots from raw disk sectors through U-Boot; the U-Boot environment must be changed once over the serial console (Debian wiki: InstallingDebianOn/Synology). Keep a TTL serial adapter ready (115200 baud).".into());
     }
@@ -2075,9 +2089,19 @@ mod tests {
         let p = build_plan(&f, &PlanRequest::default());
         let names: Vec<&str> = p.straddling.iter().map(|s| s.array.as_str()).collect();
         assert_eq!(names, ["md2", "md3"], "{:?}", p.straddling);
-        assert_eq!((p.straddling[0].erased.clone(), p.straddling[0].left.clone()), (vec!["sda".into(), "sdc".into(), "sdd".into()], vec!["sdb".to_string()]));
+        assert_eq!(
+            (p.straddling[0].erased.clone(), p.straddling[0].left.clone()),
+            (vec!["sda".into(), "sdc".into(), "sdd".into()], vec!["sdb".to_string()])
+        );
         let all = p.warnings.join("\n");
-        assert!(all.contains("md2 spans sda, sdc, sdd (erased) and sdb (not touched): it is lost as a whole"), "{all}");
+        assert!(
+            all.contains("md2 and md3 span sda, sdc, sdd (erased) and sdb (not touched): they are lost as a whole, including their part on that disk."),
+            "two arrays on the same disks make one warning: {all}"
+        );
+        assert_eq!(
+            straddle_warnings(&p.straddling[..1]),
+            ["md2 spans sda, sdc, sdd (erased) and sdb (not touched): it is lost as a whole, including its part on that disk."]
+        );
         assert!(all.contains("Not used and not touched: sdb (removable, unknown port). synofurb does not write to them."), "{all}");
         assert!(!all.contains("stays as it is"), "the reassurance is false for sdb and must not be printed: {all}");
         // keeping the arrays removes the straddle: they are not erased
@@ -2128,5 +2152,13 @@ mod tests {
         }
         let w = build_plan(&f, &PlanRequest::default()).warnings.join("\n");
         assert!(w.contains("md2 is checking") && !w.contains("not fully protected"), "a check leaves every copy intact: {w}");
+        // a missing member needs a repair, not waiting
+        for a in &mut f.arrays {
+            if a.name == "md3" {
+                a.degraded = 1;
+            }
+        }
+        let w = build_plan(&f, &PlanRequest::default()).warnings.join("\n");
+        assert!(w.contains("md3 is degraded (1 missing). Repair it before installing"), "{w}");
     }
 }

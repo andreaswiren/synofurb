@@ -103,8 +103,14 @@ pub fn install(out: &Out, a: InstallArgs) -> CliResult<()> {
     let plan = build_plan(&insp.facts, &a.plan.request());
 
     let mut lines = render::plan_report(&insp.facts, &plan, &asm);
-    lines
-        .extend(addons_cmd::plan_text(&spec.addons, &AddonContext { offline: spec.bundle.is_some(), root_mib: Some(plan.sizes.root_mib), has_data_volume: Some(plan.has_data_volume()) }));
+    lines.extend(addons_cmd::plan_text(
+        &spec.addons,
+        &AddonContext {
+            offline: spec.bundle.is_some(),
+            root_mib: Some(plan.sizes.root_mib),
+            has_data_volume: Some(plan.has_data_volume()),
+        },
+    ));
     if !a.dry_run {
         for l in &lines {
             out.info(l);

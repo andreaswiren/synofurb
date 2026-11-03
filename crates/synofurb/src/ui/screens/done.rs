@@ -74,6 +74,8 @@ impl App {
         };
         let label = |id: &'static str, it: &'static copy::Item| kit::labelled(id, it, &app);
         let mut list = DescriptionList::horizontal()
+            // in rem: a label with its info icon is wider than the stock 120 px at bigger text and ran into the value
+            .label_width(gpui_kit::rems(8.0))
             .columns(1)
             .bordered(false)
             .child(DescriptionItem::new(copy::DONE_ADDRESS.short).value(self.done_row(cx, "c-addr", ip.clone(), "Address")))

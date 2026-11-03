@@ -662,11 +662,7 @@ mod tests {
         assert_eq!(port_to_show(None, None, false), None);
         // and the row says it when the port is not 22 (see UnitRow::address_text)
         let mut a = AddedHosts::default();
-        a.upsert(AddedHost {
-            target: t("nas.lan:2222"),
-            report: ProbeReport { checks: vec![], found: None },
-            checked: String::new(),
-        });
+        a.upsert(AddedHost { target: t("nas.lan:2222"), report: ProbeReport { checks: vec![], found: None }, checked: String::new() });
         assert_eq!(a.get("nas.lan").and_then(|h| h.target.port), Some(2222));
     }
 

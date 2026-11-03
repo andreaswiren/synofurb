@@ -80,8 +80,13 @@ impl AddonPicks {
     }
 
     /// Everything that will be installed, in install order, with the reason Docker is there.
+    ///
+    /// Built from the ids alone: a value typed into a field that the checks refuse must not make the whole list read as "nothing
+    /// ticked" (the engine refuses a choice with a bad value, and the rows would all lose their ticks while the person is still typing).
     pub fn effective(&self) -> Vec<Resolved> {
-        addons::resolve(&self.choices(&BTreeMap::new())).unwrap_or_default()
+        let ids: Vec<AddonChoice> =
+            addons::catalog().iter().filter(|e| self.picked.contains(e.id)).map(|e| AddonChoice::new(e.id)).collect();
+        addons::resolve(&ids).unwrap_or_default()
     }
 
     pub fn is_on(&self, id: &str) -> bool {
@@ -118,7 +123,7 @@ impl AddonPicks {
         v
     }
 
-    /// "Will be installed after first boot: Docker, Portainer, Frigate NVR" (None when nothing is ticked).
+    /// "After first boot: Docker, Portainer, Frigate NVR" (None when nothing is ticked).
     pub fn confirm_line(&self) -> Option<String> {
         let names: Vec<&str> = self.effective().iter().map(|r| r.entry.name).collect();
         (!names.is_empty()).then(|| format!("{} {}", crate::ui::copy::CONF_ADDONS.short, names.join(", ")))
@@ -169,7 +174,11 @@ pub fn about_lines(e: &addons::CatalogEntry) -> Vec<String> {
         let it = crate::ui::screens::addons::privilege_item(p);
         v.push(format!("{}: {}", it.short, it.tip));
     }
-    let size = if e.approx_size_mib >= 1000 { format!("{:.1} GB", e.approx_size_mib as f64 / 1000.0) } else { format!("{} MB", e.approx_size_mib) };
+    let size = if e.approx_size_mib >= 1000 {
+        format!("{:.1} GB", e.approx_size_mib as f64 / 1000.0)
+    } else {
+        format!("{} MB", e.approx_size_mib)
+    };
     v.push(format!("Download about {size}, about {} min on a 20 Mbit/s line.", addons::approx_minutes(e)));
     if e.data_gib > 0 {
         v.push(format!("Wants at least {} GiB free on the data volume.", e.data_gib));
@@ -392,6 +401,18 @@ mod tests {
     }
 
     #[test]
+    fn a_bad_value_in_a_field_does_not_make_the_ticks_disappear() {
+        let mut p = picks(&["portainer", "frigate"]);
+        p.set_value(("frigate", "retain_days"), "400");
+        assert_eq!(p.field_errors(&BTreeMap::new()).len(), 1, "the field is reported");
+        // the engine refuses these choices, but the rows still show what is ticked and what that needs
+        assert!(addons::validate(&p.choices(&BTreeMap::new())).is_err());
+        assert!(p.is_on("docker") && p.is_on("portainer") && p.is_on("frigate"));
+        assert_eq!(p.required_by("docker"), ["Portainer", "Frigate NVR"]);
+        assert_eq!(p.confirm_line().as_deref(), Some("After first boot: Docker, Portainer, Frigate NVR"));
+    }
+
+    #[test]
     fn unticking_forgets_that_add_ons_values() {
         let mut p = picks(&["frigate"]);
         p.set_value(("frigate", "retain_days"), "30");
@@ -456,7 +477,7 @@ mod tests {
         assert_eq!(picks(&[]).confirm_line(), None);
         let p = picks(&["portainer"]);
         let line = p.confirm_line().unwrap();
-        assert!(line.starts_with("Will be installed after first boot:") && line.ends_with("Docker, Portainer"), "{line}");
+        assert!(line.starts_with("After first boot:") && line.ends_with("Docker, Portainer"), "{line}");
         assert!(p.needs_internet());
         assert!(!picks(&["docker"]).needs_internet());
     }
@@ -485,7 +506,10 @@ mod tests {
         // the offline source adds its own line, and a plan without a data volume adds the data-volume line
         let off = confirm_model(&quick, &AddonContext { offline: true, has_data_volume: Some(false), ..Default::default() });
         assert!(off.loud.iter().any(|w| w.contains("offline bundle")), "{:?}", off.loud);
-        let keep = confirm_model(&picks(&["frigate"]).choices(&BTreeMap::new()), &AddonContext { has_data_volume: Some(false), ..Default::default() });
+        let keep = confirm_model(
+            &picks(&["frigate"]).choices(&BTreeMap::new()),
+            &AddonContext { has_data_volume: Some(false), ..Default::default() },
+        );
         assert!(keep.loud.iter().any(|w| w.contains("creates no data volume")), "{:?}", keep.loud);
         assert!(confirm_model(&[], &ctx).names.is_empty() && confirm_model(&[], &ctx).loud.is_empty());
     }

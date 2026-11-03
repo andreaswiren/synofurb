@@ -194,11 +194,7 @@ impl ScanView {
             [n] => swept_label(n),
             many => {
                 let limited = many.iter().filter(|n| is_limited(n)).count();
-                if limited == 0 {
-                    format!("{} networks", many.len())
-                } else {
-                    format!("{} networks, {limited} swept in part", many.len())
-                }
+                if limited == 0 { format!("{} networks", many.len()) } else { format!("{} networks, {limited} swept in part", many.len()) }
             }
         }
     }
@@ -233,15 +229,28 @@ impl ScanView {
         })
     }
 
+    /// Every method ended in a failure: nothing was scanned at all (not "scanned, found nothing").
+    pub fn all_failed(&self) -> bool {
+        !self.lines.is_empty() && self.lines.iter().all(|l| matches!(l.state, LineState::Failed(_)))
+    }
+
     /// What an empty result says was scanned: "Scanned 192.168.69.0/24 with 4 methods in 6 s." When no address could be probed it says
     /// so (a /32 VPN address has none), so that "no NAS found" is not read as "every address was tried".
     pub fn empty_line(&self) -> String {
         let m = self.methods.len();
         let how = if m == 1 { "1 method".to_string() } else { format!("{m} methods") };
         match self.finished {
+            Some(_) if self.all_failed() => {
+                let n = self.methods.len();
+                format!("Nothing could be scanned: {} failed on {}.", if n == 1 { "the method".to_string() } else { format!("all {n} methods") }, self.networks_text())
+            }
             Some((_, e)) if self.was_stopped => format!("Stopped after {} on {}.", secs_text(e), self.networks_text()),
             Some((_, e)) if self.total_hosts == 0 => {
-                format!("Scanned {} with {how} in {}. No address was probed, only broadcasts were heard.", self.networks_text(), secs_text(e))
+                format!(
+                    "Scanned {} with {how} in {}. No address was probed, only broadcasts were heard.",
+                    self.networks_text(),
+                    secs_text(e)
+                )
             }
             Some((_, e)) => format!("Scanned {} with {how} in {}.", self.networks_text(), secs_text(e)),
             None => String::new(),
@@ -447,6 +456,25 @@ mod tests {
     }
 
     #[test]
+    fn when_every_method_failed_the_text_does_not_claim_a_scan() {
+        let mut v = ScanView::default();
+        started(&mut v, vec![net("a", "192.168.69.0/24", "x")], 253);
+        for m in [ScanMethod::Mdns, ScanMethod::ProbeSweep] {
+            v.apply(&ScanEvent::MethodFinished { method: m, network: "a".into(), found: 0, error: Some("blocked".into()) });
+        }
+        v.apply(&ScanEvent::Finished { found_total: 0, elapsed: Duration::from_secs(1) });
+        assert!(v.all_failed());
+        assert_eq!(v.empty_line(), "Nothing could be scanned: all 2 methods failed on 192.168.69.0/24.");
+        // one method that worked is a scan
+        let mut w = ScanView::default();
+        started(&mut w, vec![net("a", "192.168.69.0/24", "x")], 253);
+        w.apply(&ScanEvent::MethodFinished { method: ScanMethod::Mdns, network: "a".into(), found: 0, error: Some("blocked".into()) });
+        w.apply(&ScanEvent::MethodFinished { method: ScanMethod::ProbeSweep, network: "a".into(), found: 0, error: None });
+        w.apply(&ScanEvent::Finished { found_total: 0, elapsed: Duration::from_secs(1) });
+        assert!(!w.all_failed() && w.empty_line().starts_with("Scanned 192.168.69.0/24 with 2 methods"));
+    }
+
+    #[test]
     fn a_slash_32_sweeps_nothing_and_the_text_says_so() {
         let mut v = ScanView::default();
         started(&mut v, vec![limited("ts", "100.100.1.2/32", "100.100.1.2/32", 0)], 0);
@@ -464,7 +492,11 @@ mod tests {
         let mut v = ScanView::default();
         started(
             &mut v,
-            vec![net("a", "192.168.69.0/24", "x"), limited("b", "10.0.0.0/16", "10.0.1.0/24", 253), limited("c", "100.1.1.1/32", "100.1.1.1/32", 0)],
+            vec![
+                net("a", "192.168.69.0/24", "x"),
+                limited("b", "10.0.0.0/16", "10.0.1.0/24", 253),
+                limited("c", "100.1.1.1/32", "100.1.1.1/32", 0),
+            ],
             506,
         );
         assert_eq!(v.networks_text(), "3 networks, 2 swept in part");

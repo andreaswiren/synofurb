@@ -462,7 +462,9 @@ pub struct Consent {
 
 /// The privileged add-ons among what will be installed (Docker itself asks for none).
 pub fn consent_items(choices: &[AddonChoice]) -> Vec<Consent> {
-    resolve(choices)
+    // from the ids alone: a bad typed value must never make the privileges disappear from the acknowledgement
+    let ids: Vec<AddonChoice> = choices.iter().map(|c| AddonChoice::new(&c.id)).collect();
+    resolve(&ids)
         .unwrap_or_default()
         .iter()
         .filter(|r| !r.entry.privileges.is_empty())
@@ -587,14 +589,20 @@ pub fn notes(choices: &[AddonChoice], ctx: &AddonContext) -> Vec<(NoteKind, Stri
     let size_mib: u64 = items.iter().map(|r| r.entry.approx_size_mib as u64).sum();
     w.push((
         NoteKind::Size,
-        format!("The add-ons need about {:.1} GiB on the system volume (Docker keeps images under /var/lib/docker).", size_mib as f64 / 1024.0),
+        format!(
+            "The add-ons need about {:.1} GiB on the system volume (Docker keeps images under /var/lib/docker).",
+            size_mib as f64 / 1024.0
+        ),
     ));
     if let Some(root) = ctx.root_mib {
         // leave room for the system itself, logs and updates
         if root < size_mib + 4096 {
             w.push((
                 NoteKind::Tight,
-                format!("The system volume is only {} GiB: that is tight for the add-ons. Raise the system size in the storage settings.", root / 1024),
+                format!(
+                    "The system volume is only {} GiB: that is tight for the add-ons. Raise the system size in the storage settings.",
+                    root / 1024
+                ),
             ));
         }
     }
@@ -609,7 +617,10 @@ pub fn notes(choices: &[AddonChoice], ctx: &AddonContext) -> Vec<(NoteKind, Stri
         ));
     }
     for r in items.iter().filter(|r| r.entry.data_gib > 0 && !missing.contains(&r.entry.name)) {
-        w.push((NoteKind::DataWants, format!("{} stores its data on the data volume and wants at least {} GiB free there.", r.entry.name, r.entry.data_gib)));
+        w.push((
+            NoteKind::DataWants,
+            format!("{} stores its data on the data volume and wants at least {} GiB free there.", r.entry.name, r.entry.data_gib),
+        ));
     }
     w
 }
@@ -829,7 +840,10 @@ mod tests {
         let l = plan_lines(&[choice("frigate"), choice("portainer")]);
         assert!(l[0].starts_with("Add-ons: Docker (required by Frigate NVR, Portainer), Portainer, Frigate NVR"), "{l:?}");
         assert!(l.iter().any(|x| x.contains("Internet")));
-        let w = warnings(&[choice("portainer"), choice("frigate")], &AddonContext { offline: false, root_mib: Some(20 * 1024), has_data_volume: Some(true) });
+        let w = warnings(
+            &[choice("portainer"), choice("frigate")],
+            &AddonContext { offline: false, root_mib: Some(20 * 1024), has_data_volume: Some(true) },
+        );
         let all = w.join("\n");
         assert!(all.contains("pull container images from the Internet"), "{all}");
         assert!(all.contains("docker-socket") && all.contains("administrator of the NAS"), "{all}");
@@ -920,7 +934,12 @@ mod tests {
             // the page and the data volume need the installer tells the user about are the manifest's
             match e.web {
                 Some(w) => {
-                    assert_eq!((m["web"]["scheme"].as_str(), m["web"]["port"].as_u64()), (Some(w.scheme), Some(w.port as u64)), "{}: web differs", e.id)
+                    assert_eq!(
+                        (m["web"]["scheme"].as_str(), m["web"]["port"].as_u64()),
+                        (Some(w.scheme), Some(w.port as u64)),
+                        "{}: web differs",
+                        e.id
+                    )
                 }
                 None => assert!(m["web"].is_null(), "{}: the manifest has a web page the installer does not know", e.id),
             }
@@ -961,6 +980,14 @@ mod tests {
             let c: Vec<AddonChoice> = p.addons.iter().map(|i| choice(i)).collect();
             assert_eq!(!consent_items(&c).is_empty(), p.addons.contains(&"portainer"), "{}", p.id);
         }
+    }
+
+    #[test]
+    fn a_bad_value_never_hides_a_privilege_from_the_acknowledgement() {
+        let mut p = choice("portainer");
+        p.settings.insert("nope".into(), "x".into());
+        assert!(validate(std::slice::from_ref(&p)).is_err());
+        assert_eq!(consent_signature(&[p]), "portainer:docker-socket");
     }
 
     #[test]

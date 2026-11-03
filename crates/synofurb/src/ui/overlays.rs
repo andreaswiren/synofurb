@@ -384,7 +384,8 @@ impl gpui_kit::Render for QuickView {
         use gpui_kit::component::ActiveTheme;
         use gpui_kit::component::alert::Alert;
         use gpui_kit::component::radio::{Radio, RadioGroup};
-        let mut col = v_flex().gap(px(12.0)).child(div().text_sm().child(copy::QUICK_INTRO.short));
+        // right padding: the dialog scrolls at big text sizes, and its scrollbar must not sit on the end of a line
+        let mut col = v_flex().gap(px(12.0)).pr(px(12.0)).child(div().text_sm().child(copy::QUICK_INTRO.short));
         if self.opts.len() > 1 {
             col = col
                 .child(
@@ -495,8 +496,17 @@ impl App {
         let single = opts.len() == 1;
         let n_opts = opts.len();
         let addons_sel = self.addons.picks.matching_preset().map_or(0, |i| i + 1);
+        // demo runs: `SYNOFURB_DEMO_PRESET=3` opens the dialog with the third preset chosen (the privilege line shows)
+        let addons_sel =
+            std::env::var("SYNOFURB_DEMO_PRESET").ok().and_then(|v| v.parse().ok()).filter(|_| self.demo.is_some()).unwrap_or(addons_sel);
         let app = cx.entity();
-        let view = cx.new(|_| QuickView { opts: if single { vec![] } else { opts }, sel: single.then_some(0), rows, addons_sel, app: app.clone() });
+        let view = cx.new(|_| QuickView {
+            opts: if single { vec![] } else { opts },
+            sel: single.then_some(0),
+            rows,
+            addons_sel,
+            app: app.clone(),
+        });
         window.open_dialog(cx, move |d, _, cx| {
             let (app, view2, raids) = (app.clone(), view.clone(), raids.clone());
             let unchosen = !super::facts::quick_ready(view.read(cx).sel, n_opts);

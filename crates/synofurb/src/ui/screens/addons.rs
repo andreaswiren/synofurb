@@ -68,14 +68,12 @@ impl App {
             let locked = !required.is_empty();
             // Keep mode creates no data volume: an add-on that keeps its data below /srv/data cannot be ticked (and can be unticked)
             let unavailable = crate::ui::addons::unavailable_reason(e, plan);
-            let box_ = Checkbox::new(("addon", ix))
-                .label(e.name)
-                .checked(on)
-                .disabled(locked || (unavailable.is_some() && !on))
-                .on_click(cx.listener(move |this, v: &bool, _, cx| {
+            let box_ = Checkbox::new(("addon", ix)).label(e.name).checked(on).disabled(locked || (unavailable.is_some() && !on)).on_click(
+                cx.listener(move |this, v: &bool, _, cx| {
                     this.addons.picks.set(id, *v);
                     cx.notify();
-                }));
+                }),
+            );
             // One risk tag at most (what it may do) and one info button for everything else: needs, size, time.
             let risk = e.privileges.first().map(|pr| privilege_item(pr));
             let head = h_flex()

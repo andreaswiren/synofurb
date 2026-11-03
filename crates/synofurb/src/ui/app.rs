@@ -615,6 +615,8 @@ impl App {
             DemoUnit::VolumesDegraded
         } else if t.usb {
             DemoUnit::VolumesUsb
+        } else if t.straddle {
+            DemoUnit::VolumesStraddle
         } else {
             unit
         };
@@ -630,7 +632,10 @@ impl App {
             self.on_inspected(facts, raw, false, window, cx);
         }
         self.demo_scan = t.scan;
-        if matches!(t.scan, DemoScan::Empty | DemoScan::Running | DemoScan::Stopped | DemoScan::AllFailed | DemoScan::NoNetwork | DemoScan::Vpn32) {
+        if matches!(
+            t.scan,
+            DemoScan::Empty | DemoScan::Running | DemoScan::Stopped | DemoScan::AllFailed | DemoScan::NoNetwork | DemoScan::Vpn32
+        ) {
             self.selected_ip = None;
         }
         if t.added {
@@ -650,7 +655,9 @@ impl App {
             if let Some(st) = self.addons.inputs.get(&("frigate", "retain_days")).cloned() {
                 self.set_input(&st, if t.bad_fields { "400" } else { "14" }, window, cx);
             }
-            if t.bad_fields && let Some(st) = self.addons.inputs.get(&("plex", "plex_claim")).cloned() {
+            if t.bad_fields
+                && let Some(st) = self.addons.inputs.get(&("plex", "plex_claim")).cloned()
+            {
                 self.set_input(&st, "oops", window, cx);
             }
         }
@@ -1068,6 +1075,7 @@ impl App {
         let cancel = CancelToken::new();
         self.scan_cancel = Some(cancel.clone());
         if self.demo.is_some() && self.demo_scan == DemoScan::NoNetwork {
+            self.inv = Inventory::default();
             self.scan.fail(copy::SCAN_NO_NETWORK.short.to_string());
             self.scan_cancel = None;
         } else if self.demo.is_some() {

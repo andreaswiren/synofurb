@@ -381,6 +381,18 @@ impl MdArray {
     pub fn reduces_redundancy(&self) -> bool {
         self.degraded > 0 || matches!(self.sync_action.as_str(), "resync" | "recover" | "reshape")
     }
+    /// What to do about a busy or degraded array before an install, in one sentence. Only a resync, a rebuild, a reshape or a missing
+    /// member means less protection (a check leaves every copy intact); a missing member needs a disk or a repair, not time.
+    pub fn advice(&self) -> &'static str {
+        if self.degraded > 0 && self.sync_action != "recover" {
+            "Repair it before installing: your data is not fully protected."
+        } else if self.reduces_redundancy() {
+            "Let it finish before installing; until then your data is not fully protected."
+        } else {
+            "Let it finish before installing."
+        }
+    }
+
     /// One-line status for the UI, e.g. `resyncing 90.8%` or `degraded (1 missing)`.
     pub fn health_note(&self) -> Option<String> {
         if self.degraded > 0 {

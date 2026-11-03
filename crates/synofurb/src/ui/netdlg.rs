@@ -119,9 +119,7 @@ impl gpui_kit::Render for NetView {
                         }),
                     )))
                     .child(div().w(rems(CIDR_REM)).flex_none().child(kit::mono_sm(cx, n.cidr.clone()).whitespace_nowrap()))
-                    .child(
-                        div().w(rems(KIND_REM)).flex_none().child(h_flex().child(kit::tag(&p, kind_tone(n.kind), None, n.kind.label()))),
-                    )
+                    .child(div().w(rems(KIND_REM)).flex_none().child(h_flex().child(kit::tag(&p, kind_tone(n.kind), None, n.kind.label()))))
                     .child(
                         div()
                             .w(rems(REC_REM))

@@ -31,7 +31,7 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 92] = [
+pub const DEMO_SCREEN_NAMES: [&str; 93] = [
     "addons",
     "addons-chosen",
     "addons-offline",
@@ -40,6 +40,7 @@ pub const DEMO_SCREEN_NAMES: [&str; 92] = [
     "confirm-addons",
     "confirm-addons-keep",
     "confirm-usb",
+    "confirm-straddle",
     "inspect-degraded",
     "done-addons",
     "failed-agent",
@@ -267,6 +268,8 @@ pub struct DemoTarget {
     pub bad_fields: bool,
     /// A USB stick is plugged in (listed, not touched).
     pub usb: bool,
+    /// A disk with an array on it is left alone (no port known) while the same array is erased on other disks.
+    pub straddle: bool,
 }
 
 /// What a demo run pretends to know about the unit (drives the risk Tag and the Recovery rows).
@@ -304,6 +307,7 @@ impl DemoTarget {
             degraded: false,
             bad_fields: false,
             usb: false,
+            straddle: false,
         }
     }
 
@@ -351,6 +355,7 @@ impl DemoTarget {
             "addons-keep" => DemoTarget { addons: true, keep: true, ..DemoTarget::at(Screen::Addons) },
             "confirm-addons-keep" => DemoTarget { addons: true, keep: true, ..DemoTarget::at(Screen::Confirm) },
             "confirm-usb" => DemoTarget { usb: true, ..DemoTarget::at(Screen::Confirm) },
+            "confirm-straddle" => DemoTarget { straddle: true, ..DemoTarget::at(Screen::Confirm) },
             "goal" => DemoTarget::at(Screen::Goal),
             "plan" | "layout" | "storage" => DemoTarget::at(Screen::Plan),
             "plan-keep" => DemoTarget { keep: true, ..DemoTarget::at(Screen::Plan) },
@@ -600,7 +605,7 @@ impl ConfirmGate<'_> {
                 GateItem::Backup => "Backup is tested",
                 GateItem::Accept => "I accept data loss",
                 GateItem::Unit => "This is the unit",
-                GateItem::Privileges => "I accept these privileges",
+                GateItem::Privileges => "Accept privileges",
                 GateItem::Phrase => "the typed phrase",
             })
             .collect();
@@ -999,9 +1004,9 @@ mod tests {
         let mut g = gate("ERASE DS918+", true, true, true);
         g.priv_ok = false;
         assert!(!g.is_open());
-        assert_eq!(g.reason().unwrap(), "Missing: I accept these privileges.");
+        assert_eq!(g.reason().unwrap(), "Missing: Accept privileges.");
         g.typed = "";
-        assert_eq!(g.reason().unwrap(), "Missing: I accept these privileges, the typed phrase.");
+        assert_eq!(g.reason().unwrap(), "Missing: Accept privileges, the typed phrase.");
     }
 
     #[test]

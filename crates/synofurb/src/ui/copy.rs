@@ -211,7 +211,7 @@ mod strings {
         NET_SEL_REC: Button, "Select recommended", "", "", "";
         NET_SEL_ALL: Button, "Select all", "", "", "";
         NET_ADD_LABEL: Label, "Add a network", "", "", "";
-        NET_ADD_HINT: Label, "192.168.1.0/24", "", "", "";
+        NET_ADD_HINT: Label, "e.g. 192.168.1.0/24", "", "", "";
         NET_ADD_BTN: Button, "Add", "", "", "";
         NET_GONE: Prose, "A chosen network is gone. The recommended ones stand in.", "", "", "";
         SCAN_STOPPING: Label, "Stopping", "", "", "";
@@ -385,11 +385,12 @@ mod strings {
         ADDON_QUICK_NONE: Label, "None", "", "", "";
         ADDON_NEEDS_WEB: Prose, "Add-ons need the web interface: switch it on in System.", "", "", "";
         SYS_NEXT_ADDONS: Button, "Next: Add-ons", "", "", "";
-        CONF_ADDONS: Prose, "Will be installed after first boot:", "", "", "";
+        CONF_ADDONS: Prose, "After first boot:", "", "", "";
         CONF_ADDONS_NET: Prose, "The first boot needs Internet to pull the container images.", "", "", "";
         CONF_ADDONS_OFFLINE: Prose, "Without Internet at first boot, Docker and the add-ons are not installed.", "", "", "";
-        CONF_ADDON_ACK: Label, "I accept these privileges", "", "", "";
+        CONF_ADDON_ACK: Label, "Accept privileges", "", "", "";
         CONF_WARNINGS: Label, "Warnings", "", "", "";
+        CONF_ADDON_DETAILS: Label, "Add-ons", "", "", "";
         DONE_ADDONS: Label, "Installing after first boot", "What the first boot does.", "",
             "Without Internet at the first boot nothing is downloaded and the add-ons show \"needs attention\". Connect the NAS, then press Retry on the Add-ons page of the web interface.";
         PLAN_TITLE: Title, "Storage plan", "", "", "";
@@ -463,7 +464,7 @@ mod strings {
         CONF_SUB: Subtitle, "Last step before changes.", "", "", "";
         CONF_DESTROYED: Label, "Destroyed", "", "", "";
         CONF_CHANGED: Label, "Changed", "", "", "";
-        CONF_PRESERVED: Label, "Preserved", "Wipe mode preserves nothing on the disks.", "backups", "";
+        CONF_PRESERVED: Label, "Preserved", "In Wipe mode only disks the install does not touch are kept.", "backups", "";
         CONF_NOTHING_PRESERVED: Label, "Nothing on the disks", "", "", "";
         CONF_DISK_WARNING: Label, "Disk warning", "{what}; consider replacing it first.", "troubleshooting", "";
         CONF_UNTESTED: Label, "Untested", "No one has reported this model; your install is the test.", "compat-status", "";
@@ -1110,7 +1111,6 @@ pub static SCREENS: &[ScreenCopy] = &[
         name: "confirm",
         visible: &[
             &CONF_TITLE,
-            &CONF_SUB,
             &CONF_DESTROYED,
             &CONF_CHANGED,
             &CONF_PRESERVED,
@@ -1122,9 +1122,14 @@ pub static SCREENS: &[ScreenCopy] = &[
             &CONF_BACKUP,
             &CONF_LOSS,
             &CONF_UNIT,
-            &CONF_ADD_SERIAL,
             &CONF_ERASE,
             &BTN_BACK,
+            // with add-ons ticked (Quick setup included): the card, its caveat, the fourth confirmation, the engine's lines fold into Details
+            &CONF_WARNINGS,
+            &CONF_ADDONS,
+            &ADDON_UNTESTED,
+            &CONF_ADDON_ACK,
+            &CONF_ADDON_DETAILS,
         ],
     },
     ScreenCopy {
@@ -1179,6 +1184,8 @@ pub static SCREENS: &[ScreenCopy] = &[
             &DONE_FINISH,
             &DONE_REPORT,
             &DONE_NEXT_STEPS,
+            // with add-ons ticked: what the first boot installs
+            &DONE_ADDONS,
         ],
     },
     ScreenCopy {

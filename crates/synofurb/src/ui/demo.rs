@@ -25,6 +25,9 @@ pub enum DemoUnit {
     Volumes,
     /// The same unit with a USB stick attached (a disk that is listed but not touched).
     VolumesUsb,
+    /// An older saved report of the unit: sdb has no port recorded and reports itself removable, so it is left alone while its
+    /// DSM arrays also live on three erased disks (the Confirm screen's loud warning).
+    VolumesStraddle,
     /// The same unit with one disk missing from md3 (a degraded array): the Alert on Inspect.
     VolumesDegraded,
 }
@@ -49,11 +52,31 @@ impl DemoUnit {
             DemoUnit::Volumes | DemoUnit::Ds918 => {
                 fixtures::ds918_two_volumes().replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n")
             }
+            DemoUnit::VolumesStraddle => {
+                let raw = fixtures::ds918_two_volumes().replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n");
+                raw.lines()
+                    .map(|l| {
+                        if l.starts_with("DISK|sdb|") {
+                            l.rsplit_once("|gpt|").map_or(l.to_string(), |(a, _)| format!("{a}|gpt"))
+                        } else {
+                            l.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n"
+            }
             DemoUnit::VolumesDegraded => fixtures::ds918_two_volumes()
                 .replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n")
                 // md3 lost sdb6: one member missing, the other state words as the kernel reports them
-                .replace("MD|md3|raid5|clean|35162439168|sda6,sdd6,sdc6,sdb6|u3|awss01:3|1.2|idle|none|0", "MD|md3|raid5|clean, degraded|35162439168|sda6,sdd6,sdc6|u3|awss01:3|1.2|idle|none|1")
-                .replace("MD|md2|raid5|active|11692677888|sdd5,sda5,sdb5,sdc5|u2|awss01:2|1.2|resync|1770222464_/_1948779648|0", "MD|md2|raid5|clean|11692677888|sdd5,sda5,sdb5,sdc5|u2|awss01:2|1.2|idle|none|0"),
+                .replace(
+                    "MD|md3|raid5|clean|35162439168|sda6,sdd6,sdc6,sdb6|u3|awss01:3|1.2|idle|none|0",
+                    "MD|md3|raid5|clean, degraded|35162439168|sda6,sdd6,sdc6|u3|awss01:3|1.2|idle|none|1",
+                )
+                .replace(
+                    "MD|md2|raid5|active|11692677888|sdd5,sda5,sdb5,sdc5|u2|awss01:2|1.2|resync|1770222464_/_1948779648|0",
+                    "MD|md2|raid5|clean|11692677888|sdd5,sda5,sdb5,sdc5|u2|awss01:2|1.2|idle|none|0",
+                ),
             DemoUnit::VolumesUsb => {
                 let usb = "DISK|sde|SanDisk Ultra|4C530001|125045424|512|1|1|gpt|/sys/devices/pci0000:00/0000:00:15.0/usb1/1-2/1-2:1.0/host5/target5:0:0/5:0:0:0\nPART|sde|sde1|1|2048|125043376\n";
                 fixtures::ds918_two_volumes()
@@ -100,7 +123,12 @@ impl DemoUnit {
 
     pub fn address(self) -> &'static str {
         match self {
-            DemoUnit::Ds918 | DemoUnit::Mixed | DemoUnit::Volumes | DemoUnit::VolumesUsb | DemoUnit::VolumesDegraded => "192.168.1.20",
+            DemoUnit::Ds918
+            | DemoUnit::Mixed
+            | DemoUnit::Volumes
+            | DemoUnit::VolumesUsb
+            | DemoUnit::VolumesDegraded
+            | DemoUnit::VolumesStraddle => "192.168.1.20",
             DemoUnit::Ds1621 => "192.168.1.31",
             DemoUnit::Rs816 => "192.168.1.44",
         }
@@ -672,6 +700,32 @@ mod tests {
         assert_eq!(arm.arch, synofurb_core::model::Arch::Armhf);
         assert_eq!(arm.firmware, synofurb_core::model::Firmware::UBoot);
         assert!(!arm.kexec);
+    }
+
+    #[test]
+    fn the_default_demo_unit_is_the_owners_real_ds918_so_every_screen_agrees() {
+        let f = DemoUnit::Ds918.facts();
+        assert_eq!((f.serial.as_str(), f.disks.iter().filter(|d| d.is_candidate()).count()), ("18A0PDN014408", 4));
+        let v = f.volumes();
+        assert_eq!(v.len(), 2);
+        // the owner's numbers, as the screens print them
+        assert_eq!(crate::ui::format::size_2dp(v[0].size_bytes()), "15.99 TiB");
+        assert_eq!(crate::ui::format::size_2dp(v[1].size_bytes()), "5.83 TiB");
+        assert_eq!(crate::ui::format::size_2dp(f.candidate_disks().iter().map(|d| d.size_bytes()).sum()), "29.11 TiB");
+        // and the unit that Find lists is the same one
+        assert_eq!(inventory().devices.iter().find(|d| d.model == "DS918+").map(|d| d.serial.as_str()), Some("18A0PDN014408"));
+    }
+
+    #[test]
+    fn the_straddle_and_degraded_demo_units_show_what_they_are_for() {
+        use synofurb_core::plan::{PlanRequest, build_plan};
+        let s = DemoUnit::VolumesStraddle.facts();
+        let plan = build_plan(&s, &PlanRequest::default());
+        assert_eq!(plan.straddling.len(), 2, "{:?}", plan.straddling);
+        assert!(plan.warnings.iter().any(|w| w.contains("md2 and md3 span")), "{:?}", plan.warnings);
+        let d = DemoUnit::VolumesDegraded.facts();
+        let busy: Vec<_> = d.busy_arrays().iter().map(|a| (a.name.clone(), a.reduces_redundancy())).collect();
+        assert_eq!(busy, [("md3".to_string(), true)], "one degraded array, and the resync of md2 is gone");
     }
 
     #[test]

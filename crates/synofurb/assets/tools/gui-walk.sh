@@ -30,6 +30,7 @@ while [ $# -gt 0 ]; do
 done
 BIN=${SYNOFURB_BIN:-${CARGO_TARGET_DIR:-target}/debug/synofurb}
 ICD=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/lvp_icd.x86_64.json}
+[ "$SELFTEST" = 1 ] || [ -x "$BIN" ] || { echo "gui-walk: no executable at $BIN (build it, or set SYNOFURB_BIN); a missing binary would make every screen look clean" >&2; exit 2; }
 W=${SIZE%x*}; H=${SIZE#*x}
 OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
 SCREENS=${*:-$("$BIN" gui --demo --screen list 2>&1 | sed -n 's/.*Choose one of: \(.*\) (the old.*/\1/p' | tr -d ',')}
@@ -113,7 +114,7 @@ def clipped(png, dump, strip=3, tall=24):
         off += 1
     x = tx + 1 + off
     out = []
-    ys = range(max(ty + 1, 0), min(ty + th - 1, h - 70))
+    ys = range(max(ty + 1, 0), min(ty + th - 1, h - 110))   # above the action bar
     # every column except the last one (the row actions: icon buttons with their own padding) and every data column's right edge
     for i, cw in enumerate(cols[:-1] if len(cols) == 6 else cols):
         x += cw
@@ -196,6 +197,9 @@ run() {
 
 for sc in $SCREENS; do run "$sc" "$sc" ""; done
 if [ "$EXTRA" = 1 ] && [ -z "$*" ]; then
+  # Find with added addresses in a tall window: at 640 px the table runs below the fold and its horizontal scrollbar (the first sign of columns
+  # that do not fit) cannot be seen, so this one is captured whole
+  ( SIZE=${W}x900; H=900; run find-tall inventory-added ""; exit $fail ) || fail=1
   run log-viewer install-after-ponr "SYNOFURB_DEMO_LOG=1"
   run command-dialog confirm-ready "" combo:Control_L+Shift_L+c wait:2
   run cancel-install install "" click:$((W - 55)),$((H - 63)) wait:2

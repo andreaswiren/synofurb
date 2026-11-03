@@ -76,7 +76,7 @@ impl App {
         let destroyed_value = if keep {
             format!("{} GiB DSM system", f.candidate_disks().len() * 10)
         } else {
-            format!("{} \u{00b7} {}", scope0.count_text(), size_2dp(raw_total))
+            crate::ui::format::keep_units(&format!("{} \u{00b7} {}", scope0.count_text(), size_2dp(raw_total)))
         };
         let dest = self.triad_card(
             "tri-d",
@@ -88,7 +88,20 @@ impl App {
                 .child(kit::strong(copy::CONF_DESTROYED.short))
                 .into_any_element(),
             p.err_solid,
-            vec![div().text_sm().child(destroyed_value).into_any_element()],
+            // what people actually lose: the DSM volumes they know, with what is on them (Wipe mode only)
+            std::iter::once(div().text_sm().child(destroyed_value).into_any_element())
+                .chain(f.volumes().iter().filter(|_| !keep).map(|v| {
+                    div()
+                        .text_sm()
+                        .child(crate::ui::format::keep_units(&format!(
+                            "{} {} \u{00b7} {} used",
+                            v.name,
+                            v.fstype,
+                            size_2dp(v.used_bytes())
+                        )))
+                        .into_any_element()
+                }))
+                .collect(),
         );
         let dom = self.sys.boot.resolve(&f) == BootChoice::Dom;
         let chg = self.triad_card(
@@ -177,44 +190,42 @@ impl App {
         let priv_sig = synofurb_core::addons::consent_signature(&addon_choices);
         let addons_card = (!addon_model.names.is_empty()).then(|| {
             let loud = addon_model.loud.clone();
-            let details = addon_model.details.clone();
-            v_flex()
-                .gap(px(4.0))
+            h_flex()
+                .gap(px(8.0))
+                .items_start()
                 .px(px(12.0))
                 .py(px(8.0))
                 .rounded(cx.theme().radius)
                 .border_1()
                 .border_color(cx.theme().border)
+                .child(icons::icon(role::PACKAGE))
                 .child(
-                    h_flex()
-                        .gap(px(8.0))
-                        .items_center()
-                        .flex_wrap()
-                        .child(icons::icon(role::PACKAGE))
-                        .child(div().text_sm().min_w_0().child(format!("{} {}", copy::CONF_ADDONS.short, addon_model.names.join(", "))))
-                        .child(kit::untested(&p, "conf-untested", &app))
-                        .child(crate::ui::disclosure::info_lines("conf-addon-info", copy::ADDON_ABOUT.short, details)),
+                    v_flex()
+                        .gap(px(4.0))
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().text_sm().child(format!("{} {}", copy::CONF_ADDONS.short, addon_model.names.join(", "))))
+                        .child(h_flex().child(kit::untested(&p, "conf-untested", &app)))
+                        .children(loud.into_iter().map(|l| {
+                            h_flex()
+                                .gap(px(6.0))
+                                .items_start()
+                                .text_sm()
+                                .text_color(p.warn_fg)
+                                .child(icons::icon_sized(role::WARN, 14.0, p.warn_fg))
+                                .child(div().flex_1().min_w_0().child(l))
+                        })),
                 )
-                .children(loud.into_iter().map(|l| {
-                    h_flex()
-                        .gap(px(6.0))
-                        .items_start()
-                        .text_sm()
-                        .text_color(p.warn_fg)
-                        .child(icons::icon_sized(role::WARN, 14.0, p.warn_fg))
-                        .child(div().flex_1().min_w_0().child(l))
-                }))
         });
+        // the rest of the engine's add-on text (Internet, sizes) sits in the Details at the bottom
+        let addon_details = v_flex().gap(px(2.0)).children(addon_model.details.iter().map(|d| div().text_xs().child(d.clone())));
+        let has_addon_details = !addon_model.details.is_empty();
         // What the plan itself warns about (a resyncing array, low RAM, a hybrid layout), on the Quick setup path too: the last screen
         // before the erase must not forget what the earlier one said. The not-touched sentence is in Preserved, a straddled array has its
         // own alert.
-        let straddle_lines: Vec<String> = plan.straddling.iter().map(|s| s.warning()).collect();
-        let plan_warnings: Vec<String> = plan
-            .warnings
-            .iter()
-            .filter(|w| !w.starts_with("Not used and not touched") && !straddle_lines.contains(w))
-            .cloned()
-            .collect();
+        let straddle_lines: Vec<String> = synofurb_core::plan::straddle_warnings(&plan.straddling);
+        let plan_warnings: Vec<String> =
+            plan.warnings.iter().filter(|w| !w.starts_with("Not used and not touched") && !straddle_lines.contains(w)).cloned().collect();
         let warnings_card = (!plan_warnings.is_empty()).then(|| {
             v_flex()
                 .id("plan-warnings")
@@ -263,7 +274,10 @@ impl App {
                 }))
                 .when(cand.len() > shown, |c| c.child(kit::caption(cx, format!("and {} more", cand.len() - shown))));
         let details = v_flex().gap(px(2.0)).children(plan.destroyed.iter().map(|d| div().text_xs().child(d.clone())));
-        let acc = Accordion::new("conf-details").bordered(true).item(|i| i.title(copy::CONF_DETAILS.short).child(details));
+        let acc = Accordion::new("conf-details")
+            .bordered(true)
+            .item(|i| i.title(copy::CONF_DETAILS.short).child(details))
+            .when(has_addon_details, |a| a.item(|i| i.title(copy::CONF_ADDON_DETAILS.short).child(addon_details)));
 
         let mut left = v_flex().gap(px(12.0)).min_w_0().flex_1().child(backup);
         if let Some(t) = &twin {
@@ -295,9 +309,7 @@ impl App {
                     .child(div().flex_1().min_w_0().child(pres)),
             )
             .child(disk_list)
-            .children(plan.straddling.iter().enumerate().map(|(i, st)| {
-                Alert::error(("straddle", i), st.warning()).icon(icons::icon(role::ERR))
-            }))
+            .children(straddle_lines.iter().enumerate().map(|(i, w)| Alert::error(("straddle", i), w.clone()).icon(icons::icon(role::ERR))))
             .children(warnings_card)
             .child(after)
             .children(addons_card)

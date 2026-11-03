@@ -14,13 +14,15 @@ synofurb gui                              # the real thing
 synofurb gui --demo --screen confirm      # built-in demo unit, nothing touches the network
 ```
 
-Demo screens (74, see `state::DEMO_SCREEN_NAMES`): `inventory inventory-scanning inventory-scan-done inventory-scan-failed inventory-empty inventory-added dlg-add dlg-add-invalid dlg-add-probing dlg-networks connect inspect goal plan plan-keep system confirm install
+Demo screens (93, see `state::DEMO_SCREEN_NAMES`): `inventory inventory-scanning inventory-scan-done inventory-scan-failed inventory-empty inventory-added inventory-stopped inventory-all-failed inventory-no-network inventory-wide inventory-vpn32 dlg-add dlg-add-invalid dlg-add-probing dlg-networks dlg-networks-{none,invalid,vpn} connect inspect inspect-degraded goal plan plan-keep system addons addons-{chosen,offline,errors,keep} confirm confirm-{addons,addons-keep,usb,straddle} done-addons install
 install-after-ponr failed failed-pre failed-post done update settings bootmgr recover manage manage-* recovery-* help
 help-topic about dlg-* welcome welcome-2..welcome-5 update-unsigned updates-{checking,current,available,failed-notfound,failed-offline,unsigned} settings-updates` (`first-launch` is an alias of `welcome`). `install`, `failed` and `done` replay a scripted event stream.
 
 | Variable | Effect |
 |---|---|
-| `SYNOFURB_DEMO_UNIT=ds918\|ds1621\|rs816\|mixed\|volumes\|volumes-usb` | Which built-in unit is inspected (`volumes` is the owner's DS918+ with two DSM volumes and a resyncing array; `volumes-usb` adds a USB stick that is listed but not touched) |
+| `SYNOFURB_DEMO_UNIT=ds918\|ds1621\|rs816\|mixed\|volumes\|volumes-usb\|volumes-degraded` | Which built-in unit is inspected (`ds918`, the default, and `volumes` are the owner's DS918+: SN 18A0PDN014408, 4 x 7.28 TiB, volume1 15.99 TiB, volume2 5.83 TiB, md2 resyncing, so every screenshot shows the same unit; `volumes-usb` adds a USB stick that is listed but not touched; `volumes-degraded` has md3 missing a member) |
+| `SYNOFURB_DEMO_PRESET=3` | With `--screen dlg-quick`: opens with the third Add-ons preset chosen |
+| `SYNOFURB_LAYOUT_DUMP=<file>` | Test hook of `gui-walk.sh`: the Find table writes its screen box and column widths there |
 | `SYNOFURB_THEME=light\|dark` | Theme for a demo run |
 | `SYNOFURB_DEMO_SCROLL=bottom` | With `--screen confirm`: scroll to the gate |
 | `SYNOFURB_DEMO_GATE=ready` | With `--screen confirm`: gate satisfied (checks the enabled Erase button) |
@@ -87,10 +89,10 @@ On About, a waiting update takes the page's primary (Details) and Copy diagnosti
 GPUI Kit; the unit header under it always shows the unit and a risk Tag.
 
 **Add-ons** (`screens/addons.rs`, `addons.rs`, docs/ADDONS.md). The third Setup tab lists the engine's catalog (`synofurb_core::addons`): a Checkbox per add-on, its summary, Tags
-(Needs Docker, Needs Internet, privileges with an info icon) and, under a ticked row, the few install-time settings (Frigate: days to keep recordings; Plex: an optional claim token as a
+(at most one risk Tag with the privilege and one info button for needs, size, minutes and data-volume need; an Untested Tag on the tab) and, under a ticked row, the few install-time settings (Frigate: days to keep recordings; Plex: an optional claim token as a
 masked secret input, its explanation behind the info icon). Docker is on and locked with a visible "Required by ..." Tag while something ticked needs it. The state is `addons::AddonPicks`
 (pure, unit-tested: dependency display, per-field checks, presets, the `--addon` words of Copy command); the typed text stays in the `Input`s and a secret only there and in the job, never in the command
-(it names an environment variable). Quick setup has an Add-ons preset group, Confirm lists "Will be installed after first boot: ..." with the Internet need, and "Copy command" repeats `--addon`
+(it names an environment variable). Quick setup has an Add-ons preset group (every preset names what it installs, Untested Tag, a privilege line), Confirm shows "After first boot: ..." with the Untested Tag, the engine's must-not-miss lines (`addons::notes`) and a fourth confirmation "Accept privileges" in the gate while a privileged add-on is chosen (`state::ConfirmGate::priv_ok`, `addons::consent_given`: the consent is tied to the exact set shown), Done has a card per add-on (address, minutes, size, first use), add-ons that need `/srv/data` are blocked in Keep mode (`addons::unavailable_reason`), and "Copy command" repeats `--addon`
 (`cli_cmd::parse_flags` keeps repeated flags, so "Matches plan" compares each one). Demo: `--screen addons|addons-chosen|confirm-addons`.
 
 **Risk Tag and Way back** are pure functions of the unit facts (`facts::risk`, `Risk::way_back`): the same state always
@@ -179,7 +181,7 @@ the tie between the copy and `synofurb_core::timing`, tokens vs JSON, accent con
 defaults and its "Use these" state, phrase gates, command-vs-plan, Manage binding to one unit, per-unit saved images, host-key bridge,
 Find column widths, management health and update gate, RAID helpers). Every demo screen renders under Xvfb with software Vulkan;
 `crates/synofurb/assets/tools/gui-walk.sh` renders every demo screen (pages, dialogs, the Help sheet) at a text size and fails when content
-reaches the page gutter or a horizontal scrollbar appears; it also scrolls each page by one and two viewports and walks the log
+reaches the page gutter or a horizontal scrollbar appears, and (for Find) when a glyph is cut off at a column edge (`SYNOFURB_LAYOUT_DUMP` gives the table box and the column widths, the check looks for ink in the last 3 px of a cell; `--selftest-clip` proves it on two synthetic captures; a missing binary is an error, not a clean run); it also scrolls each page by one and two viewports and walks the log
 viewer, the Copy command and Cancel install dialogs and the disabled-reason Popover. The `gui-walk` CI job runs it at Largest on
 ubuntu-24.04 (Xvfb, lavapipe); that job has not run yet. A local run at Largest (light, 960 x 640, three viewports per screen) found no overflow on all 55 demo screens (the five Welcome guide screens were walked separately at default and Largest, light and dark: clean) and the 4 extra states. The Help sheet is excluded from the gutter test because it is a panel over
 the page; content hidden by `overflow: hidden` without a scrollbar cannot be seen by it. Enter/Space behaviour of Erase and the Command button were checked with injected XTest keys.

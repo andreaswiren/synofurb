@@ -61,6 +61,8 @@ impl App {
             .into_any_element();
         let pin = self.host_pin(cx);
         let facts = DescriptionList::horizontal()
+            // in rem: a label with its info icon is wider than the stock 120 px at bigger text and ran into the value
+            .label_width(gpui_kit::rems(8.0))
             .columns(2)
             .bordered(false)
             .child(
@@ -139,7 +141,11 @@ impl App {
                     ),
                 )
                 .child(TableBody::new().children(vols.iter().map(|v| {
-                    let levels = v.levels.iter().map(|l| crate::ui::facts::md_level_label(l)).collect::<Vec<_>>().join(" + ");
+                    let mut levels = v.levels.iter().map(|l| crate::ui::facts::md_level_label(l)).collect::<Vec<_>>().join(" + ");
+                    // several arrays under one volume group is what Synology calls SHR: say the word people know
+                    if v.arrays.len() > 1 && !levels.is_empty() {
+                        levels.push_str(" (SHR-like)");
+                    }
                     let backed = if v.disks.is_empty() {
                         "unknown".to_string()
                     } else {
@@ -205,11 +211,8 @@ impl App {
         }
         for (i, a) in f.busy_arrays().into_iter().enumerate() {
             if let Some(note) = a.health_note() {
-                // only a resync, a rebuild, a reshape or a missing member means less protection; a check leaves every copy intact
-                let tail = if a.reduces_redundancy() { "; your data is not fully protected until then" } else { "" };
                 body = body.child(
-                    Alert::warning(("busy-array", i), format!("{} is {note}. Let it finish before installing{tail}.", a.name))
-                        .icon(icons::icon(role::WARN)),
+                    Alert::warning(("busy-array", i), format!("{} is {note}. {}", a.name, a.advice())).icon(icons::icon(role::WARN)),
                 );
             }
         }

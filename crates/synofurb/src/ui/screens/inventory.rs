@@ -25,18 +25,21 @@ use gpui_kit::{App as GpuiApp, Context, IntoElement, WeakEntity, Window, div, px
 use synofurb_core::compat::Status;
 use synofurb_core::discovery::Found;
 
+/// Horizontal padding of a cell and of a header (px, on the spacing scale).
+const CELL_PAD: f32 = 6.0;
 /// Narrowest each data column may be, in rem (so it grows with the text size): model + radio (+ Twin), address, DSM version, status
 /// tag. "Found by" is the one flexible column: it takes what is left and ends in an ellipsis when it must.
-const MIN_REM: [f32; 4] = [10.3, 8.0, 5.4, 10.2];
+const MIN_REM: [f32; 4] = [10.1, 7.8, 5.2, 10.0];
 /// "Found by" is text ("udp \u{b7} mdns", "Added by you"): it ends in an ellipsis when it must.
-const FOUND_MIN_REM: f32 = 6.3;
+const FOUND_MIN_REM: f32 = 6.1;
 /// Width of the actions column (Check again, Remove: two 24 px icon buttons, a 2 px gap and 4 px padding). It exists only while a row has actions.
 pub const ACTIONS_PX: f32 = 60.0;
 
-/// Width the table's columns may use in a window `viewport` px wide: the page without its padding, minus the table's own border and a few
-/// px so that no rounding can push a column out (the old margin of 24 px left a gap at the right of the table at every size).
+/// Width the table's columns may use in a window `viewport` px wide: the page without its padding, minus the table's border and the room
+/// the table keeps at its right edge for a scrollbar (measured with the walk: at 960 px columns that add up to more than about 892 px
+/// in the 910 px box make a horizontal scrollbar appear, with 5 or with 6 columns).
 pub fn table_avail(viewport: f32) -> f32 {
-    viewport - 2.0 * crate::ui::theme::layout::PAGE_PAD - 5.0
+    viewport - 2.0 * crate::ui::theme::layout::PAGE_PAD - 20.0
 }
 
 /// Test hook for `assets/tools/gui-walk.sh` (only active when `SYNOFURB_LAYOUT_DUMP=<file>` is set): an invisible element that fills the
@@ -49,13 +52,21 @@ fn layout_dump_probe(widths: Vec<f32>) -> gpui_kit::Canvas<()> {
                 let cols = widths.iter().map(|w| format!("{w:.0}")).collect::<Vec<_>>().join(" ");
                 let _ = std::fs::write(
                     path,
-                    format!("table {:.0} {:.0} {:.0} {:.0}\ncols {cols}\n", f32::from(b.origin.x), f32::from(b.origin.y), f32::from(b.size.width), f32::from(b.size.height)),
+                    format!(
+                        "table {:.0} {:.0} {:.0} {:.0}\ncols {cols}\n",
+                        f32::from(b.origin.x),
+                        f32::from(b.origin.y),
+                        f32::from(b.size.width),
+                        f32::from(b.size.height)
+                    ),
                 );
             }
         },
         |_, _, _, _| {},
     )
     .absolute()
+    .top_0()
+    .left_0()
     .size_full()
 }
 
@@ -198,8 +209,8 @@ impl TableDelegate for InventoryTable {
         h_flex()
             .items_center()
             .gap(px(2.0))
-            .px(px(8.0))
-            .when(ix == 0, |d| d.pl(px(32.0)))
+            .px(px(CELL_PAD))
+            .when(ix == 0, |d| d.pl(px(CELL_PAD + 16.0 + 6.0))) // the radio (16 px) and the cell's gap (6 px) come first in the data rows
             .child(item.short)
             .when_some(app.filter(|_| item.has_more() || !item.tip.is_empty()), |d, app| d.child(info_tip(("th-info", ix), item, &app)))
             .into_any_element()
@@ -211,7 +222,7 @@ impl TableDelegate for InventoryTable {
         let edge = cx.theme().primary.opacity(0.5);
         // The selection is never colour alone: a Radio in the first cell and a 1 px accent border (50 %) around the row.
         let last = column_count(self.has_actions()) - 1;
-        let cell = h_flex().size_full().items_center().gap(px(6.0)).px(px(8.0)).overflow_hidden().when(selected, |d| {
+        let cell = h_flex().size_full().items_center().gap(px(6.0)).px(px(CELL_PAD)).overflow_hidden().when(selected, |d| {
             let d = d.border_t_1().border_b_1().border_color(edge);
             match col {
                 0 => d.border_l_1(),
@@ -446,7 +457,11 @@ impl App {
             table(cx)
         };
         // an empty result is explained by the empty state below (what was scanned, and the ways forward)
-        let scan_ui = if n_rows == 0 && !scanning && self.scan.error.is_none() { div().into_any_element() } else { self.scan_section(cx) };
+        let scan_ui = if n_rows == 0 && !scanning && self.scan.error.is_none() && !self.scan.all_failed() {
+            div().into_any_element()
+        } else {
+            self.scan_section(cx)
+        };
 
         let mut body = v_flex().w_full().gap(px(12.0)).child(scan_ui).child(units_ui);
         if !converted.is_empty() {
@@ -506,9 +521,10 @@ impl App {
                     .media(EmptyMedia::new().child(icons::icon_sized(role::SEARCH, 24.0, cx.theme().muted_foreground)))
                     .title(EmptyTitle::new().child(copy::INV_EMPTY.short))
                     .when(!what.is_empty(), |h| {
-                        h.description(EmptyDescription::new().child(
-                            v_flex().gap(px(2.0)).items_center().child(what.clone()).child(copy::INV_EMPTY_WHY.short),
-                        ))
+                        h.description(
+                            EmptyDescription::new()
+                                .child(v_flex().gap(px(2.0)).items_center().child(what.clone()).child(copy::INV_EMPTY_WHY.short)),
+                        )
                     }),
             )
             .content(
@@ -657,7 +673,15 @@ impl App {
                                 .on_click(cx.listener(|this, _, _, cx| this.stop_scan(cx))),
                         ),
                 )
-                .child(Progress::new("scan-progress").value(pct).accessibility_label(copy::SCAN_PROGRESS.short))
+                // a 1 px edge in the strong border colour: the bare track is 1.3:1 against the page (UI review m14)
+                .child(
+                    div()
+                        .rounded(cx.theme().radius)
+                        .border_1()
+                        .border_color(p.border_strong)
+                        .overflow_hidden()
+                        .child(Progress::new("scan-progress").value(pct).accessibility_label(copy::SCAN_PROGRESS.short)),
+                )
                 .child(v_flex().id("scan-lines").gap(px(4.0)).max_h(px(196.0)).overflow_y_scroll().children(lines))
                 .into_any_element();
         }
@@ -729,7 +753,7 @@ mod tests {
     fn at_largest_text_in_the_smallest_window_no_data_column_is_narrower_than_its_content() {
         let avail = table_avail(960.0);
         let w = column_widths(avail, 1.3, true);
-        let need = [214.0, 166.0, 110.0, 130.0, 210.0];
+        let need = [208.0, 160.0, 106.0, 124.0, 206.0];
         for (i, n) in need.iter().enumerate() {
             assert!(w[i] >= *n, "column {i} is {} px, its content needs {n}: {w:?}", w[i]);
         }
