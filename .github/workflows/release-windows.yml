@@ -214,7 +214,7 @@ jobs:
             echo "**Read this first.** This is a first release built for the Windows installers. It is **not** the full release pipeline:"
             echo
             echo "- **Unsigned.** The \`.msi\` and \`.exe\` are not Authenticode-signed (Windows SmartScreen will warn) and \`SHA256SUMS\` has no minisign signature."
-            echo "  The checksums catch a damaged download, not a tampered release. The in-app updater refuses to install unsigned releases (it shows that an update exists)."
+            echo "  The checksums catch a damaged download, not a tampered release. From 0.2.2 the in-app updater can install an unsigned release only after you tick an explicit consent box (it checks the SHA-256 only); older versions can only show that an update exists, so install the first update by hand."
             echo "- **Design gate not passed.** The UX and UI critic approvals required by \`docs/DESIGN-GATE.md\` do not exist for this design hash;"
             echo "  the owner asked for this release anyway. Gate output:"
             echo
