@@ -162,7 +162,7 @@ impl App {
         let acc = Accordion::new("credits")
             .bordered(true)
             .item(|i| i.title(copy::ABOUT_CREDITS.short).child(v_flex().gap(px(6.0)).child(credits).child(h_flex().child(synodeb))));
-        let update_line = crate::ui::screens::update_status::status_row(&app, "a-upd", cx);
+        let update_line = crate::ui::screens::update_status::status_line(&self.update, self.update_unsigned(), &app, "a-upd", cx);
         let pending = crate::ui::screens::update_status::update_pending(&self.update);
         let body = v_flex().w_full().max_w(px(640.0)).gap(px(16.0)).child(header).child(update_line).child(links).child(acc);
         Page::new(copy::ABOUT_TITLE.short, body)

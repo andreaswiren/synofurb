@@ -148,6 +148,7 @@ mod strings {
         TAG_OFFLINE: Label, "Offline", "Compatibility list is {n} days old; LAN scan still works.", "offline-mode", "";
         MENU_HELP: Label, "Help", "Help for this screen.", "", "";
         MENU_SETTINGS: Label, "Settings", "Theme, text size, updates, data.", "", "";
+        MENU_SETTINGS_UPDATE: Label, "Settings, update available", "An update is waiting: see Settings, Updates.", "", "";
         MENU_ABOUT: Label, "About", "Version, credits, diagnostics.", "", "";
         MENU_UPDATES: Label, "Check for updates", "Looks for a newer synofurb.", "", "";
 

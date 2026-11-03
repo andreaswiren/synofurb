@@ -21,15 +21,21 @@ pub fn update_pending(state: &UpdateState) -> bool {
     matches!(state, UpdateState::Available(_) | UpdateState::Downloading(..) | UpdateState::Verified(..) | UpdateState::Failed(..))
 }
 
-/// The update line. `id` keeps the controls of two screens apart.
+/// The update line for code that runs outside the app's own render (a Settings row): reads the app itself.
 pub fn status_row(app: &Entity<App>, id: &'static str, cx: &GpuiApp) -> AnyElement {
     let a = app.read(cx);
+    status_line(&a.update, a.update_unsigned(), app, id, cx)
+}
+
+/// The update line. `id` keeps the controls of two screens apart. Takes the state itself, so a page built inside the
+/// app's render (About) can call it without reading the app entity a second time.
+pub fn status_line(state: &UpdateState, unsigned: bool, app: &Entity<App>, id: &'static str, cx: &GpuiApp) -> AnyElement {
     let p = cx.pal();
     let muted = cx.theme().muted_foreground;
-    let busy = matches!(a.update, UpdateState::Checking);
+    let busy = matches!(state, UpdateState::Checking);
     let version = crate::ui::app::version();
 
-    let (icon, text, info, note): (Option<AnyElement>, String, Option<AnyElement>, Option<String>) = match &a.update {
+    let (icon, text, info, note): (Option<AnyElement>, String, Option<AnyElement>, Option<String>) = match state {
         UpdateState::Unknown => (None, copy::UPD_ST_NONE.short.into(), None, None),
         UpdateState::Checking => (Some(Spinner::new().small().into_any_element()), copy::UPD_ST_CHECKING.short.into(), None, None),
         UpdateState::UpToDate => (
@@ -48,11 +54,11 @@ pub fn status_row(app: &Entity<App>, id: &'static str, cx: &GpuiApp) -> AnyEleme
             Some(icons::icon_sized(role::INFO, 16.0, p.tone(Tone::Accent).fg).into_any_element()),
             copy::UPD_ST_AVAILABLE.fmt(&[&i.latest]),
             None,
-            a.update_unsigned().then(|| copy::UPD_ST_UNSIGNED.short.to_string()),
+            unsigned.then(|| copy::UPD_ST_UNSIGNED.short.to_string()),
         ),
     };
 
-    let pending = update_pending(&a.update);
+    let pending = update_pending(state);
     let button: AnyElement = if pending {
         let app2 = app.clone();
         Button::new(SharedString::from(format!("{id}-details")))
@@ -63,7 +69,7 @@ pub fn status_row(app: &Entity<App>, id: &'static str, cx: &GpuiApp) -> AnyEleme
             .into_any_element()
     } else {
         let app2 = app.clone();
-        let label = if matches!(a.update, UpdateState::CheckFailed(_)) { &copy::UPD_CHECK_AGAIN } else { &copy::UPD_CHECK };
+        let label = if matches!(state, UpdateState::CheckFailed(_)) { &copy::UPD_CHECK_AGAIN } else { &copy::UPD_CHECK };
         Button::new(SharedString::from(format!("{id}-check")))
             .outline()
             .small()

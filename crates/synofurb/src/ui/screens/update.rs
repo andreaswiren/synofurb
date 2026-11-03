@@ -13,6 +13,7 @@ use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::prelude::*;
@@ -65,11 +66,11 @@ impl Render for UpdateView {
             .p(px(8.0))
             .rounded(cx.theme().radius)
             .bg(cx.theme().muted)
-            .overflow_y_scroll()
             .child(v_flex().gap(px(2.0)).text_sm().children(info.notes_plain().lines().map(|l| {
                 let l = l.trim_end().to_string();
                 if l.is_empty() { div().h(px(4.0)) } else { div().child(l) }
-            })));
+            })))
+            .overflow_y_scrollbar();
         let mut col = v_flex().w_full().gap(px(12.0)).child(meta).child(notes);
         // ONE warning: the unsigned line, or why the release cannot be installed at all
         match &mode {
