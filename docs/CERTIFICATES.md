@@ -1,6 +1,6 @@
 # Certificates and the HAProxy front (Stage 2 design)
 
-Status: **implemented** (Stage 2 of `docs/ADDONS.md`, management plane `0.6.x`, release `0.2.4`), **never run against a real Let's Encrypt, DNS zone, lego, HAProxy or systemd unit**: see "Implementation" at the end for what exists, what was tested and what is unverified. The text above that section is the design it was built from (two details changed while building it and are corrected in place: the store paths and the TLS terminator).
+Status: **implemented** (Stage 2 of `docs/ADDONS.md`, management plane `0.6.x`, release `0.2.3`), **never run against a real Let's Encrypt, DNS zone, lego, HAProxy or systemd unit**: see "Implementation" at the end for what exists, what was tested and what is unverified. The text above that section is the design it was built from (two details changed while building it and are corrected in place: the store paths and the TLS terminator).
 
 ## Goal
 
