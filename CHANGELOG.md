@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.2.2 (unreleased)
+## 0.2.2
 
 ### Fixed (desktop app, updates)
+- **Find NAS: saved bogus entries are removed.** Versions before 0.2.1 saved this computer's own network adapters as "Synology" units in `inventory.json`; they came back at every start even after the scan fix. On load, entries seen only by the Synology UDP scan that name nothing (no model, host name, serial or MAC) are dropped and the file is rewritten.
 - **A failed update check was almost invisible** (the owner saw the button "blink once"). Settings, Updates and the About page now show one line for every state: checking (spinner), "0.2.2 is current", "0.2.2 available" (Details) or "Couldn't check: <reason>" with the full reason behind an (i) and a "Check again" button; the result stays until the next check. The About page has a "Check for updates" button and status line.
 - **"Offline" was shown for any failed check.** The failure is now typed: only a transport failure (GitHub's API host cannot be reached) sets the Offline chip. A 404 (a private repository) says "Releases not found. If the repository is private, the update check cannot see them."; a rate limit shows the engine's hint with the time; no release says "No release found for this system."
 - **The red dot on the Settings button was always drawn** (the badge ignored its count). It now appears only while an update waits, and the button's name says so.
