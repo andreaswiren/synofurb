@@ -1,0 +1,23 @@
+# Plex Media Server (add-on "plex", rendered by synofurb-mgmt). Do not edit by hand: it is rewritten on install and update.
+# Official image and parameters: https://github.com/plexinc/pms-docker (checked 2026-11-03).
+services:
+  plex:
+    container_name: synofurb-plex
+    image: plexinc/pms-docker:latest
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ}"
+      PLEX_UID: "${PUID}"
+      PLEX_GID: "${PGID}"
+      PLEX_CLAIM: "${plex_claim}"
+      ADVERTISE_IP: "${advertise_url}"
+    volumes:
+      - ${DATA_DIR}/config:/config
+      - ${STORAGE_TRANSCODE}:/transcode
+      - ${media_dir}:/data:${media_access}
+${NETWORK_BLOCK}    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+${DEVICES_BLOCK}
