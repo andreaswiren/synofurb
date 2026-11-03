@@ -58,6 +58,9 @@ const STATIC_FILES: &[(&str, &str)] = &[
     // `VERSION` is what `synofurb_mgmt.py health --json` and `manage health` report; the single source is apps/mgmt-plane/VERSION
     // (the same file `manage::MgmtBundle::embedded()` and `bundle create` ship).
     mgmt_asset!("mgmt/VERSION", "VERSION"),
+    // the add-on framework and the packed add-on definitions (apps/mgmt-plane/addons/*), installed next to the management plane
+    mgmt_asset!("mgmt/synofurb_addons.py", "synofurb_addons.py"),
+    mgmt_asset!("mgmt/addons.pack.json", "addons.pack.json"),
 ];
 
 pub struct Payload {
@@ -243,6 +246,8 @@ mod tests {
             "mgmt/synofurb_mgmt.py",
             "mgmt/synofurb-mgmt.service",
             "mgmt/VERSION",
+            "mgmt/synofurb_addons.py",
+            "mgmt/addons.pack.json",
             "files/etc/ssh/sshd_config.d/10-synofurb.conf",
         ] {
             assert!(names.iter().any(|n| n == need), "missing {need} in {names:?}");

@@ -387,7 +387,10 @@ fn the_embedded_management_plane_is_complete_and_consistent() {
     // the NAS-side contract: every name matches [A-Za-z0-9._-]{1,64}, only the files its updater accepts
     for f in &b.files {
         assert!(f.name.len() <= 64 && f.name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')), "{}", f.name);
-        assert!(["synofurb_mgmt.py", "VERSION", "README.md", "synofurb-mgmt.service"].contains(&f.name.as_str()));
+        assert!(
+            ["synofurb_mgmt.py", "VERSION", "README.md", "synofurb-mgmt.service", "synofurb_addons.py", "addons.pack.json"]
+                .contains(&f.name.as_str())
+        );
     }
     b.check_manifest(&b.manifest()).unwrap();
 }
