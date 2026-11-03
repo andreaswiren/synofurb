@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.3 (unreleased)
+## 0.2.3
 
 ### Fixed (installer: the installed Debian boots on the DS918+)
 - **The installed system had no init.** `debootstrap --variant=minbase` installs no `systemd` and no `systemd-sysv` (`debootstrap --print-debs` for the exact command of stage 2 lists `init-system-helpers libsystemd0 libudev1 sysvinit-utils` and nothing else of the init family) and nothing in `chroot-setup.sh`'s package list pulled `systemd-sysv`, which provides `/sbin/init`: the new system could not start anything. `systemd-sysv` and `libpam-systemd` are now installed (and are in the offline bundle's package seed).

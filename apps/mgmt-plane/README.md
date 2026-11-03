@@ -8,7 +8,7 @@ Needs these Debian packages for the features that use them: `openssl` (first-sta
 `iproute2`, `util-linux`, `mdadm`, `lvm2`, `xfsprogs`/`e2fsprogs`/`btrfs-progs`, `ntfs-3g`, `exfatprogs`,
 `smartmontools` (optional), `openssh-server` (optional).
 
-Version: the `VERSION` file next to this README (currently 0.5.0) is the single source; it is packaged with the script, read at start-up,
+Version: the `VERSION` file next to this README (currently 0.6.0) is the single source; it is packaged with the script, read at start-up,
 shown in the UI (login and sidebar footer) and returned by `GET /api/me`, `/api/status`, `/api/services` and `/api/tls-fingerprint`.
 
 ## What it does

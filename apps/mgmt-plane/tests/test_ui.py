@@ -244,18 +244,18 @@ class BrowserAuditTests(unittest.TestCase):
         f = out["flows"]
         self.assertEqual(out["errors"], [])
         self.assertTrue(f["initial"]["updateDisabled"])                       # nothing to install before a check
-        self.assertEqual((f["checked"]["available"], f["checked"]["unsigned"]), ("0.6.0", 1))
+        self.assertEqual((f["checked"]["available"], f["checked"]["unsigned"]), ("0.7.0", 1))
         self.assertTrue(f["dialogDisabledUntilConsent"] and f["dialogEnabledAfterConsent"])
         self.assertTrue(f["mainNeedsTyping"] and f["mainEnabledAfterTyping"])
         self.assertTrue(f["sawRestart"])
-        self.assertIn("Updated to 0.6.0", f["done"]["banner"])
-        self.assertIn("Rolled back to 0.5.0", f["rolledBack"])
+        self.assertIn("Updated to 0.7.0", f["done"]["banner"])
+        self.assertIn("Rolled back to 0.6.0", f["rolledBack"])
         self.assertIn("Rolled back to 0.4.0", f["rollbackDone"])
         self.assertIn("Cannot reach GitHub", f["offline"])
         self.assertTrue(f["busyDisabled"])
         self.assertIn("Update refused", f["refused"])
         self.assertIn("critical state", f["refused"])
-        self.assertIn("Updated to 0.6.0", f["forced"])
+        self.assertIn("Updated to 0.7.0", f["forced"])
         self.assertFalse(f["phoneOverflow"])
 
     def test_fonts_load_and_demo_is_small(self):

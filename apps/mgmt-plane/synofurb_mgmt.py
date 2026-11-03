@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Iterable
 
-DEFAULT_VERSION = "0.5.0"
+DEFAULT_VERSION = "0.6.0"
 
 
 def read_version() -> str:
