@@ -1053,6 +1053,25 @@ def _read(path: str) -> str:
         return ""
 
 
+def _mkdirs(path: str, mode: int = 0o755, stop: str = "") -> None:
+    """makedirs whose new folders really get ``mode``: the service runs with UMask=0027, which would make /srv/addons/<id> 0750 and keep a
+    container user (PLEX_UID, PUID) out of its own config.  Folders that already exist are left alone."""
+    missing = []
+    cur = path
+    while cur and cur != stop and not os.path.isdir(cur):
+        missing.append(cur)
+        nxt = os.path.dirname(cur)
+        if nxt == cur:
+            break
+        cur = nxt
+    for d in reversed(missing):
+        try:
+            os.mkdir(d, mode)
+        except FileExistsError:
+            continue
+        os.chmod(d, mode)
+
+
 def _write_atomic(path: str, data: str, mode: int = 0o644, uid: int | None = None, gid: int | None = None) -> None:
     d = os.path.dirname(path)
     os.makedirs(d, exist_ok=True)
@@ -1143,7 +1162,8 @@ class Docker:
         r = self.env.run(["docker", "version", "--format", "{{.Server.Version}}"], timeout=20)
         if r.ok and r.out.strip():
             return True, r.out.strip().splitlines()[0]
-        return False, (r.err or r.out or "docker is not running").strip().splitlines()[-1][:200] if (r.err or r.out) else "docker is not running"
+        lines = [x for x in (r.err or r.out).strip().splitlines() if x.strip()]
+        return False, lines[-1][:200] if lines else "docker is not running"
 
     def compose_available(self) -> tuple[bool, str]:
         r = self.env.run(["docker", "compose", "version", "--short"], timeout=20)
@@ -1471,7 +1491,7 @@ def write_rendered(env: AddonEnv, addon: Addon, r: Rendered, ident: dict, name: 
     base = env.p(addon.data_dir)
     dest = os.path.join(base, name or r.dest)
     parent = os.path.dirname(dest)
-    os.makedirs(parent, mode=0o755, exist_ok=True)
+    _mkdirs(parent)
     real_base = os.path.realpath(base)
     if os.path.realpath(parent) != real_base and not os.path.realpath(parent).startswith(real_base + os.sep):
         raise AddonError("%s would be written outside the add-on's folder" % r.dest)
@@ -2185,10 +2205,10 @@ class Manager:
             raise AddonError(why + ". Install the Docker add-on again.")
 
     def _prepare_dirs(self, a: Addon, storage: dict, ident: dict) -> None:
-        os.makedirs(self.env.p(a.data_dir), mode=0o755, exist_ok=True)
+        _mkdirs(self.env.p(a.data_dir))
         for st in a.storage:
             d = self.env.p(storage[st["key"]])
-            os.makedirs(d, mode=0o755, exist_ok=True)
+            _mkdirs(d)
             if self.env.chown:
                 try:
                     os.chown(d, ident["puid"], ident["pgid"])
@@ -2635,8 +2655,12 @@ def register_routes(host: Any, get_manager: Callable[[Any], Manager]) -> None:
 
     def act(req: Any, mgr: Manager) -> Any:
         aid, action = seg(req, 3), seg(req, 4)
-        a = mgr.addon(aid)
         body = dict(req.body)                       # the real values; the audit log gets the masked copy below
+        try:
+            a = mgr.addon(aid)
+        except NotFound:
+            mask_body(None, req.body)               # unknown add-on: every setting value is treated as secret
+            raise
         mask_body(a, req.body)
         req.audit_note = "%s %s" % (action, aid)
         if action == "install":

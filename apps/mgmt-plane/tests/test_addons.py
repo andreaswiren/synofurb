@@ -698,6 +698,15 @@ class DockerArgvTests(SandboxTest):
                 d.up(project, f)
         self.assertEqual(self.sb.runner.calls, [])
 
+    def test_availability_messages(self):
+        d = A.Docker(self.env)
+        self.sb.runner.on(["docker", "version"], "  \n", rc=1, err="\n")
+        self.assertEqual(d.available(), (False, "docker is not running"))
+        self.sb.runner.on(["docker", "version"], "", rc=1, err="Cannot connect to the Docker daemon at unix:///var/run/docker.sock.\n")
+        self.assertIn("Cannot connect", d.available()[1])
+        self.sb.runner.on(["docker", "version"], "26.1.5\n")
+        self.assertEqual(d.available(), (True, "26.1.5"))
+
     def test_ps_parsing_both_formats(self):
         nd = '{"Name":"a-1","Service":"a","State":"running","Health":"healthy"}\n{"Name":"b-1","Service":"b","State":"exited","ExitCode":2}\n'
         arr = json_array = json.dumps([{"Name": "a-1", "State": "Running"}])
@@ -781,6 +790,21 @@ class LifecycleTests(SandboxTest):
         self.assertTrue(job.ok, job.error)
         self.assertTrue(os.path.isdir(self.env.p("/srv/data/addons/plex/transcode")))              # the loader creates the storage directory
         self.assertEqual(self.mgr.store.get("plex")["storage"], {"transcode": "/srv/data/addons/plex/transcode"})
+
+    def test_folders_are_world_readable_even_under_the_services_umask(self):
+        """synofurb-mgmt.service runs with UMask=0027; a container user must still reach /srv/addons/<id>/config and the storage folder."""
+        self.sb.install_docker()
+        os.makedirs(self.env.p("/srv/data/media"))
+        old = os.umask(0o027)
+        try:
+            self.assertTrue(self.install("frigate").ok)
+            self.assertTrue(self.mgr.control("frigate", "restart", background=False).ok)
+        finally:
+            os.umask(old)
+        for d in ("/srv/addons", "/srv/addons/frigate", "/srv/addons/frigate/config", "/srv/data/addons", "/srv/data/addons/frigate", "/srv/data/addons/frigate/media"):
+            self.assertEqual(stat.S_IMODE(os.stat(self.env.p(d)).st_mode), 0o755, d)
+        self.assertEqual(stat.S_IMODE(os.stat(self.env.p("/srv/addons/frigate/compose.yml")).st_mode), 0o644)
+        self.assertEqual(stat.S_IMODE(os.stat(self.env.p("/srv/addons/frigate/config/config.yml")).st_mode), 0o600)
 
     def test_path_settings_must_exist(self):
         self.sb.install_docker()
@@ -1523,6 +1547,11 @@ class HttpAddonTests(unittest.TestCase):
         self.assertEqual(req["user"], "admin")
         start = next(r for r in rows if r["action"] == "addons.job.start")
         self.assertEqual(start["args"]["privileges"], ["host-network"])
+
+    def test_unknown_addon_in_a_request_never_logs_setting_values(self):
+        st, obj, _ = self.cli.call("POST", "/api/addons/nope/install", {"settings": {"anything": "claim-TOPSECRET99"}})
+        self.assertEqual(st, 404)
+        self.assertNotIn("TOPSECRET", self.env.read(self.env.cfg.audit_path))
 
     def test_remove_with_data_needs_the_typed_name(self):
         self.cli.call("POST", "/api/addons/portainer/install", {"accept": True})
