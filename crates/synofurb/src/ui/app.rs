@@ -1,8 +1,11 @@
 //! The root view: all UI state, the message pump from the worker threads, and the actions screens trigger.
 //! Rendering lives in `render.rs` (chrome) and `screens/` (one module per screen).
 
+use super::addhost::AddedHosts;
+use super::addip::AddView;
 use super::copy;
 use super::demo::{self, DemoUnit, Script};
+use super::scanview::ScanView;
 use super::screens::inventory::InventoryTable;
 use super::settings::{UiSettings, now_unix};
 use super::state::*;
@@ -22,7 +25,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use synofurb_core::compat::{CompatDb, Status};
 use synofurb_core::config::{InstallConfig, KernelChannel, SshKeypair, generate_password, generate_ssh_keypair, hash_password};
-use synofurb_core::discovery::{Found, Inventory, ScanOptions};
+use synofurb_core::discovery::networks::NetworkInfo;
+use synofurb_core::discovery::{CancelToken, Found, Inventory, ScanEvent, ScanOptions};
 use synofurb_core::logs::Event;
 use synofurb_core::model::DeviceFacts;
 use synofurb_core::plan::{DataRaid, Plan, PlanRequest, StorageMode, build_plan, default_system_copies};
@@ -65,14 +69,6 @@ impl<T> Job<T> {
     pub fn running(&self) -> bool {
         matches!(self, Job::Running)
     }
-}
-
-#[derive(Default)]
-pub struct ScanState {
-    pub running: bool,
-    pub methods: Vec<(&'static str, Result<usize, String>)>,
-    /// A scan has finished at least once in this session.
-    pub finished_once: bool,
 }
 
 /// Compatibility information for display, independent of where it came from (live verdict, list, or demo data).
@@ -166,7 +162,18 @@ pub struct App {
 
     pub inv: Inventory,
     pub selected_ip: Option<String>,
-    pub scan: ScanState,
+    pub scan: ScanView,
+    /// A scan has ended at least once in this session.
+    pub scan_finished_once: bool,
+    /// Stops the running scan.
+    pub scan_cancel: Option<CancelToken>,
+    /// The networks this computer is on (refreshed when a scan starts and when the Networks dialog opens).
+    pub nets: Vec<NetworkInfo>,
+    /// Addresses the user added by IP (kept in added-hosts.json).
+    pub added: AddedHosts,
+    /// Ties Add-by-IP answers to the check that asked.
+    pub add_gen: u64,
+    pub add_view: Option<gpui_kit::WeakEntity<AddView>>,
     pub compat: CompatDb,
     pub compat_refreshing: bool,
     pub compat_note: Option<(String, bool)>,
@@ -222,7 +229,7 @@ pub struct App {
     /// started with and are dropped when it no longer matches.
     pub unit_gen: u64,
     /// Demo: Find shows no units (`Some(false)`: the scan finished empty, `Some(true)`: it never finishes).
-    pub demo_no_units: Option<bool>,
+    pub demo_scan: DemoScan,
     /// Set by "Cancel" while Open agent waits for the agent; a fresh flag per action.
     pub rec_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub open_trust: Vec<super::trust::TrustWatch>,
@@ -269,6 +276,7 @@ pub fn version() -> &'static str {
 impl App {
     pub fn new(demo: Option<DemoTarget>, window: &mut Window, cx: &mut Context<App>) -> App {
         let cfg_dir = config_dir();
+        let cfg_dir2 = cfg_dir.clone();
         let settings = if demo.is_some() { UiSettings::for_demo() } else { UiSettings::load(&UiSettings::path(&cfg_dir)) };
         let (tx, rx) = futures::channel::mpsc::unbounded::<Msg>();
         let is_demo = demo.is_some();
@@ -424,7 +432,13 @@ impl App {
             error: None,
             inv,
             selected_ip: None,
-            scan: ScanState::default(),
+            scan: ScanView::default(),
+            scan_finished_once: false,
+            scan_cancel: None,
+            nets: if is_demo { demo::networks() } else { synofurb_core::discovery::networks::networks() },
+            added: if is_demo { AddedHosts::default() } else { AddedHosts::load(&cfg_dir2.join("added-hosts.json")) },
+            add_gen: 0,
+            add_view: None,
             compat,
             compat_refreshing: false,
             compat_note: None,
@@ -471,7 +485,7 @@ impl App {
             flash_untouched: false,
             dsm_wait: DsmWaitState::Idle,
             unit_gen: 0,
-            demo_no_units: None,
+            demo_scan: DemoScan::Normal,
             rec_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             open_trust: vec![],
             pin_cache: None,
@@ -604,10 +618,13 @@ impl App {
             let facts = unit.facts();
             self.on_inspected(facts, raw, false, window, cx);
         }
-        if let Some(scanning) = t.no_units {
-            self.inv = Inventory::default();
-            self.demo_no_units = Some(scanning);
+        self.demo_scan = t.scan;
+        if matches!(t.scan, DemoScan::Empty | DemoScan::Running) {
             self.selected_ip = None;
+        }
+        if t.added {
+            self.added = demo::added_hosts();
+            self.selected_ip = Some("192.168.1.99".into());
         }
         if t.twin {
             self.inv.merge(demo::twin_of_ds918());
@@ -770,6 +787,8 @@ impl App {
                 cx,
             ),
             Overlay::Quick => self.open_quick_dialog(window, cx),
+            Overlay::Add(d) => self.open_add_dialog(None, Some(d), window, cx),
+            Overlay::Networks => self.open_networks_dialog(window, cx),
             Overlay::Manual => self.open_manual_recovery(window, cx),
             Overlay::NextDialog => self.open_next_dialog(window, cx),
             Overlay::Welcome(step) => self.open_welcome(step, false, window, cx),
@@ -813,7 +832,6 @@ impl App {
             Msg::RecoveryDone(o) => o.level != worker::RecLevel::Done && o.level != worker::RecLevel::Info,
             Msg::DsmWaitDone(w) => w.timed_out,
             _ => false,
-            Msg::ScanPartial(inv) => self.inv = inv,
         };
         if failed {
             for w in self.open_trust.drain(..) {
@@ -821,17 +839,30 @@ impl App {
             }
         }
         match m {
-            Msg::ScanMethod { name, result } => {
-                self.scan.methods.push((name, result));
+            Msg::ScanEv(ev) => {
+                if let ScanEvent::Found(f) = &ev {
+                    self.inv.merge(f.clone());
+                }
+                self.scan.apply(&ev);
+                if matches!(ev, ScanEvent::Finished { .. }) {
+                    self.scan_finished_once = true;
+                    self.scan_cancel = None;
+                    self.save_inventory();
+                }
+            }
+            Msg::ScanFailed(why) => {
+                self.scan.fail(why);
+                self.scan_finished_once = true;
+                self.scan_cancel = None;
             }
             Msg::ScanDone(inv) => {
-                if self.demo.is_none() {
-                    let _ = inv.save(&self.cfg_dir.join("inventory.json"));
+                for d in inv.devices {
+                    self.inv.merge(d);
                 }
-                self.inv = inv;
-                self.scan.running = false;
-                self.scan.finished_once = true;
+                self.save_inventory();
             }
+            Msg::AddStep { ticket, idx, result } => self.on_add_step(ticket, idx, result, cx),
+            Msg::AddDone { ticket, target, report } => self.on_add_done(ticket, target, report, window, cx),
             Msg::Inspected(r) => {
                 self.pin_cache = None;
                 self.inspecting = false;
@@ -1006,42 +1037,41 @@ impl App {
         if self.scan.running {
             return;
         }
-        self.scan = ScanState { running: true, methods: vec![], finished_once: self.scan.finished_once };
-        if let (Some(_), Some(scanning)) = (self.demo, self.demo_no_units) {
-            // Demo "no units": the scan never ends (skeleton rows) or ends with nothing found (the empty state).
-            if !scanning {
-                let tx = self.tx.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(800));
-                    let _ = tx.unbounded_send(Msg::ScanDone(Inventory::default()));
-                });
-            }
-            cx.notify();
-            return;
+        if self.demo.is_none() {
+            self.nets = synofurb_core::discovery::networks::networks();
         }
+        self.scan.begin();
+        let cancel = CancelToken::new();
+        self.scan_cancel = Some(cancel.clone());
         if self.demo.is_some() {
-            // Replay the demo inventory as if it were streaming in.
-            let tx = self.tx.clone();
-            let full = demo::inventory();
-            std::thread::spawn(move || {
-                let mut inv = Inventory::default();
-                for (i, name) in
-                    ["Synology Assistant broadcast", "Bonjour/mDNS", "UPnP/SSDP", "Subnet sweep (DSM ports)"].iter().enumerate()
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(350));
-                    for d in full.devices.iter().skip(i * 2).take(2) {
-                        inv.merge(d.clone());
-                    }
-                    let _ = tx.unbounded_send(Msg::ScanPartial(inv.clone()));
-                    let _ = tx.unbounded_send(Msg::ScanMethod { name, result: Ok(2) });
-                }
-                let _ = tx.unbounded_send(Msg::ScanDone(full));
-            });
+            // A scripted scan: the same events the real one sends, nothing touches the network.
             self.inv = Inventory::default();
+            demo::spawn_scan_script(self.tx.clone(), self.demo_scan, cancel);
         } else {
-            worker::spawn_scan(self.tx.clone(), ScanOptions::default(), self.inv.clone());
+            let nets = self.settings.scan_networks.to_scan(&self.nets);
+            if nets.is_empty() {
+                self.scan.fail(copy::SCAN_NO_NETWORK.short.to_string());
+                self.scan_cancel = None;
+            } else {
+                worker::spawn_scan(self.tx.clone(), ScanOptions::recommended().with_networks(nets), cancel);
+            }
         }
         cx.notify();
+    }
+
+    /// Stop the running scan; it ends within about a second and keeps what it found.
+    pub fn stop_scan(&mut self, cx: &mut Context<App>) {
+        if let Some(c) = &self.scan_cancel {
+            c.cancel();
+        }
+        self.scan.stop_requested();
+        cx.notify();
+    }
+
+    fn save_inventory(&self) {
+        if self.demo.is_none() {
+            let _ = self.inv.save(&self.cfg_dir.join("inventory.json"));
+        }
     }
 
     pub fn use_manual_address(&mut self, window: &mut Window, cx: &mut Context<App>) {

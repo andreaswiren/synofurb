@@ -79,8 +79,9 @@ impl App {
                     .value(kit::mono_sm(cx, console).into_any_element()),
             )
             .child(
-                gpui_kit::component::description_list::DescriptionItem::new(label("l-backups", &copy::INSPECT_BACKUPS, &app))
-                    .value(kit::tag(&p, Tone::Neutral, Some(role::INFO), copy::INSPECT_NOT_CHECKED.short).into_any_element()),
+                gpui_kit::component::description_list::DescriptionItem::new(label("l-backups", &copy::INSPECT_BACKUPS, &app)).value(
+                    h_flex().child(kit::tag(&p, Tone::Neutral, Some(role::INFO), copy::INSPECT_NOT_CHECKED.short)).into_any_element(),
+                ),
             )
             .child(
                 gpui_kit::component::description_list::DescriptionItem::new(label("l-hostkey", &copy::HK_PIN, &app)).value(match pin {
@@ -91,7 +92,7 @@ impl App {
                         .child(kit::mono_sm(cx, fp.clone()).min_w_0().truncate())
                         .child(gpui_kit::component::clipboard::Clipboard::new("hk-pin-copy").value(fp).tooltip("Copy"))
                         .into_any_element(),
-                    None => kit::chip(&p, copy::HK_NOT_PINNED.short).into_any_element(),
+                    None => h_flex().child(kit::chip(&p, copy::HK_NOT_PINNED.short)).into_any_element(),
                 }),
             );
 
@@ -137,7 +138,7 @@ impl App {
                     ),
                 )
                 .child(TableBody::new().children(vols.iter().map(|v| {
-                    let levels = v.levels.iter().map(|l| l.to_uppercase()).collect::<Vec<_>>().join(" + ");
+                    let levels = v.levels.iter().map(|l| crate::ui::facts::md_level_label(l)).collect::<Vec<_>>().join(" + ");
                     let backed = if v.disks.is_empty() {
                         "unknown".to_string()
                     } else {
@@ -176,7 +177,7 @@ impl App {
                 };
                 TableRow::new()
                     .child(TableCell::new().child(kit::mono(cx, a.name.clone())))
-                    .child(TableCell::new().child(a.level.to_uppercase()))
+                    .child(TableCell::new().child(crate::ui::facts::md_level_label(&a.level)))
                     .child(TableCell::new().child(role_text))
                     .child(TableCell::new().child(a.health_note().unwrap_or_else(|| "OK".to_string())))
                     .child(TableCell::new().text_right().child(kit::mono(cx, size_2dp(a.sectors * SECTOR))))

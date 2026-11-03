@@ -31,7 +31,7 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 70] = [
+pub const DEMO_SCREEN_NAMES: [&str; 77] = [
     "addons",
     "addons-chosen",
     "confirm-addons",
@@ -53,6 +53,13 @@ pub const DEMO_SCREEN_NAMES: [&str; 70] = [
     "inventory-offline",
     "inventory-empty",
     "inventory-scanning",
+    "inventory-scan-done",
+    "inventory-scan-failed",
+    "inventory-added",
+    "dlg-add",
+    "dlg-add-invalid",
+    "dlg-add-probing",
+    "dlg-networks",
     "connect",
     "inspect",
     "goal",
@@ -150,12 +157,40 @@ pub enum Overlay {
     HostKeyEnded,
     /// "Quick setup" dialog (Goal).
     Quick,
+    /// "Add NAS" dialog on Find: idle, with an invalid address typed, or while checking one.
+    Add(AddDemo),
+    /// "Networks to scan" dialog on Find.
+    Networks,
     /// "Manual recovery" dialog (Recovery).
     Manual,
     /// "What happens next" dialog of the failure screen.
     NextDialog,
     /// The Welcome guide (first launch, Help, menu) on a 0-based step.
     Welcome(usize),
+}
+
+/// How the Add NAS dialog starts in a demo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddDemo {
+    Idle,
+    Invalid,
+    Probing,
+}
+
+/// What the Find screen's scan does in a demo (a scripted scan: nothing touches the network).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DemoScan {
+    /// The usual quick scan that ends with the sample units.
+    #[default]
+    Normal,
+    /// Stuck half way (the progress panel).
+    Running,
+    /// Ended with the sample units; one method failed.
+    Failed,
+    /// Ended with nothing found.
+    Empty,
+    /// Ended with the sample units.
+    Done,
 }
 
 /// Where a demo run starts: a screen, optionally with something open on top.
@@ -180,8 +215,10 @@ pub struct DemoTarget {
     pub twin: bool,
     /// The Confirm gate is satisfied (Erase enabled).
     pub ready: bool,
-    /// Find with no units: `Some(false)` empty and done, `Some(true)` still scanning.
-    pub no_units: Option<bool>,
+    /// What the scan on Find does.
+    pub scan: DemoScan,
+    /// Find lists the three kinds of address the user added (Synology, unknown device, unreachable).
+    pub added: bool,
     /// The update state the demo starts in (About, Settings and the update dialog show it).
     pub update: DemoUpdate,
     /// Add-ons are ticked (Docker, Portainer, Frigate NVR and Plex).
@@ -216,7 +253,8 @@ impl DemoTarget {
             updating: false,
             twin: false,
             ready: false,
-            no_units: None,
+            scan: DemoScan::Normal,
+            added: false,
             update: DemoUpdate::None,
             addons: false,
         }
@@ -227,8 +265,19 @@ impl DemoTarget {
         let n = name.trim().to_ascii_lowercase();
         let t = match n.as_str() {
             "inventory" | "find" => DemoTarget::at(Screen::Inventory),
-            "inventory-empty" => DemoTarget { no_units: Some(false), ..DemoTarget::at(Screen::Inventory) },
-            "inventory-scanning" => DemoTarget { no_units: Some(true), ..DemoTarget::at(Screen::Inventory) },
+            "inventory-empty" => DemoTarget { scan: DemoScan::Empty, ..DemoTarget::at(Screen::Inventory) },
+            "inventory-scanning" => DemoTarget { scan: DemoScan::Running, ..DemoTarget::at(Screen::Inventory) },
+            "inventory-scan-done" => DemoTarget { scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) },
+            "inventory-scan-failed" => DemoTarget { scan: DemoScan::Failed, ..DemoTarget::at(Screen::Inventory) },
+            "inventory-added" => DemoTarget { scan: DemoScan::Done, added: true, ..DemoTarget::at(Screen::Inventory) },
+            "dlg-add" => DemoTarget { overlay: Overlay::Add(AddDemo::Idle), scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) },
+            "dlg-add-invalid" => {
+                DemoTarget { overlay: Overlay::Add(AddDemo::Invalid), scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) }
+            }
+            "dlg-add-probing" => {
+                DemoTarget { overlay: Overlay::Add(AddDemo::Probing), scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) }
+            }
+            "dlg-networks" => DemoTarget { overlay: Overlay::Networks, scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) },
             "inventory-offline" => DemoTarget { offline: true, ..DemoTarget::at(Screen::Inventory) },
             "connect" => DemoTarget::at(Screen::Connect),
             "inspect" => DemoTarget::at(Screen::Inspect),

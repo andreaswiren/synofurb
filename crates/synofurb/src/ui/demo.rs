@@ -1,6 +1,7 @@
 //! Demo mode (`synofurb gui --demo --screen <name>`): built-in units and scripted install events so every screen can
 //! be shown and screenshotted without hardware. Nothing here touches the network or a NAS.
 
+use super::addhost::{self, AddedHost, AddedHosts, CheckResult, CheckState, ProbeReport, Target};
 use super::worker::{DEMO_TICK, Msg, Tx};
 use std::net::IpAddr;
 use synofurb_core::compat::Status;
@@ -191,6 +192,205 @@ pub fn inventory() -> Inventory {
     inv.merge(found("DS220j", "192.168.1.52", "00:11:32:11:22:33", "7.1.1-42962", "2030ABC100871", &["ssdp"], false, "guest"));
     inv.merge(found("DS218+", "192.168.1.60", "00:11:32:aa:aa:aa", "", "1850XYZ000212", &["mdns"], true, "attic"));
     inv
+}
+
+// ------------------------------------------------------------------------------------------------ scan and Add by IP
+
+/// The networks the demo computer is on: one real LAN, a VPN and three virtual adapters ("Networks: 1 of 5").
+pub fn networks() -> Vec<synofurb_core::discovery::networks::NetworkInfo> {
+    use synofurb_core::discovery::networks::{LocalAddr, networks_from};
+    let a = |n: &str, ip: &str, p: u8| LocalAddr { interface: n.into(), ip: ip.parse().expect("demo ip"), prefix: p };
+    networks_from(&[
+        a("Ethernet", "192.168.1.10", 24),
+        a("Tailscale", "100.101.4.7", 10),
+        a("vEthernet (WSL)", "172.28.16.1", 20),
+        a("docker0", "172.17.0.1", 16),
+        a("VMware Network Adapter VMnet8", "192.168.136.1", 24),
+    ])
+}
+
+fn demo_network() -> synofurb_core::discovery::networks::ResolvedNetwork {
+    use synofurb_core::discovery::networks::{Ipv4Cidr, NetworkKind, ResolvedNetwork};
+    let cidr: Ipv4Cidr = "192.168.1.0/24".parse().expect("demo cidr");
+    ResolvedNetwork {
+        key: "Ethernet|192.168.1.10/24".into(),
+        label: "Ethernet 192.168.1.0/24".into(),
+        cidr,
+        interface: Some("Ethernet".into()),
+        local_ip: "192.168.1.10".parse().ok(),
+        broadcast: cidr.broadcast(),
+        kind: Some(NetworkKind::Lan),
+        custom: false,
+        sweep: cidr,
+        sweep_hosts: 253,
+    }
+}
+
+/// The scripted scan: `(milliseconds to wait before the event, event)`. `Running` stops half way (the progress panel);
+/// the others end. `Failed` has one method that failed; `Empty` finds nothing.
+pub fn scan_script(kind: super::state::DemoScan) -> Vec<(u64, synofurb_core::discovery::ScanEvent)> {
+    use super::state::DemoScan;
+    use synofurb_core::discovery::{ScanEvent as E, ScanMethod as M};
+    let net = demo_network();
+    let key = net.key.clone();
+    let mut v: Vec<(u64, E)> =
+        vec![(150, E::Started { networks: vec![net], methods: vec![M::SynologyUdp, M::Mdns, M::Ssdp, M::ProbeSweep], total_hosts: 253 })];
+    for m in [M::SynologyUdp, M::Mdns, M::Ssdp, M::ProbeSweep] {
+        v.push((40, E::MethodStarted { method: m, network: key.clone() }));
+    }
+    let empty = kind == DemoScan::Empty;
+    let found: Vec<Found> = if empty { vec![] } else { inventory().devices.into_iter().filter(|d| !d.synofurb_debian).collect() };
+    let failed = kind == DemoScan::Failed;
+    // listening methods: 4 s of listening, shown in steps
+    for step in 1..=3u32 {
+        for m in [M::SynologyUdp, M::Mdns, M::Ssdp] {
+            v.push((120, E::MethodProgress { method: m, network: key.clone(), done: step * 1000, total: 4000 }));
+        }
+        v.push((60, E::MethodProgress { method: M::ProbeSweep, network: key.clone(), done: step * 28, total: 253 }));
+        if let Some(f) = found.get(step as usize - 1) {
+            v.push((30, E::Found(f.clone())));
+        }
+    }
+    v.push((100, E::MethodFinished { method: M::SynologyUdp, network: key.clone(), found: found.len().min(3), error: None }));
+    v.push((
+        50,
+        E::MethodFinished {
+            method: M::Mdns,
+            network: key.clone(),
+            found: if failed { 0 } else { found.len().min(2) },
+            error: failed.then(|| "multicast is blocked on this adapter (os error 10013)".to_string()),
+        },
+    ));
+    if kind == DemoScan::Running {
+        // stuck here: 87 of 253 hosts, two units found, the sweep still running
+        v.push((50, E::MethodProgress { method: M::ProbeSweep, network: key.clone(), done: 87, total: 253 }));
+        return v;
+    }
+    v.push((100, E::MethodFinished { method: M::Ssdp, network: key.clone(), found: found.len().min(2), error: None }));
+    for f in found.iter().skip(3) {
+        v.push((60, E::Found(f.clone())));
+    }
+    v.push((100, E::MethodProgress { method: M::ProbeSweep, network: key.clone(), done: 253, total: 253 }));
+    v.push((50, E::MethodFinished { method: M::ProbeSweep, network: key.clone(), found: found.len().min(2), error: None }));
+    v.push((50, E::Finished { found_total: found.len(), elapsed: std::time::Duration::from_millis(5600) }));
+    v
+}
+
+/// Play [`scan_script`] on a thread. A stopped scan ends with `Finished` at once, like the real one.
+pub fn spawn_scan_script(tx: Tx, kind: super::state::DemoScan, cancel: synofurb_core::discovery::CancelToken) {
+    use synofurb_core::discovery::ScanEvent;
+    std::thread::spawn(move || {
+        let script = scan_script(kind);
+        let t0 = std::time::Instant::now();
+        for (wait, ev) in script {
+            let end = std::time::Instant::now() + std::time::Duration::from_millis(wait);
+            while std::time::Instant::now() < end && !cancel.is_cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            if cancel.is_cancelled() {
+                break;
+            }
+            if tx.unbounded_send(Msg::ScanEv(ev)).is_err() {
+                return;
+            }
+        }
+        if kind == super::state::DemoScan::Running {
+            while !cancel.is_cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+        if cancel.is_cancelled() {
+            let _ = tx.unbounded_send(Msg::ScanEv(ScanEvent::Finished { found_total: 2, elapsed: t0.elapsed() }));
+        }
+    });
+}
+
+fn chk(check: &str, state: CheckState, detail: &str) -> CheckResult {
+    CheckResult { check: check.into(), state, detail: detail.into() }
+}
+
+/// What the demo's checks find for an address: `.99` is a Synology unit, `.88` a router (an unknown device), anything else is silent.
+pub fn add_report(t: &Target) -> ProbeReport {
+    let names = addhost::check_names(t);
+    let ip = t.ip().unwrap_or_else(|| "192.168.1.99".parse().expect("ip"));
+    let last = t.host.rsplit('.').next().unwrap_or("");
+    match last {
+        "99" => ProbeReport {
+            checks: vec![
+                chk(&names[0], CheckState::Answered, "SSH-2.0-OpenSSH_8.2"),
+                chk(&names[1], CheckState::Answered, "DSM answered its Web API"),
+                chk(&names[2], CheckState::Answered, "open (DSM's secure web interface)"),
+                chk(&names[3], CheckState::Answered, "DS220+ answered"),
+            ],
+            found: Some(Found {
+                ips: vec![ip],
+                model: "DS220+".into(),
+                dsm_version: "7.2.2-72806".into(),
+                serial: "2150TCN001234".into(),
+                hostname: "guest-room".into(),
+                http_port: Some(5000),
+                https_port: Some(5001),
+                synology: true,
+                sources: vec!["added".into()],
+                ..Default::default()
+            }),
+        },
+        "88" => ProbeReport {
+            checks: vec![
+                chk(&names[0], CheckState::Closed, "connection refused (the host is there, the port is closed)"),
+                chk(&names[1], CheckState::Closed, "a web server answered (HTTP/1.1 401 Unauthorized), but not DSM"),
+                chk(&names[2], CheckState::NoReply, "no reply in 1.5 s"),
+                chk(&names[3], CheckState::NoReply, "no reply in 1.5 s"),
+            ],
+            found: None,
+        },
+        _ => ProbeReport {
+            checks: vec![
+                chk(&names[0], CheckState::NoReply, "no reply in 1.5 s"),
+                chk(&names[1], CheckState::NoReply, "no reply in 1.5 s"),
+                chk(&names[2], CheckState::NoReply, "no reply in 1.5 s"),
+                chk(&names[3], CheckState::NoReply, "no reply in 1.5 s"),
+            ],
+            found: None,
+        },
+    }
+}
+
+/// The three kinds of added row, for the Find screenshots.
+pub fn added_hosts() -> AddedHosts {
+    let mut a = AddedHosts::default();
+    for ip in ["192.168.1.99", "192.168.1.88", "192.168.1.77"] {
+        let target = addhost::parse_target(ip).expect("demo target");
+        let report = add_report(&target);
+        a.upsert(AddedHost { target, report, checked: "2026-11-03 10:12".into() });
+    }
+    a
+}
+
+/// A scripted check: the steps arrive one by one; `.150` never ends (the dialog's "checking" state) until it is cancelled.
+pub fn spawn_add_script(tx: Tx, ticket: u64, target: Target, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || {
+        let report = add_report(&target);
+        let hold = target.host.ends_with(".150");
+        for (i, r) in report.checks.iter().enumerate() {
+            if hold && i >= 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(if hold { 150 } else { 400 }));
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            let _ = tx.unbounded_send(Msg::AddStep { ticket, idx: i, result: r.clone() });
+        }
+        if hold {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if !cancel.load(Ordering::Relaxed) {
+            let _ = tx.unbounded_send(Msg::AddDone { ticket, target, report });
+        }
+    });
 }
 
 pub fn outcome(unit: DemoUnit, hostname: &str, username: &str) -> Outcome {

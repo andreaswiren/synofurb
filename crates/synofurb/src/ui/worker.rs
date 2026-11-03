@@ -6,10 +6,10 @@ use futures::channel::mpsc::UnboundedSender;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::channel;
 use std::time::Duration;
 use synofurb_core::compat::{CompatDb, RefreshOutcome};
-use synofurb_core::discovery::{self, Found, Inventory, ScanOptions, mdns, probe, ssdp, syno_udp};
+use synofurb_core::discovery::{self, CancelToken, Inventory, ScanEvent, ScanOptions};
 use synofurb_core::logs::{Event, Logger};
 use synofurb_core::model::DeviceFacts;
 use synofurb_core::remote::{RemoteShell, SshSession};
@@ -20,14 +20,24 @@ pub type Tx = UnboundedSender<Msg>;
 
 /// Everything a worker can tell the UI.
 pub enum Msg {
-    /// A discovery method finished (`Ok(n)` results) or failed.
-    ScanMethod {
-        name: &'static str,
-        result: Result<usize, String>,
-    },
-    /// Merged inventory so far (live results).
-    ScanPartial(Inventory),
+    /// One step of a running scan (which method is on which network, progress, a unit found, the end).
+    ScanEv(ScanEvent),
+    /// The scan could not start: the chosen networks cannot be used (an adapter is gone, a custom network is refused).
+    ScanFailed(String),
+    /// The units the scan saw, with their MAC addresses filled in. Sent after the last event.
     ScanDone(Inventory),
+    /// One check of an Add-by-IP probe finished (`ticket` ties it to the dialog that asked).
+    AddStep {
+        ticket: u64,
+        idx: usize,
+        result: super::addhost::CheckResult,
+    },
+    /// The Add-by-IP probe ended with this report.
+    AddDone {
+        ticket: u64,
+        target: super::addhost::Target,
+        report: super::addhost::ProbeReport,
+    },
     /// The unit's `health --json` (read-only), or why there is none.
     ManageHealth(Result<Box<synofurb_core::manage::Health>, String>),
     /// A result of work started for one unit context (`App::unit_gen`): the UI drops it when the page now shows another unit
@@ -109,60 +119,33 @@ fn note_changed_key(tx: &Tx, e: &anyhow::Error) {
 
 // ------------------------------------------------------------------------------------------------ discovery
 
-/// Run every discovery method on its own thread and stream merged results. (The core's `discovery::scan`
-/// only returns at the end; this is the same orchestration with a partial-result hook. See docs/GUI.md.)
-pub fn spawn_scan(tx: Tx, opts: ScanOptions, known: Inventory) {
+/// Run the scan on its own thread: the core reports every step as a [`ScanEvent`], this forwards them to the UI.
+/// `cancel` stops it (the listening methods within 300 ms, the port sweep within about a second); the core still ends the scan with
+/// `Finished`, so the UI always gets an end.
+pub fn spawn_scan(tx: Tx, opts: ScanOptions, cancel: CancelToken) {
     std::thread::spawn(move || {
-        let (ftx, frx) = channel::<Found>();
-        let t = opts.timeout;
-        let mut handles = vec![];
-        macro_rules! method {
-            ($name:literal, $f:expr) => {{
-                let (ftx, tx) = (ftx.clone(), tx.clone());
-                handles.push(std::thread::spawn(move || {
-                    let r = $f(&ftx).map_err(|e| format!("{e:#}"));
-                    send(&tx, Msg::ScanMethod { name: $name, result: r });
-                }));
-            }};
+        let tx2 = tx.clone();
+        match discovery::scan_with_callback(&opts, &cancel, |e| send(&tx2, Msg::ScanEv(e))) {
+            Ok(inv) => send(&tx, Msg::ScanDone(inv)),
+            Err(e) => send(&tx, Msg::ScanFailed(e.to_string())),
         }
-        method!("Synology Assistant broadcast", move |s: &Sender<Found>| syno_udp::scan(t, s));
-        method!("Bonjour/mDNS", move |s: &Sender<Found>| mdns::scan(t, s));
-        method!("UPnP/SSDP", move |s: &Sender<Found>| ssdp::scan(t, s));
-        if opts.sweep {
-            method!("Subnet sweep (DSM ports)", |s: &Sender<Found>| probe::sweep(s));
-        }
-        drop(ftx);
-        let mut inv = known;
-        let now = chrono_like_now();
-        for mut f in frx {
-            f.last_seen = now.clone();
-            if f.mac.is_none()
-                && let Some(ip) = f.primary_ip()
-            {
-                f.mac = discovery::arp_lookup(ip);
-            }
-            inv.merge(f);
-            send(&tx, Msg::ScanPartial(inv.clone()));
-        }
-        for h in handles {
-            let _ = h.join();
-        }
-        for d in &mut inv.devices {
-            if d.mac.is_none()
-                && let Some(ip) = d.primary_ip()
-            {
-                d.mac = discovery::arp_lookup(ip);
-                if d.mac.as_deref().is_some_and(discovery::is_synology_mac) {
-                    d.synology = true;
-                    d.sources.push("oui".into());
-                }
-            }
-        }
-        send(&tx, Msg::ScanDone(inv));
+    });
+}
+
+/// Check an address the person added: every check reports as it ends, then the whole report.
+pub fn spawn_add_probe(tx: Tx, ticket: u64, target: super::addhost::Target, cancel: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        let tx2 = tx.clone();
+        let report = super::addhost::probe(&target, &cancel, &mut |(idx, result)| send(&tx2, Msg::AddStep { ticket, idx, result }));
+        send(&tx, Msg::AddDone { ticket, target, report });
     });
 }
 
 /// `YYYY-MM-DD HH:MM:SS` in UTC without pulling in a date crate (the UI only shows it as "last seen").
+pub fn now_text() -> String {
+    chrono_like_now()
+}
+
 fn chrono_like_now() -> String {
     let secs = super::settings::now_unix();
     let (days, rem) = (secs / 86_400, secs % 86_400);

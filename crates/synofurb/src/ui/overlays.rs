@@ -11,7 +11,6 @@ use super::state::{BootChoice, KeyMode, Screen};
 use super::theme::layout;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
-use gpui_kit::component::input::Input;
 use gpui_kit::component::{WindowExt, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AppContext, ClipboardItem, Context, IntoElement, Window, px};
@@ -124,35 +123,6 @@ impl App {
                 })
         });
         cx.defer_in(window, move |_, window, cx| window.focus(&focus, cx));
-    }
-
-    /// "Add NAS": probe an address that discovery did not find.
-    pub fn open_add_dialog(&mut self, window: &mut Window, cx: &mut Context<App>) {
-        let app = cx.entity();
-        let input = self.inp.add_ip.clone();
-        window.open_dialog(cx, move |d, _, cx| {
-            let (app, input2) = (app.clone(), input.clone());
-            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
-                .title(copy::INV_ADD_TITLE.short)
-                .w(px(layout::DIALOG_W))
-                .child(v_flex().gap(px(8.0)).child(copy::INV_ADD_TITLE.body).child(Input::new(&input).cleanable(true)))
-                .footer(
-                    DialogFooter::new()
-                        .child(
-                            Button::new("add-cancel")
-                                .outline()
-                                .label(copy::BTN_CANCEL.short)
-                                .on_click(|_, window, cx| window.close_dialog(cx)),
-                        )
-                        .child(Button::new("add-ok").primary().label(copy::INV_ADD_BTN.short).on_click(move |_, window, cx| {
-                            let ip = input2.read(cx).value().trim().to_string();
-                            if !ip.is_empty() {
-                                window.close_dialog(cx);
-                                app.update(cx, |a, cx| a.select_host(&ip, window, cx));
-                            }
-                        })),
-                )
-        });
     }
 
     /// The command line for the current choices (None until a unit has been inspected).

@@ -475,6 +475,18 @@ impl DiskScope {
     }
 }
 
+/// An md level the way people say it: `raid5` -> `RAID 5`, `linear` -> `Linear`.
+pub fn md_level_label(level: &str) -> String {
+    match level.strip_prefix("raid") {
+        Some(n) if !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()) => format!("RAID {n}"),
+        _ if level.is_empty() => "-".to_string(),
+        _ => {
+            let mut c = level.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        }
+    }
+}
+
 /// How many disk lines Confirm shows before "and N more" (a wide chassis has 12 or more bays).
 pub const DESTROYED_LINES_MAX: usize = 8;
 
@@ -760,6 +772,14 @@ mod tests {
         assert_eq!(capitalize_first("the installer reported a failure: x"), "The installer reported a failure: x");
         assert_eq!(capitalize_first("Already fine"), "Already fine");
         assert_eq!(capitalize_first(""), "");
+    }
+
+    #[test]
+    fn md_levels_read_like_people_say_them() {
+        assert_eq!(md_level_label("raid5"), "RAID 5");
+        assert_eq!(md_level_label("raid10"), "RAID 10");
+        assert_eq!(md_level_label("linear"), "Linear");
+        assert_eq!(md_level_label(""), "-");
     }
 
     #[test]

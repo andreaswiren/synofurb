@@ -127,7 +127,8 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | 1 | Find NAS | Label (page title) | 2 |
 | 2 | Select the unit to work on. | Label (subtitle) | 6 |
 | 3 | Filter units | Input (search placeholder) | 2 |
-| 4 | Rescan | Button (ghost) + Spinner while scanning | 1 |
+| 4 | Networks: 1 of 5 | Button (ghost, network icon): opens the Networks dialog | 2 |
+| 4b | Rescan | Button (ghost); disabled while scanning | 1 |
 | 5 | Add by IP | Button (ghost) | 3 |
 | 6 | Model, Address, DSM | DataTable column headers | 3 |
 | 7 | Found by | DataTable column header | 2 |
@@ -139,7 +140,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 | 13 | Twin | Tag (warning) on rows of the same model | cond. |
 | 14 | Offline | StatusBar item (Tag) when offline | cond. |
 
-**Word budget:** screen 24 + shell 11 = **35** of 60. Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
+**Word budget:** screen 26 + shell 11 = **37** of 60 (the progress panel, the Networks dialog and the Add NAS dialog are conditional and counted on their own). Counted: titles, subtitles, labels, options, column headers, buttons, prose. Not counted: data (in braces), conditional elements (shown only in the named state).
 
 **Disclosures** (everything that used to be prose):
 
@@ -147,10 +148,13 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 |---|---|---|---|---|
 | Status header (i) | Popover | Status | How much this model is proven. | help: compat-status |
 | Found by values | Tooltip | Found by | Discovery methods that saw this unit. | help: first-install |
-| Rescan (split) | Popover | Scan details | Five discovery methods run at once. | Lists each method with Tag ok/warn and the subnet; help: troubleshooting |
+| Scan summary (i) | Popover | What ran | - | After a scan: one line per method and network with its result and, when it failed or was skipped, the reason |
+| Networks | Dialog | Networks to scan | Choose which networks the scan covers. | One Checkbox row per network of this computer: adapter, CIDR, kind Tag (LAN, VPN, Virtual), Recommended chip. Custom networks (CIDR, at most a /20, validated with the core's message) with Remove. Select recommended, Select all, Done. The choice is kept in ui-settings.json (selected ids, custom CIDRs); an id that has disappeared is dropped and, when nothing remains, the recommended networks stand in. The default never includes VPN or virtual networks (a Hyper-V external switch is Virtual: tick it by hand). |
 | Twin tag | Tooltip | Twin | Another unit of this model is on the network; check serials. | help: first-install |
 | Connect disabled | Tooltip | Connect | Select a unit first. | - |
-| Add by IP | Dialog | Add NAS | Enter an address to probe. | Input IP + port; buttons Add / Cancel |
+| Add by IP | Dialog | Add NAS | Enter the address of a unit that discovery did not find. | One Input, focused when the dialog opens; Enter or Add checks it. Idle (placeholder "IP or host name", never an example that looks like a value); invalid (inline error under the field, dialog stays open: empty, spaces, bad IP, port outside 1 to 65535, bad name, 0.0.0.0, this computer); checking (a line per check: name lookup, SSH, DSM web 5000, DSM secure web 5001, Synology UDP query; Cancel stops the check and keeps the dialog). The outcome becomes a row marked *Added by you* and selected; the Connect screen is not opened. |
+| Added row: Unknown device | Tag + info popover | Not recognised | Something answered at this address, but nothing says it is a Synology unit. | Popover *What was checked* lists what answered. Selectable; Connect then shows a warning Alert first. |
+| Added row: Unreachable | Tag + info popover | No answer | Nothing answered at this address. | Popover lists every failed check with its reason. Connect is disabled with that reason; *Check again* re-runs the check, Remove deletes the row. |
 | Offline tag | Tooltip | Offline | Compatibility list is {n} days old; LAN scan still works. | help: offline-mode |
 | Welcome guide | Dialog (first launch until ended with the last step's box; Help and menu replay it) | Replace DSM with Debian | Nothing changes until you confirm. | Five steps, see D1b. The old "Before you start" dialog is merged into it. |
 
@@ -158,7 +162,7 @@ Manage (D15/D18), Recovery (D14) and Boot manager (D13) hide the Stepper; Help (
 
 **Keyboard:** `Ctrl+F` filter; `Up`/`Down` row; `Enter` Connect; `R` rescan; `A` add; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
-**States:** *empty*: Empty: "No NAS found" + buttons Scan again, Add by IP, link Help; *error*: A failing discovery method is a warning Tag in the Scan details popover; no page error; *loading*: Skeleton rows + Spinner on Rescan; rows stream in; *offline*: StatusBar Tag "Offline"; compatibility column uses the cached list.
+**States:** *empty*: Empty: "No NAS found" + one line of what was scanned ("Scanned 192.168.1.0/24 with 4 methods in 6 s.") + buttons Add by IP, Choose networks, Scan again, link Help; *error*: a failing method is a warning Tag ("1 method failed") and a Failed line with its reason popover; a selection the core refuses (adapter gone) is an error Alert with Choose networks; *loading*: a progress panel replaces the grey rows: one overall Progress bar with the text "Scanning 192.168.1.0/24 · 87 of 253 hosts · 3 found", one line per method and network (Waiting, Running with hosts or percent, Done with the count, Failed or Skipped with a reason popover, Stopped), a Stop button that cancels within about a second, results streaming into the table; the spinner is a static icon with Reduce motion; after the scan one line "Scanned 1 network in 6 s · 5 units found" with What ran; *offline*: StatusBar Tag "Offline"; compatibility column uses the cached list.
 
 ### D1b Welcome guide
 

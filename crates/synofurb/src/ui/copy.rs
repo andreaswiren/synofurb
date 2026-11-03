@@ -186,6 +186,51 @@ mod strings {
         INV_ADD_TITLE: Dialog, "Add NAS", "", "", "Enter the address of a unit that discovery did not find.";
         INV_ADD_ADDR: Label, "Address", "", "", "";
         INV_ADD_BTN: Button, "Add", "", "", "";
+        INV_ADD_HINT: Label, "IP or host name", "", "", "";
+        INV_ADD_CHECKING: Label, "Checking {}", "", "", "";
+        ADD_ERR_EMPTY: Prose, "Enter an IP address or a host name.", "", "", "";
+        ADD_ERR_CHARS: Prose, "Use one address, without spaces or other characters.", "", "", "";
+        ADD_ERR_IP: Prose, "That is not a valid IPv4 or IPv6 address.", "", "", "";
+        ADD_ERR_PORT: Prose, "The port must be a number from 1 to 65535.", "", "", "";
+        ADD_ERR_NAME: Prose, "That is not a valid host name.", "", "", "";
+        ADD_ERR_NOT_HOST: Prose, "No NAS can have that address.", "", "", "";
+        ADD_ERR_THIS: Prose, "That is this computer, not a NAS.", "", "", "";
+        INV_ADDED: Label, "Added by you", "", "", "";
+        INV_UNKNOWN: Label, "Unknown device", "Something answered at this address, but nothing says it is a Synology unit.", "", "";
+        INV_UNKNOWN_TAG: Label, "Not recognised", "", "", "";
+        INV_UNREACH: Label, "Unreachable", "Nothing answered at this address.", "", "";
+        INV_UNREACH_TAG: Label, "No answer", "", "", "";
+        INV_CHECK_AGAIN: Button, "Check again", "Look at this address again.", "", "";
+        INV_REMOVE: Button, "Remove", "Remove this address from the list.", "", "";
+        INV_CHECKED: Label, "What was checked", "", "", "";
+        INV_UNKNOWN_WARN: Prose, "Not recognised as a Synology NAS. Check the address first.", "", "", "";
+        INV_UNREACH_WHY: Prose, "Nothing answered at this address. Use Check again, or remove it.", "", "", "";
+        NET_CHIP: Button, "Networks: {} of {}", "Choose which networks the scan covers.", "", "";
+        NET_TITLE: Dialog, "Networks to scan", "", "", "Scan the networks your NAS is on. VPN and virtual networks are off unless you select them.";
+        NET_RECOMMENDED: Label, "Recommended", "", "", "";
+        NET_SEL_REC: Button, "Select recommended", "", "", "";
+        NET_SEL_ALL: Button, "Select all", "", "", "";
+        NET_ADD_LABEL: Label, "Add a network", "", "", "";
+        NET_ADD_HINT: Label, "192.168.1.0/24", "", "", "";
+        NET_ADD_BTN: Button, "Add", "", "", "";
+        NET_GONE: Prose, "A chosen network is gone. The recommended ones stand in.", "", "", "";
+        SCAN_STOPPING: Label, "Stopping", "", "", "";
+        NET_NONE: Prose, "Select at least one network.", "", "", "";
+        NET_DONE: Button, "Done", "", "", "";
+        NET_CUSTOM: Label, "Custom", "", "", "";
+        SCAN_NOT_STARTED: Label, "Scan not started", "", "", "";
+        SCAN_WHY: Label, "Why", "", "", "";
+        SCAN_PROGRESS: Label, "Scan progress", "", "", "";
+        SCAN_WHAT_RAN: Label, "What ran", "", "", "";
+        SCAN_STOP: Button, "Stop", "Stop scanning now.", "", "";
+        SCAN_WAITING: Label, "Waiting", "", "", "";
+        SCAN_RUNNING: Label, "Running", "", "", "";
+        SCAN_DONE: Label, "Done", "", "", "";
+        SCAN_FAILED: Label, "Failed", "", "", "";
+        SCAN_SKIPPED: Label, "Skipped", "", "", "";
+        SCAN_STOPPED: Label, "Stopped", "", "", "";
+        SCAN_CHOOSE: Button, "Choose networks", "", "", "";
+        SCAN_NO_NETWORK: Prose, "This computer is on no network. Connect it, or add a network.", "", "", "";
 
         // ===================================================================== D1b welcome guide (first launch, Help, menu)
         WELCOME_MENU: Label, "Welcome guide", "Replay the short intro.", "", "";
@@ -836,6 +881,20 @@ pub static SHORTCUTS: &[(&str, &str)] = &[
     ("escape", "Close popovers and dialogs"),
 ];
 
+/// The inline sentence for an address that cannot be used.
+pub fn add_error(e: super::addhost::AddError) -> &'static str {
+    use super::addhost::AddError::*;
+    match e {
+        Empty => ADD_ERR_EMPTY.short,
+        BadChars => ADD_ERR_CHARS.short,
+        BadIp => ADD_ERR_IP.short,
+        BadPort => ADD_ERR_PORT.short,
+        BadName => ADD_ERR_NAME.short,
+        NotHost => ADD_ERR_NOT_HOST.short,
+        ThisComputer => ADD_ERR_THIS.short,
+    }
+}
+
 /// The shell around every wizard screen: stepper (six steps), risk tag, way back, wordmark (11 words).
 pub static SHELL: &[&Item] =
     &[&APP_NAME, &STEP_FIND, &STEP_CONNECT, &STEP_GOAL, &STEP_SETUP, &STEP_CONFIRM, &STEP_INSTALL, &RISK_FLASH_CHANGED, &WAY_BACK];
@@ -850,6 +909,7 @@ pub static SCREENS: &[ScreenCopy] = &[
             &INV_FILTER,
             &INV_RESCAN,
             &INV_ADD,
+            &NET_CHIP,
             &INV_COL_MODEL,
             &INV_COL_ADDR,
             &INV_COL_DSM,

@@ -14,13 +14,13 @@ synofurb gui                              # the real thing
 synofurb gui --demo --screen confirm      # built-in demo unit, nothing touches the network
 ```
 
-Demo screens (67, see `state::DEMO_SCREEN_NAMES`): `inventory connect inspect goal plan plan-keep system confirm install
+Demo screens (74, see `state::DEMO_SCREEN_NAMES`): `inventory inventory-scanning inventory-scan-done inventory-scan-failed inventory-empty inventory-added dlg-add dlg-add-invalid dlg-add-probing dlg-networks connect inspect goal plan plan-keep system confirm install
 install-after-ponr failed failed-pre failed-post done update settings bootmgr recover manage manage-* recovery-* help
 help-topic about dlg-* welcome welcome-2..welcome-5 update-unsigned updates-{checking,current,available,failed-notfound,failed-offline,unsigned} settings-updates` (`first-launch` is an alias of `welcome`). `install`, `failed` and `done` replay a scripted event stream.
 
 | Variable | Effect |
 |---|---|
-| `SYNOFURB_DEMO_UNIT=ds918\|ds1621\|rs816` | Which built-in unit is inspected |
+| `SYNOFURB_DEMO_UNIT=ds918\|ds1621\|rs816\|mixed\|volumes\|volumes-usb` | Which built-in unit is inspected (`volumes` is the owner's DS918+ with two DSM volumes and a resyncing array; `volumes-usb` adds a USB stick that is listed but not touched) |
 | `SYNOFURB_THEME=light\|dark` | Theme for a demo run |
 | `SYNOFURB_DEMO_SCROLL=bottom` | With `--screen confirm`: scroll to the gate |
 | `SYNOFURB_DEMO_GATE=ready` | With `--screen confirm`: gate satisfied (checks the enabled Erase button) |
@@ -47,6 +47,11 @@ crates/synofurb/src/ui/
   app.rs        root view `App`: state, message pump, actions
   render.rs     title bar, Stepper, unit header, status bar, update banner, action bar, key bindings
   welcome.rs    PURE: the Welcome guide's step machine (five steps, Back/Next/Skip, what "seen" means) and its content table
+  addhost.rs    PURE + IO: Add by IP: parse and normalise an address, the checks (lookup, SSH banner, DSM web, UDP query), outcome, added-hosts.json
+  addip.rs      the Add NAS dialog (one entity that owns its input; Enter, Add and Cancel) and what happens after it
+  scanview.rs   PURE: folds the core's ScanEvents into the progress panel (lines, bar, headline, summary, empty text)
+  netsel.rs     PURE: the chosen networks, kept in ui-settings.json (recommended by default, dropped when gone, custom CIDRs)
+  netdlg.rs     the Networks dialog
   overlays.rs   Help sheet, Welcome guide, Keep/Next/Add/Slices dialogs, Copy command, Quick setup
   screens/      one module per screen
   worker.rs     std::thread workers + Msg; demo.rs scripted units and events; assets.rs embedded Lucide icons
