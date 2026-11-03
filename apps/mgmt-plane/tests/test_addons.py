@@ -531,6 +531,47 @@ class RenderTests(SandboxTest):
         self.assertEqual(os.listdir(outside), [])
 
 
+class CatalogIntegrationTests(unittest.TestCase):
+    """The loader and renderer against the shipped Frigate and Plex definitions, cross-checked with the catalog tests' independent renderer."""
+
+    def test_both_render_identically_to_the_catalog_helper_for_every_choice_combination(self):
+        import test_addons_catalog as C
+        cat = real_catalog()
+        ident = {"puid": 1000, "pgid": 1000, "tz": "Europe/Berlin", "admins": []}
+        for aid in ("frigate", "plex"):
+            a = cat.get(aid)
+            manifest = C.load(aid)
+            for dev in ("", C.DEVICES_FULL):
+                for ov in C.choice_combinations(manifest):
+                    with self.subTest(addon=aid, overrides=ov, devices=bool(dev)):
+                        ctx = C.build_context(manifest, ov, devices=dev)
+                        values, _, _ = A.validate_settings(a, ov)
+                        chosen = [d for d in a.devices if d["id"] == "dri"] if dev else []
+                        compose, extra = A.render_addon(a, values, {s["key"]: s["path"] for s in a.storage}, chosen, ident)
+                        self.assertEqual(compose.text.rstrip("\n"), C.render(C.read_template(aid, manifest["compose"]), ctx).rstrip("\n"))
+                        for f, r in zip(manifest.get("files", []), extra):
+                            self.assertEqual(r.text, C.render(C.read_template(aid, f["template"]), ctx))
+                        self.assertNotIn("${", compose.text)
+
+    def test_every_shipped_addon_installs_with_defaults_where_possible(self):
+        sb = Sandbox()
+        self.addCleanup(sb.close)
+        sb.install_docker()
+        os.makedirs(sb.env.p("/srv/data/media"))
+        for aid in ("portainer", "frigate", "plex"):
+            job = sb.mgr.install(aid, {"accept": True}, user="t", background=False)
+            self.assertTrue(job.ok, "%s: %s" % (aid, job.error))
+        self.assertEqual({a["id"]: a["status"] for a in sb.mgr.list()["addons"]}, {"docker": "stopped", "portainer": "running", "frigate": "running", "plex": "running"})
+        cfg = sb.read("/srv/addons/frigate/config/config.yml")
+        self.assertIn("rtsp://127.0.0.1:554/rtsp", cfg)                     # the harmless placeholder stream, camera slots are off
+
+    def test_the_shipped_manifests_pass_both_validators(self):
+        import test_addons_catalog as C
+        for aid in C.addon_ids():
+            self.assertEqual(C.validate_manifest(C.load(aid), aid), [], aid)
+        self.assertEqual(real_catalog().problems, [])
+
+
 class ValidateSettingsTests(unittest.TestCase):
     def setUp(self):
         self.a = real_catalog().get("frigate")
@@ -1137,29 +1178,49 @@ class DockerHandlerTests(SandboxTest):
 # ============================================================================ apply-pending
 
 class PendingTests(SandboxTest):
-    def pending(self, aid, doc=None, mode=0o644):
-        p = self.env.p("/etc/synofurb/addons.d/pending/%s.json" % aid)
+    """The installer's hand-over: pending/<id>.json (+ pending-secrets/<id>.json), see docs/ADDONS.md."""
+
+    def pending(self, aid, doc=None, mode=0o600, secrets=None, secret_mode=0o600):
+        base = self.env.p("/etc/synofurb/addons.d")
+        p = os.path.join(base, "pending", aid + ".json")
         os.makedirs(os.path.dirname(p), exist_ok=True)
+        d = {"schema": 1, "id": aid, "order": 1, "source": "installer", "settings": {}, "secrets": sorted(secrets or {})}
+        d.update(doc or {})
         with open(p, "w") as fh:
-            json.dump(doc if doc is not None else {"schema": 1, "id": aid, "settings": {}}, fh)
+            json.dump(d, fh)
         os.chmod(p, mode)
+        if secrets is not None:
+            sp = os.path.join(base, "pending-secrets", aid + ".json")
+            os.makedirs(os.path.dirname(sp), exist_ok=True)
+            with open(sp, "w") as fh:
+                json.dump(secrets, fh)
+            os.chmod(sp, secret_mode)
         return p
 
     def result(self):
-        return json.load(open(self.env.state_path("addons-apply.json")))
+        with open(self.env.state_path("addons-apply.json")) as fh:
+            return json.load(fh)
 
     def test_installs_in_dependency_order_and_removes_the_files(self):
         self.sb.runner.on(["dpkg-query"], "ii ")
-        p1, p2 = self.pending("portainer"), self.pending("docker")
+        p1, p2 = self.pending("portainer", {"order": 2}), self.pending("docker", {"order": 1})
         doc = A.apply_pending(self.mgr)
         self.assertEqual([(r["id"], r["status"]) for r in doc["items"]], [("docker", "installed"), ("portainer", "installed")])
         self.assertTrue(doc["ok"])
+        self.assertEqual(doc["stuck"], 0)
         self.assertFalse(os.path.exists(p1) or os.path.exists(p2))
         self.assertEqual(self.result()["items"][1]["attempts"], 1)
         self.assertEqual(self.mgr.store.get("portainer")["status"], "installed")
-        accepted = [a for a in self.sb.audit if a[2] == "addons.job.start"]
-        self.assertEqual({a[0] for a in accepted}, {"installer"})
+        self.assertEqual({a[0] for a in self.sb.audit if a[2] == "addons.job.start"}, {"installer"})
         self.assertEqual(A.apply_pending(self.mgr)["items"], [])
+
+    def test_settings_are_strings_as_typed(self):
+        self.sb.install_docker()
+        self.pending("frigate", {"settings": {"retain_days": "14"}})
+        doc = A.apply_pending(self.mgr)
+        self.assertEqual(doc["items"][0]["status"], "installed", doc)
+        self.assertEqual(self.mgr.store.get("frigate")["settings"]["retain_days"], 14)
+        self.assertIn("days: 14", self.sb.read("/srv/addons/frigate/config/config.yml"))
 
     def test_retries_with_backoff_and_succeeds(self):
         self.sb.runner.on(["dpkg-query"], "ii ")
@@ -1182,7 +1243,7 @@ class PendingTests(SandboxTest):
         self.assertEqual([s for s in slept if s >= 10], [10, 30])
         self.assertEqual(self.mgr.store.get("portainer")["status"], "installed")
 
-    def test_gives_up_after_the_attempts_keeps_the_file_and_never_raises(self):
+    def test_gives_up_records_needs_attention_and_removes_the_files(self):
         self.sb.runner.on(["dpkg-query"], "ii ")
         self.pending("docker")
         keep = self.pending("portainer")
@@ -1192,41 +1253,76 @@ class PendingTests(SandboxTest):
         self.assertEqual((por["status"], por["attempts"]), ("failed", 2))
         self.assertIn("no route to host", por["message"])
         self.assertFalse(doc["ok"])
-        self.assertTrue(os.path.exists(keep))                                     # retried at the next boot
+        self.assertEqual(doc["stuck"], 0)
+        self.assertFalse(os.path.exists(keep))                                    # taken over: the web UI shows it with Retry
         self.assertEqual(self.mgr.store.get("portainer")["status"], "needs-attention")
+        self.assertEqual(self.mgr.status("portainer")["status"], "needs-attention")
+        del self.sb.docker.pull
+        self.assertTrue(self.mgr.install("portainer", {"accept": True}, background=False).ok)     # Retry
 
-    def test_failed_dependency_skips_dependents(self):
+    def test_failed_dependency_records_dependents_with_their_settings(self):
+        os.makedirs(self.env.p("/srv/data/media"))
         self.pending("docker")
-        self.pending("portainer")
+        p2 = self.pending("plex", {"settings": {"network": "bridge"}}, secrets={"plex_claim": "claim-abcdefgh12"})
         self.sb.docker.engine = False
         doc = A.apply_pending(self.mgr, attempts=1)
         self.assertEqual([r["status"] for r in doc["items"]], ["failed", "skipped"])
         self.assertIn("needs docker", doc["items"][1]["message"])
+        rec = self.mgr.store.get("plex")
+        self.assertEqual((rec["status"], rec["settings"]["network"]), ("needs-attention", "bridge"))
+        self.assertEqual(self.mgr.store.secrets("plex"), {"plex_claim": "claim-abcdefgh12"})
+        self.assertFalse(os.path.exists(p2))
+        self.assertNotIn("claim-abc", json.dumps(self.result()))
 
-    def test_rejected_files_are_parked(self):
+    def test_invalid_request_is_recorded_for_the_web_ui(self):
         self.sb.install_docker()
-        bad = self.pending("portainer", {"schema": 1, "id": "portainer", "settings": {"nope": 1}})
-        ghost = self.pending("ghost")
+        bad = self.pending("portainer", {"settings": {"nope": 1}})
         doc = A.apply_pending(self.mgr, attempts=3)
+        self.assertEqual((doc["items"][0]["status"], doc["items"][0]["attempts"]), ("failed", 1))
+        self.assertIn("unknown setting", doc["items"][0]["message"])
+        self.assertEqual(self.mgr.store.get("portainer")["status"], "needs-attention")
+        self.assertFalse(os.path.exists(bad))
+
+    def test_unknown_and_malformed_files_are_parked_not_retried(self):
+        ghost = self.pending("ghost")
+        broken = os.path.join(os.path.dirname(ghost), "portainer.json")
+        with open(broken, "w") as fh:
+            fh.write("{not json")
+        open(os.path.join(os.path.dirname(ghost), "README.txt"), "w").close()          # ignored
+        open(os.path.join(os.path.dirname(ghost), "Bad_Name.json"), "w").close()       # ignored
+        doc = A.apply_pending(self.mgr, attempts=1)
         st = {r["id"]: r["status"] for r in doc["items"]}
         self.assertEqual(st, {"portainer": "rejected", "ghost": "rejected"})
-        self.assertFalse(os.path.exists(bad) or os.path.exists(ghost))
-        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(bad), "rejected", "portainer.json")))
+        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(ghost), "rejected", "ghost.json")))
+        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(ghost), "Bad_Name.json")))
 
-    def test_secrets_need_a_private_file(self):
+    def test_secrets_file_must_be_private(self):
         self.sb.install_docker()
         os.makedirs(self.env.p("/srv/data/media"))
-        doc = {"schema": 1, "id": "plex", "settings": {}, "secrets": {"plex_claim": "claim-abcdefgh12"}}
-        open_ = self.pending("plex", doc, 0o644)
+        sec = {"plex_claim": "claim-abcdefgh12"}
+        self.pending("plex", secrets=sec, secret_mode=0o644)
         out = A.apply_pending(self.mgr, attempts=1)
         self.assertEqual(out["items"][0]["status"], "rejected")
         self.assertIn("readable by others", out["items"][0]["message"])
-        self.pending("plex", doc, 0o600)
+        self.assertIsNone(self.mgr.store.get("plex"))
+        self.pending("plex", secrets=sec, secret_mode=0o600)
         out = A.apply_pending(self.mgr, attempts=1)
         self.assertEqual(out["items"][0]["status"], "installed", out)
         self.assertEqual(self.mgr.store.secrets("plex")["plex_claim"], "claim-abcdefgh12")
-        self.assertFalse(os.path.exists(open_))
-        self.assertNotIn("claim-abc", json.dumps(self.result()))
+        self.assertFalse(os.path.exists(self.env.p("/etc/synofurb/addons.d/pending-secrets/plex.json")))
+
+    def test_files_stay_when_another_job_holds_the_lock(self):
+        self.sb.install_docker()
+        keep = self.pending("portainer")
+        tok = self.env.job_lock.acquire("update", "x")
+        try:
+            doc = A.apply_pending(self.mgr, attempts=1)
+        finally:
+            self.env.job_lock.release(tok)
+        self.assertEqual((doc["items"][0]["status"], doc["stuck"]), ("waiting", 1))
+        self.assertTrue(os.path.exists(keep))
+        self.assertEqual(A.cli_main(["apply-pending"], self.mgr, lambda m: None), 0)       # lock is free now: installs
+        self.assertFalse(os.path.exists(keep))
 
     def test_already_installed_is_skipped(self):
         self.sb.install_docker()
@@ -1235,13 +1331,18 @@ class PendingTests(SandboxTest):
         self.assertEqual(doc["items"][0]["status"], "installed")
         self.assertIn("already", doc["items"][0]["message"])
 
-    def test_cli_apply_pending_always_exits_zero(self):
-        self.pending("ghost")
+    def test_cli_exit_codes(self):
         out = []
-        rc = A.cli_main(["apply-pending"], self.mgr, out.append)
-        self.assertEqual(rc, 0)
+        self.pending("ghost")
+        self.assertEqual(A.cli_main(["apply-pending"], self.mgr, out.append), 0)           # rejected files are taken over too
         self.assertIn("rejected", "\n".join(out))
-        self.assertEqual(A.cli_main(["apply-pending"], self.mgr, out.append), 0)
+        self.sb.install_docker()
+        self.pending("portainer")
+        tok = self.env.job_lock.acquire("update", "x")
+        try:
+            self.assertEqual(A.cli_main(["apply-pending"], self.mgr, out.append), 1)       # nothing could be done: the first-boot script retries
+        finally:
+            self.env.job_lock.release(tok)
 
 
 # ============================================================================ CLI
@@ -1464,6 +1565,47 @@ class HttpAddonTests(unittest.TestCase):
         gate.set()
         self.wait(obj["job"]["id"])
         self.assertIsNone(m.JobLock(self.env.cfg).holder())
+
+
+class UiGuardTests(unittest.TestCase):
+    def script(self):
+        t = m._UI_TEMPLATE
+        return t[t.rindex("<script nonce"):t.rindex("</script>")]
+
+    def test_no_top_level_name_is_declared_twice(self):
+        """A second `function watchJob` silently replaced the first one once; every top-level function/const name must be unique."""
+        import collections
+        import re
+        names = [a or b for a, b in re.findall(r"^(?:async )?function ([A-Za-z0-9_]+)\(|^(?:const|let) ([A-Za-z0-9_]+) =", self.script(), re.M)]
+        self.assertEqual([k for k, v in collections.Counter(names).items() if v > 1], [])
+
+    def test_every_addon_copy_key_used_by_the_script_exists(self):
+        import re
+        used = set(re.findall(r"\b(?:T|TIP)\('((?:ad|nav)\.[A-Za-z0-9._-]+)'", self.script()))
+        self.assertGreater(len(used), 20)
+        self.assertEqual(sorted(k for k in used if not k.endswith(".") and k not in m.COPY), [])
+        for st in ("running", "stopped", "starting", "installing", "updating", "removing", "unhealthy", "error", "needs-attention", "not-installed"):
+            self.assertIn("ad.st." + st, m.COPY)                    # the dynamic T('ad.st.' + status)
+        for act in ("install", "update", "remove", "start", "stop", "restart"):
+            self.assertIn("ad.act." + act, m.COPY)
+        for p in ("docker-socket", "host-network", "privileged", "cap"):
+            self.assertIn("ad.priv." + p, m.COPY)
+
+    def test_every_status_the_manager_can_report_has_a_tag(self):
+        import re
+        src = open(os.path.join(ROOT, "synofurb_addons.py")).read()
+        live = src[src.index("    def live_status"):src.index("    def probe")]
+        reported = set(re.findall(r'"([a-z-]+)"', " ".join(re.findall(r'"status": [^,}]*', live)))) - {"status"} | {"installing", "updating", "removing", "needs-attention"}
+        self.assertTrue({"running", "stopped", "starting", "unhealthy", "error", "not-installed"} <= reported)
+        for st in reported:
+            self.assertIn("ad.st." + st, m.COPY, st)
+
+    def test_addons_page_is_registered_everywhere(self):
+        self.assertIn("addons", m.COPY_SCREENS)
+        self.assertIn("nav.addons", m.COPY_SHELL)
+        self.assertIn("addons", [t["id"] for t in m.HELP_TOPICS])
+        self.assertIn("PAGES.addons = ", self.script())
+        self.assertIn("/*PAGE:addons*/", self.script())
 
 
 class BundleTests(unittest.TestCase):

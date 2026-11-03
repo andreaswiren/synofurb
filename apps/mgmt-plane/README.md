@@ -23,9 +23,27 @@ shown in the UI (login and sidebar footer) and returned by `GET /api/me`, `/api/
 | Users | list local accounts (uid>=1000 + root marker), create/delete, set password, lock/unlock, add SSH key |
 | Boot manager | units that boot through the internal boot flash (`/usr/local/sbin/synofurb-dom`): entries (DSM, Debian, previous kernel, boot agent), current default, DSM fail-safe note, **Return to DSM**, set default, reboot into an entry, boot-flash free space and DOM backup location. Other units get a "not a boot-flash unit" notice |
 | System | sshd state and host key fingerprints, serial-getty units, restart of an allow-list of services, reboot/poweroff |
+| Add-ons | Docker apps as small definitions (`addons/<id>/addon.json` + compose template): catalog cards, install dialog with settings, **privileges, devices and storage shown before install**, jobs with progress, logs, update, remove (delete data needs the typed name); built in: Docker, Portainer, Frigate NVR, Plex; contract in [docs/ADDONS.md](../../docs/ADDONS.md) |
 | Updates | installed and available version, channel **Stable** (newest release asset) or **Main** (`apps/mgmt-plane` of a branch or tag), Check, release notes, **Update now** (consent while unsigned, typed commit for Main), live progress that survives the restart, automatic rollback, **Roll back**, History of every update (desktop app, command line, GitHub, who, result); see "Self-update" below |
 | Help | twelve-plus short topics with search (sign-in, certificate, storage, imports, boot, recovery, report, RAID levels, Hybrid RAID, replace, scrub, safe apply); every (i) button in the UI opens the matching topic |
 | About | logo, version, **Copy diagnostics** (version, host, OS, kernel, service state; no secrets), links to documentation, source and issue tracker, Credits with licence texts (Debian, Lucide ISC, Inter and JetBrains Mono OFL 1.1, Montserrat, synodeb note) |
+
+## Add-ons (Docker apps)
+
+`synofurb_addons.py` (standard library only, loaded by `synofurb_mgmt.py`) is the plugin framework; the definitions are in `addons/<id>/` (`addon.json` manifest, `compose.yml.tmpl`, optional `*.tmpl` files) and in
+`/etc/synofurb/addons.d/<id>/` for your own. Shipped: `docker` (Debian `docker.io`, `docker-cli`, `docker-compose`; idempotent; adds the administrators to the `docker` group), `portainer`, `frigate`, `plex`.
+Everything goes through `docker compose -p synofurb-<id>`; installs, updates and removals are background jobs (one at a time, shared with management-plane updates) written to the audit log.
+Update bundles carry the framework as `synofurb_addons.py` plus `addons.pack.json` (the definitions as one file; `tools/make-update-bundle.py` builds it).
+
+```
+synofurb_mgmt.py addons list|show ID|status ID|logs ID [--tail N]
+synofurb_mgmt.py addons install ID [--set key=value ...] [--storage key=/srv/data/...] [--device id=on|off] [--settings-stdin] [--yes]
+synofurb_mgmt.py addons update|start|stop|restart ID          synofurb_mgmt.py addons remove ID [--delete-data --yes]
+synofurb_mgmt.py addons apply-pending                          # first boot: installs what the installer left in /etc/synofurb/addons.d/pending
+```
+
+Secrets (a Plex claim token, camera URLs with passwords) are never accepted on the command line: pass them as JSON on standard input with `--settings-stdin`. API and details: [docs/ADDONS.md](../../docs/ADDONS.md).
+Nothing of it has run against a real Docker daemon yet; the test suite uses a fake `docker`.
 
 ## RAID and Hybrid RAID (SHR)
 
@@ -148,6 +166,13 @@ public routes needs the session cookie; every POST also needs `X-CSRF-Token` and
 | POST | `/api/update/rollback` | `{}` -> job that restores `/opt/synofurb-mgmt.prev` |
 | POST | `/api/update/job` | `{job}` -> the job and its step events |
 | POST | `/api/update/progress` | public: `{job}` -> only `state`, `step`, `kind`, `from`, `to`, `finished` (what the page can read after the restart dropped its session) |
+| GET | `/api/addons` | catalog and installed add-ons with live state, `problems[]`, the running `job` |
+| GET | `/api/addons/<id>` | one add-on: settings (secrets as `{set}`), storage report, devices, privileges |
+| POST | `/api/addons/<id>/install` | `{settings, storage, devices, accept}` -> **202** `{job}`; privileges must be accepted |
+| POST | `/api/addons/<id>/update`, `/start`, `/stop`, `/restart` | -> **202** `{job}` |
+| POST | `/api/addons/<id>/remove` | `{delete_data, confirm}` (`confirm` = the id when data is deleted) -> **202** `{job}` |
+| GET | `/api/addons/<id>/logs?tail=N` | container (or journal) log, secret values masked |
+| GET | `/api/jobs`, `/api/jobs/<id>` | add-on jobs: state, step, progress, log; 409 on a second job
 
 ## Security model
 

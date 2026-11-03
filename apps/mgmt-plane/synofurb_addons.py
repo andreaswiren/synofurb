@@ -2089,22 +2089,23 @@ class Manager:
         self.env.audit(user, ip, "addons.job.start", dict(audit_args, job=job.id, addon=a.id, kind=kind), "ok")
 
         def run() -> None:
+            ok, err = False, ""
             try:
                 work(job)
-                job.ok, job.state = True, "done"
+                ok = True
                 if not job.message or job.message.startswith("=="):
                     job.message = "Done"
             except AddonError as e:
-                job.ok, job.state, job.error = False, "failed", job.scrub(str(e))
+                err = job.scrub(str(e))
             except Exception:                                                  # noqa: BLE001 - never leak internals to the client
                 traceback.print_exc(file=sys.stderr)
-                job.ok, job.state, job.error = False, "failed", "internal error; see the job log and the journal"
-            finally:
-                job.finished = self.env.now()
-                job.log.append(("== done" if job.ok else "== failed: " + job.error))
-                self.jobs.persist()
-                lock.release(token)
-                self.env.audit(user, ip, "addons.job." + kind, dict(audit_args, job=job.id, addon=a.id), "ok" if job.ok else "error: " + job.error)
+                err = "internal error; see the job log and the journal"
+            job.finished = self.env.now()
+            job.log.append("== done" if ok else "== failed: " + err)
+            lock.release(token)                                                # free before the end is visible: the next click must not meet a busy lock
+            job.ok, job.error, job.state = ok, err, "done" if ok else "failed"
+            self.jobs.persist()
+            self.env.audit(user, ip, "addons.job." + kind, dict(audit_args, job=job.id, addon=a.id), "ok" if ok else "error: " + err)
         if background:
             threading.Thread(target=run, name="addon-" + job.id, daemon=True).start()
         else:
@@ -2403,54 +2404,90 @@ def _pending_dir(env: AddonEnv) -> str:
     return env.p(env.user_dir + "/pending")
 
 
+def _secrets_dir(env: AddonEnv) -> str:
+    return env.p(env.user_dir + "/pending-secrets")
+
+
 def read_pending(env: AddonEnv) -> tuple[list[dict], list[dict]]:
-    """-> (items, rejected).  Each pending file is {"schema":1,"id":...,"settings":{},"storage":{},"devices":{},"secrets":{}}.
-    A file that carries secrets must not be readable by group or others."""
+    """-> (items, rejected).  The installer's hand-over (docs/ADDONS.md, installer notes):
+
+    ``pending/<id>.json``          {"schema":1,"id":"frigate","order":3,"settings":{"retain_days":"14"},"secrets":["claim"], ...}   (no secret values)
+    ``pending-secrets/<id>.json``  {"claim": "value"}  mode 0600 (refused when group/others can read it)
+
+    Setting values are strings as typed; the manifest's types coerce them.  Files that do not look like ``<id>.json`` are ignored."""
     d = _pending_dir(env)
     items: list[dict] = []
     rejected: list[dict] = []
     try:
-        names = sorted(n for n in os.listdir(d) if n.endswith(".json"))
+        names = sorted(n for n in os.listdir(d) if n.endswith(".json") and ID_RE.fullmatch(n[:-5]))
     except OSError:
         return [], []
     for n in names:
         p = os.path.join(d, n)
         aid = n[:-5]
+        sp = os.path.join(_secrets_dir(env), n)
         try:
             st = os.lstat(p)
             if not os.path.isfile(p) or os.path.islink(p) or st.st_size > 64 * 1024:
                 raise AddonError("not a regular small file")
             with open(p, encoding="utf-8") as fh:
                 doc = json.load(fh)
-            if not isinstance(doc, dict) or doc.get("schema", 1) != 1 or doc.get("id", aid) != aid or not ID_RE.fullmatch(aid):
-                raise AddonError("not a valid pending file for '%s'" % aid[:40])
-            sec = doc.get("secrets") or {}
-            if not isinstance(sec, dict) or not isinstance(doc.get("settings", {}), dict):
-                raise AddonError("settings and secrets must be objects")
-            if sec and (st.st_mode & 0o077):
-                raise AddonError("it contains secrets but is readable by others; use mode 0600")
-            settings = dict(doc.get("settings") or {})
-            settings.update(sec)
-            items.append({"id": aid, "file": p, "body": {"settings": settings, "storage": doc.get("storage") or {}, "devices": doc.get("devices") or {}, "accept": True}})
+            if not isinstance(doc, dict) or doc.get("schema", 1) != 1 or doc.get("id", aid) != aid:
+                raise AddonError("not a valid pending file for '%s'" % aid)
+            settings = doc.get("settings") or {}
+            if not isinstance(settings, dict) or not isinstance(doc.get("secrets", []), list):
+                raise AddonError("'settings' must be an object and 'secrets' a list of names")
+            settings = dict(settings)
+            if os.path.lexists(sp):
+                sst = os.lstat(sp)
+                if not os.path.isfile(sp) or os.path.islink(sp) or sst.st_size > 64 * 1024:
+                    raise AddonError("the secrets file is not a regular small file")
+                if sst.st_mode & 0o077:
+                    raise AddonError("the secrets file is readable by others; it must be mode 0600")
+                with open(sp, encoding="utf-8") as fh:
+                    sec = json.load(fh)
+                if not isinstance(sec, dict):
+                    raise AddonError("the secrets file must be a JSON object")
+                settings.update(sec)
+            order = doc.get("order")
+            items.append({"id": aid, "files": [p] + ([sp] if os.path.lexists(sp) else []), "order": order if isinstance(order, int) else 1000,
+                          "body": {"settings": settings, "storage": doc.get("storage") or {}, "devices": doc.get("devices") or {}, "accept": True}})
         except (OSError, ValueError, AddonError) as e:
-            rejected.append({"id": aid, "file": p, "message": "pending file rejected: %s" % e})
+            rejected.append({"id": aid, "files": [p] + ([sp] if os.path.lexists(sp) else []), "message": "pending file rejected: %s" % e})
     return items, rejected
 
 
+def _record_attention(mgr: "Manager", a: Addon, body: dict, message: str) -> None:
+    """Take an add-on over although it could not be installed: it shows up as 'needs attention' with the reason and the settings, so Retry works."""
+    sets = body.get("settings") if isinstance(body.get("settings"), dict) else {}
+    sec_keys = set(a.secret_keys())
+    plain = {k: v for k, v in sets.items() if a.setting(k) and k not in sec_keys and isinstance(v, (str, int, bool))}
+    secret_vals = {k: v for k, v in sets.items() if k in sec_keys and isinstance(v, str)}
+    prev = mgr.store.get(a.id) or {}
+    mgr.store.update(a.id, status="needs-attention", error=message[:400], version=a.version, settings=plain, secret_keys=sorted(secret_vals), storage=prev.get("storage") or {},
+                     devices=prev.get("devices") or {}, privileges=prev.get("privileges") or [], installed=prev.get("installed") or mgr.env.now(), updated=mgr.env.now())
+    mgr.store.set_secrets(a.id, secret_vals)
+
+
 def apply_pending(mgr: Manager, attempts: int = 3, delays: tuple = (10, 30, 90), emit: Callable[[str], None] | None = None) -> dict:
-    """Install what the installer asked for, dependencies first.  Retries with backoff; never raises; writes addons-apply.json."""
+    """Install what the installer asked for, dependencies first.  Retries with backoff inside the run.  An add-on that still fails is recorded as
+    'needs attention' (the person retries in the web UI) and its pending files are removed; files stay only when nothing could be done with them
+    (another job holds the lock all the time, the state cannot be written).  Never raises; writes addons-apply.json; ``doc["stuck"]`` counts the files left."""
     env = mgr.env
     say = emit or (lambda m: None)
     started = env.now()
     items, rejected = read_pending(env)
     result: list[dict] = []
+    stuck = 0
     for r in rejected:
         result.append({"id": r["id"], "status": "rejected", "message": r["message"], "attempts": 0})
-        _park(r["file"])
+        for f in r["files"]:
+            _park(f)
     try:
         cat = mgr.catalog()
         want = {it["id"]: it for it in items}
-        ordered = [a.id for a in cat.order() if a.id in want] + [i for i in want if i not in cat.addons]
+        ordered = [a.id for a in cat.order() if a.id in want]
+        ordered += [i for i in sorted(want, key=lambda i: (want[i]["order"], i)) if i not in cat.addons]
         failed: set = set()
         for aid in ordered:
             it = want[aid]
@@ -2458,44 +2495,62 @@ def apply_pending(mgr: Manager, attempts: int = 3, delays: tuple = (10, 30, 90),
             result.append(rec)
             if aid not in cat.addons:
                 rec.update(status="rejected", message="unknown add-on '%s'" % aid[:40])
-                _park(it["file"])
+                for f in it["files"]:
+                    _park(f)
                 continue
             a = cat.addons[aid]
-            blocked = [r for r in a.requires if r in failed or (not mgr.installed(r) and r not in want)]
-            if blocked:
-                rec.update(status="skipped", message="needs %s first" % ", ".join(blocked))
-                failed.add(aid)
-                continue
-            cur = mgr.store.get(aid)
-            if cur and cur.get("status") not in ("needs-attention",):
-                rec.update(status="installed", message="already installed")
-                _unlink(it["file"])
-                continue
-            for n in range(1, attempts + 1):
-                rec["attempts"] = n
-                try:
-                    say("installing %s (attempt %d of %d)" % (aid, n, attempts))
-                    job = mgr.install(aid, it["body"], user="installer", ip="-", background=False, wait_lock=300)
-                except Busy as e:
-                    rec["message"] = str(e)
-                except AddonError as e:                                 # the request itself is wrong: retrying cannot help
-                    rec.update(status="rejected", message=str(e))
-                    _park(it["file"])
-                    break
-                else:
-                    if job.ok:
-                        rec.update(status="installed", message=job.message or "installed")
-                        _unlink(it["file"])
+            try:
+                blocked = [r for r in a.requires if r in failed or (not mgr.usable(r) and r not in want)]
+                cur = mgr.store.get(aid)
+                if cur and cur.get("status") == "installed":
+                    rec.update(status="installed", message="already installed")
+                    _remove(it["files"])
+                    continue
+                if blocked:
+                    rec.update(status="skipped", message="needs %s first" % ", ".join(blocked))
+                    _record_attention(mgr, a, it["body"], "%s needs %s first. Install that, then retry." % (a.name, ", ".join(blocked)))
+                    failed.add(aid)
+                    _remove(it["files"])
+                    continue
+                busy_only = True
+                for n in range(1, attempts + 1):
+                    rec["attempts"] = n
+                    try:
+                        say("installing %s (attempt %d of %d)" % (aid, n, attempts))
+                        job = mgr.install(aid, it["body"], user="installer", ip="-", background=False, wait_lock=300)
+                    except Busy as e:
+                        rec["message"] = str(e)
+                    except AddonError as e:                                 # the request itself is wrong: retrying cannot help
+                        busy_only = False
+                        rec.update(status="failed", message=str(e))
+                        _record_attention(mgr, a, it["body"], str(e))
                         break
-                    rec["message"] = job.error
-                if n < attempts:
-                    env.sleep(delays[min(n - 1, len(delays) - 1)])
-            if rec["status"] in ("failed", "rejected"):
+                    else:
+                        busy_only = False
+                        if job.ok:
+                            rec.update(status="installed", message=job.message or "installed")
+                            break
+                        rec["message"] = job.error
+                    if n < attempts:
+                        env.sleep(delays[min(n - 1, len(delays) - 1)])
+                if rec["status"] == "installed":
+                    _remove(it["files"])
+                elif busy_only:
+                    rec["status"] = "waiting"
+                    stuck += 1                                              # never got the lock: the files stay for the next run
+                    failed.add(aid)
+                else:
+                    failed.add(aid)
+                    _remove(it["files"])                                    # recorded as 'needs attention' by the install job
+            except OSError as e:
+                rec.update(status="waiting", message="cannot write the state: %s" % (e.strerror or e))
+                stuck += 1
                 failed.add(aid)
     except Exception as e:                                                  # noqa: BLE001 - the boot must never fail because of this
         traceback.print_exc(file=sys.stderr)
         result.append({"id": "-", "status": "failed", "message": "internal error: %s" % type(e).__name__, "attempts": 0})
-    doc = {"schema": 1, "started": started, "finished": env.now(), "ok": all(r["status"] in ("installed",) for r in result), "items": result}
+        stuck += 1
+    doc = {"schema": 1, "started": started, "finished": env.now(), "ok": bool(result) and all(r["status"] == "installed" for r in result), "stuck": stuck, "items": result}
     try:
         _write_atomic(env.state_path(APPLY_RESULT), json.dumps(doc, indent=1) + "\n", 0o644)
     except OSError:
@@ -2503,15 +2558,16 @@ def apply_pending(mgr: Manager, attempts: int = 3, delays: tuple = (10, 30, 90),
     return doc
 
 
-def _unlink(p: str) -> None:
-    try:
-        os.unlink(p)
-    except OSError:
-        pass
+def _remove(files: list[str]) -> None:
+    for f in files:
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
 
 
 def _park(p: str) -> None:
-    """Move a rejected pending file aside so it is not tried at every boot (secrets inside stay 0600)."""
+    """Move a rejected pending file aside so it is not tried at every boot (a secrets file stays 0600)."""
     d = os.path.join(os.path.dirname(p), "rejected")
     try:
         os.makedirs(d, mode=0o700, exist_ok=True)
@@ -2663,7 +2719,7 @@ def cli_main(argv: list[str], mgr: Manager, out: Callable[[str], None] = print, 
                     out("%-12s %-9s %s" % (r["id"], r["status"], r["message"]))
                 if not doc["items"]:
                     out("nothing pending")
-            return 0                                          # never fails the boot
+            return 1 if doc["stuck"] else 0                   # non-zero only when files had to stay: the first-boot script tries again
         if cmd == "show":
             d = mgr.show(args.id)
             if args.json:

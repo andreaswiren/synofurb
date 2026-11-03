@@ -61,7 +61,8 @@ shows the installed version.
 
 ### 2. `... update --from DIR --json`
 
-`DIR` holds exactly `synofurb_mgmt.py`, `VERSION`, `README.md`, optionally `synofurb-mgmt.service`, and `MANIFEST.sha256` (`sha256sum`
+`DIR` holds exactly `synofurb_mgmt.py`, `VERSION`, `README.md`, optionally `synofurb-mgmt.service` and the add-on framework (`synofurb_addons.py`, `addons.pack.json`: the add-on definitions of
+`addons/<id>/*` as one file, [ADDONS.md](ADDONS.md)), and `MANIFEST.sha256` (`sha256sum`
 format, every file listed, no others). The unit verifies the manifest, compiles the script (syntax only), copies to `/opt/synofurb-mgmt.new`,
 swaps it with `/opt/synofurb-mgmt` (the old tree is kept as `/opt/synofurb-mgmt.prev`), installs the unit file when packaged, restarts
 `synofurb-mgmt.service`, waits up to 30 s for the new code to answer `health --json` with the expected version, and on any failure restores
@@ -75,6 +76,13 @@ Steps: `verify`, `stage`, `swap`, `restart`, `health`, `rollback` (only after a 
 engine accepts other spellings (`running`, `done`, `failed`, `warn`, `skipped`, ...) and extra keys, and shows plain text lines as they are.
 Exit codes: **0** updated, **2** refused before anything changed, **3** failed and rolled back, **4** failed and the rollback failed.
 `--force` allows installing an older version.
+
+### 2b. `... addons ...` (add-ons, not used by the health/update flow)
+
+`synofurb_mgmt.py addons list|show|status|logs|install|update|remove|start|stop|restart|apply-pending [--json]` manages the Docker add-ons (Docker, Portainer, Frigate, Plex, user add-ons). It runs as root on the unit,
+takes the same job lock as `update` (so an add-on job and a management-plane update never run together: the second is refused), and `apply-pending` is what the first-boot unit calls to take over the installer's
+choices. A management plane update replaces the whole `/opt/synofurb-mgmt` tree: add-on state (`/var/lib/synofurb-mgmt/addons*.json`) and data (`/srv/addons`, `/srv/data/addons`) are outside it and untouched, and the
+bundle must carry `synofurb_addons.py` and `addons.pack.json` or the unit loses the add-on page until the next update that has them. Full description: [ADDONS.md](ADDONS.md).
 
 ### 3. `... update --rollback --json`
 
@@ -195,7 +203,7 @@ engine reports the state it finds when it looks again. Ctrl-C before the update 
 ## Offline copies
 
 `--from-bundle DIR` takes the files from a folder instead of the copy built into the program. `DIR` is either the files themselves
-(`synofurb_mgmt.py`, `VERSION`, `README.md`, optionally `synofurb-mgmt.service`; `python3 apps/mgmt-plane/tools/make-update-bundle.py OUT`
+(`synofurb_mgmt.py`, `VERSION`, `README.md`, optionally `synofurb-mgmt.service`, `synofurb_addons.py`, `addons.pack.json`; `python3 apps/mgmt-plane/tools/make-update-bundle.py OUT`
 makes such a folder, including its `MANIFEST.sha256`) or an **offline bundle** made by `synofurb bundle create`, which carries the same files in `mgmt/`
 ([OFFLINE.md](OFFLINE.md#the-management-app-mgmt)). Give either the bundle or its `mgmt/` folder:
 

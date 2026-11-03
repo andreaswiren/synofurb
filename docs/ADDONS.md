@@ -15,9 +15,15 @@ The management plane is Python standard library only: manifests are **JSON**, co
 apps/mgmt-plane/addons/<id>/addon.json          the manifest (below)
 apps/mgmt-plane/addons/<id>/compose.yml.tmpl    docker compose template
 apps/mgmt-plane/addons/<id>/<file>.tmpl         other files to render (e.g. config.yml.tmpl)
-/var/lib/synofurb-mgmt/addons.json              state: installed add-ons, their settings (secrets stored 0600), versions, status
-/srv/addons/<id>/                               the add-on's data (compose file, config, volumes); bulk data on the redundant RAID volume
+/etc/synofurb/addons.d/<id>/                    optional user add-ons, same layout (an id the built-in catalog already has is refused)
+/var/lib/synofurb-mgmt/addons.json              state: installed add-ons, their non-secret settings, versions, status (0600)
+/var/lib/synofurb-mgmt/addons-secrets.json      secret setting values (0600, never returned by the API, never logged)
+/srv/addons/<id>/                               the add-on's config: compose.yml and rendered files (`${DATA_DIR}`, on the system volume)
+/srv/data/addons/<id>/...                       bulk data (recordings, media, transcoder files): the redundant data volume the installer mounts at /srv/data
 ```
+
+An add-on folder is flat (no sub-folders, no links, file names `[A-Za-z0-9._-]`, at most 256 KiB each). The update bundle is a flat file list too, so the shipped
+form of `addons/` is one file, `addons.pack.json` (`synofurb_addons.build_pack()`); the loader reads the folder when it exists (a source checkout) and the pack otherwise.
 
 ## Manifest (`addon.json`, schema 1)
 
@@ -34,11 +40,14 @@ apps/mgmt-plane/addons/<id>/<file>.tmpl         other files to render (e.g. conf
   "kind": "compose",
   "requires": ["docker"],
   "web": { "port": 8971, "scheme": "https", "path": "/", "hostname_hint": "frigate" },
-  "ports": [ { "host": 8971, "container": 8971, "proto": "tcp", "label": "Web UI" } ],
+  "ports": [ { "host": 8971, "container": 8971, "proto": "tcp", "label": "Web UI" }, { "host": 5000, "container": 5000, "proto": "tcp", "label": "Internal API", "bind": "127.0.0.1" } ],
   "settings": [
-    { "key": "retain_days", "label": "Keep recordings (days)", "type": "int", "default": 7, "min": 1, "max": 365, "help": "Older recordings are deleted." }
+    { "key": "retain_days", "label": "Keep recordings (days)", "type": "int", "default": 7, "min": 1, "max": 365, "help": "Older recordings are deleted." },
+    { "key": "detector", "label": "Object detector", "type": "choice", "default": "cpu", "choices": [
+      { "value": "cpu", "label": "CPU", "vars": { "DETECTOR_BLOCK": "detectors:\n  cpu1:\n    type: cpu\n" } },
+      { "value": "coral", "label": "Coral USB", "vars": { "DETECTOR_BLOCK": "detectors:\n  coral:\n    type: edgetpu\n    device: usb\n" } } ] }
   ],
-  "storage": [ { "key": "media", "label": "Recordings", "path": "/srv/addons/frigate/media", "bulk": true, "min_free_gib": 50 } ],
+  "storage": [ { "key": "media", "label": "Recordings", "path": "/srv/data/addons/frigate/media", "bulk": true, "min_free_gib": 50 } ],
   "devices": [
     { "id": "dri", "label": "Intel graphics (hardware decoding)", "host": "/dev/dri", "optional": true, "detect": "path:/dev/dri/renderD128" },
     { "id": "coral_usb", "label": "Coral USB accelerator", "host": "/dev/bus/usb", "optional": true, "detect": "usb:1a6e:089a|18d1:9302" },
@@ -58,18 +67,39 @@ Field rules (the loader validates and rejects the whole add-on with a clear mess
 * `kind`: `compose` (a Docker app) or `system` (a host package/service such as Docker itself, installed by a named handler; no compose file).
 * `requires`: other add-on ids that must be installed and running first (Docker first). Cycles are rejected.
 * `settings[].type`: `string`, `int`, `bool`, `secret` (stored 0600, never shown after saving, never logged), `choice` (with `choices`), `path`, `text`
-  (multi-line). Every setting has `key` (`[a-z][a-z0-9_]*`), `label` (short), optional `help` (shown behind an info button, not as a paragraph), `default`, validation (`min`/`max`/`pattern`/`choices`/`required`).
-  Settings become `${key}` in templates; the loader also provides `${ADDON_ID}`, `${DATA_DIR}` (`/srv/addons/<id>`), `${STORAGE_<KEY>}` (storage paths),
-  `${PUID}`, `${PGID}`, `${TZ}` and `${DEVICES_BLOCK}` (a ready-made compose `devices:` list for the devices the user enabled).
-* `storage[].bulk = true`: large data (recordings, media). It must live on the redundant data volume (the mdadm/LVM volume of the installed system),
-  never on the system disk's single copy; the loader refuses a bulk path outside the data volume and warns when free space is below `min_free_gib`.
+  (multi-line). Every setting has `key` (`[a-z][a-z0-9_]*`), `label` (short), optional `help` (shown behind an info button, not as a paragraph), `default`, validation
+  (`min`/`max`/`pattern`/`choices`/`required`). **Enforced rules**: `int` is range-checked by `min`/`max`; for `string`, `secret`, `path` and `text` a non-empty value must
+  match `pattern` (full match) and have a length between `min` and `max` (an empty optional value is allowed; `required: true` rejects it); `bool` renders as `true`/`false`;
+  `path` values must be normalized absolute paths below `/srv` or `/mnt` (letters, digits, `. _ @ + - /`) and the folder must exist when the add-on is installed.
+  A shipped `secret` may have a harmless placeholder `default` (a loopback address, empty).
+* `choices[]` are strings or objects `{ "value", "label", "vars": { "NAME": "text" }, "privileges": [...] }`. The `vars` of the **selected** option become extra template variables
+  (this is how conditional content is done: `string.Template` has no conditionals); every option of one choice defines the same variable names; multi-line text carries its own
+  indentation and is placed at column 0. `privileges` of an option are added to the add-on's privileges only while that option is selected (Plex: `host-network` only with host networking).
+* Template variables: settings become `${key}`; the loader also provides `${ADDON_ID}`, `${DATA_DIR}` (`/srv/addons/<id>`), `${STORAGE_<KEY>}` (storage paths),
+  `${PUID}`, `${PGID}`, `${TZ}` and `${DEVICES_BLOCK}`: either an empty string or a finished service-level block indented four spaces
+  (`"    devices:\n      - /dev/dri:/dev/dri\n"`) for the devices the user enabled; the template puts the placeholder alone on a line at column 0. `${key_json}` is the value as a JSON
+  string (quoted, safe anywhere). **Where a value may go** is decided by where its placeholder sits: inside "double quotes" of the compose file it may not contain `"`, `\` or a dollar sign;
+  unquoted in the compose file it must be a plain token (letters, digits, `. _ / @ + = , : ~ % ? & -`); inside quotes of a rendered file it may not contain `"` or `\`; no value contains a control
+  character (`text` may contain newlines but cannot be used in the compose file). A literal dollar sign in a template is written twice (`string.Template` rule).
+* `PUID`/`PGID`: the first administrator (member of `sudo`) with a regular uid, and its primary gid; never 0: when there is none, 1000/1000. No extra user is created.
+* `ports[]` may add `"bind": "127.0.0.1"` (default `0.0.0.0`); a web port bound to loopback gets no "Open" link in the UI.
+* `storage[].bulk = true`: large data (recordings, media). It must live on the redundant data volume. The installer mounts the data LV at `/srv/data`, so the path must be below
+  `/srv/data` (the loader refuses anything else, also when the user edits the path) and `/srv/data` must be a mount of its own (not the system disk) when the add-on is installed;
+  the loader creates the folders (owned by PUID/PGID) and warns when free space is below `min_free_gib`. `${DATA_DIR}` stays `/srv/addons/<id>` on the system volume for configuration.
 * `devices[]`: optional hardware passthrough. `detect` is `path:<file>` or `usb:<vid:pid>|<vid:pid>`; the UI offers only devices that are present (or lets the user
   force it with a warning). A Coral that is not plugged in must not stop the add-on from installing.
-* `privileges[]`: any of `docker-socket`, `host-network`, `privileged`, `cap:<NAME>`. They are shown to the user **before** install and recorded in the audit log.
-* `files[]`: extra templates rendered into `${DATA_DIR}`; `once: true` means render only when the destination does not exist (never overwrite user edits).
+* `privileges[]`: any of `docker-socket`, `host-network`, `privileged`, `cap:<NAME>` (plus those of the selected choices). They are shown to the user **before** install, must be
+  confirmed (`accept`), and are recorded in the audit log. The loader checks the compose template against them: a mounted Docker socket, `privileged: true`, `network_mode: host` or a
+  `cap_add` that is not declared is refused; host paths such as `/etc`, `/` or `/var/lib/docker`, shared pid/ipc namespaces, `env_file`, `build`, `extends`, `include`, a hand-written `devices:` and
+  `unconfined` are never allowed.
+* `files[]`: extra templates rendered into `${DATA_DIR}`; `once: true` means render only when the destination does not exist (never overwrite user edits). The UI says
+  "used on first install only" for settings that feed only such files (a later "re-render" action is out of scope). Files that contain a secret are written 0600, root.
+* `changes[]` (optional, mostly system add-ons): short sentences shown before install about what changes on the unit. `handler` (system add-ons): the name of built-in code (`docker`).
 * `web`: the add-on's web UI behind the host (`scheme` http or https to the container). Stage 1 shows `http(s)://<host>:<port>`; Stage 2 publishes it through HAProxy
   under a hostname with its own certificate (`hostname_hint` is the suggested name).
-* `healthcheck`: `http` (status < 500 counts as up), `tcp` (port opens) or `container` (compose reports running).
+* `healthcheck`: `http` (`http(s)://127.0.0.1:<port>/...` only; status < 500 counts as up; certificates are not verified on loopback), `tcp` (port opens) or `container` (compose reports running);
+  `timeout` (seconds, default 120) is how long install waits and how long "Starting" is shown before "Not answering".
+* Unknown manifest fields are rejected (typos); fields starting with `x-` or `_` are ignored.
 
 ## Lifecycle (the management plane owns it; web UI, API and CLI share one implementation)
 
@@ -77,8 +107,8 @@ Field rules (the loader validates and rejects the whole add-on with a clear mess
 `status` · `logs`. Compose project name `synofurb-<id>`. Every mutating action asks for confirmation in the UI, is written to the audit log and runs as a background job with
 visible progress. Image pulls need Internet access; offline units show a clear reason.
 
-CLI (also used by the installer's first boot): `synofurb_mgmt.py addons list|show <id>|install <id> [--set key=value ...] [--yes]|remove <id> [--delete-data]|start|stop|restart|update|status|logs`.
-API: `GET /api/addons`, `GET /api/addons/<id>`, `POST /api/addons/<id>/install|start|stop|restart|update|remove`, `GET /api/addons/<id>/logs`, job status `GET /api/jobs/<id>`.
+CLI (also used by the installer's first boot): `synofurb_mgmt.py addons list|show <id>|install <id> [--set key=value ...] [--yes]|remove <id> [--delete-data]|start|stop|restart|update|status|logs|apply-pending`.
+API: `GET /api/addons`, `GET /api/addons/<id>`, `POST /api/addons/<id>/install|start|stop|restart|update|remove`, `GET /api/addons/<id>/logs`, job status `GET /api/jobs/<id>` (details in the implementation notes below).
 
 ## Built-in add-ons
 
@@ -134,7 +164,7 @@ typed**; coerce by the manifest's setting type and validate. `secrets` lists the
 in `pending/`, in `env.sh`, on a command line or in a log: they travel in the install payload (the same token-protected LAN transfer as the password hash), and
 the CLI takes them from an environment variable or a file.
 
-**`synofurb_mgmt.py addons apply-pending`** (to implement in the management plane): for each `pending/<id>.json` in `order`: install the add-on with those settings (the `docker` entry is a no-op when
+**`synofurb_mgmt.py addons apply-pending`** (implemented, see the management plane notes below): for each `pending/<id>.json` in `order`: install the add-on with those settings (the `docker` entry is a no-op when
 Docker is already installed, else its handler installs it), move the secrets into the add-on's state (0600), and when the add-on is recorded (installed, or "needs attention" with the reason) delete its
 `pending/<id>.json` and `pending-secrets/<id>.json`. Exit code 0 when every file was taken over, **including add-ons that failed and now show "needs attention"** (the user retries in the web UI);
 non-zero only when it could not work through the files at all (Docker missing, state not writable, network down before anything was tried): the files then stay and the
@@ -149,3 +179,77 @@ runs `/usr/local/sbin/synofurb-addons-firstboot`, which makes sure Docker is ins
 settings above under a ticked row, Docker shown on and locked with "Required by ..." while something ticked needs it. Quick setup has presets (None, Docker + Portainer, Frigate NVR, Plex,
 Frigate + Plex; each with Docker and Portainer as the base). Confirm lists "Will be installed after first boot: ..." and the Internet need. "Copy command" writes one `--addon` per ticked
 add-on (a secret as `key=@env:KEY`). The CLI is `--addon ID[:KEY=VALUE,...]` on `plan` and `install` and `addons list [--json]` (docs/CLI.md, secrets as `KEY=@env:VAR` or `KEY=@file:PATH`).
+
+## Implementation notes: management plane (`apps/mgmt-plane/synofurb_addons.py`)
+
+Nothing in this part has run against a real Docker daemon. The tests use `FakeDocker` (a test double for the `Docker` class) or the real `Docker` class on a scripted runner (to check
+the exact command lines), scripted `apt-get`/`systemctl`, a fake clock and a temp root. **First run on a unit** (Docker install from the Debian mirror, a pull, a Portainer start) is the open check.
+
+**Code layout.** One new module, standard library only, with no import from `synofurb_mgmt` (the web module imports it, so it also works when `synofurb_mgmt.py` runs as `__main__`). The
+glue in `synofurb_mgmt.py` is one delimited block (section 17b: environment, route registration, CLI hook), a `find_route()` for paths with an id in them, a `query` field on `Request`, and the Add-ons page.
+A bundle without `synofurb_addons.py` simply has no add-ons. `AddonEnv` is the seam: paths (`--root` aware), the command runner, `mounts`, `audit`, the job lock, probes, clock.
+
+**Loader.** `parse_manifest()` validates one add-on (precise messages such as `settings[2] (port): 'min' is larger than 'max'`); `load_catalog()` loads the built-in folder or pack and
+`/etc/synofurb/addons.d/<id>/`, never lets one bad add-on hide the others (`problems` in `GET /api/addons` and `addons list`), rejects unknown or rejected requirements and every member
+of a dependency cycle (`dependency cycle: a -> b -> a`), and refuses a user add-on whose id the built-in catalog has. Templates are checked at load time: unknown `${name}`, a stray `$`,
+`${DEVICES_BLOCK}` anywhere but alone at column 0, a `text` setting in the compose file, and the privilege consistency check described above.
+
+**Rendering.** `string.Template`, values validated per placeholder position (see "Where a value may go"). The compose file is written to `compose.next.yml`, checked with
+`docker compose config -q`, and only then moved over `compose.yml`, so a bad update never destroys the working file; `once` files are not touched when they exist; writes go through a
+temp file and `os.replace`, and a folder that is a link out of the add-on's directory is refused. The rendered compose text is audited again against the effective privileges
+(manifest plus selected choices) before it is written. Files using a secret are 0600.
+
+**Lifecycle and jobs.** `install` (check, render, pull, start, health), `update` (the same with the stored settings; the definition version is recorded), `start` (`compose up -d`), `stop`, `restart`,
+`remove` (`compose down --remove-orphans`; **delete data** also removes the Docker volumes and the add-on's own folders `/srv/addons/<id>` and `/srv/data/addons/<id>`, never a mount point,
+never a path outside those folders, a link is unlinked and not followed; the API wants `confirm: "<id>"`), `status` (containers from `compose ps`, then the health check: `running`, `stopped`,
+`starting`, `unhealthy`, `error`, `needs-attention`, `installing`, `updating`, `removing`, `not-installed`), `logs`. Docker cannot be stopped or removed while an installed add-on requires it. Every
+mutating call is a **job**: `{id, kind, addon, state running|done|failed, step, steps, progress, message, ok, error, warnings, log[]}`, kept in memory and, once finished, in
+`/var/lib/synofurb-mgmt/addons-jobs.json` (a job that was running at a crash comes back as failed, and its add-on as "needs attention"). Install keeps the add-on in `needs-attention` with the
+reason when a step fails after the files were written (a pull without Internet, a bad compose file); running `install` again is the retry and reuses the stored settings.
+**One job at a time**: the add-on jobs take the management plane's `job.lock` (the same lock `update` uses), so a second request, or an update of the management plane, is refused with HTTP 409 while one runs
+(`Another job is running (install portainer)`); in a plain environment it is a `flock` on `addons.lock`. The lock is released before the job shows as finished. Audit log: the request (secret
+values replaced by `***`), `addons.job.start` (add-on, kind, privileges, devices, storage, `accepted: true`, user, address) and `addons.job.<kind>` with the result.
+
+**Health.** `http` probes `127.0.0.1` only (no redirects followed, certificate not verified), `tcp` connects, `container` needs every container running and not unhealthy. After `up`, install waits up to
+`healthcheck.timeout`; a late answer is a warning, not a failure.
+
+**Secrets.** Stored only in `addons-secrets.json` (0600, atomic writes); the state file lists their names. The API returns `{"set": true}`; the stored values are removed from job logs, `logs` output and
+error messages; an empty secret field keeps the stored value; `secret` values are refused on the CLI command line (`--set`), they come as JSON on standard input (`--settings-stdin`).
+
+**Docker add-on (`kind: system`, `handler: docker`).** Debian 13 (trixie), checked against the archive on 2026-11-03: `docker.io` 26.1.5, `docker-cli` 26.1.5 (a "Recommends" of `docker.io`, so it is named),
+`docker-compose` 2.26.1 (Go; installs `/usr/libexec/docker/cli-plugins/docker-compose`; there is no `docker-compose-v2` in trixie), `docker-buildx` 0.13.1 (not needed). Steps (all idempotent): when all three packages are
+installed nothing is downloaded; otherwise `apt-get update`, a `Candidate:` check with `apt-cache policy`, then `env DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends ca-certificates docker.io docker-cli docker-compose`;
+`/etc/docker/daemon.json` with `json-file` rotation (10 MB x 3) only when no such file exists; `systemctl enable --now docker.service`; every administrator (member of `sudo`, uid >= 1000) joins the
+`docker` group when not already in it (the group is root-equivalent: the add-on's `changes` say so); a final `docker version` / `docker compose version` check. An offline unit gets "needs the Debian mirror and
+Internet access". `update` runs `apt-get install --only-upgrade`; `remove` is refused (the packages stay; the message names the `apt-get remove` command).
+
+**Portainer.** `portainer/portainer-ce:lts`, `9443` (https, self-signed), `${DATA_DIR}/data`, mounts `/var/run/docker.sock` (privilege `docker-socket`, shown and confirmed before install). The first-run note (create the
+administrator within 5 minutes, otherwise restart the add-on) is `post_install`, shown in the job log and in Details.
+
+**Web UI.** Add-ons page: installed list (name, state Tag, open / stop-start / restart / update / logs / details / remove), catalog cards for what is not installed (icon, name, summary, state Tag, Install, disabled with the
+reason when `requires` is missing), install dialog (settings form from the manifest, `help` behind an info button, devices with Found / Not found, storage with free space and the data-volume error,
+**privileges listed before install with a required confirmation**, changes), job dialog (progress bar, step, log), logs viewer, update and remove confirmations (**delete data** needs the typed id).
+The open link is `http(s)://<host>:<port>` (Stage 2 replaces it). Add-on names, summaries and labels come from the manifests and count as data in the word-budget audit (`data-d`); all chrome text is in `COPY`.
+
+**API.** `GET /api/addons` `{addons[], problems[], job}`; `GET /api/addons/<id>` (settings, values with secrets as `{set}`, `storage_report`, `device_states`, `privileges`, `changes`, `warnings`);
+`POST /api/addons/<id>/install` body `{settings:{}, storage:{key:path}, devices:{id:true|false}, accept:true|[privileges]}`; `.../update|start|stop|restart` (empty body); `.../remove` body `{delete_data, confirm}`;
+all answer **202** `{ok, job}`; `GET /api/addons/<id>/logs?tail=N` (10..2000); `GET /api/jobs/<id>`, `GET /api/jobs`. Errors: 400 (rejected input, message safe to show), 404, 409 (busy). Session cookie, CSRF and the same-origin check apply as everywhere.
+
+**CLI.** `addons list|show|status|logs|install|update|remove|start|stop|restart|apply-pending [--json]`; `install ID [--set k=v] [--storage k=path] [--device id=on|off] [--settings-stdin] [--yes]` (`--yes` accepts the
+privileges shown); `remove ID [--delete-data --yes]`. Progress is printed live; exit 0 ok, 1 the operation failed or another job is running, 2 refused or bad input.
+
+**`apply-pending`** reads the installer's files exactly as described in the installer notes (strings as typed, secrets from `pending-secrets/<id>.json`, refused when that file is readable by group or others), installs
+in dependency order (the catalog's `requires`, then `order`), retries a failed install 3 times with 10 s, 30 s, 90 s backoff, records an add-on that still fails (and every add-on that waits for it) as "needs attention" with the reason
+and the settings, and removes the pending files of everything it recorded. Unknown ids and unreadable files are moved to `pending/rejected/`. It writes `/var/lib/synofurb-mgmt/addons-apply.json`
+(`{ok, stuck, items:[{id, status installed|failed|skipped|rejected|waiting, message, attempts}]}`, no secrets). Exit 0 when every file was taken over; **1 only when files had to stay** (another job held the lock, the state could not be
+written), so the first-boot script retries. `docker` already installed (for example by stage 2) is a no-op that is recorded.
+
+**Packaging.** `addons.pack.json` and `synofurb_addons.py` are optional members of the update bundle, of `tools/make-update-bundle.py`, `scripts/package-mgmt.sh` and `verify_bundle()`. The desktop app's embedded copy
+of the management plane (`crates/synofurb-core/src/manage.rs`, `MGMT_FILES` and the staging script) must list the same two files, or an app push removes the add-ons from the unit (the unit keeps working, the page says so).
+
+**Security review of this part.** No shell anywhere (argv lists, `shell=False`; a test greps the module); every id, project name, compose path, setting value, storage path and device path is validated before it reaches an argv, a
+template or a file name; compose command lines are built in one place (`Docker.argv`). Template injection: values are checked per placeholder position, `$` is escaped for compose, unknown placeholders are refused, `text` never reaches the compose
+file, and the rendered compose is audited again. Path traversal: add-on folders are flat, file names and `dest` paths are validated, `realpath` of the parent must stay inside the add-on folder, links are refused or never followed, delete-data only removes
+the add-on's own folders. Docker socket: privilege `docker-socket` is shown before install, confirmed, audited, and a template that mounts the socket without declaring it is refused. A user add-on is trusted code (root-owned `/etc`): the template
+check protects against mistakes and mismatched privilege lists, it is not a sandbox. Not done: image signature verification (images are pulled by tag), pinning by digest, a network egress policy for containers.
+

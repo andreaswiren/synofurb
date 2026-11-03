@@ -5767,14 +5767,14 @@ COPY.update({
 COPY.update({
     "nav.addons": _c("Add-ons"), "ad.installed": _c("Installed"), "ad.available": _c("Available"),
     "ad.install": _c("Install", "button"), "ad.retry": _c("Retry", "button", "The last install did not finish; try it again."), "ad.open": _c("Open", "button", "Open the app's web page."),
-    "ad.start": _c("Start", "button"), "ad.stop": _c("Stop", "button"), "ad.restart": _c("Restart", "button"), "ad.update": _c("Update", "button", "Download newer images and restart. Data is kept."),
+    "ad.start": _c("Start", "button"), "ad.stop": _c("Stop", "button"), "ad.restart": _c("Restart", "button"), "ad.update": _c("Update", "button", "Download newer images and restart; data is kept."),
     "ad.logs": _c("Logs", "button"), "ad.remove": _c("Remove", "button"), "ad.details": _c("Details", "button"), "ad.refresh": _c("Refresh", "button"), "ad.view": _c("View", "button"),
     "ad.help": _c("Help", "button"), "ad.lines": _c("Lines"),
     "ad.st.running": _c("Running", "label", "Containers run and the health check answers."), "ad.st.stopped": _c("Stopped", "label", "Installed, but not running."),
     "ad.st.starting": _c("Starting", "label", "Running; the health check does not answer yet."), "ad.st.installing": _c("Installing", "label", "A job is installing it."),
     "ad.st.updating": _c("Updating", "label", "A job is updating it."), "ad.st.removing": _c("Removing", "label", "A job is removing it."),
-    "ad.st.unhealthy": _c("Not answering", "label", "Running, but the health check fails. See the logs."), "ad.st.error": _c("Problem", "label", "A container keeps stopping. See the logs."),
-    "ad.st.needs-attention": _c("Needs attention", "label", "The last operation failed. See the details."), "ad.st.not-installed": _c("Not installed", "label"),
+    "ad.st.unhealthy": _c("Not answering", "label", "Running, but the health check fails; see the logs."), "ad.st.error": _c("Problem", "label", "A container keeps stopping; see the logs."),
+    "ad.st.needs-attention": _c("Needs attention", "label", "The last operation failed; see the details."), "ad.st.not-installed": _c("Not installed", "label"),
     "ad.priv.docker-socket": _c("Docker control", "label", "Full control of Docker here, which is the same as root."),
     "ad.priv.host-network": _c("Host network", "label", "Shares this unit's network; its ports are not isolated."),
     "ad.priv.privileged": _c("Privileged", "label", "Unrestricted access to hardware and kernel."), "ad.priv.cap": _c("Extra capability", "label", "An extra kernel capability for the container."),
@@ -5783,7 +5783,7 @@ COPY.update({
     "ad.absent_warn": _c("Not found: the app may not start.", "prose"), "ad.free": _c("free"), "ad.once": _c("Used on first install only.", "tip"),
     "ad.secret_set": _c("Set; leave empty to keep it.", "tip"), "ad.needs": _c("Install {name} first.", "tip"), "ad.noweb": _c("No web page.", "prose"),
     "ad.update_q": _c("Update {name}?", "title"), "ad.update_b": _c("Newer images are downloaded and the app restarts. Your data is kept.", "prose"),
-    "ad.remove_q": _c("Remove {name}?", "title"), "ad.remove_b": _c("The containers are removed. Your data is kept unless you tick the box.", "prose"),
+    "ad.remove_q": _c("Remove {name}?", "title"), "ad.remove_b": _c("Containers are removed. Data is kept unless you tick the box.", "prose"),
     "ad.deldata": _c("Delete data", "label", "Erases the settings, configuration and stored files for good."),
     "ad.logs_t": _c("Logs of {name}", "title"), "ad.job_t": _c("{name}: {action}", "title"), "ad.busy": _c("A job is running", "title"), "ad.done": _c("Done."),
     "ad.problems": _c("Not loaded", "title"), "ad.note": _c("After install", "label"), "ad.ports": _c("Ports"), "ad.homepage": _c("Project page", "button"), "ad.empty": _c("No add-ons.", "prose"),
@@ -6754,7 +6754,7 @@ const adHelp = text => popover(T('ad.help'), h('p', {}, text), 'info');
 const adPriv = p => tip(h('span', {class: 'chip'}, ic('triangle-alert', 'sm'), p.startsWith('cap:') ? T('ad.priv.cap') + ' ' + p.slice(4) : T('ad.priv.' + p)), p.startsWith('cap:') ? TIP('ad.priv.cap') : TIP('ad.priv.' + p));
 const adName = a => h('span', {class: 'aname'}, h('span', {class: 'aico'}, ic(adIcon(a.icon), 'lg')), h('b', {'data-d': ''}, a.name));
 /* a job in a dialog: progress bar, current step, log; polls until the job ends */
-function watchJob(first, name, action, done) {
+function adJob(first, name, action, done) {
   const bar = h('progress', {max: 100, value: first.progress || 0}), msg = h('p', {'data-d': ''}, first.message || ''), log = h('pre', {class: 'code log2', 'aria-live': 'off'}, '');
   let timer = null;
   const dlg = dialog(T('ad.job_t', {name, action: T('ad.act.' + action)}), {icon: 'refresh-cw', wide: true}, () => h('div', {}, bar, msg, log), close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))]);
@@ -6775,7 +6775,7 @@ function watchJob(first, name, action, done) {
 }
 async function adAct(a, action, reload) {
   const r = await api('POST', '/api/addons/' + a.id + '/' + action, {});
-  watchJob(r.job, a.name, action, reload);
+  adJob(r.job, a.name, action, reload);
 }
 function adLogs(a) {
   const pre = h('pre', {class: 'code log2'}, '');
@@ -6853,7 +6853,7 @@ async function adInstall(a, byId, reload) {
         for (const [k, i] of Object.entries(stor)) body.storage[k] = i.value.trim();
         for (const [k, cb] of Object.entries(devs)) body.devices[k] = cb.checked;
         const r = await api('POST', '/api/addons/' + a.id + '/install', body);
-        close(); watchJob(r.job, d.name, 'install', reload);
+        close(); adJob(r.job, d.name, 'install', reload);
       } catch (e) { setErr(e.message); busy(ok, false); }
     });
     redraw();
@@ -6871,7 +6871,7 @@ function adRemove(a, reload) {
     ok.addEventListener('click', async () => {
       if (ok.classList.contains('is-loading')) return;
       busy(ok, true); setErr('');
-      try { const r = await api('POST', '/api/addons/' + a.id + '/remove', {delete_data: del.checked, confirm: del.checked ? typed.value : ''}); close(); watchJob(r.job, a.name, 'remove', reload); }
+      try { const r = await api('POST', '/api/addons/' + a.id + '/remove', {delete_data: del.checked, confirm: del.checked ? typed.value : ''}); close(); adJob(r.job, a.name, 'remove', reload); }
       catch (e) { setErr(e.message); busy(ok, false); }
     });
     return [h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
@@ -6881,7 +6881,7 @@ PAGES.addons = async () => {
   const r = await api('GET', '/api/addons'), reload = () => show('addons');
   const byId = Object.fromEntries(r.addons.map(a => [a.id, a])), inst = r.addons.filter(a => a.installed);
   const parts = [h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.addons')), infoBtn('addons', T('nav.addons'))))];
-  if (r.job) parts.push(banner('neutral', T('ad.busy'), r.job.message, btn(T('ad.view'), {size: 'sm', onclick: () => watchJob(r.job, r.job.addon, r.job.kind, reload)})));
+  if (r.job) parts.push(banner('neutral', T('ad.busy'), r.job.message, btn(T('ad.view'), {size: 'sm', onclick: () => adJob(r.job, r.job.addon, r.job.kind, reload)})));
   for (const p of r.problems) parts.push(banner('warn', T('ad.problems'), p.id + ': ' + p.error));
   if (inst.length) {
     const rows = inst.map(a => {
@@ -6890,7 +6890,7 @@ PAGES.addons = async () => {
         up ? btnIcon('square', T('ad.stop'), () => adAct(a, 'stop', reload)) : btnIcon('play', T('ad.start'), () => adAct(a, 'start', reload)),
         btnIcon('refresh-cw', T('ad.restart'), () => adAct(a, 'restart', reload)),
         btnIcon('download', T('ad.update'), () => confirmAction({title: T('ad.update_q', {name: a.name}), danger: false, icon: 'download', label: T('ad.update'), body: T('ad.update_b'),
-          onConfirm: async () => { const j = await api('POST', '/api/addons/' + a.id + '/update', {}); watchJob(j.job, a.name, 'update', reload); }}), a.update_available ? 'primary' : 'ghost'),
+          onConfirm: async () => { const j = await api('POST', '/api/addons/' + a.id + '/update', {}); adJob(j.job, a.name, 'update', reload); }}), a.update_available ? 'primary' : 'ghost'),
         btnIcon('scroll-text', T('ad.logs'), () => adLogs(a)), btnIcon('info', T('ad.details'), () => adDetails(a)),
         a.kind === 'system' ? null : btnIcon('trash', T('ad.remove'), () => adRemove(a, reload))];
       return [adName(a), adTag(a.status), h('div', {class: 'row'}, acts)];
