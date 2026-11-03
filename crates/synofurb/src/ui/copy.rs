@@ -258,7 +258,14 @@ mod strings {
         INSPECT_COL_SERIAL: Label, "Serial", "", "", "";
         INSPECT_COL_SIZE: Label, "Size", "", "", "";
         INSPECT_COL_USE: Label, "Use", "", "", "";
-        INSPECT_VOLUMES: Label, "DSM volumes", "DSM's RAID arrays and what they hold.", "", "";
+        INSPECT_VOLUMES: Label, "DSM volumes", "The volumes DSM shows, and the disks behind them.", "", "";
+        INSPECT_ARRAYS: Label, "RAID arrays", "DSM's RAID arrays and what they hold.", "", "";
+        INSPECT_NO_VOLUMES: Label, "No volumes found", "", "", "";
+        INSPECT_COL_VOLUME: Label, "Volume", "", "", "";
+        INSPECT_COL_FS: Label, "Filesystem", "", "", "";
+        INSPECT_COL_USED: Label, "Used", "", "", "";
+        INSPECT_COL_BACKED: Label, "Backed by", "", "", "";
+        INSPECT_COL_STATUS: Label, "Status", "", "", "";
         INSPECT_LAYOUT: Label, "Current layout", "DSM's partitions on each disk.", "", "";
         INSPECT_CHOOSE: Button, "Choose goal", "", "", "";
         INSPECT_BLOCKED: Label, "Cannot be converted", "Debian 13 cannot run on this hardware.", "compat-status", "";
@@ -865,6 +872,13 @@ pub static SCREENS: &[ScreenCopy] = &[
             &INSPECT_COL_SIZE,
             &INSPECT_COL_USE,
             &INSPECT_VOLUMES,
+            &INSPECT_ARRAYS,
+            &INSPECT_NO_VOLUMES,
+            &INSPECT_COL_VOLUME,
+            &INSPECT_COL_FS,
+            &INSPECT_COL_USED,
+            &INSPECT_COL_BACKED,
+            &INSPECT_COL_STATUS,
             &INSPECT_LAYOUT,
             &INSPECT_CHOOSE,
             &BTN_BACK,
