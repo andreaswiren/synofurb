@@ -213,8 +213,9 @@ impl Render for UpdateView {
                 h_flex()
                     .w_full()
                     .items_center()
+                    .flex_wrap()
                     .gap(px(8.0))
-                    .child(div().flex_1().when_some(url, |d, u| {
+                    .child(div().flex_1().min_w(px(120.0)).when_some(url, |d, u| {
                         d.child(
                             Button::new("upd-page")
                                 .link()
@@ -224,7 +225,7 @@ impl Render for UpdateView {
                                 .on_click(move |_, _, cx| cx.open_url(&u)),
                         )
                     }))
-                    .children(buttons),
+                    .child(h_flex().gap(px(8.0)).items_center().flex_wrap().children(buttons)),
             )
             .into_any_element()
     }

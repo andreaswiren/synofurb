@@ -156,6 +156,44 @@ What it does not protect against:
 * **Legacy-mode minisign signatures are accepted** (plain Ed25519 over the file) as well as the default pre-hashed mode.
   Both need the same secret key.
 
+## What the desktop app shows
+
+Everywhere an update is mentioned (Settings, Updates; the About page; the dot on the Settings button) the app shows one of these
+states, and a click on "Check for updates" always ends in one of them and stays on screen:
+
+| State | Text | Button |
+|---|---|---|
+| never checked | Not checked yet | Check for updates |
+| checking | Checking for updates (spinner) | Check for updates (disabled while it runs) |
+| current | `<version> is current` | Check for updates |
+| available | `<version> available` | Details (primary): opens the update dialog |
+| failed | Couldn't check: `<short reason>`, with the full reason behind the (i) | Check again |
+
+Why a check fails, and what the app says (the kind is typed in `ui/updates.rs`, never read from message text):
+
+| Engine error | Reason shown | Offline chip? |
+|---|---|---|
+| `Http`, and GitHub's API host cannot be reached (a TCP connection fails) | No Internet connection | **yes**, the only case |
+| `Http`, and GitHub is reachable (an error status) | GitHub error, with the engine's text | no |
+| `NotFound` (HTTP 404) | Releases not found: "GitHub did not find the releases. If the repository is private, the update check cannot see them." | no |
+| `RateLimited` | GitHub rate limit, with the engine's hint ("try again in about N minute(s)") | no |
+| `NoRelease` | No release found: "No release found for this system." | no |
+| `Parse` | Unreadable answer, with the engine's text | no |
+| anything else | Check failed, with the engine's text | no |
+
+**A private repository.** The check sends no credentials, so while the repository is private GitHub answers 404 and the app says
+"Releases not found" (it is not "offline"). Making the repository public, or publishing releases in a public one, fixes it. A
+manual check always shows what it finds, even a version you skipped or snoozed; the automatic check at start respects those.
+
+**An unsigned release.** While the build's signing key is the placeholder (see the unsigned path above) the update dialog shows
+the plain-text release notes in a scroll area, one calm warning line ("This release is not signed. synofurb checks its SHA-256
+only."), a required checkbox "I understand and want to install it" (its (i) explains in plain words that a tampered release would
+not be detected), and a primary "Download and install" that stays disabled, with the reason beside it, until the box is ticked.
+After the download the dialog shows "Unsigned, checksum verified" with the first characters of the SHA-256 and "Restart and
+update". A release that cannot be installed at all (no build for this system, no `SHA256SUMS`) shows its reason as the one
+warning and a disabled button. With a real key and a signed release nothing of this appears: the signed path, no checkbox. The
+"Release page" link (always a github.com address) stays in every state.
+
 ## Limits
 
 * No background polling; checks happen when you ask (or when the app's UI asks).
