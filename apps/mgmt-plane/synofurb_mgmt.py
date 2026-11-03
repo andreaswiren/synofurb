@@ -4141,6 +4141,7 @@ class Updater:
                  health_timeout: float = 30.0, sleep: Callable[[float], None] = time.sleep):
         self.cfg, self.runner, self.emit = cfg, runner, emit
         self.probe, self.health_timeout, self.sleep = probe or default_probe, health_timeout, sleep
+        self.before_restart: Callable[[], None] | None = None          # the web job waits here so its response is delivered before the service goes down
         self.inst, self.new, self.prev = cfg.p(INSTALL_DIR), cfg.p(INSTALL_DIR + ".new"), cfg.p(INSTALL_DIR + ".prev")
 
     def installed_version(self) -> str | None:
@@ -4148,6 +4149,8 @@ class Updater:
         return t.splitlines()[0] if t else None
 
     def restart(self, reload_units: bool) -> bool:
+        if self.before_restart:
+            self.before_restart()
         if reload_units:
             self.runner.run(["systemctl", "daemon-reload"], timeout=30)
         return self.runner.run(["systemctl", "restart", "synofurb-mgmt.service"], timeout=60).ok
@@ -4299,6 +4302,875 @@ class Updater:
         return EXIT_OK
 
 
+# ============================================================================
+# 18b. Self-update: ONE pipeline for the web UI, `update --from-github` and the app's push
+#      check -> stage -> verify -> swap -> health -> rollback.  The last four steps are `Updater` above (offline, shared with
+#      `update --from DIR`); this section adds the sources (a GitHub release asset or the monorepo sub-folder), the job lock,
+#      the job records (version history: who/what/when), the audit trail and the web routes.  Nothing here runs on the app's
+#      push path except the lock, the history record and the audit line.
+# ============================================================================
+
+import gzip  # noqa: E402
+import http.client  # noqa: E402
+import tarfile  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+import zlib  # noqa: E402
+
+UPDATE_REPO = "andreaswiren/synofurb"
+UPDATE_SUBDIR = "apps/mgmt-plane"
+# the only hosts a download may touch (https, every redirect hop); release downloads end up on a githubusercontent.com CDN host
+UPDATE_HOSTS = ("api.github.com", "github.com", "codeload.github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com")
+UPDATE_PLACEHOLDER_KEY = "REPLACE_WITH_MINISIGN_PUBLIC_KEY"       # same placeholder as install.sh; a real key makes signatures mandatory
+UPDATE_PUBKEY = UPDATE_PLACEHOLDER_KEY
+BUNDLE_FILES = BUNDLE_REQUIRED + (BUNDLE_OPTIONAL_UNIT,)          # manifest order, identical to FILES in tools/make-update-bundle.py
+MAX_API, MAX_SUMS, MAX_ASSET, MAX_REPO_TARBALL, MAX_REPO_UNPACKED = 2 << 20, 256 << 10, 8 << 20, 256 << 20, 2 << 30
+UPDATE_CHANNELS = ("stable", "main")
+UPDATE_SOURCES = ("app", "manual", "github-stable", "github-main", "rollback")
+ASSET_RE = re.compile(r"synofurb-mgmt-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\.tar\.gz")
+TAG_RE = re.compile(r"v?\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.+-]{0,40})?")
+REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}")
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+APP_STAGE_PREFIX = ".synofurb-mgmt-stage-"                          # what the desktop app's push stages into (manage.rs); informational only
+
+
+class UpdateError(Exception):
+    """A refusal before anything on the unit changed. ``kind`` is stable (the UI and tests key on it); ``message`` is short and safe to show."""
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(message)
+        self.kind, self.message = kind, message
+
+
+def bundle_member_ok(name: str) -> bool:
+    """Which files an update may contain. The one place to extend if the bundle contract ever grows (verify_bundle must agree)."""
+    return name in BUNDLE_FILES
+
+
+def write_manifest(directory: str, names: Iterable[str] = BUNDLE_FILES) -> list[str]:
+    """MANIFEST.sha256 in `sha256sum` format; the same lines `tools/make-update-bundle.py` writes (a test compares them)."""
+    lines = ["%s  %s" % (sha256_file(os.path.join(directory, n)), n) for n in names if os.path.isfile(os.path.join(directory, n))]
+    write_atomic(os.path.join(directory, MANIFEST_NAME), "\n".join(lines) + "\n")
+    return lines
+
+
+# ---- HTTP (https to GitHub only) ---------------------------------------------
+
+class _PolicyRedirect(urllib.request.HTTPRedirectHandler):
+    max_redirections = 5
+
+    def __init__(self, check: Callable[[str], None]):
+        self._check = check
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):          # type: ignore[no-untyped-def]
+        self._check(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class HttpFetcher:
+    """GET with a host policy (https, GitHub hosts, no credentials in the URL, every redirect hop checked), hard size limits and
+    typed errors. No token is ever sent. ``loopback_http`` exists for the tests' fake release server only."""
+
+    def __init__(self, hosts: Iterable[str] = UPDATE_HOSTS, loopback_http: bool = False, timeout: float = 20.0):
+        self.hosts, self.loopback_http, self.timeout = tuple(hosts), loopback_http, timeout
+        self.opener = urllib.request.build_opener(_PolicyRedirect(self.check_url))
+
+    def check_url(self, url: str) -> None:
+        u = urllib.parse.urlsplit(url)
+        host = (u.hostname or "").lower()
+        try:
+            port = u.port
+        except ValueError:
+            port = -1
+        if u.username or u.password or "\\" in url:
+            raise UpdateError("policy", "refusing a URL with credentials")
+        if u.scheme == "https" and host in self.hosts and port in (None, 443):
+            return
+        if self.loopback_http and u.scheme in ("http", "https") and host in ("127.0.0.1", "localhost", "::1"):
+            return
+        raise UpdateError("policy", "refusing %s: only https to GitHub is allowed" % (host or "that address"))
+
+    def _open(self, url: str, accept: str):
+        self.check_url(url)
+        req = urllib.request.Request(url, headers={"User-Agent": "synofurb-mgmt/" + VERSION, "Accept": accept})
+        try:
+            return self.opener.open(req, timeout=self.timeout)
+        except urllib.error.HTTPError as e:
+            if e.code == 429 or (e.code == 403 and e.headers.get("X-RateLimit-Remaining") == "0"):
+                try:
+                    mins = max(1, int((int(e.headers.get("X-RateLimit-Reset", "0")) - time.time()) / 60) + 1)
+                except ValueError:
+                    mins = 10
+                raise UpdateError("rate_limit", "GitHub rate limit reached; try again in about %d minute(s)" % min(mins, 120))
+            if e.code == 404:
+                raise UpdateError("not_found", "GitHub did not find it (HTTP 404); a private repository cannot be checked")
+            raise UpdateError("http", "GitHub answered HTTP %d" % e.code)
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as e:
+            reason = getattr(e, "reason", e)
+            raise UpdateError("offline", "Cannot reach GitHub (%s)" % type(reason).__name__)
+
+    def get_bytes(self, url: str, max_bytes: int, accept: str = "application/json") -> bytes:
+        with self._open(url, accept) as r:
+            if int(r.headers.get("Content-Length") or 0) > max_bytes:
+                raise UpdateError("size", "the answer is larger than the %d KiB limit" % (max_bytes >> 10))
+            data = r.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise UpdateError("size", "the answer is larger than the %d KiB limit" % (max_bytes >> 10))
+        return data
+
+    def download(self, url: str, dest: str, max_bytes: int) -> tuple[str, int]:
+        """Stream to ``dest`` (0600), hashing as it goes. Returns (sha256, size). A partial file is removed."""
+        h = hashlib.sha256()
+        n = 0
+        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as out, self._open(url, "application/octet-stream") as r:
+                if int(r.headers.get("Content-Length") or 0) > max_bytes:
+                    raise UpdateError("size", "the download is larger than the %d MiB limit" % (max_bytes >> 20))
+                while True:
+                    chunk = r.read(1 << 16)
+                    if not chunk:
+                        break
+                    n += len(chunk)
+                    if n > max_bytes:
+                        raise UpdateError("size", "the download is larger than the %d MiB limit" % (max_bytes >> 20))
+                    h.update(chunk)
+                    out.write(chunk)
+        except UpdateError:
+            _unlink(dest)
+            raise
+        except (OSError, ValueError, http.client.HTTPException) as e:
+            _unlink(dest)
+            raise UpdateError("offline", "the download was interrupted (%s)" % type(e).__name__)
+        except BaseException:
+            _unlink(dest)
+            raise
+        return h.hexdigest(), n
+
+
+def _unlink(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+class _CapReader:
+    """File-like wrapper that refuses to hand out more than ``cap`` bytes (a gzip bomb stops here)."""
+
+    def __init__(self, fh: Any, cap: int):
+        self.fh, self.cap, self.n = fh, cap, 0
+
+    def read(self, size: int = -1) -> bytes:
+        data = self.fh.read(size)
+        self.n += len(data)
+        if self.n > self.cap:
+            raise UpdateError("size", "the archive unpacks to more than %d MiB" % (self.cap >> 20))
+        return data
+
+
+def _config_json(cfg: Config) -> dict:
+    try:
+        with open(cfg.p(cfg.config_path), encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def update_pubkey(cfg: Config) -> str:
+    """The minisign public key releases must be signed with. The placeholder (nothing configured) means releases are unsigned today."""
+    k = _config_json(cfg).get("update_pubkey")
+    return k if isinstance(k, str) and re.fullmatch(r"RW[A-Za-z0-9+/=]{20,100}", k) else UPDATE_PUBKEY
+
+
+def update_trust(cfg: Config, channel: str, has_signature: bool) -> tuple[str, str | None]:
+    """(mode, blocked_reason). mode: `signed` (minisign verified), `unsigned` (SHA-256 only, needs the person's consent) or `blocked`."""
+    if update_pubkey(cfg) == UPDATE_PLACEHOLDER_KEY:
+        return "unsigned", None
+    if channel == "stable":
+        return ("signed", None) if has_signature else ("blocked", "this release has no SHA256SUMS.minisig")
+    if _config_json(cfg).get("update_allow_unsigned_source") is True:
+        return "unsigned", None
+    return "blocked", "a signing key is configured and a source tree cannot be verified"
+
+
+def plain_notes(md: str, limit: int = 1500) -> str:
+    out = []
+    for ln in (md or "").replace("\r", "").splitlines()[:40]:
+        ln = re.sub(r"^\s{0,3}#{1,6}\s*", "", ln)
+        ln = re.sub(r"^\s*[-*]\s+", "• ", ln)
+        ln = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", ln).replace("**", "").replace("`", "")
+        out.append(ln.rstrip())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()[:limit]
+
+
+def parse_sums(text: str, name: str) -> str:
+    for ln in text.splitlines():
+        parts = ln.strip().split(None, 1)
+        if len(parts) == 2 and parts[1].lstrip("*") == name:
+            if not re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+                raise UpdateError("parse", "SHA256SUMS has a malformed line for %s" % name)
+            return parts[0].lower()
+    raise UpdateError("checksum", "%s is not listed in SHA256SUMS: refusing an unlisted file" % name)
+
+
+def valid_ref(ref: Any) -> str:
+    if not isinstance(ref, str) or not REF_RE.fullmatch(ref) or ".." in ref or "//" in ref or ref.endswith(("/", ".lock", ".")):
+        raise UpdateError("policy", "not a valid branch or tag name")
+    return ref
+
+
+def installed_info(cfg: Config) -> tuple[str | None, str | None]:
+    inst = cfg.p(INSTALL_DIR)
+    t = read_text(os.path.join(inst, "VERSION")).strip()
+    script = os.path.join(inst, "synofurb_mgmt.py")
+    return (t.splitlines()[0] if t else None), (sha256_file(script) if os.path.isfile(script) else None)
+
+
+def _cmp_state(remote: str, installed: str | None, channel: str) -> str:
+    try:
+        r, i = parse_version(remote), parse_version(installed or "")
+    except ValidationError:
+        return "available"
+    return "available" if r > i else "older" if r < i else ("same" if channel == "main" else "current")
+
+
+class GithubSource:
+    """Where an update can come from: the newest release asset (`stable`) or apps/mgmt-plane of a ref of the monorepo (`main`)."""
+
+    def __init__(self, fetch: HttpFetcher, repo: str = UPDATE_REPO, api_base: str = "https://api.github.com",
+                 dl_base: str = "https://github.com", codeload_base: str = "https://codeload.github.com"):
+        self.fetch, self.repo, self.api, self.dl, self.code = fetch, repo, api_base.rstrip("/"), dl_base.rstrip("/"), codeload_base.rstrip("/")
+
+    def _json(self, url: str) -> Any:
+        try:
+            return json.loads(self.fetch.get_bytes(url, MAX_API, "application/vnd.github+json").decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            raise UpdateError("parse", "GitHub sent an answer that could not be read")
+
+    # -- check -----------------------------------------------------------------
+    def check(self, cfg: Config, channel: str, ref: str = "") -> dict:
+        installed, _ = installed_info(cfg)
+        if channel == "stable":
+            info = self._check_stable()
+        elif channel == "main":
+            info = self._check_main(valid_ref(ref or "main"))
+        else:
+            raise UpdateError("policy", "unknown channel")
+        mode, blocked = update_trust(cfg, channel, info.pop("has_signature", False))
+        info.update(channel=channel, installed=installed, state=_cmp_state(info["version"], installed, channel), mode=mode, blocked=blocked,
+                    checked_at=int(time.time()), repo=self.repo)
+        return info
+
+    def _check_stable(self) -> dict:
+        rels = self._json("%s/repos/%s/releases?per_page=30" % (self.api, self.repo))
+        best = None
+        for rel in rels if isinstance(rels, list) else []:
+            if not isinstance(rel, dict) or rel.get("draft") or rel.get("prerelease"):
+                continue
+            tag = rel.get("tag_name")
+            assets = {a.get("name"): a for a in rel.get("assets") or [] if isinstance(a, dict)}
+            if not isinstance(tag, str) or not TAG_RE.fullmatch(tag):
+                continue
+            for name, a in assets.items():
+                m_ = ASSET_RE.fullmatch(name) if isinstance(name, str) else None
+                if not m_ or "-" in m_.group(1):
+                    continue
+                key = parse_version(m_.group(1))
+                if best is None or key > best[0]:
+                    best = (key, m_.group(1), tag, name, rel, assets)
+        if best is None:
+            raise UpdateError("no_release", "No management plane release found")
+        _, version, tag, name, rel, assets = best
+        if "SHA256SUMS" not in assets:
+            raise UpdateError("blocked", "release %s has no SHA256SUMS: refusing to install it" % tag)
+        size = assets[name].get("size")
+        if isinstance(size, int) and size > MAX_ASSET:
+            raise UpdateError("size", "the release asset is larger than the %d MiB limit" % (MAX_ASSET >> 20))
+        return {"version": version, "tag": tag, "asset": name, "ref": "", "commit": "", "published": str(rel.get("published_at") or "")[:10],
+                "notes": plain_notes(str(rel.get("body") or "")), "has_signature": "SHA256SUMS.minisig" in assets}
+
+    def _check_main(self, ref: str) -> dict:
+        qref = urllib.parse.quote(ref, safe="/")
+        commits = self._json("%s/repos/%s/commits?sha=%s&path=%s&per_page=5" % (self.api, self.repo, qref, UPDATE_SUBDIR))
+        rows = [c for c in commits if isinstance(c, dict) and isinstance(c.get("sha"), str) and SHA_RE.fullmatch(c["sha"])] if isinstance(commits, list) else []
+        if not rows:
+            raise UpdateError("not_found", "No commit of %s found at %r" % (UPDATE_SUBDIR, ref))
+        sha = rows[0]["sha"]
+        raw = self.fetch.get_bytes("%s/repos/%s/contents/%s/VERSION?ref=%s" % (self.api, self.repo, UPDATE_SUBDIR, sha), 4096, "application/vnd.github.raw+json")
+        version = raw.decode("utf-8", "replace").strip().splitlines()[0] if raw.strip() else ""
+        try:
+            parse_version(version)
+        except ValidationError:
+            raise UpdateError("parse", "the VERSION file at that ref is not a version")
+        notes = []
+        for c in rows:
+            cm = c.get("commit") if isinstance(c.get("commit"), dict) else {}
+            who = cm.get("author") if isinstance(cm.get("author"), dict) else {}
+            notes.append("• %s %s (%s)" % (c["sha"][:7], str(cm.get("message") or "").splitlines()[0][:100] if cm.get("message") else "", str(who.get("date") or "")[:10]))
+        return {"version": version, "tag": "", "asset": "", "ref": ref, "commit": sha, "published": notes_date(rows[0]), "notes": "\n".join(notes), "has_signature": False}
+
+    # -- stage -----------------------------------------------------------------
+    def stage(self, cfg: Config, runner: Runner, info: dict, work: str, emit: Callable[[str, str, str], None]) -> str:
+        """Download and verify what ``check`` found into ``work``/bundle (files + MANIFEST.sha256). Returns the directory."""
+        dest = os.path.join(work, "bundle")
+        os.makedirs(dest, mode=0o700, exist_ok=True)
+        if info["channel"] == "stable":
+            self._stage_stable(cfg, runner, info, work, dest, emit)
+        else:
+            self._stage_main(info, work, dest, emit)
+        names = [n for n in BUNDLE_FILES if os.path.isfile(os.path.join(dest, n))]
+        for n in BUNDLE_REQUIRED:
+            if n not in names:
+                raise UpdateError("archive", "%s is missing from the update" % n)
+        ver = read_text(os.path.join(dest, "VERSION")).strip().splitlines()
+        if not ver or ver[0] != info["version"]:
+            raise UpdateError("archive", "the downloaded VERSION (%s) is not the version that was checked (%s)" % (ver[0] if ver else "none", info["version"]))
+        code_v = re.search(r'^DEFAULT_VERSION = "([^"]+)"', read_text(os.path.join(dest, "synofurb_mgmt.py")), re.M)
+        if not code_v or code_v.group(1) != info["version"]:
+            raise UpdateError("archive", "VERSION and DEFAULT_VERSION in synofurb_mgmt.py disagree: refusing")
+        write_manifest(dest, names)
+        return dest
+
+    def _stage_stable(self, cfg: Config, runner: Runner, info: dict, work: str, dest: str, emit: Callable[[str, str, str], None]) -> None:
+        base = "%s/%s/releases/download/%s" % (self.dl, self.repo, info["tag"])
+        sums_raw = self.fetch.get_bytes(base + "/SHA256SUMS", MAX_SUMS, "application/octet-stream")
+        sums = sums_raw.decode("utf-8", "replace")
+        if info["mode"] == "signed":
+            minisign = runner.which("minisign")
+            if not minisign:
+                raise UpdateError("signature", "cannot verify the signature: minisign is not installed (apt install minisign)")
+            sig = self.fetch.get_bytes(base + "/SHA256SUMS.minisig", MAX_SUMS, "application/octet-stream")
+            p_sums, p_sig = os.path.join(work, "SHA256SUMS"), os.path.join(work, "SHA256SUMS.minisig")
+            for p, data in ((p_sums, sums_raw), (p_sig, sig)):
+                with open(p, "wb") as fh:
+                    fh.write(data)
+            if not runner.run([minisign, "-Vm", p_sums, "-x", p_sig, "-P", update_pubkey(cfg)], timeout=30).ok:
+                raise UpdateError("signature", "SIGNATURE VERIFICATION FAILED for SHA256SUMS: the release is not authentic")
+            emit("download", "ok", "signature verified (minisign)")
+        expected = parse_sums(sums, info["asset"])
+        archive = os.path.join(work, info["asset"])
+        digest, size = self.fetch.download("%s/%s" % (base, info["asset"]), archive, MAX_ASSET)
+        if not hmac.compare_digest(digest, expected):
+            raise UpdateError("checksum", "SHA-256 MISMATCH for %s: nothing was installed" % info["asset"])
+        emit("download", "ok", "%s %d KiB, SHA-256 %s... matches SHA256SUMS%s" % (info["asset"], size >> 10, digest[:12], "" if info["mode"] == "signed" else " (unsigned)"))
+        try:
+            with tarfile.open(archive, "r:gz") as tf:
+                seen: set[str] = set()
+                for mem in tf:
+                    name = mem.name[2:] if mem.name.startswith("./") else mem.name
+                    if mem.isdir() and name in ("", "."):
+                        continue
+                    if not mem.isreg() or not bundle_member_ok(name) or name in seen:
+                        raise UpdateError("archive", "unexpected member in the archive: %s" % name[:60])
+                    seen.add(name)
+                    _write_member(dest, name, tf.extractfile(mem), mem.size)
+        except (tarfile.TarError, EOFError, OSError, zlib.error) as e:
+            raise UpdateError("archive", "cannot read the archive (%s)" % type(e).__name__)
+
+    def _stage_main(self, info: dict, work: str, dest: str, emit: Callable[[str, str, str], None]) -> None:
+        archive = os.path.join(work, "repo.tar.gz")
+        digest, size = self.fetch.download("%s/%s/tar.gz/%s" % (self.code, self.repo, info["commit"]), archive, MAX_REPO_TARBALL)
+        emit("download", "ok", "commit %s, %d MiB, SHA-256 %s... (no signature exists for a source tree)" % (info["commit"][:7], size >> 20, digest[:12]))
+        top, seen = None, set()
+        try:
+            with open(archive, "rb") as raw, gzip.GzipFile(fileobj=raw) as gz, tarfile.open(fileobj=_CapReader(gz, MAX_REPO_UNPACKED), mode="r|") as tf:      # type: ignore[arg-type]
+                for mem in tf:
+                    parts = mem.name.split("/")
+                    if len(parts) != 4 or parts[1:3] != UPDATE_SUBDIR.split("/") or not bundle_member_ok(parts[3]):
+                        continue
+                    if not mem.isreg() or parts[3] in seen or (top is not None and parts[0] != top) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", parts[0]):
+                        raise UpdateError("archive", "unexpected entry in the source archive: %s" % parts[3])
+                    top = parts[0]
+                    seen.add(parts[3])
+                    _write_member(dest, parts[3], tf.extractfile(mem), mem.size)
+        except (tarfile.TarError, EOFError, OSError, zlib.error) as e:
+            raise UpdateError("archive", "cannot read the source archive (%s)" % type(e).__name__)
+        finally:
+            _unlink(archive)
+
+
+def _write_member(dest: str, name: str, src: Any, size: int) -> None:
+    if size > MAX_BUNDLE_FILE or src is None:
+        raise UpdateError("size", "%s is too large" % name)
+    fd = os.open(os.path.join(dest, name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)       # name comes from a fixed allow-list, never from the archive path
+    with os.fdopen(fd, "wb") as out:
+        left = size
+        while left > 0:
+            chunk = src.read(min(1 << 16, left))
+            if not chunk:
+                raise UpdateError("archive", "%s is truncated" % name)
+            out.write(chunk)
+            left -= len(chunk)
+
+
+# ---- job lock, job records, settings -------------------------------------------
+
+def _pid_alive(pid: Any) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+class JobLock:
+    """`<state>/job.lock`: at most one update or add-on job at a time, across processes (the web service, the transient unit and the
+    app's SSH session). Created with O_EXCL; a lock whose process is gone is stale and is removed. Add-on jobs use the same class:
+    ``acquire("addon", label)``."""
+
+    def __init__(self, cfg: Config):
+        self.path = cfg.p(cfg.state_dir + "/job.lock")
+
+    def holder(self) -> dict | None:
+        try:
+            with open(self.path, encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        if isinstance(d, dict) and _pid_alive(d.get("pid")):
+            return d
+        _unlink(self.path)
+        return None
+
+    def acquire(self, kind: str, label: str, job_id: str = "") -> dict | None:
+        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+        rec = {"kind": kind, "label": label[:80], "id": job_id, "pid": os.getpid(), "since": int(time.time())}
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                if self.holder() is not None:
+                    return None
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(rec, fh)
+            return rec
+        return None
+
+    def release(self, rec: dict | None) -> None:
+        if rec is None:
+            return
+        cur = self.holder()
+        if cur and cur.get("pid") == rec.get("pid") and cur.get("since") == rec.get("since"):
+            _unlink(self.path)
+
+
+def _update_dir(cfg: Config, *sub: str) -> str:
+    return cfg.p(os.path.join(cfg.state_dir, "update", *sub))
+
+
+def load_update_settings(cfg: Config) -> dict:
+    try:
+        with open(_update_dir(cfg, "settings.json"), encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        d = {}
+    ch = d.get("channel") if isinstance(d, dict) else None
+    ref = d.get("ref") if isinstance(d, dict) else None
+    return {"channel": ch if ch in UPDATE_CHANNELS else "stable", "ref": ref if isinstance(ref, str) and REF_RE.fullmatch(ref) else "main"}
+
+
+def save_update_settings(cfg: Config, channel: str, ref: str) -> None:
+    write_atomic(_update_dir(cfg, "settings.json"), json.dumps({"channel": channel, "ref": ref}), mode=0o600)
+
+
+def load_check(cfg: Config) -> dict | None:
+    try:
+        with open(_update_dir(cfg, "check.json"), encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) and "version" in d else None
+    except (OSError, ValueError):
+        return None
+
+
+class JobRecord:
+    """One update/rollback, whoever started it (web, GitHub CLI, app push, manual bundle): the version history and the live progress."""
+
+    KEEP = 30
+    MAX_EVENTS = 80
+
+    def __init__(self, cfg: Config, data: dict):
+        self.cfg, self.data = cfg, data
+        self.id = data["id"]
+        self.path = _update_dir(cfg, "jobs", self.id + ".json")
+        self.echo: Callable[[str, str, str], None] | None = None
+
+    @classmethod
+    def create(cls, cfg: Config, **meta: Any) -> "JobRecord":
+        jid = meta.pop("id", None) or secrets.token_hex(8)
+        if not re.fullmatch(r"[0-9a-f]{16}", jid):
+            raise UpdateError("policy", "bad job id")
+        rec = cls(cfg, {"id": jid, "state": "queued", "started": int(time.time()), "finished": None, "exit": None, "events": [], "pid": None,
+                        "kind": "update", "source": "manual", "ref": "", "commit": "", "by": "", "via": "cli", "from": None, "to": None, "unsigned": False, **meta})
+        rec.save()
+        rec.prune()
+        return rec
+
+    @classmethod
+    def load(cls, cfg: Config, jid: str) -> "JobRecord | None":
+        if not re.fullmatch(r"[0-9a-f]{16}", jid or ""):
+            return None
+        try:
+            with open(_update_dir(cfg, "jobs", jid + ".json"), encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return cls(cfg, d) if isinstance(d, dict) and d.get("id") == jid else None
+
+    def save(self) -> None:
+        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+        write_atomic(self.path, json.dumps(self.data, separators=(",", ":")), mode=0o600)
+
+    def prune(self) -> None:
+        d = os.path.dirname(self.path)
+        files = sorted((f for f in os.listdir(d) if re.fullmatch(r"[0-9a-f]{16}\.json", f)), key=lambda f: os.path.getmtime(os.path.join(d, f)))
+        for f in files[:-self.KEEP]:
+            _unlink(os.path.join(d, f))
+
+    def start(self) -> None:
+        self.data.update(state="running", pid=os.getpid())
+        self.save()
+
+    def emit(self, step: str, status: str, message: str) -> None:
+        ev = self.data["events"]
+        ev.append({"t": int(time.time()), "step": step, "status": status, "message": message[:300]})
+        del ev[:-self.MAX_EVENTS]
+        self.save()
+        if self.echo:
+            self.echo(step, status, message)
+
+    def set(self, **kw: Any) -> None:
+        self.data.update(kw)
+        self.save()
+
+    def finish(self, state: str, code: int) -> None:
+        self.data.update(state=state, exit=code, finished=int(time.time()), pid=None)
+        self.save()
+
+    def summary(self) -> dict:
+        d = self.data
+        last = d["events"][-1] if d.get("events") else {}
+        return {k: d.get(k) for k in ("id", "kind", "source", "ref", "commit", "by", "via", "from", "to", "state", "exit", "started", "finished", "unsigned")} | {
+            "step": last.get("step"), "message": last.get("message")}
+
+
+def list_jobs(cfg: Config, limit: int = 15) -> list[JobRecord]:
+    d = _update_dir(cfg, "jobs")
+    try:
+        names = [f for f in os.listdir(d) if re.fullmatch(r"[0-9a-f]{16}\.json", f)]
+    except OSError:
+        return []
+    out = [r for r in (JobRecord.load(cfg, f[:-5]) for f in names) if r]
+    out.sort(key=lambda r: (r.data.get("started") or 0, r.id), reverse=True)
+    return out[:limit]
+
+
+def reap_jobs(cfg: Config) -> None:
+    """A job that says it is queued/running but has no live process (power loss, killed) is closed as failed, so the page never waits for ever."""
+    now = time.time()
+    for r in list_jobs(cfg, 30):
+        d = r.data
+        if d.get("state") == "running" and not _pid_alive(d.get("pid")):
+            r.emit("result", "fail", "interrupted: the update process ended without a result; check the unit")
+            r.finish("failed", EXIT_ROLLBACK_FAILED)
+        elif d.get("state") == "queued" and now - (d.get("started") or now) > 90:
+            r.emit("result", "fail", "the update process did not start")
+            r.finish("failed", EXIT_REFUSED)
+
+
+# ---- the shared flow -------------------------------------------------------------
+
+def update_audit(cfg: Config, rec: JobRecord, action: str, result: str) -> None:
+    d = rec.data
+    AuditLog(cfg.p(cfg.audit_path)).log(d.get("by") or "-", d.get("ip") or "-", action, {"job": rec.id, "source": d.get("source"), "via": d.get("via"), "ref": d.get("ref"),
+                                                                                         "commit": (d.get("commit") or "")[:12], "from": d.get("from"), "to": d.get("to")}, result)
+
+
+def preflight(cfg: Config, runner: Runner, force: bool) -> str | None:
+    """Reason to refuse an update from GitHub, or None. (The app checks health itself before a push; `--from DIR` stays as it was.)"""
+    if force:
+        return None
+    if not cfg.dry_run and runner.run(["systemctl", "is-active", "synofurb-mgmt.service"], timeout=10).out.strip() != "active":
+        return "the web UI service is not active: fix it first, or use --force"
+    parent = os.path.dirname(cfg.p(INSTALL_DIR))
+    try:
+        free = shutil.disk_usage(parent if os.path.isdir(parent) else cfg.p("/")).free
+    except OSError:
+        free = 1 << 40
+    if free < 64 << 20:
+        return "less than 64 MiB free next to %s" % INSTALL_DIR
+    try:
+        doc = collect_health(App(cfg, runner), quick=True, budget_s=20.0)
+    except Exception:                                             # noqa: BLE001
+        return None
+    if doc.get("overall") == "crit":
+        return ("the unit is in a critical state (%s); update anyway with --force" % "; ".join(doc.get("warnings", [])[:2]))[:200]
+    return None
+
+
+def run_update_flow(cfg: Config, runner: Runner, spec: dict, rec: JobRecord, *, fetch: HttpFetcher | None = None, probe: Callable[[Config], bool] | None = None,
+                    health_timeout: float = 30.0, sleep: Callable[[float], None] = time.sleep) -> int:
+    """check -> stage -> verify -> swap -> health -> rollback, with the job lock, history and audit. ``spec``: mode (dir|github|rollback), src,
+    channel, ref, expect, accept_unsigned, force, restart_delay. Exit codes are the Updater's: 0 ok, 2 refused, 3 rolled back, 4 rollback failed."""
+    lock = JobLock(cfg)
+    held = lock.acquire("update", rec.data["source"], rec.id)
+    rec.start()
+    update_audit(cfg, rec, "mgmt-update-start", "started")
+    work, phase = None, "check"
+    code, state = EXIT_REFUSED, "refused"
+    try:
+        if held is None:
+            rec.emit("lock", "fail", "another job is running (%s): wait for it to finish" % ((lock.holder() or {}).get("kind") or "unknown"))
+            return code
+        cur, _ = installed_info(cfg)
+        rec.set(**{"from": cur})
+        force, src = bool(spec.get("force")), spec.get("src")
+        if spec["mode"] == "github":
+            gh = GithubSource(fetch or HttpFetcher())
+            rec.emit("check", "start", "asking GitHub (%s)" % ("releases" if spec["channel"] == "stable" else "ref " + spec["ref"]))
+            info = gh.check(cfg, spec["channel"], spec["ref"])
+            rec.set(ref=info["ref"], commit=info["commit"], to=info["version"], unsigned=info["mode"] == "unsigned")
+            rec.emit("check", "ok", "%s %s, %s (installed %s)" % ("release" if info["channel"] == "stable" else "commit " + info["commit"][:7], info["version"], info["state"], cur or "none"))
+            expect = spec.get("expect") or ""
+            if expect and expect != info["version"] and not (len(expect) >= 7 and info["commit"].startswith(expect)):
+                raise UpdateError("mismatch", "GitHub now offers %s, not the %s you were shown: check again" % ((info["commit"] or info["version"])[:12], expect[:12]))
+            if info["blocked"]:
+                raise UpdateError("blocked", info["blocked"])
+            if info["mode"] == "unsigned" and not spec.get("accept_unsigned"):
+                raise UpdateError("consent", "this update is not signed (SHA-256 only): pass --accept-unsigned, or tick the box in the web UI")
+            if info["state"] == "current" and not force:
+                rec.emit("result", "ok", "already up to date (%s)" % cur)
+                code, state = EXIT_OK, "current"
+                return code
+            if info["state"] == "older" and not force:
+                raise UpdateError("older", "version %s is older than the installed %s (use --force to downgrade)" % (info["version"], cur))
+            why = preflight(cfg, runner, force)
+            if why:
+                raise UpdateError("unhealthy", why)
+            os.makedirs(_update_dir(cfg), mode=0o700, exist_ok=True)
+            work = tempfile.mkdtemp(prefix="stage-", dir=_update_dir(cfg))
+            phase = "download"
+            rec.emit("download", "start", "downloading")
+            src = gh.stage(cfg, runner, info, work, rec.emit)
+        elif spec["mode"] == "dir":
+            vf = os.path.join(src or "", "VERSION")
+            rec.set(to=(read_text(vf).strip().splitlines() or [None])[0] if os.path.isfile(vf) else None)
+        phase = "update"
+        upd = Updater(cfg, runner, rec.emit, probe=probe, health_timeout=health_timeout, sleep=sleep)
+        delay = float(spec.get("restart_delay") or 0)
+        if delay > 0:
+            upd.before_restart = lambda: sleep(delay)
+        code = upd.rollback() if spec["mode"] == "rollback" else upd.update(src, force=force)
+        if code == EXIT_OK:
+            rec.set(to=upd.installed_version())
+        state = {EXIT_OK: "ok", EXIT_REFUSED: "refused", EXIT_ROLLED_BACK: "rolled_back", EXIT_ROLLBACK_FAILED: "rollback_failed"}[code]
+    except UpdateError as e:
+        step = {"consent": "consent", "blocked": "check", "mismatch": "check", "older": "check", "unhealthy": "health"}.get(e.kind, phase)
+        rec.emit(step, "fail", e.message)
+        code, state = EXIT_REFUSED, "refused"
+    except Exception as e:                                         # noqa: BLE001
+        traceback.print_exc(file=sys.stderr)
+        rec.emit("result", "fail", "unexpected error: %s" % type(e).__name__)
+        code, state = (EXIT_ROLLBACK_FAILED if phase == "update" else EXIT_REFUSED), "failed"
+    finally:
+        if work:
+            shutil.rmtree(work, ignore_errors=True)
+        if held is not None or rec.data.get("state") == "running":
+            rec.finish(state, code)
+            update_audit(cfg, rec, "mgmt-update", "%s (exit %d)" % (state, code))
+        lock.release(held)
+    return code
+
+
+def default_source(src: str) -> str:
+    return "app" if os.path.basename(os.path.normpath(src)).startswith(APP_STAGE_PREFIX) else "manual"
+
+
+def run_update_cli(args: argparse.Namespace, cfg: Config, runner: Runner, emit: Callable[[str, str, str], None]) -> int:
+    """`update --from DIR | --from-github [--ref R] [--check] | --rollback | --status` (called by run_cli after the root check)."""
+    who = args.by or os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
+    ip = (os.environ.get("SSH_CONNECTION") or "-").split()[0]
+    meta = {"by": who[:64], "ip": ip, "via": args.via or "cli"}
+    if args.status:
+        reap_jobs(cfg)
+        print(json.dumps(update_state(cfg), separators=(",", ":")) if args.json else "installed: %s" % (installed_info(cfg)[0] or "unknown"), flush=True)
+        return EXIT_OK
+    if args.check:
+        if not args.from_github:
+            emit("check", "fail", "--check needs --from-github")
+            return EXIT_REFUSED
+        try:
+            info = GithubSource(HttpFetcher()).check(cfg, "main" if args.ref else "stable", args.ref or "")
+        except UpdateError as e:
+            emit("check", "fail", e.message)
+            return EXIT_REFUSED
+        print(json.dumps(info, separators=(",", ":")) if args.json else "%s: %s (installed %s) - %s" % (info["channel"], info["version"], info["installed"] or "none", info["state"]), flush=True)
+        return EXIT_OK
+    spec: dict[str, Any] = {"force": args.force, "restart_delay": args.restart_delay, "accept_unsigned": args.accept_unsigned, "expect": args.expect or "", "src": None}
+    if args.rollback:
+        spec["mode"] = "rollback"
+        meta.update(kind="rollback", source="rollback")
+    elif args.from_github:
+        spec.update(mode="github", channel="main" if args.ref else "stable", ref=args.ref or "")
+        if args.ref:
+            try:
+                valid_ref(args.ref)
+            except UpdateError as e:
+                emit("check", "fail", e.message)
+                return EXIT_REFUSED
+        meta["source"] = "github-main" if args.ref else "github-stable"
+    elif args.src:
+        spec.update(mode="dir", src=args.src)
+        meta["source"] = args.source if args.source in UPDATE_SOURCES else default_source(args.src)
+    else:
+        emit("verify", "fail", "update needs --from DIR, --from-github or --rollback")
+        return EXIT_REFUSED
+    if args.job_id:
+        rec = JobRecord.load(cfg, args.job_id)
+        if rec is None:
+            emit("verify", "fail", "unknown job id")
+            return EXIT_REFUSED
+        rec.data.update({k: v for k, v in meta.items() if not rec.data.get(k)})
+    else:
+        rec = JobRecord.create(cfg, **meta)
+    rec.echo = emit
+    return run_update_flow(cfg, runner, spec, rec, health_timeout=args.health_timeout)
+
+
+# ---- state and web routes ----------------------------------------------------------
+
+def update_state(cfg: Config) -> dict:
+    reap_jobs(cfg)
+    inst, sha = installed_info(cfg)
+    prev = read_text(os.path.join(cfg.p(INSTALL_DIR + ".prev"), "VERSION")).strip().splitlines()
+    jobs = list_jobs(cfg)
+    active = next((j for j in jobs if j.data.get("state") in ("queued", "running")), None)
+    lock = JobLock(cfg).holder()
+    s = load_update_settings(cfg)
+    chk = load_check(cfg)
+    if chk:
+        chk["state"], chk["installed"] = _cmp_state(chk["version"], inst, chk.get("channel", "stable")), inst
+    return {"ok": True, "installed": inst, "sha256": sha, "previous": prev[0] if prev else None, "channel": s["channel"], "ref": s["ref"], "check": chk,
+            "active": active.id if active else None, "busy": (lock or {}).get("kind"), "jobs": [j.summary() for j in jobs],
+            "signed": update_pubkey(cfg) != UPDATE_PLACEHOLDER_KEY, "repo": UPDATE_REPO}
+
+
+def _channel_ref(body: dict) -> tuple[str, str]:
+    ch = body.get("channel")
+    if ch not in UPDATE_CHANNELS:
+        raise ApiError(400, "channel must be stable or main")
+    try:
+        return ch, (valid_ref(body.get("ref") or "main") if ch == "main" else "")
+    except UpdateError as e:
+        raise ApiError(400, e.message)
+
+
+@route("GET", "/api/update")
+def api_update(req: Request) -> dict:
+    return update_state(req.app.cfg)
+
+
+@route("POST", "/api/update/check", mutating=False)
+def api_update_check(req: Request) -> dict:
+    app = req.app
+    ch, ref = _channel_ref(req.body)
+    try:
+        info = GithubSource(getattr(app, "update_fetch", None) or HttpFetcher()).check(app.cfg, ch, ref)
+    except UpdateError as e:
+        raise ApiError(502 if e.kind in ("offline", "http", "rate_limit") else 400, e.message)
+    save_update_settings(app.cfg, ch, ref or "main")
+    write_atomic(_update_dir(app.cfg, "check.json"), json.dumps(info, separators=(",", ":")), mode=0o600)
+    return {"ok": True, "check": info}
+
+
+def launch_update_job(app: App, argv: list[str], jid: str) -> None:
+    """Start the job OUTSIDE this service's cgroup (a transient systemd unit), so restarting the service cannot kill it."""
+    custom = getattr(app, "update_launcher", None)
+    if custom:
+        custom(argv)
+        return
+    full = [sys.executable or "/usr/bin/python3", app.script_path] + argv
+    if app.cfg.root:
+        full += ["--root", app.cfg.root] + (["--dry-run"] if app.cfg.dry_run else [])
+    if app.runner.which("systemd-run") and not app.cfg.dry_run:
+        r = app.run(["systemd-run", "--unit", "synofurb-mgmt-update-" + jid[:8], "--collect", "--quiet", "--description", "synofurb management plane update",
+                     "--setenv=PYTHONUNBUFFERED=1", "--setenv=PYTHONDONTWRITEBYTECODE=1", "--"] + full, timeout=20)
+        if not r.ok:
+            raise ApiError(500, "could not start the update job: " + (r.err or r.out).strip()[:200])
+        return
+    subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=RealRunner.ENV)
+
+
+def _start_job(req: Request, argv: list[str], **meta: Any) -> dict:
+    app = req.app
+    reap_jobs(app.cfg)
+    h = JobLock(app.cfg).holder()
+    if h:
+        raise ApiError(409, "another job is running (%s): wait for it to finish" % h.get("kind", "unknown"))
+    rec = JobRecord.create(app.cfg, by=req.user or "-", ip=req.ip, via="web", **meta)
+    try:
+        launch_update_job(app, ["update", "--json", "--job-id", rec.id, "--by", req.user or "-", "--via", "web", "--restart-delay", "3"] + argv, rec.id)
+    except ApiError as e:
+        rec.emit("result", "fail", e.message)
+        rec.finish("failed", EXIT_REFUSED)
+        raise
+    req.audit_note = "job " + rec.id
+    return {"ok": True, "job": rec.id}
+
+
+@route("POST", "/api/update/start")
+def api_update_start(req: Request) -> dict:
+    b = req.body
+    ch, ref = _channel_ref(b)
+    expect = b.get("expect")
+    if not isinstance(expect, str) or not re.fullmatch(r"[0-9A-Za-z.+-]{1,40}", expect):
+        raise ApiError(400, "expect must be the version or commit that was shown")
+    if ch == "main":
+        need_confirm(b, expect[:7])
+    argv = ["--from-github", "--expect", expect] + (["--ref", ref] if ch == "main" else []) + (["--accept-unsigned"] if b.get("accept_unsigned") is True else []) + (["--force"] if b.get("force") is True else [])
+    return _start_job(req, argv, source="github-" + ch, ref=ref)
+
+
+@route("POST", "/api/update/rollback")
+def api_update_rollback(req: Request) -> dict:
+    if not os.path.isfile(os.path.join(req.app.cfg.p(INSTALL_DIR + ".prev"), "synofurb_mgmt.py")):
+        raise ApiError(409, "no previous version is kept")
+    return _start_job(req, ["--rollback"], kind="rollback", source="rollback")
+
+
+def _job_id(body: dict) -> str:
+    jid = body.get("job")
+    if not isinstance(jid, str) or not re.fullmatch(r"[0-9a-f]{16}", jid):
+        raise ApiError(400, "bad job id")
+    return jid
+
+
+@route("POST", "/api/update/job", mutating=False)
+def api_update_job(req: Request) -> dict:
+    reap_jobs(req.app.cfg)
+    rec = JobRecord.load(req.app.cfg, _job_id(req.body))
+    if rec is None:
+        raise ApiError(404, "no such job")
+    return {"ok": True, "job": rec.summary(), "events": rec.data.get("events", [])}
+
+
+@route("POST", "/api/update/progress", auth=False, mutating=False)
+def api_update_progress(req: Request) -> dict:
+    """What the page can still read after the restart dropped its session: state and version numbers only, found by the unguessable job id."""
+    reap_jobs(req.app.cfg)
+    rec = JobRecord.load(req.app.cfg, _job_id(req.body))
+    if rec is None:
+        raise ApiError(404, "no such job")
+    s = rec.summary()
+    return {"ok": True, "job": {k: s[k] for k in ("id", "state", "step", "from", "to", "finished")}}
+
+
 def run_cli(args: argparse.Namespace, cfg: Config, runner: Runner) -> int:
     """Dispatch ``health`` and ``update``. Exit codes: 0 ok, 2 refused/bad input, 3 failed and rolled back, 4 failed and rollback failed."""
     if args.command == "health":
@@ -4319,13 +5191,7 @@ def run_cli(args: argparse.Namespace, cfg: Config, runner: Runner) -> int:
     if not cfg.root and os.geteuid() != 0:
         emit("verify", "fail", "must run as root")
         return EXIT_REFUSED
-    upd = Updater(cfg, runner, emit, health_timeout=args.health_timeout)
-    if args.rollback:
-        return upd.rollback()
-    if not args.src:
-        emit("verify", "fail", "update needs --from DIR or --rollback")
-        return EXIT_REFUSED
-    return upd.update(args.src, force=args.force)
+    return run_update_cli(args, cfg, runner, emit)
 
 
 # ============================================================================
@@ -4367,6 +5233,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--force", action="store_true", help="update: allow installing an older version")
     ap.add_argument("--rollback", action="store_true", help="update: restore the previous version")
     ap.add_argument("--health-timeout", type=float, default=30.0, help=argparse.SUPPRESS)
+    ap.add_argument("--from-github", action="store_true", help="update: fetch from GitHub (newest release; with --ref the apps/mgmt-plane folder of that branch or tag)")
+    ap.add_argument("--ref", help="update --from-github: branch or tag of the monorepo (default: the newest release asset)")
+    ap.add_argument("--check", action="store_true", help="update --from-github: only look; change nothing")
+    ap.add_argument("--status", action="store_true", help="update: installed version and the last updates")
+    ap.add_argument("--accept-unsigned", action="store_true", help="update --from-github: accept a download that has a SHA-256 but no signature")
+    ap.add_argument("--source", help=argparse.SUPPRESS)
+    ap.add_argument("--by", help=argparse.SUPPRESS)
+    ap.add_argument("--via", help=argparse.SUPPRESS)
+    ap.add_argument("--job-id", help=argparse.SUPPRESS)
+    ap.add_argument("--expect", help=argparse.SUPPRESS)
+    ap.add_argument("--restart-delay", type=float, default=0.0, help=argparse.SUPPRESS)
     ap.add_argument("--raid-scrub", action="store_true", help=argparse.SUPPRESS)
     return ap.parse_args(argv)
 
@@ -4405,6 +5282,7 @@ def main(argv: list[str] | None = None) -> int:
         app.audit.log("system", "-", "raid-scrub", {}, "ok: started %d check(s)" % n)
         return 0
     startup_recovery(app)
+    reap_jobs(cfg)
     ctx = None
     if cfg.tls:
         cert, key = ensure_tls(cfg, runner, socket.gethostname(), app.ip_addresses())

@@ -257,6 +257,31 @@ if [ "$ENABLE_MGMT" = 1 ]; then
 fi
 systemctl enable synofurb-firstboot.service || true
 
+# --- add-ons (BEGIN synofurb-addons: docs/ADDONS.md, "Installer integration") -------------------------------------------------
+# ADDONS (ids in install order) and ADDON_DOCKER_PACKAGES come from env.sh and exist only when add-ons were chosen. The choices go
+# to the pending folder; the first-boot unit hands them to the management plane. Secret settings are copied 0600 and never printed.
+if [ -n "${ADDONS:-}" ]; then
+  say "add-ons chosen: $ADDONS"
+  install -d -m 700 /etc/synofurb/addons.d /etc/synofurb/addons.d/pending /etc/synofurb/addons.d/pending-secrets
+  for _a in $ADDONS; do
+    install -m 600 "$P/addons/$_a.json" "/etc/synofurb/addons.d/pending/$_a.json"
+    if [ -f "$P/addons/secrets/$_a.json" ]; then
+      install -m 600 "$P/addons/secrets/$_a.json" "/etc/synofurb/addons.d/pending-secrets/$_a.json"
+      say "add-on $_a: secret settings stored (not shown)"
+    fi
+  done
+  echo "$ADDON_DOCKER_PACKAGES" > /etc/synofurb/addons.d/docker.packages
+  if [ "$OFFLINE" = 1 ]; then
+    # The bundle has no Docker packages: the first-boot unit installs them from the official mirrors (Internet needed there).
+    say "OFFLINE install: Docker ($ADDON_DOCKER_PACKAGES) is installed on the first boot instead"
+  else
+    # shellcheck disable=SC2086
+    apt_install $ADDON_DOCKER_PACKAGES || say "WARNING: Docker could not be installed now; the first boot tries again"
+  fi
+  systemctl enable synofurb-addons-firstboot.service || true
+fi
+# --- add-ons (END synofurb-addons) ------------------------------------------------------------------------------------------------
+
 # --- bootloader ------------------------------------------------------------------------------------------------------------------
 say "bootloader ($FIRMWARE)"
 stable_name() { # DEVICE -> a /dev/disk/by-id name if one exists, else the device itself

@@ -463,7 +463,12 @@ impl App {
         };
         let mut rows: Vec<(&'static str, String)> = vec![];
         if !q.mixed {
-            rows.push(("Storage", format!("Wipe all {} disks \u{00b7} {}", f.candidate_disks().len(), opts[0].1)));
+            rows.push(("Storage", {
+                let scope = super::facts::DiskScope::of(&f);
+                let n = if scope.big_excluded == 0 { format!("all {} disks", scope.used) } else { scope.count_text() };
+                let left = scope.not_touched().map(|t| format!(" \u{00b7} {}", t.to_lowercase())).unwrap_or_default();
+                format!("Wipe {n} \u{00b7} {}{left}", opts[0].1)
+            }));
         }
         rows.push(("System", format!("{} GiB \u{00d7} {} copies \u{00b7} {hostname} \u{00b7} {user}", q.system_gib, q.copies)));
         rows.push(("Boot", format!("Newest kernel \u{00b7} {} \u{00b7} {boot}", if self.source_offline { "Offline" } else { "Online" })));

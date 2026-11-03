@@ -389,7 +389,11 @@ pub mod fixtures {
             s.push_str(&format!("PART|{d}|{d}5|5|9437184|3897559296\nPART|{d}|{d}6|6|3907000000|11720813056\n"));
         }
         s.push_str("DISK|synoboot|DiskStation|SYNO0001|245760|512|1|1|msdos|/sys/devices/pci0000:00/0000:00:15.0/usb1/1-1/1-1:1.0/host4/target4:0:0/4:0:0:0\n");
-        s.push_str("PART|synoboot|synoboot1|1|2048|241664\n");
+        // The boot flash: partition 1 = FAT loader menu, partition 2 = ext2 with zImage/rd.gz. The unit reports it as editable (both
+        // magics match). The partition sizes below are SAMPLE values (a 120 MiB flash holds at least 16 + 64 MiB for the editable test
+        // plus the DSM files); `synofurb inspect` on the unit prints the real ones, which belong into docs/HARDWARE-TEST-PLAN.md.
+        s.push_str("PART|synoboot|synoboot1|1|2048|49152\nPART|synoboot|synoboot2|2|51200|188416\n");
+        s.push_str("DOM|245760|49152|188416|1|1\n");
         s.push_str("MD|md0|raid1|clean|4980352|sdd1,sdc1,sdb1,sda1|u0|DiskStation:0|0.9|idle|none|0\n");
         s.push_str("MD|md1|raid1|clean|4194176|sdd2,sdc2,sdb2,sda2|u1|DiskStation:1|0.9|idle|none|0\n");
         s.push_str("MD|md2|raid5|active|11692677888|sdd5,sda5,sdb5,sdc5|u2|awss01:2|1.2|resync|1770222464_/_1948779648|0\n");

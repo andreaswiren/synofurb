@@ -980,3 +980,93 @@ fn unsigned_self_update_is_an_explicit_opt_in_and_never_satisfied_by_yes_alone()
     // the shipped build still has the placeholder key, so the flag is accepted by the argument checks
     assert!(synofurb_core::updater::unsigned_allowed());
 }
+
+// ---------------------------------------------------------------------------------------------- scan networks
+
+#[test]
+fn scan_list_networks_json_and_text() {
+    let s = Sandbox::new("nets");
+    let r = s.run(&["scan", "--list-networks", "--json"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let nets = r.json()["networks"].as_array().unwrap().clone();
+    let mut seen_non_recommended = false;
+    for n in &nets {
+        has_keys(n, &["id", "interface", "ip", "prefix", "cidr", "broadcast", "kind", "recommended", "sweep_hosts"]);
+        assert!(!n["ip"].as_str().unwrap().starts_with("127."), "loopback is not listed");
+        let id = format!("{}|{}/{}", n["interface"].as_str().unwrap(), n["ip"].as_str().unwrap(), n["prefix"]);
+        assert_eq!(n["id"], id.as_str());
+        assert!(["lan", "vpn", "virtual", "link_local", "other"].contains(&n["kind"].as_str().unwrap()));
+        assert_eq!(n["recommended"].as_bool().unwrap(), n["kind"] == "lan", "only LAN networks are the default");
+        // recommended ones come first
+        assert!(!(seen_non_recommended && n["recommended"].as_bool().unwrap()));
+        seen_non_recommended |= !n["recommended"].as_bool().unwrap();
+    }
+    let t = s.run(&["scan", "--list-networks"]);
+    assert_eq!(t.code, 0, "{}", t.stderr);
+    if !nets.is_empty() {
+        assert!(t.stdout.contains("INTERFACE") && t.stdout.contains("KIND"), "{}", t.stdout);
+        assert!(t.stdout.contains(nets[0]["id"].as_str().unwrap()));
+    }
+    // nothing is scanned or saved when listing
+    assert!(!s.path("data/synofurb/inventory.json").exists());
+}
+
+#[test]
+fn scan_network_selection_errors_are_usage_errors() {
+    let s = Sandbox::new("netsel");
+    let r = s.run(&["scan", "--network", "10.0.0.0/16"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("too large") && r.stderr.contains("/20"), "{}", r.stderr);
+    let r = s.run(&["scan", "--network", "no-such-adapter0"]);
+    assert_eq!(r.code, 2);
+    assert!(r.stderr.contains("--list-networks"), "{}", r.stderr);
+    let r = s.run(&["scan", "--network", "1.2.3/24"]);
+    assert_eq!(r.code, 2);
+    assert_eq!(s.run(&["scan", "--network", "10.0.0.0/24", "--all-networks"]).code, 2, "mutually exclusive");
+}
+
+/// Scan a custom network on the loopback range: no NAS, no network access needed. Every `--ndjson` line is an event.
+#[test]
+fn scan_ndjson_reports_progress_per_method_and_network() {
+    let s = Sandbox::new("netprog");
+    let r = s.run(&["scan", "--network", "127.0.0.0/29", "--timeout", "1", "--ndjson", "--no-save"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let ev: Vec<Value> = r.stdout.lines().map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON ({e}): {l}"))).collect();
+    let kind = |i: usize| ev[i]["event"].as_str().unwrap().to_string();
+    assert_eq!(kind(0), "started");
+    assert_eq!(kind(ev.len() - 1), "finished");
+    assert_eq!(ev[0]["networks"][0]["key"], "127.0.0.0/29");
+    assert_eq!(ev[0]["networks"][0]["cidr"], "127.0.0.0/29");
+    // 127.0.0.2 .. 127.0.0.6 are swept (127.0.0.1 is this computer)
+    assert_eq!(ev[0]["total_hosts"], 5);
+    let methods: Vec<&str> = ev[0]["methods"].as_array().unwrap().iter().map(|m| m.as_str().unwrap()).collect();
+    assert_eq!(methods, ["synology_udp", "mdns", "ssdp", "probe_sweep"]);
+    let finished: Vec<&Value> = ev.iter().filter(|e| e["event"] == "method_finished").collect();
+    for m in ["synology_udp", "probe_sweep"] {
+        let f = finished.iter().find(|e| e["method"] == m).unwrap_or_else(|| panic!("no method_finished for {m}: {}", r.stdout));
+        assert_eq!(f["network"], "127.0.0.0/29");
+        assert!(f["error"].is_null(), "{f}");
+    }
+    for m in ["mdns", "ssdp"] {
+        assert!(
+            ev.iter().any(|e| e["event"] == "skipped" && e["method"] == m && e["reason"].as_str().unwrap().contains("multicast")),
+            "{m} must be skipped for a network this computer is not on"
+        );
+    }
+    let last_sweep = ev.iter().rev().find(|e| e["event"] == "method_progress" && e["method"] == "probe_sweep").expect("sweep progress");
+    assert_eq!((last_sweep["done"].as_u64(), last_sweep["total"].as_u64()), (Some(5), Some(5)));
+    assert!(ev.last().unwrap()["elapsed_ms"].is_u64());
+}
+
+#[test]
+fn scan_json_lists_what_was_scanned() {
+    let s = Sandbox::new("netjson");
+    let r = s.run(&["scan", "--network", "127.0.0.0/30", "--no-sweep", "--timeout", "1", "--json", "--no-save"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let v = r.json();
+    assert_eq!(v["devices"].as_array().unwrap().len(), 0);
+    assert_eq!(v["networks"][0]["key"], "127.0.0.0/30");
+    assert!(v["errors"].as_array().unwrap().is_empty());
+    // the text mode says what it is scanning, on stderr
+    assert!(r.stderr.contains("Scanning 1 network(s)") && r.stderr.contains("127.0.0.0/30"), "{}", r.stderr);
+}

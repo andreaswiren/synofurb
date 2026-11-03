@@ -266,6 +266,9 @@ mod strings {
         INSPECT_COL_USED: Label, "Used", "", "", "";
         INSPECT_COL_BACKED: Label, "Backed by", "", "", "";
         INSPECT_COL_STATUS: Label, "Status", "", "", "";
+        INSPECT_USE_TARGET: Label, "Install target", "", "", "";
+        INSPECT_USE_NOT: Label, "Not used: {}", "", "", "";
+        INSPECT_NOT_CHECKED: Label, "Not checked", "", "", "";
         INSPECT_LAYOUT: Label, "Current layout", "DSM's partitions on each disk.", "", "";
         INSPECT_CHOOSE: Button, "Choose goal", "", "", "";
         INSPECT_BLOCKED: Label, "Cannot be converted", "Debian 13 cannot run on this hardware.", "compat-status", "";
@@ -879,6 +882,9 @@ pub static SCREENS: &[ScreenCopy] = &[
             &INSPECT_COL_USED,
             &INSPECT_COL_BACKED,
             &INSPECT_COL_STATUS,
+            &INSPECT_USE_TARGET,
+            &INSPECT_USE_NOT,
+            &INSPECT_NOT_CHECKED,
             &INSPECT_LAYOUT,
             &INSPECT_CHOOSE,
             &BTN_BACK,

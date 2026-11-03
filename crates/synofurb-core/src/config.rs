@@ -113,6 +113,9 @@ pub struct InstallConfig {
     pub extra_packages: Vec<String>,
     /// U-Boot boards: DTB file name to append to the kernel (e.g. `armada-385-synology-ds116.dtb`).
     pub dtb: Option<String>,
+    /// Add-ons (Docker apps) to install on the first boot, see `crate::addons`. Configs saved before add-ons existed load as empty.
+    #[serde(default)]
+    pub addons: Vec<crate::addons::AddonChoice>,
 }
 
 fn default_kernel() -> KernelChannel {
@@ -137,6 +140,7 @@ impl InstallConfig {
             enable_mgmt: true,
             extra_packages: vec![],
             dtb: None,
+            addons: vec![],
         }
     }
 
@@ -184,6 +188,10 @@ impl InstallConfig {
             && (!d.ends_with(".dtb") || !d.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)))
         {
             bail!("invalid DTB file name");
+        }
+        crate::addons::validate(&self.addons)?;
+        if !self.addons.is_empty() && !self.enable_mgmt {
+            bail!("add-ons are installed by the web management plane: switch it on or drop the add-ons");
         }
         Ok(())
     }
@@ -310,5 +318,21 @@ mod tests {
         c.extra_packages.clear();
         c.dtb = Some("../evil".into());
         assert!(c.validate().is_err());
+        c.dtb = None;
+        c.addons = vec![crate::addons::AddonChoice::new("portainer")];
+        c.validate().unwrap();
+        c.enable_mgmt = false;
+        assert!(c.validate().unwrap_err().to_string().contains("management plane"));
+        c.enable_mgmt = true;
+        c.addons = vec![crate::addons::AddonChoice::new("nope")];
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn configs_saved_before_addons_still_load() {
+        let mut v = serde_json::to_value(InstallConfig::new("nas", "nasadmin", "$6$salt$abcdef".into())).unwrap();
+        v.as_object_mut().unwrap().remove("addons");
+        let c: InstallConfig = serde_json::from_value(v).unwrap();
+        assert!(c.addons.is_empty());
     }
 }

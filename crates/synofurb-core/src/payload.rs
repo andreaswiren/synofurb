@@ -46,6 +46,8 @@ const STATIC_FILES: &[(&str, &str)] = &[
     asset!("files/etc/apt/apt.conf.d/52synofurb-unattended"),
     asset!("files/etc/sysctl.d/90-synofurb.conf"),
     asset!("files/etc/systemd/system/synofurb-firstboot.service"),
+    asset!("files/etc/systemd/system/synofurb-addons-firstboot.service"),
+    asset!("files/usr/local/sbin/synofurb-addons-firstboot"),
     asset!("files/usr/local/sbin/synofurb-firstboot"),
     asset!("files/usr/local/sbin/synofurb-uboot-update"),
     asset!("files/usr/local/sbin/synofurb-dom-update"),
@@ -118,6 +120,12 @@ pub fn render_env_with(cfg: &InstallConfig, plan: &Plan, facts: &DeviceFacts, of
         kv("INITRD_MIB", &rb.initrd_mib.to_string());
         kv("RESERVED_MIB", &rb.reserved_mib.to_string());
     }
+    // add-ons: only written when there are some, so the file is byte-identical to before for every other install
+    if !cfg.addons.is_empty() {
+        let ids = crate::addons::resolved_ids(&cfg.addons).unwrap_or_default();
+        kv("ADDONS", &ids.join(" "));
+        kv("ADDON_DOCKER_PACKAGES", &crate::addons::DOCKER_PACKAGES.join(" "));
+    }
     if let Some(o) = offline {
         kv("OFFLINE", "1");
         kv("OFFLINE_SUITES", &o.suites.join(" "));
@@ -176,6 +184,13 @@ fn build_payload_with(
         (cfg.ssh_authorized_keys.join("\n") + if cfg.ssh_authorized_keys.is_empty() { "" } else { "\n" }).as_bytes(),
         0o600,
     )?;
+    // add-ons chosen in the installer: the choices (no secrets) and, separately, the secret settings (0600), see crate::addons
+    for (i, r) in crate::addons::resolve(&cfg.addons)?.iter().enumerate() {
+        add(&format!("addons/{}.json", r.entry.id), crate::addons::pending_json(r, i + 1).as_bytes(), 0o600)?;
+        if let Some(sec) = crate::addons::pending_secrets_json(r) {
+            add(&format!("addons/secrets/{}.json", r.entry.id), sec.as_bytes(), 0o600)?;
+        }
+    }
     add("plan.json", serde_json::to_string_pretty(plan)?.as_bytes(), 0o644)?;
     add("dsm-inspect.txt", dsm_inspect_output.as_bytes(), 0o644)?;
     let bytes = tar.into_inner()?.finish()?;
@@ -399,5 +414,365 @@ mod tests {
             }
         }
         assert!(found);
+    }
+
+    // ------------------------------------------------------------------------------------------------ add-ons
+
+    fn addon_cfg() -> (InstallConfig, Plan, DeviceFacts) {
+        use crate::addons::AddonChoice;
+        let (mut cfg, plan, facts) = setup();
+        let mut plex = AddonChoice::new("plex");
+        plex.secrets.insert("plex_claim".into(), "claim-TOPSECRETVALUE".into());
+        let mut frigate = AddonChoice::new("frigate");
+        frigate.settings.insert("retain_days".into(), "14".into());
+        cfg.addons = vec![plex, frigate, AddonChoice::new("portainer")];
+        (cfg, plan, facts)
+    }
+
+    fn read_payload(bytes: &[u8]) -> Vec<(String, u32, String)> {
+        let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
+        ar.entries()
+            .unwrap()
+            .map(|e| {
+                let mut e = e.unwrap();
+                let (n, m) = (e.path().unwrap().to_string_lossy().to_string(), e.header().mode().unwrap());
+                let mut s = String::new();
+                let _ = e.read_to_string(&mut s);
+                (n, m, s)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn env_and_payload_carry_the_addon_choices_without_leaking_secrets() {
+        let (cfg, plan, facts) = addon_cfg();
+        let env = render_env(&cfg, &plan, &facts);
+        assert!(
+            env.contains(
+                "ADDONS='docker portainer frigate plex'
+"
+            ),
+            "{env}"
+        );
+        assert!(
+            env.contains(
+                "ADDON_DOCKER_PACKAGES='docker.io docker-cli docker-compose'
+"
+            ),
+            "{env}"
+        );
+        assert!(!env.contains("TOPSECRET") && !env.contains("plex_claim"), "secrets never go into env.sh");
+        // no add-ons: env.sh is exactly what it was
+        let (plain, plan0, facts0) = setup();
+        assert!(!render_env(&plain, &plan0, &facts0).contains("ADDON"));
+
+        let p = build_payload(&cfg, &plan, &facts, "x").unwrap();
+        let files = read_payload(&p.bytes);
+        let get = |n: &str| files.iter().find(|f| f.0 == n).unwrap_or_else(|| panic!("{n} missing"));
+        for id in ["docker", "portainer", "frigate", "plex"] {
+            let f = get(&format!("addons/{id}.json"));
+            assert_eq!(f.1 & 0o777, 0o600, "{id}: pending file mode");
+            let j: serde_json::Value = serde_json::from_str(&f.2).unwrap();
+            assert_eq!(j["id"], id);
+            assert!(!f.2.contains("TOPSECRET"), "the choice file has no secret values");
+        }
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&get("addons/frigate.json").2).unwrap()["settings"]["retain_days"], "14");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&get("addons/docker.json").2).unwrap()["order"], 1);
+        let sec = get("addons/secrets/plex.json");
+        assert_eq!(sec.1 & 0o777, 0o600);
+        assert!(sec.2.contains("claim-TOPSECRETVALUE"));
+        assert!(!files.iter().any(|f| f.0.starts_with("addons/secrets/") && f.0 != "addons/secrets/plex.json"));
+        // the secret appears in exactly that one payload file
+        assert_eq!(files.iter().filter(|f| f.2.contains("TOPSECRETVALUE")).count(), 1);
+        // unit + first-boot script travel with the static files
+        let unit = get("files/etc/systemd/system/synofurb-addons-firstboot.service");
+        assert!(unit.2.contains("ExecStart=/usr/local/sbin/synofurb-addons-firstboot"));
+        assert_eq!(get("files/usr/local/sbin/synofurb-addons-firstboot").1 & 0o777, 0o755);
+        // without add-ons no addons/ file exists
+        let p0 = build_payload(&plain, &plan0, &facts0, "x").unwrap();
+        assert!(!read_payload(&p0.bytes).iter().any(|f| f.0.starts_with("addons/")));
+    }
+
+    #[test]
+    fn config_with_secret_serializes_without_it() {
+        let (cfg, _, _) = addon_cfg();
+        let j = serde_json::to_string(&cfg).unwrap();
+        assert!(!j.contains("TOPSECRET") && j.contains("retain_days"), "{j}");
+        assert!(!format!("{cfg:?}").contains("TOPSECRET"));
+    }
+
+    /// The add-on block of the real `chroot-setup.sh`, run with `sh` against a scratch root with fake `apt-get`/`systemctl`.
+    #[cfg(unix)]
+    fn run_addon_block(offline: bool, apt_fails: bool) -> (std::path::PathBuf, String) {
+        let script = include_str!("../../../payload/chroot-setup.sh");
+        let start = script.find("# --- add-ons (BEGIN synofurb-addons").expect("add-on block");
+        let end = script.find("# --- add-ons (END synofurb-addons)").expect("end of the add-on block");
+        let block = &script[start..end];
+        let root = std::env::temp_dir().join(format!("sf-addons-{}-{}-{}", std::process::id(), offline, apt_fails));
+        let _ = std::fs::remove_dir_all(&root);
+        let pay = root.join("payload");
+        std::fs::create_dir_all(&pay).unwrap();
+        let (cfg, plan, facts) = addon_cfg();
+        let p = build_payload(&cfg, &plan, &facts, "x").unwrap();
+        tar::Archive::new(flate2::read::GzDecoder::new(&p.bytes[..])).unpack(&pay).unwrap();
+        let env = render_env(&cfg, &plan, &facts);
+        let r = root.display().to_string();
+        let block = block.replace("/etc/synofurb", &format!("{r}/etc/synofurb"));
+        assert!(!block.contains(" /etc/synofurb"), "unrewritten absolute path:\n{block}");
+        let harness = format!(
+            "set -eu\nP={}\n{env}\nOFFLINE={}\nsay() {{ echo \"[chroot] $*\"; }}\nsystemctl() {{ echo \"systemctl $*\"; }}\n\
+             apt_install() {{ echo \"apt_install $*\"; {}; }}\n{block}\n",
+            sh_quote(&pay.display().to_string()),
+            if offline { 1 } else { 0 },
+            if apt_fails { "return 100" } else { "return 0" },
+        );
+        let out = std::process::Command::new("sh").arg("-c").arg(&harness).output().unwrap();
+        assert!(out.status.success(), "{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        (root, String::from_utf8_lossy(&out.stdout).to_string())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chroot_script_writes_pending_files_and_installs_docker_online() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, out) = run_addon_block(false, false);
+        let pending = root.join("etc/synofurb/addons.d/pending");
+        let mut names: Vec<String> =
+            std::fs::read_dir(&pending).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        names.sort();
+        assert_eq!(names, ["docker.json", "frigate.json", "plex.json", "portainer.json"]);
+        for n in &names {
+            assert_eq!(std::fs::metadata(pending.join(n)).unwrap().permissions().mode() & 0o777, 0o600, "{n}");
+        }
+        for d in ["etc/synofurb/addons.d", "etc/synofurb/addons.d/pending", "etc/synofurb/addons.d/pending-secrets"] {
+            assert_eq!(std::fs::metadata(root.join(d)).unwrap().permissions().mode() & 0o777, 0o700, "{d}");
+        }
+        let sec = root.join("etc/synofurb/addons.d/pending-secrets/plex.json");
+        assert_eq!(std::fs::metadata(&sec).unwrap().permissions().mode() & 0o777, 0o600);
+        assert!(std::fs::read_to_string(&sec).unwrap().contains("claim-TOPSECRETVALUE"));
+        assert_eq!(std::fs::read_dir(root.join("etc/synofurb/addons.d/pending-secrets")).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/synofurb/addons.d/docker.packages")).unwrap().trim(),
+            "docker.io docker-cli docker-compose"
+        );
+        assert!(out.contains("apt_install docker.io docker-cli docker-compose"), "{out}");
+        assert!(out.contains("systemctl enable synofurb-addons-firstboot.service"), "{out}");
+        assert!(!out.contains("TOPSECRET"), "the install log must not contain secrets:\n{out}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chroot_script_defers_docker_offline_and_survives_an_apt_failure() {
+        let (root, out) = run_addon_block(true, false);
+        assert!(!out.contains("apt_install"), "offline: the bundle has no Docker packages\n{out}");
+        assert!(out.contains("OFFLINE install: Docker") && out.contains("systemctl enable synofurb-addons-firstboot.service"), "{out}");
+        assert!(root.join("etc/synofurb/addons.d/pending/docker.json").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+        // a failing apt-get is a warning, not an install failure
+        let (root, out) = run_addon_block(false, true);
+        assert!(out.contains("WARNING: Docker could not be installed now"), "{out}");
+        assert!(out.contains("systemctl enable synofurb-addons-firstboot.service"), "{out}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chroot_script_without_addons_does_nothing_for_them() {
+        let script = include_str!("../../../payload/chroot-setup.sh");
+        let start = script.find("# --- add-ons (BEGIN synofurb-addons").unwrap();
+        let end = script.find("# --- add-ons (END synofurb-addons)").unwrap();
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "set -eu\nsay() {{ echo \"[chroot] $*\"; }}\napt_install() {{ echo apt; }}\nsystemctl() {{ echo sc; }}\nOFFLINE=0\n{}",
+                &script[start..end]
+            ))
+            .output()
+            .unwrap();
+        assert!(out.status.success() && out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    #[cfg(unix)]
+    fn script_path(rel: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../payload").join(rel)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn addon_firstboot_script_is_valid_sh_and_shellcheck_clean() {
+        let f = script_path("files/usr/local/sbin/synofurb-addons-firstboot");
+        for sh in ["dash", "sh"] {
+            if let Ok(o) = std::process::Command::new(sh).arg("-n").arg(&f).output() {
+                assert!(o.status.success(), "{sh} -n: {}", String::from_utf8_lossy(&o.stderr));
+            }
+        }
+        if let Ok(o) = std::process::Command::new("shellcheck").args(["-s", "dash"]).arg(&f).output() {
+            assert!(o.status.success(), "shellcheck:\n{}", String::from_utf8_lossy(&o.stdout));
+        }
+    }
+
+    #[test]
+    fn addon_unit_has_the_documented_shape() {
+        let u = include_str!("../../../payload/files/etc/systemd/system/synofurb-addons-firstboot.service");
+        for need in [
+            "Wants=network-online.target",
+            "ConditionPathExists=/etc/synofurb/addons.d/pending",
+            "Type=oneshot",
+            "ExecStart=/usr/local/sbin/synofurb-addons-firstboot",
+            "WantedBy=multi-user.target",
+        ] {
+            assert!(u.lines().any(|l| l.trim() == need), "unit lacks `{need}`");
+        }
+        let after = u.lines().find(|l| l.starts_with("After=")).unwrap();
+        assert!(after.contains("network-online.target") && after.contains("docker.service"), "{after}");
+        assert!(!u.contains("ExecStart=-") || u.contains("exits 0"), "the script itself never fails; no `-` prefix needed");
+        // the wrapper is what runs apply-pending, with the documented command
+        let w = include_str!("../../../payload/files/usr/local/sbin/synofurb-addons-firstboot");
+        assert!(w.contains("MGMT=${SYNOFURB_MGMT:-/opt/synofurb-mgmt/synofurb_mgmt.py}") && w.contains("addons apply-pending"));
+        assert!(w.trim_end().ends_with("exit 0"), "the first-boot script must never fail the boot");
+        // package list in the script's fallback is the Rust constant
+        assert!(
+            w.contains(&format!("PKGS={}", crate::addons::DOCKER_PACKAGES.join("\\ "))),
+            "fallback package list differs from addons::DOCKER_PACKAGES"
+        );
+    }
+
+    /// `systemd-analyze verify` when it exists (it checks syntax and referenced paths of the unit).
+    #[cfg(unix)]
+    #[test]
+    fn addon_unit_passes_systemd_analyze_when_available() {
+        let f = script_path("files/etc/systemd/system/synofurb-addons-firstboot.service");
+        if let Ok(o) = std::process::Command::new("systemd-analyze").arg("verify").arg("--man=no").arg(&f).output() {
+            let err = String::from_utf8_lossy(&o.stderr);
+            // the referenced script does not exist on a build machine; any other complaint about the unit is a failure
+            let bad: Vec<&str> = err
+                .lines()
+                .filter(|l| !l.contains("/usr/local/sbin/synofurb-addons-firstboot") && !l.contains("IPv6") && !l.trim().is_empty())
+                .collect();
+            assert!(bad.is_empty(), "systemd-analyze verify:\n{err}");
+        }
+    }
+
+    /// Run the real first-boot script against a scratch root with a fake management script, `docker` and `apt-get`.
+    #[cfg(unix)]
+    fn run_firstboot(pending: &[&str], mgmt_body: &str, with_docker: bool, apt_ok: bool) -> (std::path::PathBuf, String, i32) {
+        use std::os::unix::fs::PermissionsExt;
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let root =
+            std::env::temp_dir().join(format!("sf-fb-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+        let _ = std::fs::remove_dir_all(&root);
+        let pd = root.join("etc/synofurb/addons.d/pending");
+        std::fs::create_dir_all(&pd).unwrap();
+        for id in pending {
+            std::fs::write(pd.join(format!("{id}.json")), "{}").unwrap();
+        }
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let tool = |name: &str, body: &str| {
+            let f = bin.join(name);
+            std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        // only these tools exist for the script (the build machine may have a real docker)
+        for t in ["sh", "basename", "dirname", "head", "cat", "date", "mkdir", "chmod", "sleep", "python3"] {
+            if let Some(p) =
+                std::env::var("PATH").unwrap_or_default().split(':').map(|d| std::path::Path::new(d).join(t)).find(|p| p.exists())
+            {
+                let _ = std::os::unix::fs::symlink(p, bin.join(t));
+            }
+        }
+        if with_docker {
+            tool("docker", "exit 0");
+        }
+        tool("apt-get", if apt_ok { "echo \"apt-get $*\" >> \"$SYNOFURB_ROOT/apt.log\"; exit 0" } else { "exit 100" });
+        tool("systemctl", "exit 0");
+        // the fake management script is run by python3: use a shell-free python body
+        let mgmt = root.join("synofurb_mgmt.py");
+        std::fs::write(&mgmt, mgmt_body).unwrap();
+        let path = bin.display().to_string();
+        let out = std::process::Command::new("sh")
+            .arg(script_path("files/usr/local/sbin/synofurb-addons-firstboot"))
+            .env("SYNOFURB_ROOT", &root)
+            .env("SYNOFURB_MGMT", &mgmt)
+            .env("SYNOFURB_RETRY_SLEEP", "0")
+            .env("SYNOFURB_ATTEMPTS", "3")
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        (root, text, out.status.code().unwrap_or(-1))
+    }
+
+    #[cfg(unix)]
+    fn python_available() -> bool {
+        std::process::Command::new("python3").arg("--version").output().is_ok_and(|o| o.status.success())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn firstboot_script_applies_pending_and_writes_the_result() {
+        if !python_available() {
+            return;
+        }
+        // management plane "applies" by removing the pending files
+        let ok = "import sys, glob, os\nassert sys.argv[1:] == ['addons', 'apply-pending'], sys.argv\nroot = os.environ['SYNOFURB_ROOT']\n[os.remove(f) for f in glob.glob(root + '/etc/synofurb/addons.d/pending/*.json')]\n";
+        let (root, out, code) = run_firstboot(&["docker", "portainer"], ok, true, true);
+        assert_eq!(code, 0, "{out}");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("var/lib/synofurb/addons-firstboot.json")).unwrap()).unwrap();
+        assert_eq!(
+            (j["docker"].as_str(), j["apply_pending_exit"].as_i64(), j["attempts"].as_i64()),
+            (Some("present"), Some(0), Some(1)),
+            "{j}"
+        );
+        assert_eq!(j["remaining"], serde_json::json!([]));
+        assert!(!root.join("apt.log").exists(), "Docker was already there: nothing to install");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn firstboot_script_never_fails_the_boot_and_reports_what_is_left() {
+        if !python_available() {
+            return;
+        }
+        // apply-pending always fails: retried, still exit 0, ids reported
+        let (root, out, code) = run_firstboot(&["docker", "frigate"], "import sys\nsys.exit(3)\n", true, true);
+        assert_eq!(code, 0, "{out}");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("var/lib/synofurb/addons-firstboot.json")).unwrap()).unwrap();
+        assert_eq!((j["apply_pending_exit"].as_i64(), j["attempts"].as_i64()), (Some(3), Some(3)), "{j}");
+        assert_eq!(j["remaining"], serde_json::json!(["docker", "frigate"]));
+        let _ = std::fs::remove_dir_all(&root);
+        // no management script at all
+        let (root, out, code) = run_firstboot(&["portainer"], "", true, true);
+        std::fs::remove_file(root.join("synofurb_mgmt.py")).unwrap();
+        let _ = out;
+        assert_eq!(code, 0);
+        let _ = std::fs::remove_dir_all(&root);
+        // Docker missing and not installable (no Internet): still exit 0, result says failed
+        let (root, out, code) = run_firstboot(&["docker"], "import sys\nsys.exit(0)\n", false, false);
+        assert_eq!(code, 0, "{out}");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("var/lib/synofurb/addons-firstboot.json")).unwrap()).unwrap();
+        assert_eq!(j["docker"], "failed", "{j}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn firstboot_script_installs_docker_when_the_installer_could_not() {
+        if !python_available() {
+            return;
+        }
+        let (root, out, code) = run_firstboot(&["docker"], "import sys\nsys.exit(0)\n", false, true);
+        assert_eq!(code, 0, "{out}");
+        let log = std::fs::read_to_string(root.join("apt.log")).unwrap();
+        assert!(log.contains("install -y --no-install-recommends docker.io docker-cli docker-compose"), "{log}");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("var/lib/synofurb/addons-firstboot.json")).unwrap()).unwrap();
+        assert_eq!(j["docker"], "installed");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

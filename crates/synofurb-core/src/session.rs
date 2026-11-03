@@ -186,6 +186,9 @@ pub fn stage(job: &InstallJob, bind_ip: IpAddr, inspect_raw: &str, log: &Logger,
             for w in warnings {
                 log.warn(w);
             }
+            if !cfg.addons.is_empty() {
+                log.warn("add-ons chosen with an offline bundle: Docker and the container images are fetched from the Internet on the first boot (the bundle has no Docker packages)");
+            }
             if !bind_ip.is_ipv4() {
                 bail!(
                     "offline installs need an IPv4 address of this computer (the installer fetches packages from {bind_ip}); pick the LAN IPv4 address"

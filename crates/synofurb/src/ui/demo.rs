@@ -20,6 +20,10 @@ pub enum DemoUnit {
     Rs816,
     /// DS918+ with one larger disk (mixed sizes: Quick setup asks Hybrid vs RAID).
     Mixed,
+    /// The owner's real DS918+: 4x 8 TB, two DSM volumes (ext4 and btrfs), md2 resyncing.
+    Volumes,
+    /// The same unit with a USB stick attached (a disk that is listed but not touched).
+    VolumesUsb,
 }
 
 impl DemoUnit {
@@ -28,6 +32,8 @@ impl DemoUnit {
             "ds1621" | "amd" | "dom" => DemoUnit::Ds1621,
             "rs816" | "arm" | "uboot" => DemoUnit::Rs816,
             "mixed" => DemoUnit::Mixed,
+            "volumes" | "ds918-volumes" => DemoUnit::Volumes,
+            "volumes-usb" | "usb" => DemoUnit::VolumesUsb,
             _ => DemoUnit::Ds918,
         }
     }
@@ -36,6 +42,13 @@ impl DemoUnit {
     pub fn raw(self) -> String {
         let base = fixtures::ds_4bay();
         match self {
+            DemoUnit::Volumes => fixtures::ds918_two_volumes().replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n"),
+            DemoUnit::VolumesUsb => {
+                let usb = "DISK|sde|SanDisk Ultra|4C530001|125045424|512|1|1|gpt|/sys/devices/pci0000:00/0000:00:15.0/usb1/1-2/1-2:1.0/host5/target5:0:0/5:0:0:0\nPART|sde|sde1|1|2048|125043376\n";
+                fixtures::ds918_two_volumes()
+                    .replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n")
+                    .replace("MD|md0", &format!("{usb}MD|md0"))
+            }
             DemoUnit::Mixed => {
                 let mut out = base.replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n");
                 for d in ["sdc", "sdd"] {
@@ -77,7 +90,7 @@ impl DemoUnit {
 
     pub fn address(self) -> &'static str {
         match self {
-            DemoUnit::Ds918 | DemoUnit::Mixed => "192.168.1.20",
+            DemoUnit::Ds918 | DemoUnit::Mixed | DemoUnit::Volumes | DemoUnit::VolumesUsb => "192.168.1.20",
             DemoUnit::Ds1621 => "192.168.1.31",
             DemoUnit::Rs816 => "192.168.1.44",
         }

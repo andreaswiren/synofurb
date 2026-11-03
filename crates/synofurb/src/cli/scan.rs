@@ -121,14 +121,6 @@ fn selection(a: &ScanArgs, avail: &[NetworkInfo]) -> CliResult<Vec<ScanNetwork>>
     } else {
         sel = avail.iter().filter(|n| a.all_networks || n.recommended).map(ScanNetwork::from_info).collect();
     }
-    if sel.is_empty() {
-        let hint = if avail.is_empty() {
-            "this computer has no IPv4 network"
-        } else {
-            "none of this computer's networks is a real LAN (see `scan --list-networks`); name one with --network or use --all-networks"
-        };
-        return Err(CliError::usage(format!("no network to scan: {hint}")));
-    }
     Ok(sel)
 }
 
@@ -138,6 +130,13 @@ pub fn scan(out: &Out, a: ScanArgs) -> CliResult<()> {
     }
     let avail = discovery::networks();
     let sel = selection(&a, &avail)?;
+    if sel.is_empty() {
+        out.warn(if avail.is_empty() {
+            "this computer has no IPv4 network; nothing to scan"
+        } else {
+            "none of this computer's networks is a real LAN, so nothing is scanned by default; see `scan --list-networks`, then use --network or --all-networks"
+        });
+    }
     let mut opts =
         ScanOptions { networks: sel, methods: discovery::ScanMethods::default(), timeout: Duration::from_secs(a.timeout), sweep: true };
     opts.methods.probe_sweep = !a.no_sweep;

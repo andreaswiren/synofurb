@@ -428,6 +428,53 @@ pub fn destroyed_disk_line(name: &str, model: &str, serial: &str, size: &str) ->
     parts.join(" \u{00b7} ")
 }
 
+/// Which disks the install touches and which it leaves alone, so no screen counts or lists them dishonestly.
+/// A disk is *counted* when it is an install target or an excluded disk of at least 8 GiB (a USB stick or a bay that reports
+/// itself as removable); the small boot flash module is not a disk anyone counts. *Left alone* is every excluded disk except the
+/// boot flash, the same list the plan warns about ("Not used and not touched").
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DiskScope {
+    /// Install targets.
+    pub used: usize,
+    /// Raw size of the install targets.
+    pub used_bytes: u64,
+    /// Excluded disks of at least 8 GiB (they make the count read "N of M").
+    pub big_excluded: usize,
+    /// Every disk the install leaves alone except the boot flash: `(name, reason)`.
+    pub left_alone: Vec<(String, &'static str)>,
+}
+
+impl DiskScope {
+    pub fn of(f: &synofurb_core::model::DeviceFacts) -> DiskScope {
+        const EIGHT_GIB: u64 = 8 << 30;
+        let cand = f.candidate_disks();
+        let excl = f.excluded_disks();
+        DiskScope {
+            used: cand.len(),
+            used_bytes: cand.iter().map(|d| d.size_bytes()).sum(),
+            big_excluded: excl.iter().filter(|(d, _)| d.size_bytes() >= EIGHT_GIB).count(),
+            left_alone: excl
+                .iter()
+                .filter(|(_, e)| !matches!(e, synofurb_core::model::Exclusion::BootFlash))
+                .map(|(d, e)| (d.name.clone(), e.reason()))
+                .collect(),
+        }
+    }
+    /// "4 disks", or "3 of 4 disks" when a disk of 8 GiB or more is left out.
+    pub fn count_text(&self) -> String {
+        let n = |k: usize| format!("{k} {}", if k == 1 { "disk" } else { "disks" });
+        if self.big_excluded == 0 { n(self.used) } else { format!("{} of {}", self.used, n(self.used + self.big_excluded)) }
+    }
+    /// "Not touched: sde (USB disk), sdf (Removable, unknown port)", or None when every disk is used.
+    pub fn not_touched(&self) -> Option<String> {
+        if self.left_alone.is_empty() {
+            return None;
+        }
+        let list = self.left_alone.iter().map(|(n, r)| format!("{n} ({})", r.to_lowercase())).collect::<Vec<_>>().join(", ");
+        Some(format!("Not touched: {list}"))
+    }
+}
+
 /// How many disk lines Confirm shows before "and N more" (a wide chassis has 12 or more bays).
 pub const DESTROYED_LINES_MAX: usize = 8;
 
@@ -713,5 +760,20 @@ mod tests {
         assert_eq!(capitalize_first("the installer reported a failure: x"), "The installer reported a failure: x");
         assert_eq!(capitalize_first("Already fine"), "Already fine");
         assert_eq!(capitalize_first(""), "");
+    }
+
+    #[test]
+    fn the_disk_count_is_honest_about_disks_that_are_left_alone() {
+        use synofurb_core::inspect::{fixtures, parse_inspect};
+        let plain = DiskScope::of(&parse_inspect(&fixtures::ds918_two_volumes()).unwrap());
+        assert_eq!(plain.count_text(), "4 disks", "the boot flash is not a disk anyone counts");
+        assert_eq!(plain.not_touched(), None);
+        let usb = "DISK|sde|SanDisk Ultra|SN9|125045424|512|1|1|gpt|/sys/devices/pci0000:00/0000:00:15.0/usb1/1-2/1-2:1.0/host5/target5:0:0/5:0:0:0\n";
+        let raw = fixtures::ds918_two_volumes().replace("MD|md0", &format!("{usb}MD|md0"));
+        let s = DiskScope::of(&parse_inspect(&raw).unwrap());
+        assert_eq!((s.used, s.big_excluded), (4, 1));
+        assert_eq!(s.count_text(), "4 of 5 disks");
+        assert_eq!(s.not_touched().as_deref(), Some("Not touched: sde (usb disk)"));
+        assert_eq!(DiskScope { used: 1, ..DiskScope::default() }.count_text(), "1 disk");
     }
 }

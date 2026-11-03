@@ -325,11 +325,10 @@ impl App {
         let twin = self.twin_of_selected(cx);
         let (disks, cpu, ram, dsm) = match self.facts.as_ref().filter(|_| !self.manage_bound()) {
             Some(f) => (
-                format!(
-                    "{} disks \u{00b7} {}",
-                    f.candidate_disks().len(),
-                    super::format::size_2dp(f.candidate_disks().iter().map(|d| d.size_bytes()).sum())
-                ),
+                {
+                    let scope = super::facts::DiskScope::of(f);
+                    format!("{} \u{00b7} {}", scope.count_text(), super::format::size_2dp(scope.used_bytes))
+                },
                 super::format::short_cpu(&f.cpu),
                 format!("{:.0} GiB", f.mem_gib()),
                 f.dsm_version.clone(),

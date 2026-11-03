@@ -1,0 +1,75 @@
+#!/bin/sh
+# First boot: hand the add-ons chosen in the installer to the management plane (docs/ADDONS.md, "Installer integration").
+#   /etc/synofurb/addons.d/pending/<id>.json            the choices (no secrets)
+#   /etc/synofurb/addons.d/pending-secrets/<id>.json    secret settings (0600)
+# 1. makes sure Docker is there (the installer installs it from the mirror; after an OFFLINE install it is fetched here),
+# 2. runs `synofurb_mgmt.py addons apply-pending`, again a few times if it did not finish (the network may not be up yet),
+# 3. writes /var/lib/synofurb/addons-firstboot.json.
+# It always exits 0, so a missing Internet connection never fails the boot.
+# Test hooks (not used on a unit): SYNOFURB_ROOT prefixes every path (and leaves PATH alone); SYNOFURB_MGMT is the management script; SYNOFURB_RETRY_SLEEP.
+ROOT=${SYNOFURB_ROOT:-}
+MGMT=${SYNOFURB_MGMT:-/opt/synofurb-mgmt/synofurb_mgmt.py}
+PENDING=$ROOT/etc/synofurb/addons.d/pending
+PKGFILE=$ROOT/etc/synofurb/addons.d/docker.packages
+RESULT=$ROOT/var/lib/synofurb/addons-firstboot.json
+ATTEMPTS=${SYNOFURB_ATTEMPTS:-4}
+SLEEP=${SYNOFURB_RETRY_SLEEP:-120}
+export DEBIAN_FRONTEND=noninteractive
+[ -n "$ROOT" ] || export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+say() { echo "synofurb-addons-firstboot: $*"; }
+
+# the ids still waiting, as a JSON list (only [a-z0-9-] names are ever listed)
+remaining() {
+  _out=""
+  for _f in "$PENDING"/*.json; do
+    [ -f "$_f" ] || continue
+    _id=$(basename "$_f" .json)
+    case "$_id" in ''|*[!a-z0-9-]*) continue ;; esac
+    _out="$_out${_out:+,}\"$_id\""
+  done
+  printf '[%s]' "$_out"
+}
+wants_docker() { [ -f "$PENDING/docker.json" ]; }
+
+DOCKER=present
+if wants_docker && ! command -v docker >/dev/null 2>&1; then
+  PKGS=docker.io\ docker-cli\ docker-compose
+  [ -s "$PKGFILE" ] && PKGS=$(head -n 1 "$PKGFILE")
+  say "Docker is not installed yet: apt-get install $PKGS"
+  DOCKER=failed
+  i=0
+  while [ "$i" -lt "$ATTEMPTS" ]; do
+    i=$((i + 1))
+    # shellcheck disable=SC2086
+    if apt-get update >/dev/null 2>&1 && apt-get install -y --no-install-recommends $PKGS; then DOCKER=installed; break; fi
+    say "installing Docker failed (attempt $i of $ATTEMPTS); is there Internet access?"
+    [ "$i" -lt "$ATTEMPTS" ] && sleep "$SLEEP"
+  done
+  [ "$DOCKER" = installed ] && { systemctl enable --now docker.service >/dev/null 2>&1 || true; }
+fi
+
+RC=0
+TRIES=0
+if [ ! -f "$MGMT" ]; then
+  say "$MGMT is missing: the add-ons stay pending until the management plane is installed"
+  RC=127
+else
+  while [ "$TRIES" -lt "$ATTEMPTS" ]; do
+    TRIES=$((TRIES + 1))
+    say "addons apply-pending (attempt $TRIES of $ATTEMPTS)"
+    python3 "$MGMT" addons apply-pending
+    RC=$?
+    # done when the management plane took every choice over; otherwise give the network a moment and try again
+    [ "$RC" -eq 0 ] && [ "$(remaining)" = "[]" ] && break
+    [ "$TRIES" -lt "$ATTEMPTS" ] && sleep "$SLEEP"
+  done
+fi
+
+mkdir -p "$(dirname "$RESULT")"
+{
+  printf '{"schema":1,"finished":"%s","attempts":%s,"docker":"%s","apply_pending_exit":%s,"remaining":%s}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TRIES" "$DOCKER" "$RC" "$(remaining)"
+} > "$RESULT"
+chmod 644 "$RESULT" 2>/dev/null || true
+say "finished: $(cat "$RESULT")"
+exit 0

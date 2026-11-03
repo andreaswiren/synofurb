@@ -9,7 +9,7 @@ use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::state::Screen;
-use crate::ui::theme::Themed;
+use crate::ui::theme::{Themed, Tone};
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -80,7 +80,7 @@ impl App {
             )
             .child(
                 gpui_kit::component::description_list::DescriptionItem::new(label("l-backups", &copy::INSPECT_BACKUPS, &app))
-                    .value(kit::chip(&p, "not checked").into_any_element()),
+                    .value(kit::tag(&p, Tone::Neutral, Some(role::INFO), copy::INSPECT_NOT_CHECKED.short).into_any_element()),
             )
             .child(
                 gpui_kit::component::description_list::DescriptionItem::new(label("l-hostkey", &copy::HK_PIN, &app)).value(match pin {
@@ -108,15 +108,15 @@ impl App {
             )
             .child(TableBody::new().children(f.disks.iter().map(|d| {
                 // every disk says whether it is an install target, or why it is not (never silently left out)
-                let use_text = match d.exclusion() {
-                    None => "Install target".to_string(),
-                    Some(e) => format!("Not used: {}", e.reason().to_lowercase()),
+                let use_tag = match d.exclusion() {
+                    None => kit::tag(&p, Tone::Ok, Some(role::OK), copy::INSPECT_USE_TARGET.short),
+                    Some(e) => kit::tag(&p, Tone::Neutral, Some(role::INFO), copy::INSPECT_USE_NOT.fmt(&[&e.reason().to_lowercase()])),
                 };
                 TableRow::new()
                     .child(TableCell::new().child(kit::mono(cx, d.name.clone())))
                     .child(TableCell::new().child(d.model.clone()))
                     .child(TableCell::new().child(kit::mono_sm(cx, d.serial.clone())))
-                    .child(TableCell::new().child(use_text))
+                    .child(TableCell::new().child(use_tag))
                     .child(TableCell::new().text_right().child(kit::mono(cx, size_2dp(d.size_bytes()))))
             })));
 

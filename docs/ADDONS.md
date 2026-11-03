@@ -102,3 +102,45 @@ Images are pulled at first boot (Internet needed); the installation does not fai
 
 One HAProxy fronts the management plane and every add-on web UI; certificates are managed in one place (several certificates, per hostname), issued by Let's Encrypt with DNS-01
 (through `challenges.addr.tools`, see `docs/CERTIFICATES.md` when it exists), HTTP-01 and TLS-ALPN-01, renewed automatically.
+
+## Implementation notes: installer side (`synofurb-core::addons`, `payload/`)
+
+**Catalog.** The installer carries a small built-in list (`crates/synofurb-core/src/addons.rs`: id, name, summary, kind, `requires`, `privileges`,
+needs-Internet, rough size, and the few settings worth asking for while installing). The test `catalog_matches_the_management_plane_manifests` compares id, name,
+summary, kind, requires, privileges and the type of every install-time setting with `apps/mgmt-plane/addons/<id>/addon.json`. **Change a manifest's name, summary,
+requires or privileges and the installer's list in the same commit**, or that test fails. Install-time settings are deliberately few: Frigate `retain_days`,
+Plex `claim_token` (secret, optional). Cameras, detector and everything else are set in the web UI afterwards.
+
+**Docker packages (Debian 13 trixie).** `docker.io` (Engine 26.1), `docker-cli` (a "Recommends" of `docker.io`, so it must be named: the installer installs without
+recommends) and `docker-compose` (Compose v2, Go; it ships `/usr/libexec/docker/cli-plugins/docker-compose`, so `docker compose` works; `docker-compose-v2` does not
+exist in trixie). Stage 2 installs them from the configured mirror. An **offline bundle has no Docker packages**: stage 2 then skips them and the first-boot script installs them from the
+official Debian mirrors (Internet needed). A later extension can add the Docker packages to the bundle.
+
+**Files stage 2 writes** (only when add-ons were chosen; the directories are 0700, the files 0600, root):
+
+```
+/etc/synofurb/addons.d/pending/<id>.json          one per add-on, Docker first; only these (no secrets)
+/etc/synofurb/addons.d/pending-secrets/<id>.json  secret settings as {"key": "value"}; only for add-ons that have some
+/etc/synofurb/addons.d/docker.packages            the package list used for Docker (one line)
+```
+
+```json
+{ "schema": 1, "id": "frigate", "order": 3, "source": "installer", "auto": false, "required_by": [], "requires": ["docker"],
+  "settings": { "retain_days": "14" }, "secrets": [] }
+```
+
+`order` is the install order (dependencies first). `auto: true`: added only because something else requires it (`required_by` says what). `settings` values are **strings as
+typed**; coerce by the manifest's setting type and validate. `secrets` lists the secret setting names that are in `pending-secrets/<id>.json`. Secret values are never
+in `pending/`, in `env.sh`, on a command line or in a log: they travel in the install payload (the same token-protected LAN transfer as the password hash), and
+the CLI takes them from an environment variable or a file.
+
+**`synofurb_mgmt.py addons apply-pending`** (to implement in the management plane): for each `pending/<id>.json` in `order`: install the add-on with those settings (the `docker` entry is a no-op when
+Docker is already installed, else its handler installs it), move the secrets into the add-on's state (0600), and when the add-on is recorded (installed, or "needs attention" with the reason) delete its
+`pending/<id>.json` and `pending-secrets/<id>.json`. Exit code 0 when every file was taken over, **including add-ons that failed and now show "needs attention"** (the user retries in the web UI);
+non-zero only when it could not work through the files at all (Docker missing, state not writable, network down before anything was tried): the files then stay and the
+first-boot script retries. Files that do not match `<id>.json` with `id` in `[a-z0-9][a-z0-9-]*` are ignored.
+
+**First boot.** `synofurb-addons-firstboot.service` (`After=network-online.target docker.service`, `ConditionPathExists` and `ConditionDirectoryNotEmpty` on the pending folder, `Type=oneshot`)
+runs `/usr/local/sbin/synofurb-addons-firstboot`, which makes sure Docker is installed, runs `python3 /opt/synofurb-mgmt/synofurb_mgmt.py addons apply-pending` up to four times
+(two minutes apart) until the pending folder is empty, writes `/var/lib/synofurb/addons-firstboot.json` (`docker`: present|installed|failed, `apply_pending_exit`, `attempts`,
+`remaining`: ids still pending) and always exits 0. The pending folder survives reboots, so the unit tries again at the next boot until the management plane has taken everything over.

@@ -164,7 +164,7 @@ impl App {
                 Tone::Err,
                 role::DELETE,
                 &copy::PLAN_DESTROYED,
-                format!("{} \u{00b7} {}", plural(n_disks, "disk", "disks"), size_2dp(raw_total)),
+                format!("{} \u{00b7} {}", crate::ui::facts::DiskScope::of(&f).count_text(), size_2dp(raw_total)),
                 plan.destroyed.clone(),
             ))
             .child(summary_tag(

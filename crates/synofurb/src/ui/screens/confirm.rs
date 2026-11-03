@@ -6,7 +6,7 @@
 use crate::ui::app::App;
 use crate::ui::copy;
 use crate::ui::disclosure::info_tip;
-use crate::ui::format::{plural, size_2dp};
+use crate::ui::format::size_2dp;
 use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::raid;
@@ -75,7 +75,7 @@ impl App {
         let destroyed_value = if keep {
             format!("{} GiB DSM system", f.candidate_disks().len() * 10)
         } else {
-            format!("{} \u{00b7} {}", plural(f.candidate_disks().len(), "disk", "disks"), size_2dp(raw_total))
+            format!("{} \u{00b7} {}", crate::ui::facts::DiskScope::of(&f).count_text(), size_2dp(raw_total))
         };
         let dest = self.triad_card(
             "tri-d",
@@ -182,7 +182,8 @@ impl App {
                 .children(cand.iter().take(shown).map(|d| {
                     kit::mono_sm(cx, crate::ui::facts::destroyed_disk_line(&d.name, &d.model, &d.serial, &size_2dp(d.size_bytes())))
                 }))
-                .when(cand.len() > shown, |c| c.child(kit::caption(cx, format!("and {} more", cand.len() - shown))));
+                .when(cand.len() > shown, |c| c.child(kit::caption(cx, format!("and {} more", cand.len() - shown))))
+                .when_some(crate::ui::facts::DiskScope::of(&f).not_touched(), |c, t| c.child(kit::caption(cx, t)));
         let details = v_flex().gap(px(2.0)).children(plan.destroyed.iter().map(|d| div().text_xs().child(d.clone())));
         let acc = Accordion::new("conf-details").bordered(true).item(|i| i.title(copy::CONF_DETAILS.short).child(details));
 
