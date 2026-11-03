@@ -223,7 +223,8 @@ fn the_initramfs_policy_for_boot_flash_units_is_small_and_complete() {
         assert!(CHROOT_SETUP.split_whitespace().any(|w| w == m || w == format!("{m};")), "module {m} is in the list");
     }
     assert!(CHROOT_SETUP.contains("MODULES=list\\nCOMPRESS=xz"));
-    let xz = CHROOT_SETUP.find("apt_install initramfs-tools xz-utils busybox").expect("xz-utils and busybox installed with initramfs-tools");
+    let xz =
+        CHROOT_SETUP.find("apt_install initramfs-tools xz-utils busybox").expect("xz-utils and busybox installed with initramfs-tools");
     assert!(xz < CHROOT_SETUP.find("installing the kernel (").unwrap(), "before any kernel is installed");
     // the sanity check runs after every initramfs build that matters
     assert_eq!(CHROOT_SETUP.matches("\n    ensure_initrd_storage\n").count(), 3, "BIOS, UEFI and boot flash branches");
@@ -297,4 +298,38 @@ fn a_refused_kernel_is_reported_loudly_but_does_not_fail_the_package_hook() {
     let (code, _) = run_hook(&d, "--hook");
     assert_eq!(code, 0);
     assert!(!d.join("state/failed").exists(), "marker cleared once the flash accepts the kernel");
+}
+
+// ------------------------------------------------------------------------------------------------- what the system needs to boot
+
+#[test]
+fn the_installed_system_gets_an_init_because_debootstraps_minbase_has_none() {
+    // `debootstrap --variant=minbase --include=ca-certificates,locales,dbus trixie` installs init-system-helpers, libsystemd0, sysvinit-utils
+    // ... but no `systemd`, no `systemd-sysv` and no `udev` (checked with `debootstrap --print-debs`, 209 packages). /sbin/init comes
+    // from systemd-sysv: without it the kernel starts nothing and the initramfs ends in "run-init: can't execute '/sbin/init'".
+    let tools = CHROOT_SETUP.split("apt_install $BOOTPKG").nth(1).expect("the big package install");
+    let list = &tools[..tools.find("$EXTRA $EXTRA_PACKAGES").expect("end of the list")];
+    for pkg in ["systemd-sysv", "libpam-systemd", "mdadm", "lvm2", "xfsprogs", "openssh-server", "iproute2", "systemd-timesyncd"] {
+        assert!(list.split_whitespace().any(|w| w == pkg), "{pkg} is installed");
+    }
+    // and the offline bundle fetches exactly what the script installs
+    for pkg in ["systemd-sysv", "libpam-systemd"] {
+        assert!(synofurb_core::offline::CHROOT_TOOLS.contains(&pkg), "{pkg} is in the offline bundle's package seed");
+    }
+    for pkg in ["xz-utils", "busybox"] {
+        assert!(synofurb_core::offline::CHROOT_INITRAMFS.contains(&pkg), "{pkg} is in the offline bundle's package seed");
+    }
+}
+
+#[test]
+fn the_cli_smoke_test_feeds_the_same_ds918_facts_as_the_fixture() {
+    // tests/cli/ds918-real.inspect.txt is `cargo run -p synofurb-core --example dump_fixture`; the smoke test (and a human with
+    // `synofurb plan --facts tests/cli/ds918-real.inspect.txt`) plans for exactly the facts the unit tests use
+    let file = include_str!("../../../tests/cli/ds918-real.inspect.txt");
+    assert_eq!(file, synofurb_core::inspect::fixtures::ds918_two_volumes(), "regenerate the file with the dump_fixture example");
+    let f = synofurb_core::inspect::parse_inspect(file).unwrap();
+    assert_eq!(f.firmware, synofurb_core::model::Firmware::Dom, "the real unit boots through its internal flash");
+    assert_eq!(f.serial_console().kernel_arg(), "console=ttyS2,115200n8");
+    assert_eq!(f.nics.len(), 2, "two Intel i211 ports");
+    assert_eq!(f.candidate_disks().len(), 4);
 }

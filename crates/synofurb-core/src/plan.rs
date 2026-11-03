@@ -1022,11 +1022,11 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     }
     // DSM data volumes (/volume1, ...) live on LVM/md devices we cannot always map back to a single
     // array (cachedev_N), so describe them once and attach them to whichever side holds the data arrays.
+    // `volumes()` skips sub-mounts (`/volume2/@docker`) and FUSE mounts, which are not volumes and would be listed twice.
     let volumes: Vec<String> = facts
-        .mounts
+        .volumes()
         .iter()
-        .filter(|m| m.mountpoint.starts_with("/volume"))
-        .map(|m| format!("{} ({}, {} used of {})", m.mountpoint, m.fstype, human_bytes(m.used_kib * 1024), human_bytes(m.size_kib * 1024)))
+        .map(|v| format!("{} ({}, {} used of {})", v.mountpoint, v.fstype, human_bytes(v.used_kib * 1024), human_bytes(v.size_kib * 1024)))
         .collect();
     if !volumes.is_empty() {
         if plan.kept_arrays.is_empty() {
@@ -1940,6 +1940,25 @@ mod tests {
         assert!(plan.errors.is_empty(), "{:?}", plan.errors);
         assert!(plan.warnings.iter().any(|w| w.contains("md2") && w.contains("resyncing 90.8%")), "{:?}", plan.warnings);
         assert!(!plan.warnings.iter().any(|w| w.contains("Not used and not touched")), "{:?}", plan.warnings);
+        // the unit boots from its internal flash: no GRUB, no /boot or ESP on the disks, and all four disks (sda/sdb say removable=1) take part
+        assert!(plan.dom_boot && plan.boot.is_none() && plan.esp.is_none() && plan.firmware == Firmware::Dom);
+        assert_eq!(plan.disks.len(), 4);
+        // the destroyed-volumes line names the two volumes once, not their sub-mounts or the FUSE mount
+        let vol = plan.destroyed.iter().find(|d| d.starts_with("DSM volumes")).expect("volumes line");
+        assert!(
+            vol.contains("/volume1 (ext4") && vol.contains("/volume2 (btrfs") && !vol.contains("@docker") && !vol.contains("synodedup"),
+            "{vol}"
+        );
+        // SHR over four equal disks with the system mirrored on all four: one data array, no unused slice, no uneven-space warning
+        let shr = build_plan(&f, &PlanRequest { data_raid: DataRaid::Shr1, system_copies: Some(4), ..Default::default() });
+        assert!(shr.is_ok(), "{:?}", shr.errors);
+        assert_eq!(
+            shr.arrays.iter().filter(|a| a.name.starts_with("data")).count(),
+            1,
+            "{:?}",
+            shr.arrays.iter().map(|a| &a.name).collect::<Vec<_>>()
+        );
+        assert!(!shr.warnings.iter().any(|w| w.contains("one disk only") || w.contains("more data space")), "{:?}", shr.warnings);
         // a USB stick that is plugged in is named, not silently ignored
         let mut f2 = f.clone();
         f2.disks.push(crate::model::Disk {

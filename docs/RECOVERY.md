@@ -10,6 +10,8 @@ software does and what it cannot do. Nothing here replaces a backup of your data
 > the default back at DSM.** One case is not covered: if the boot agent itself never starts, nothing has run to reset
 > the default, so the unit may keep booting the agent. Then use the manual recovery below.
 
+A step-by-step first run for one concrete unit (backups first, spare disks, serial console, expected log lines, rollback per step) is in [HARDWARE-TEST-PLAN.md](HARDWARE-TEST-PLAN.md).
+
 This applies to x86 units (Intel and AMD) that boot through the internal boot flash ("DOM"), which is what `synofurb`
 uses on those units (see [boot/dom](../boot/dom/README.md)). The mechanism is the same idea the
 [synodeb](https://github.com/rylos/synodeb) project uses for the DS923+.

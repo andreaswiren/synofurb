@@ -128,6 +128,26 @@ ok "dry run wrote the review files"
 if sh -n "$WORK/review/stage2.sh" 2>/dev/null; then ok "generated stage2.sh is valid sh"; else bad "generated stage2.sh has a syntax error"; fi
 grep -q "NAS_HOSTNAME='vault'" "$WORK/review/payload/env.sh" && ok "dry run honours --hostname" || bad "dry run ignored --hostname"
 grep -q DRYRUNSALT "$WORK/review/payload/env.sh" && ok "dry run uses a placeholder password hash" || bad "dry run exposes a real password hash"
+# the owner's real DS918+ (4 x 8 TB, DOM, console ttyS2, sda/sdb on an add-in controller reporting removable=1): raw inspection output as a facts file
+DS918="$REPO/tests/cli/ds918-real.inspect.txt"
+cli plan --facts "$DS918" --raid shr1 --copies 4 --kernel stable --json
+json_ok "real DS918+: plan is OK, boots through the internal flash, all four disks" "v['ok'] is True and v['plan']['firmware']=='Dom' and v['plan']['dom_boot'] is True and len(v['plan']['disks'])==4"
+cli install --facts "$DS918" --raid shr1 --copies 4 --kernel stable --dry-run --out "$WORK/ds918" --hostname nas --no-mgmt --have-backup --accept-data-loss --confirm "ERASE DS918+"
+expect "real DS918+: install --dry-run" 0 "Dry run written to"
+S2="$WORK/ds918/stage2.sh"
+if sh -n "$S2" 2>/dev/null; then ok "real DS918+: generated stage2.sh is valid sh"; else bad "real DS918+: stage2.sh has a syntax error"; fi
+for needle in 'firmware=Dom' 'dom_flash_check 32' 'release_storage ||' 'mdadm --create /dev/md/system --run --force --level=1 --raid-devices=4' 'default debian --yes'; do
+    grep -qF -- "$needle" "$S2" && ok "real DS918+: stage2.sh has: $needle" || bad "real DS918+: stage2.sh lacks: $needle"
+done
+for d in sda sdb sdc sdd; do
+    grep -qF "parted -s \"/dev/\$D_$d\" mklabel gpt" "$S2" && ok "real DS918+: $d is repartitioned" || bad "real DS918+: $d is not repartitioned"
+done
+grep -qF 'console=ttyS2,115200n8' "$WORK/ds918/installer-cmdline.txt" && ok "real DS918+: installer console is ttyS2" || bad "real DS918+: installer console is not ttyS2"
+grep -qF "SERIAL_ARG='console=ttyS2,115200n8'" "$WORK/ds918/payload/env.sh" && ok "real DS918+: installed system console is ttyS2" || bad "real DS918+: installed system console is not ttyS2"
+grep -qF "FIRMWARE='Dom'" "$WORK/ds918/payload/env.sh" && ok "real DS918+: env.sh says Dom" || bad "real DS918+: env.sh does not say Dom"
+mkdir -p "$WORK/ds918/tool" && printf '#!/bin/sh\nexit 0\n' > "$WORK/ds918/tool/synofurb-dom" && chmod +x "$WORK/ds918/tool/synofurb-dom"
+SYNOFURB_DRY=1 SYNOFURB_DOM_DIRS="$WORK/ds918/tool" SYNOFURB_LOG="$WORK/ds918/dry.log" SYNOFURB_LOCK="$WORK/ds918/lock" sh "$S2" >/dev/null 2>&1
+grep -q '@@DONE' "$WORK/ds918/dry.log" 2>/dev/null && ok "real DS918+: the dry run of stage2.sh runs through to @@DONE" || bad "real DS918+: the dry run of stage2.sh did not finish"
 cli install --host 192.0.2.1
 expect "install without the gate exits 3 before touching the network" 3 "refusing to continue" "--have-backup" "--accept-data-loss" "--confirm"
 cli install --host 192.0.2.1 --yes --accept-data-loss --have-backup
