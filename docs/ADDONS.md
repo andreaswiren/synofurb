@@ -144,3 +144,8 @@ first-boot script retries. Files that do not match `<id>.json` with `id` in `[a-
 runs `/usr/local/sbin/synofurb-addons-firstboot`, which makes sure Docker is installed, runs `python3 /opt/synofurb-mgmt/synofurb_mgmt.py addons apply-pending` up to four times
 (two minutes apart) until the pending folder is empty, writes `/var/lib/synofurb/addons-firstboot.json` (`docker`: present|installed|failed, `apply_pending_exit`, `attempts`,
 `remaining`: ids still pending) and always exits 0. The pending folder survives reboots, so the unit tries again at the next boot until the management plane has taken everything over.
+
+**Desktop app.** Setup has an **Add-ons** tab (after Storage and System): a checkbox per catalog entry with its summary and Tags (Needs Docker, Needs Internet, privileges), the
+settings above under a ticked row, Docker shown on and locked with "Required by ..." while something ticked needs it. Quick setup has presets (None, Docker + Portainer, Frigate NVR, Plex,
+Frigate + Plex; each with Docker and Portainer as the base). Confirm lists "Will be installed after first boot: ..." and the Internet need. "Copy command" writes one `--addon` per ticked
+add-on (a secret as `key=@env:KEY`). The CLI is `--addon ID[:KEY=VALUE,...]` on `plan` and `install` and `addons list [--json]` (docs/CLI.md, secrets as `KEY=@env:VAR` or `KEY=@file:PATH`).
