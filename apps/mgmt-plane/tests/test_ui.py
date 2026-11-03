@@ -162,7 +162,7 @@ class AboutAndNavTests(unittest.TestCase):
     def test_nav_and_about(self):
         src = script_source()
         nav = re.search(r"const NAV = \[(.*?)\];", src, re.S).group(1)
-        self.assertEqual(re.findall(r"\['([a-z]+)', '", nav), ["dashboard", "storage", "raid", "mounts", "network", "users", "boot", "system", "help", "about"])
+        self.assertEqual(re.findall(r"\['([a-z]+)', '", nav), ["dashboard", "storage", "raid", "mounts", "addons", "network", "users", "boot", "system", "updates", "help", "about"])
         for needle in ("PAGES.about", "about.copy", "LIC[id]", "navigator.clipboard", "popover(T('about.synodeb')", "Montserrat", "'Lucide'", "'Inter'", "'JetBrains Mono'"):
             self.assertIn(needle, src)
         self.assertIn('"Lucide"', json.dumps(m._LICENSES))
@@ -181,7 +181,7 @@ class BrowserAuditTests(unittest.TestCase):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         cls.tmp = tempfile.TemporaryDirectory()
-        path = os.path.join(cls.tmp.name, "index.html")
+        path = cls.demo_path = os.path.join(cls.tmp.name, "index.html")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(mod.build())
         npm = shutil.which("npm")
@@ -230,6 +230,33 @@ class BrowserAuditTests(unittest.TestCase):
         self.assertEqual(res["errors"], [])
         self.assertEqual(res["unresolved"], [])
         self.assertEqual(res["overflow"], [])
+
+    def test_updates_page_flows(self):
+        """A person checks, confirms (consent, typed commit), watches the restart, sees a rollback and a refusal; phone width does not overflow."""
+        env = dict(os.environ)
+        if shutil.which("npm"):
+            env["NODE_PATH"] = subprocess.run(["npm", "root", "-g"], capture_output=True, text=True).stdout.strip() + os.pathsep + env.get("NODE_PATH", "")
+        r = subprocess.run(["node", os.path.join(HERE, "ui_updates.js"), "file://" + self.demo_path], capture_output=True, text=True, timeout=240, env=env)
+        if r.returncode == 77:
+            self.skipTest("no browser")
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        f = out["flows"]
+        self.assertEqual(out["errors"], [])
+        self.assertTrue(f["initial"]["updateDisabled"])                       # nothing to install before a check
+        self.assertEqual((f["checked"]["available"], f["checked"]["unsigned"]), ("0.6.0", 1))
+        self.assertTrue(f["dialogDisabledUntilConsent"] and f["dialogEnabledAfterConsent"])
+        self.assertTrue(f["mainNeedsTyping"] and f["mainEnabledAfterTyping"])
+        self.assertTrue(f["sawRestart"])
+        self.assertIn("Updated to 0.6.0", f["done"]["banner"])
+        self.assertIn("Rolled back to 0.5.0", f["rolledBack"])
+        self.assertIn("Rolled back to 0.4.0", f["rollbackDone"])
+        self.assertIn("Cannot reach GitHub", f["offline"])
+        self.assertTrue(f["busyDisabled"])
+        self.assertIn("Update refused", f["refused"])
+        self.assertIn("critical state", f["refused"])
+        self.assertIn("Updated to 0.6.0", f["forced"])
+        self.assertFalse(f["phoneOverflow"])
 
     def test_fonts_load_and_demo_is_small(self):
         self.assertEqual(sorted(self.result["fonts"]), ["Inter 400", "Inter 600", "Inter 700", "JetBrains Mono 400"])

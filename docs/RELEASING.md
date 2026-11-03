@@ -97,7 +97,7 @@ Attached to the GitHub Release (names are a contract - `docs/UPDATES.md` - the u
 | `synofurb-agent-<amd64\|arm64\|armhf>-<v>.vmlinuz` and `.initrd` | `boot/agent/build.sh <arch>` via `scripts/package-agent.sh` (verified against the build's own checksums) |
 | `synofurb-dom` | `boot/dom/synofurb-dom` |
 | `compat-models.json` | `compat/models.json` |
-| `synofurb-mgmt-<mgmt-version>.tar.gz` | `scripts/package-mgmt.sh` from `apps/mgmt-plane/` (flat archive for `/opt/synofurb-mgmt`) |
+| `synofurb-mgmt-<mgmt-version>.tar.gz` | `scripts/package-mgmt.sh` from `apps/mgmt-plane/` (flat archive for `/opt/synofurb-mgmt`: the four base files plus `synofurb_addons.py` and `addons.pack.json`). It is also what the **Stable** channel of the management plane's own updater reads (web UI page Updates and `update --from-github`, `docs/MANAGE.md`): the highest *mgmt* version among the non-pre-release releases that carry it plus `SHA256SUMS` wins, so bump `apps/mgmt-plane/VERSION` (and `DEFAULT_VERSION`) in the release that should reach units |
 | `synofurb-<v>-sbom.cdx.json`, `synofurb-<v>-sbom.spdx.json`, `THIRD-PARTY-LICENSES.txt` | `scripts/gen-sbom.py`, `scripts/gen-licenses.py` (not in the workflow yet: [compliance/SBOM.md](compliance/SBOM.md) section 5 lists the exact steps; `package-collect.sh` already accepts them as optional) |
 | `SHA256SUMS` | every file above, `sha256sum` format, sorted |
 | `SHA256SUMS.minisig` | minisign signature of `SHA256SUMS`, trusted comment `synofurb <v>` |

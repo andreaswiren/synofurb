@@ -2,10 +2,10 @@
 // usage: node ui_audit.js <demo-url-without-query>   -> prints one JSON document; exit 77 when no browser can be started.
 const { chromium } = require('playwright');
 const BASE = process.argv[2];
-const PAGES = ['dashboard', 'storage', 'raid', 'mounts', 'network', 'users', 'boot', 'system', 'help', 'about'];
+const PAGES = ['dashboard', 'storage', 'raid', 'mounts', 'addons', 'network', 'users', 'boot', 'system', 'updates', 'help', 'about'];
 // words a person reads by default: headings, labels, column headers, buttons, prose. Data (values from the system) is not counted; row buttons count once per label.
 const COUNT = `(() => {
-  const DATA = '.mono,.val,.sub,.chip,.badge,dd,.avatar,.ver,progress,.pr,.num,#crumb,.brand small,.me b,td,.log,pre';
+  const DATA = '.mono,.val,.sub,.chip,.badge,dd,.avatar,.ver,progress,.pr,.num,#crumb,.brand small,.me b,td,.log,pre,[data-d]';
   const SKIP = '#toasts,.sprite,#tip,script,style,.vh,.skip,#live,#demo-ribbon,#demo-ov';
   const out = [], rowBtn = new Set();
   const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -17,7 +17,7 @@ const COUNT = `(() => {
     if (el.closest('[popover]:not(:popover-open)') || el.closest('dialog:not([open])') || el.closest('details:not([open]) > :not(summary)')) continue;
     if (el.closest('tbody')) { if (el.closest('button,a')) rowBtn.add(t.toLowerCase()); continue; }
     if (el.closest(DATA) && !el.closest('button,a,th,label,h1,h2,h3,summary')) continue;
-    if (el.closest('.arr,.stack>.card')) { rowBtn.add(t.toLowerCase()); continue; }       // repeated cards: each label counts once
+    if (el.closest('.arr,.stack>.card,.acard')) { rowBtn.add(t.toLowerCase()); continue; }       // repeated cards: each label counts once
     out.push(t);
   }
   const ws = s => s.split(/\\s+/).filter(x => /[A-Za-z]/.test(x));

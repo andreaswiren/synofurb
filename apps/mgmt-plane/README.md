@@ -23,6 +23,7 @@ shown in the UI (login and sidebar footer) and returned by `GET /api/me`, `/api/
 | Users | list local accounts (uid>=1000 + root marker), create/delete, set password, lock/unlock, add SSH key |
 | Boot manager | units that boot through the internal boot flash (`/usr/local/sbin/synofurb-dom`): entries (DSM, Debian, previous kernel, boot agent), current default, DSM fail-safe note, **Return to DSM**, set default, reboot into an entry, boot-flash free space and DOM backup location. Other units get a "not a boot-flash unit" notice |
 | System | sshd state and host key fingerprints, serial-getty units, restart of an allow-list of services, reboot/poweroff |
+| Updates | installed and available version, channel **Stable** (newest release asset) or **Main** (`apps/mgmt-plane` of a branch or tag), Check, release notes, **Update now** (consent while unsigned, typed commit for Main), live progress that survives the restart, automatic rollback, **Roll back**, History of every update (desktop app, command line, GitHub, who, result); see "Self-update" below |
 | Help | twelve-plus short topics with search (sign-in, certificate, storage, imports, boot, recovery, report, RAID levels, Hybrid RAID, replace, scrub, safe apply); every (i) button in the UI opens the matching topic |
 | About | logo, version, **Copy diagnostics** (version, host, OS, kernel, service state; no secrets), links to documentation, source and issue tracker, Credits with licence texts (Debian, Lucide ISC, Inter and JetBrains Mono OFL 1.1, Montserrat, synodeb note) |
 
@@ -49,6 +50,9 @@ No server is started; run as root over SSH (`health` works without root). Exit c
 python3 /opt/synofurb-mgmt/synofurb_mgmt.py health --json
 python3 /opt/synofurb-mgmt/synofurb_mgmt.py update --from /tmp/bundle --json      # --force allows a downgrade
 python3 /opt/synofurb-mgmt/synofurb_mgmt.py update --rollback --json
+python3 /opt/synofurb-mgmt/synofurb_mgmt.py update --from-github --check --json      # newest release; add --ref main|<tag> for the source folder
+python3 /opt/synofurb-mgmt/synofurb_mgmt.py update --from-github --accept-unsigned [--ref R] [--force] --json
+python3 /opt/synofurb-mgmt/synofurb_mgmt.py update --status --json                   # installed version, previous version, history
 ```
 
 `health --json` prints one JSON object (`schema` 1): `version`, `hostname`, `uptime_s`, `load[3]`, `mem{total,avail}`, `os`, `kernel`,
@@ -66,6 +70,19 @@ unit file replaced if packaged), `restart`, `health` (up to 30 s: service active
 and on any failure `rollback` (previous install and unit file back, restart, same health check). No network access. Exit codes: 0 updated, 2 refused
 (nothing changed), 3 failed and rolled back, 4 failed and the rollback failed. `update --rollback` exchanges the installed and the `.prev` version (running it twice rolls forward).
 Build a bundle with `python3 tools/make-update-bundle.py OUT_DIR`.
+
+### Self-update (web UI, `--from-github`, the app's push: one pipeline)
+
+`update --from-github` adds *check -> download -> verify* (and the steps `lock`, `check`, `download`, `consent`) in front of the same `Updater`, so the web UI, the shell and the desktop
+app behave identically (same files, same atomic swap, same 30 s health wait, same automatic rollback, same exit codes). Details, trust model and the network policy: `docs/MANAGE.md`
+("Updating the management plane itself"). In short:
+
+* Sources: **stable** = the newest release asset `synofurb-mgmt-<ver>.tar.gz` + `SHA256SUMS` (built by `scripts/package-mgmt.sh`); **main** = `--ref <branch|tag>`, the `apps/mgmt-plane` folder of the monorepo, pinned to the commit the check showed.
+* https only, to GitHub's hosts (every redirect hop checked), hard size limits, extraction by allow-listed file names, no token or credential sent. Releases are unsigned today, so `--accept-unsigned` (the web UI's consent box)
+  is required; a real minisign key (`update_pubkey` in `/etc/synofurb/mgmt.json`) makes signatures mandatory.
+* Refused (exit 2, nothing changed) while the unit is `crit`, the service is down or another update/add-on job holds `/var/lib/synofurb-mgmt/job.lock`, unless `--force` (health only).
+* The web UI starts the job in its own `systemd-run` unit and polls it, so restarting `synofurb-mgmt.service` cannot kill it. Every update is audit-logged and kept as a job record in
+  `/var/lib/synofurb-mgmt/update/jobs/` (the History). Add-on jobs take the same lock (`JobLock`).
 
 ## Look and feel
 
@@ -125,6 +142,12 @@ public routes needs the session cookie; every POST also needs `X-CSRF-Token` and
 | GET | `/api/boot` | boot-flash status via `synofurb-dom status --json`, or `{available:false}` on units without the tool |
 | POST | `/api/boot/default` | `{entry:dsm\|debian\|debian-old\|agent,confirm=<entry>}` runs `synofurb-dom default <entry> --yes`; `confirm` is not needed for `debian` |
 | POST | `/api/boot/reboot-to` | same body; sets the default, then `systemd-run --on-active=5 systemctl reboot` |
+| GET | `/api/update` | installed and previous version, channel/ref, the last check, the active job, the history (last 15 jobs) |
+| POST | `/api/update/check` | `{channel: stable\|main, ref?}` -> asks GitHub; returns the check (`version`, `state`, `mode`, `blocked`, `notes`, `commit`) and remembers it |
+| POST | `/api/update/start` | `{channel, ref?, expect, accept_unsigned?, force?, confirm?}`: `expect` = the version (stable) or commit (main) that was shown; main needs `confirm` = its first 7 characters; returns `{job}`, 409 while another job runs |
+| POST | `/api/update/rollback` | `{}` -> job that restores `/opt/synofurb-mgmt.prev` |
+| POST | `/api/update/job` | `{job}` -> the job and its step events |
+| POST | `/api/update/progress` | public: `{job}` -> only `state`, `step`, `kind`, `from`, `to`, `finished` (what the page can read after the restart dropped its session) |
 
 ## Security model
 

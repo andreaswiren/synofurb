@@ -14,7 +14,7 @@ disks, partitions, arrays or the boot flash: the only files written are `/opt/sy
 `synofurb-mgmt.service` unit file and temporary files below `/tmp` that are removed again.
 
 Contents: [Commands](#commands) - [The contract with the unit](#the-contract-with-the-unit) - [What the verdict means](#what-the-verdict-means) -
-[Update flow](#update-flow) - [Offline copies](#offline-copies) - [Engine API](#engine-api-for-the-desktop-app) - [What is verified](#what-is-verified)
+[Update flow](#update-flow) - [Updating the management plane itself](#updating-the-management-plane-itself-web-ui-and-github) - [Offline copies](#offline-copies) - [Engine API](#engine-api-for-the-desktop-app) - [What is verified](#what-is-verified)
 
 ## Commands
 
@@ -80,6 +80,60 @@ Exit codes: **0** updated, **2** refused before anything changed, **3** failed a
 
 Exchanges the installed and the `.prev` tree (running it twice rolls forward). Same output and exit codes. Exit 2 with
 `rollback fail: no previous version is kept` when there is nothing to go back to.
+
+## Updating the management plane itself: web UI and GitHub
+
+The unit can update itself, from its own web UI (page **Updates**) or from the shell (`synofurb_mgmt.py update --from-github`), in addition to
+the push from the desktop app. All three end in the same `Updater` (verify, stage, swap, restart, health, automatic rollback, the previous
+version kept in `/opt/synofurb-mgmt.prev`); the GitHub paths only add *check*, *download* and *verification* in front of it, and the push path
+needs no Internet at all (a test makes any network use on it fail).
+
+| Entry point | Command | Source label in the history |
+|---|---|---|
+| Web UI | page Updates, **Update now** / **Roll back** (runs the CLI below as a job) | GitHub release / GitHub source / Rollback |
+| GitHub, shell | `update --from-github [--ref main\|<tag>] [--check] [--accept-unsigned] [--force] [--json]` | GitHub release (no `--ref`) / GitHub source (`--ref`) |
+| Desktop app | `update --from DIR --json` (staged under `/tmp/.synofurb-mgmt-stage-*`) | Desktop app |
+| Shell, a bundle | `update --from DIR` (any other folder) | Command line |
+| Any | `update --rollback`, `update --status [--json]` | Rollback |
+
+**Sources.** *Stable* (no `--ref`): the newest non-draft, non-pre-release GitHub release that carries `synofurb-mgmt-<ver>.tar.gz` (the highest
+*management plane* version wins, not the newest upload; the file `scripts/package-mgmt.sh` builds) and its `SHA256SUMS`. *Main* (`--ref R`, a
+branch or tag, default `main` in the web UI): the `apps/mgmt-plane` folder of `andreaswiren/synofurb` at `R`. The check resolves `R` to the
+newest commit that touches that folder (shown in the UI, with the last commit subjects as the "release notes"), and the download is pinned to
+that commit (`codeload.github.com/.../tar.gz/<sha>`), so what was shown is what is installed. Only the files the bundle contract allows are taken
+(`BUNDLE_FILES`: `synofurb_mgmt.py`, `VERSION`, `README.md`, `synofurb-mgmt.service`, `synofurb_addons.py`) by exact name, never by the archive's path; the
+add-on definitions `addons/<id>/<file>` are validated (names, sizes, counts) and packed into `addons.pack.json` by the installed `synofurb_addons.build_pack`, exactly as
+`tools/make-update-bundle.py` does; links, duplicates and a second top directory are refused; `MANIFEST.sha256` is written by `write_manifest`, whose output a test compares
+with the tool's, byte for byte. `VERSION` must equal the version that was checked and `DEFAULT_VERSION` in the script.
+
+**Trust.** Releases carry `SHA256SUMS` but no signature today (the signing key is a placeholder, `docs/UPDATES.md`), so the desktop app's model applies:
+the asset's SHA-256 is compared with the line in the `SHA256SUMS` *of the same release*, which catches a damaged download but not a tampered release,
+and the person must consent: the web UI shows "Not signed" and a required "I understand and want to update" (for Main also the short commit to type);
+the CLI needs `--accept-unsigned`. A source tree has no signature at all, so Main always needs that consent. Once a real minisign key is configured
+(`update_pubkey` in `/etc/synofurb/mgmt.json`, the same `RW...` key `install.sh` takes), signatures are mandatory: Stable runs `minisign -Vm SHA256SUMS`
+and refuses when `minisign` is missing, the signature asset is missing or the signature is wrong (never a silent fall back to SHA-256); Main is blocked
+unless `update_allow_unsigned_source` is true in the same file. The mgmt plane has no minisign implementation of its own: it needs the `minisign` package.
+
+**Network policy.** https only, to `api.github.com`, `github.com`, `codeload.github.com`, `objects.githubusercontent.com` and `release-assets.githubusercontent.com`
+(the CDN a release download is redirected to); the policy is applied to the first URL and to every redirect hop, URLs with credentials and other ports are refused,
+no GitHub token or any other credential is sent or stored (anonymous API: 60 requests per hour, a rate limit is reported with the minutes to wait). Limits: 2 MiB per API
+answer, 256 KiB for `SHA256SUMS`, 8 MiB for a release asset and for every file, 256 MiB for the repository tarball, 2 GiB unpacked (a gzip bomb stops there).
+
+**Safety rules.** A GitHub update is refused (exit 2, nothing changed) while the unit's health is `crit`, the web service is not active or less than 64 MiB is free, unless
+`--force` (the page offers **Update anyway** after such a refusal); a version older than the installed one also needs `--force`. The push path (`--from DIR`)
+keeps the contract above: the app looks at health itself first. **One job at a time**: every update and every add-on job holds `/var/lib/synofurb-mgmt/job.lock`
+(`JobLock`, created with `O_EXCL`, stale when its process is gone); a second one is refused with exit 2 and the step `lock` (web: HTTP 409). Every update is written to the audit log
+(`mgmt-update-start`, `mgmt-update`, with job id, source, from, to; no secrets) and to a **job record** `/var/lib/synofurb-mgmt/update/jobs/<id>.json` (the last 30 are kept): that is the
+version history the page shows (when, from, to, source, who, result, and the step events). A job whose process disappeared (power loss) is closed as failed at the next look.
+
+**Surviving the restart.** The web request only creates the job record and starts `synofurb_mgmt.py update --from-github --job-id ...` with `systemd-run --collect` (its own transient unit,
+outside the service's cgroup, so `systemctl restart synofurb-mgmt.service` cannot kill it), then answers with the job id. The job waits 3 s before the restart so that answer and
+the first polls are delivered. The page polls `POST /api/update/job`; when the service restarts, connections fail and then answer 401 (sessions live in memory), and the page switches to
+`POST /api/update/progress`, a public route that returns only the job's state, step and version numbers for an unguessable job id, until the job ends; it then offers **Sign in again**.
+If the new version fails its health check the job restores the old files and checks again (the page says "Rolled back").
+
+NDJSON steps added by the GitHub paths (before the Updater's own): `lock`, `check`, `download`, `consent`. Their failures end the stream like `verify` does (exit 2). `update --from-github --check --json`
+prints one JSON object (`channel`, `version`, `tag`/`commit`, `state` = `available|current|same|older`, `mode` = `signed|unsigned|blocked`, `blocked`, `notes`, `installed`) and changes nothing.
 
 ## What the verdict means
 
@@ -196,7 +250,17 @@ Done in the development sandbox:
   the repository's script in a sandbox, `manage health` (exit 8/9, JSON), `version`, `update --dry-run`, a refused update, a real update that
   ends in the unit's failure/rollback path with NDJSON, `rollback`, and the staging directory being removed.
 
+* **Self-update from GitHub** (`apps/mgmt-plane/tests/test_selfupdate.py`, 60+ tests): a fake release server on 127.0.0.1 with the real downloader (host policy incl. redirects, size limits, partial files removed, typed errors, no credentials),
+  release selection (newest non-draft non-pre-release, foreign assets ignored), SHA-256 match and mismatch, hostile archives (traversal, links, extra members, a second top directory, duplicates, add-on entries, a size cap on unpacking), signed mode with a fake `minisign`,
+  consent and "what you saw is what you get", the health gate, the job lock (busy and stale), audit lines, job records and their reaping, the full flow and the automatic rollback through the same `Updater` with a fake systemd and health,
+  the CLI (`--check`, `--ref`, `--status`, offline), the web routes against the real HTTP server (`systemd-run` argv checked, 409 while busy, typed commit for Main, public progress route), the real release asset built by `scripts/package-mgmt.sh` and a tarball of the real
+  `apps/mgmt-plane` tree staged byte-identical to `make-update-bundle.py`; the Updates page in a real browser against the demo (check, consent, typed commit, restart and reconnect, rollback, refusal and "Update anyway", phone width).
+
 **Not verified:**
+
+* The self-update on a real appliance with real systemd: `systemd-run` placing the job outside the service's cgroup (tested by argv only), a real `systemctl restart` of the service that serves the page, the page reconnecting through a real restart (simulated in the demo, with the 401 the real service gives after losing its sessions).
+* Anything against the real `api.github.com`, `codeload.github.com` and the release CDN: the tests use a loopback server, never the Internet. The accepted host list (notably `release-assets.githubusercontent.com`) follows how GitHub redirects release downloads today; if that changes the update says which host it refused.
+* A real minisign key and signature (a fake `minisign` binary is used; the key is a placeholder).
 
 * Anything on a real appliance, with real systemd: the happy-path restart of `synofurb-mgmt.service`, the 30 s health wait with a live
   web server, the timing of the first health call after the restart, `systemctl enable`.

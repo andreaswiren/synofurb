@@ -615,6 +615,87 @@
   });
   R['POST /api/raid/after-grow'] = b => { const a = arrByName(b.array); need(a, 'extending the volume'); needConfirm(b, a.name); return {ok: true, results: [{desc: 'Grow the physical volume on ' + a.name, cmd: 'pvresize ' + a.device, rc: 0, out: '', err: ''}].concat(a.lvs.map(l => ({desc: 'Extend ' + l, cmd: 'lvextend -l +100%FREE /dev/' + l, rc: 0, out: '', err: ''})))}; };
 
+
+  /* ---------- updates of the management plane itself (?update=available|current|offline|rollback|busy|unhealthy) ---------- */
+  const UM = qs.get('update') || 'available';
+  const NEWV = (v => v[0] + '.' + (Number(v[1]) + 1) + '.0')(String(DATA.version).split('.'));
+  const SHA = '3f9c2a71b8e4d05a6c7e1f20944b8d3ac51e7f60';
+  const nowS = () => Date.now() / 1000;
+  const upd = {installed: DATA.version, previous: '0.4.0', channel: 'stable', ref: 'main', check: null, down: 0,
+    jobs: [{id: 'a1b2c3d4e5f60718', kind: 'update', source: 'app', ref: '', commit: '', by: 'andreas', via: 'cli', from: '0.4.0', to: DATA.version, state: 'ok', exit: 0, started: nowS() - 3 * 86400, finished: nowS() - 3 * 86400 + 38, unsigned: false, step: 'result', message: 'updated 0.4.0 -> ' + DATA.version},
+           {id: '0f1e2d3c4b5a6978', kind: 'update', source: 'github-stable', ref: '', commit: '', by: 'admin', via: 'web', from: '0.3.1', to: '0.4.0', state: 'rolled_back', exit: 3, started: nowS() - 9 * 86400, finished: nowS() - 9 * 86400 + 61, unsigned: true, step: 'result', message: 'update to 0.4.0 failed; rolled back'}]};
+  if (UM === 'busy') upd.busy = 'addon';
+  function updCmp(c) { const a = c.version.split('.').map(Number), b = upd.installed.split('.').map(Number); for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i] ? 'available' : 'older'; return c.channel === 'main' ? 'same' : 'current'; }
+  function updState() {
+    const c = upd.check ? Object.assign({}, upd.check, {installed: upd.installed, state: updCmp(upd.check)}) : null;
+    const act = upd.jobs.find(j => j.state === 'running');
+    return {ok: true, installed: upd.installed, sha256: 'demo', previous: upd.previous, channel: upd.channel, ref: upd.ref, check: c, active: act ? act.id : null, busy: upd.busy || null, jobs: clone(upd.jobs), signed: false, repo: 'andreaswiren/synofurb'};
+  }
+  R['GET /api/update'] = () => updState();
+  R['POST /api/update/check'] = b => {
+    if (UM === 'offline') throw bad(502, 'Cannot reach GitHub (gaierror)');
+    if (!['stable', 'main'].includes(b.channel)) throw bad(400, 'channel must be stable or main');
+    upd.channel = b.channel; upd.ref = b.ref || upd.ref;
+    const main = b.channel === 'main', v = UM === 'current' && !main ? upd.installed : NEWV;
+    upd.check = {channel: b.channel, version: v, tag: main ? '' : 'v0.3.0', asset: main ? '' : 'synofurb-mgmt-' + v + '.tar.gz', ref: main ? (b.ref || 'main') : '', commit: main ? SHA : '', published: '2026-05-12', mode: 'unsigned', blocked: null,
+      notes: main ? '• 3f9c2a7 Updates page: check, update and roll back from the web UI (2026-05-12)\n• 81d0c4e Keep the previous version after an update (2026-05-09)' : 'Management plane ' + v + '\n• Update from GitHub inside the web UI\n• Version history shows who updated and how',
+      checked_at: Math.floor(nowS()), repo: 'andreaswiren/synofurb'};
+    return {ok: true, check: updState().check};
+  };
+  function updJob(id) { const j = upd.jobs.find(x => x.id === id); if (!j) throw bad(404, 'no such job'); return j; }
+  function updRun(j, rollbackJob, force) {
+    const to = j.to, fail = UM === 'rollback' && !rollbackJob, refuse = UM === 'unhealthy' && !rollbackJob && !force;
+    const plan = refuse ? [['check', 'start', 'asking GitHub'], ['check', 'ok', 'release ' + to + ', available (installed ' + j.from + ')'], ['health', 'fail', 'the unit is in a critical state (array md1 degraded); an update needs force']]
+      : rollbackJob ? [['rollback', 'start', 'restoring /opt/synofurb-mgmt.prev'], ['restart', 'start', 'restarting synofurb-mgmt.service'], ['rollback', 'ok', 'version ' + to + ' is running'], ['result', 'ok', 'rolled back to ' + to]]
+      : [['check', 'start', 'asking GitHub'], ['check', 'ok', 'release ' + to + ', available (installed ' + j.from + ')'], ['download', 'start', 'downloading'],
+         ['download', 'ok', 'synofurb-mgmt-' + to + '.tar.gz 212 KiB, SHA-256 9f2c1a7b4e0d... matches SHA256SUMS (unsigned)'], ['verify', 'start', 'checking'], ['verify', 'ok', 'manifest verified, version ' + to],
+         ['stage', 'start', 'copying'], ['stage', 'ok', '4 files staged'], ['swap', 'start', 'swapping'], ['swap', 'ok', 'previous version kept'], ['restart', 'start', 'restarting synofurb-mgmt.service'],
+         ['restart', 'ok', 'service restarted'], ['health', 'start', 'waiting up to 30 s for the new version']]
+      .concat(fail ? [['health', 'fail', 'health check failed (no valid answer)'], ['rollback', 'start', 'restoring the previous version'], ['rollback', 'ok', 'previous version ' + j.from + ' is running again'], ['result', 'fail', 'update to ' + to + ' failed; rolled back']]
+                   : [['health', 'ok', 'version ' + to + ' answers'], ['result', 'ok', 'updated ' + j.from + ' -> ' + to]]);
+    j.events = []; j.state = 'running';
+    plan.forEach(([step, status, message], i) => setTimeout(() => {
+      j.events.push({t: Math.floor(nowS()), step, status, message}); j.step = step; j.message = message;
+      if (step === 'restart' && status === 'start') upd.down = Date.now() + 3200;
+      if (refuse && step === 'health') { j.state = 'refused'; j.exit = 2; j.finished = nowS(); }
+      if (step === 'result') {
+        j.state = rollbackJob ? 'ok' : fail ? 'rolled_back' : 'ok'; j.exit = j.state === 'ok' ? 0 : 3; j.finished = nowS();
+        if (j.state === 'ok') { if (!rollbackJob) upd.previous = upd.installed; else upd.previous = upd.installed; upd.installed = to; }
+      }
+    }, 700 * (i + 1) + (step === 'restart' && status === 'ok' ? 2400 : 0)));
+  }
+  function updStart(src, to, extra) {
+    if (upd.busy || upd.jobs.some(j => j.state === 'running')) throw bad(409, 'another job is running (' + (upd.busy || 'update') + '): wait for it to finish');
+    const j = Object.assign({id: Array.from({length: 16}, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join(''), kind: 'update', source: src, ref: '', commit: '', by: st.user, via: 'web', from: upd.installed, to, state: 'queued', exit: null,
+      started: nowS(), finished: null, unsigned: true, step: null, message: null, events: []}, extra || {});
+    upd.jobs.unshift(j);
+    return j;
+  }
+  R['POST /api/update/start'] = b => {
+    if (!['stable', 'main'].includes(b.channel)) throw bad(400, 'channel must be stable or main');
+    if (typeof b.expect !== 'string' || !b.expect) throw bad(400, 'expect must be the version or commit that was shown');
+    if (b.channel === 'main') needConfirm(b, b.expect.slice(0, 7));
+    const j = updStart('github-' + b.channel, upd.check ? upd.check.version : NEWV, b.channel === 'main' ? {ref: b.ref || 'main', commit: b.expect} : {});
+    updRun(j, false, b.force === true);
+    return {ok: true, job: j.id};
+  };
+  R['POST /api/update/rollback'] = () => {
+    if (!upd.previous) throw bad(409, 'no previous version is kept');
+    const j = updStart('rollback', upd.previous, {kind: 'rollback', unsigned: false});
+    updRun(j, true);
+    return {ok: true, job: j.id};
+  };
+  R['POST /api/update/job'] = b => {
+    if (Date.now() < upd.down) throw bad(401, 'authentication required');
+    const j = updJob(b.job), o = clone(j); delete o.events;
+    return {ok: true, job: o, events: clone(j.events || [])};
+  };
+  R['POST /api/update/progress'] = b => {
+    const j = updJob(b.job);
+    return {ok: true, job: {id: j.id, kind: j.kind, state: j.state, step: j.step, from: j.from, to: j.to, finished: j.finished}};
+  };
+  PUBLIC.add('POST /api/update/progress');
+
   window.fetch = async function (url, opt) {
     const u = new URL(typeof url === 'string' ? url : url.url, location.href);
     if (!/\/api\//.test(u.pathname)) return origFetch ? origFetch(url, opt) : Promise.reject(new Error('offline demo'));
