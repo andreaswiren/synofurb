@@ -71,7 +71,7 @@
       "label": "Video decoding",
       "type": "choice",
       "default": "auto",
-      "choices": ["auto", "preset-vaapi"],
+      "choices": [{ "value": "auto", "label": "Automatic" }, { "value": "preset-vaapi", "label": "Intel graphics (VAAPI)" }],
       "help": "auto lets Frigate decide. preset-vaapi uses the Intel graphics for decoding camera streams (switch on Intel graphics under Devices first). Intel generation 9 (Celeron J3455) uses Frigate's default iHD driver."
     },
     {

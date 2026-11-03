@@ -12,13 +12,21 @@ use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AppContext, Context, Entity, IntoElement, Subscription, WeakEntity, Window, div, px};
+use gpui_kit::{AppContext, Context, Entity, IntoElement, Subscription, WeakEntity, Window, div, px, rems};
 use synofurb_core::discovery::networks::NetworkKind;
+
+/// Column widths of a network row, in rem so they grow with the text size (a px width cut the "Recommended" tag and wrapped the
+/// address at Largest): address, kind tag, "Recommended" chip. The interface name takes the rest.
+const CIDR_REM: f32 = 9.5;
+const KIND_REM: f32 = 6.0;
+const REC_REM: f32 = 7.0;
 
 pub struct NetView {
     app: WeakEntity<App>,
     input: Entity<InputState>,
     error: Option<String>,
+    /// What the scan on screen used when the dialog opened: closing with another selection scans again.
+    before: super::netsel::Effective,
     _sub: Subscription,
 }
 
@@ -33,13 +41,19 @@ pub fn kind_tone(k: NetworkKind) -> Tone {
 }
 
 impl NetView {
-    fn new(app: WeakEntity<App>, input: Entity<InputState>, window: &mut Window, cx: &mut Context<NetView>) -> NetView {
+    fn new(
+        app: WeakEntity<App>,
+        input: Entity<InputState>,
+        before: super::netsel::Effective,
+        window: &mut Window,
+        cx: &mut Context<NetView>,
+    ) -> NetView {
         let sub = cx.subscribe_in(&input, window, |this: &mut NetView, _, ev: &InputEvent, window, cx| match ev {
             InputEvent::PressEnter { .. } => this.add(window, cx),
             InputEvent::Change if this.error.take().is_some() => cx.notify(),
             _ => {}
         });
-        NetView { app, input, error: None, _sub: sub }
+        NetView { app, input, error: None, before, _sub: sub }
     }
 
     fn add(&mut self, window: &mut Window, cx: &mut Context<NetView>) {
@@ -104,11 +118,13 @@ impl gpui_kit::Render for NetView {
                             cx.notify();
                         }),
                     )))
-                    .child(div().w(px(128.0)).flex_none().child(kit::mono_sm(cx, n.cidr.clone())))
-                    .child(div().w(px(76.0)).flex_none().child(h_flex().child(kit::tag(&p, kind_tone(n.kind), None, n.kind.label()))))
+                    .child(div().w(rems(CIDR_REM)).flex_none().child(kit::mono_sm(cx, n.cidr.clone()).whitespace_nowrap()))
+                    .child(
+                        div().w(rems(KIND_REM)).flex_none().child(h_flex().child(kit::tag(&p, kind_tone(n.kind), None, n.kind.label()))),
+                    )
                     .child(
                         div()
-                            .w(px(112.0))
+                            .w(rems(REC_REM))
                             .flex_none()
                             .when(n.recommended, |d| d.child(h_flex().child(kit::chip(&p, copy::NET_RECOMMENDED.short)))),
                     ),
@@ -129,9 +145,9 @@ impl gpui_kit::Render for NetView {
                             cx.notify();
                         }),
                     )))
-                    .child(div().w(px(128.0)).flex_none().child(kit::mono_sm(cx, c.cidr.clone())))
+                    .child(div().w(rems(CIDR_REM)).flex_none().child(kit::mono_sm(cx, c.cidr.clone()).whitespace_nowrap()))
                     .child(
-                        div().w(px(76.0)).flex_none().child(
+                        div().w(rems(KIND_REM)).flex_none().child(
                             Button::new(("netc-rm", i))
                                 .ghost()
                                 .xsmall()
@@ -145,7 +161,7 @@ impl gpui_kit::Render for NetView {
                                 })),
                         ),
                     )
-                    .child(div().w(px(112.0)).flex_none()),
+                    .child(div().w(rems(REC_REM)).flex_none()),
             );
         }
         col = col.child(list);
@@ -163,6 +179,21 @@ impl gpui_kit::Render for NetView {
                     .child(icons::icon_sized(role::ERR, 14.0, p.err_fg))
                     .child(copy::NET_NONE.short),
             );
+        }
+        if sel.selects_slow(&nets) {
+            col = col.child(
+                h_flex()
+                    .id("net-slow")
+                    .gap(px(6.0))
+                    .items_start()
+                    .text_sm()
+                    .text_color(p.warn_fg)
+                    .child(icons::icon_sized(role::WARN, 14.0, p.warn_fg))
+                    .child(div().flex_1().min_w_0().child(copy::NET_VPN_WARN.short)),
+            );
+        }
+        if eff.differs_from(&self.before) {
+            col = col.child(kit::caption(cx, copy::NET_RESCAN.short));
         }
         col = col.child(kit::caption(cx, copy::NET_ADD_LABEL.short)).child(
             h_flex()
@@ -194,29 +225,68 @@ impl gpui_kit::Render for NetView {
 }
 
 impl App {
+    /// "Networks to scan". `demo` opens it in one of its states for screenshots.
     pub fn open_networks_dialog(&mut self, window: &mut Window, cx: &mut Context<App>) {
+        self.open_networks_dialog_demo(None, window, cx);
+    }
+
+    pub fn open_networks_dialog_demo(&mut self, demo: Option<NetDemo>, window: &mut Window, cx: &mut Context<App>) {
         if self.demo.is_none() {
             self.nets = synofurb_core::discovery::networks::networks();
         }
+        match demo {
+            // every network unticked on purpose
+            Some(NetDemo::None) => self.settings.scan_networks = super::netsel::NetSelection { ids: Some(vec![]), custom: vec![] },
+            // the VPN ticked next to the LAN
+            Some(NetDemo::Vpn) => {
+                let nets = self.nets.clone();
+                if let Some(v) = nets.iter().find(|n| n.interface == "Tailscale") {
+                    self.settings.scan_networks.toggle(&nets, &v.id);
+                }
+            }
+            _ => {}
+        }
+        let before = {
+            let e = self.settings.scan_networks.effective(&self.nets);
+            // a demo that changes the selection starts from the recommended one, so "Done scans again" shows
+            if demo.is_some() { super::netsel::NetSelection::default().effective(&self.nets) } else { e }
+        };
         let weak = cx.weak_entity();
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(copy::NET_ADD_HINT.short));
-        let view = cx.new(|cx| NetView::new(weak, input, window, cx));
+        let input2 = input.clone();
+        let view = cx.new(|cx| NetView::new(weak, input, before, window, cx));
+        if demo == Some(NetDemo::Invalid) {
+            input2.update(cx, |s, cx| s.set_value("10.0.0.0/8", window, cx));
+            view.update(cx, |v, cx| v.add(window, cx));
+        }
         let app = cx.entity();
+        // wider with bigger text: the rows are laid out in rem
+        let width = layout::DIALOG_W_WIDE * self.settings.text_scale.factor();
         window.open_dialog(cx, move |d, _, cx| {
-            let (v1, a1, a2) = (view.clone(), app.clone(), app.clone());
+            let (v1, v2, a1, a2) = (view.clone(), view.clone(), app.clone(), app.clone());
             let none = {
                 let a = app.read(cx);
                 let e = a.settings.scan_networks.effective(&a.nets);
                 e.ids.is_empty() && e.custom.is_empty()
             };
+            let a3 = app.clone();
             d.bg(cx.theme().popover)
                 .title(copy::NET_TITLE.short)
-                .w(px(layout::DIALOG_W_WIDE))
+                .w(px(width))
                 .child(view.clone())
                 // Enter in the field adds the network; it does not close the dialog
                 .on_ok(move |_, window, cx| {
                     v1.update(cx, |v, cx| v.add(window, cx));
                     false
+                })
+                // however the dialog closes (Done, Escape, the close button): a different selection means the list on screen is stale
+                .on_close(move |_, _, cx| {
+                    let before = v2.read(cx).before.clone();
+                    a3.update(cx, |a, cx| {
+                        if a.settings.scan_networks.effective(&a.nets).differs_from(&before) {
+                            a.start_scan(cx);
+                        }
+                    });
                 })
                 .footer(
                     DialogFooter::new()
@@ -244,3 +314,5 @@ impl App {
         });
     }
 }
+
+pub use super::state::NetDemo;

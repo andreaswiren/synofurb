@@ -422,9 +422,17 @@ pub struct Plan {
     pub warnings: Vec<String>,
     pub errors: Vec<String>,
     pub sizes: Sizes,
+    /// DSM data arrays that have members on an erased disk and on a disk the install leaves alone (lost as a whole).
+    #[serde(default)]
+    pub straddling: Vec<Straddle>,
 }
 
 impl Plan {
+    /// Does the install create the data volume that is mounted at `/srv/data`? (Not in Keep mode when nothing new is built.)
+    pub fn has_data_volume(&self) -> bool {
+        self.vgs.iter().any(|v| v.name == "vg_data" && !v.lvs.is_empty())
+    }
+
     pub fn is_ok(&self) -> bool {
         self.errors.is_empty()
     }
@@ -480,6 +488,58 @@ struct DiskAnalysis<'a> {
     extents: Vec<Extent>,
     /// MBR disk with preserved partitions: cannot be modified.
     locked: bool,
+}
+
+/// A DSM data array whose members sit on a disk the install erases and on a disk it does not touch: it cannot survive, and
+/// the untouched disk keeps only a useless piece of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Straddle {
+    pub array: String,
+    /// Member disks that are erased.
+    pub erased: Vec<String>,
+    /// Member disks that are left alone.
+    pub left: Vec<String>,
+}
+
+impl Straddle {
+    /// The warning sentence: `md2 spans sda, sdb (erased) and sde (not touched): it is lost as a whole, including its part on sde.`
+    pub fn warning(&self) -> String {
+        format!(
+            "{} spans {} (erased) and {} (not touched): it is lost as a whole, including its part on {}.",
+            self.array,
+            self.erased.join(", "),
+            self.left.join(", "),
+            if self.left.len() == 1 { "that disk" } else { "those disks" }
+        )
+    }
+}
+
+/// The disks that hold members of `a` (sorted, without duplicates).
+fn array_disks(facts: &DeviceFacts, a: &MdArray) -> Vec<String> {
+    let mut v: Vec<String> = a.members.iter().filter_map(|m| facts.locate_part(m).map(|(d, _)| d.name.clone())).collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// DSM data arrays (not the preserved ones in `kept`) that have members on both an install target and a disk that is left alone
+/// (USB, removable with an unknown port, too small). The boot flash never holds data members.
+pub fn straddling_arrays(facts: &DeviceFacts, kept: &BTreeSet<String>) -> Vec<Straddle> {
+    let mut out = vec![];
+    for a in facts.arrays.iter().filter(|a| a.role == ArrayRole::Data && !kept.contains(&a.name)) {
+        let (mut erased, mut left) = (vec![], vec![]);
+        for d in array_disks(facts, a) {
+            match facts.disk(&d).map(|x| x.exclusion()) {
+                Some(None) => erased.push(d),
+                Some(Some(crate::model::Exclusion::BootFlash)) | None => {}
+                Some(Some(_)) => left.push(d),
+            }
+        }
+        if !erased.is_empty() && !left.is_empty() {
+            out.push(Straddle { array: a.name.clone(), erased, left });
+        }
+    }
+    out
 }
 
 fn array_of<'a>(facts: &'a DeviceFacts, part: &str) -> Option<&'a MdArray> {
@@ -623,6 +683,7 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         warnings: vec![],
         errors: vec![],
         sizes: Sizes::default(),
+        straddling: vec![],
     };
 
     if facts.arch == Arch::Unsupported {
@@ -647,21 +708,44 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
     // Arrays that are still resyncing or missing members: an install now would start from a pool that is not redundant.
     for a in facts.busy_arrays() {
         if let Some(note) = a.health_note() {
-            plan.warnings.push(format!(
-                "DSM array {} is {note}. Let it finish before installing; until then the pool is not fully redundant.",
-                a.name
-            ));
+            // only a resync, a rebuild, a reshape or a missing member means less protection; a check leaves every copy intact
+            let tail = if a.reduces_redundancy() { "; until then your data is not fully protected" } else { "" };
+            plan.warnings.push(format!("DSM array {} is {note}. Let it finish before installing{tail}.", a.name));
         }
     }
     // Disks the plan will not touch, other than the boot flash: never leave them out silently.
-    let left: Vec<String> = facts
+    let left: Vec<(String, String)> = facts
         .excluded_disks()
         .into_iter()
         .filter(|(_, e)| !matches!(e, crate::model::Exclusion::BootFlash))
-        .map(|(d, e)| format!("{} ({})", d.name, e.reason().to_lowercase()))
+        .map(|(d, e)| (d.name.clone(), format!("{} ({})", d.name, e.reason_inline())))
         .collect();
+    // A DSM data array with members on an erased disk and on a disk that is left alone is destroyed as a whole: say so instead
+    // of promising that the untouched disk keeps its DSM data.
+    let kept_for_straddle: BTreeSet<String> = match (req.mode, &req.keep_arrays) {
+        (StorageMode::WipeAll, _) => BTreeSet::new(),
+        (StorageMode::KeepVolumes, Some(k)) => k.iter().cloned().collect(),
+        (StorageMode::KeepVolumes, None) => facts.data_arrays().iter().map(|a| a.name.clone()).collect(),
+    };
+    plan.straddling = straddling_arrays(facts, &kept_for_straddle);
     if !left.is_empty() {
-        plan.warnings.push(format!("Not used and not touched: {}. DSM data on them stays as it is.", left.join(", ")));
+        let mut msg = format!("Not used and not touched: {}. synofurb does not write to them.", left.iter().map(|l| l.1.as_str()).collect::<Vec<_>>().join(", "));
+        // "DSM data stays as it is" is only said for a disk that holds DSM data and none of it belongs to an array that is erased
+        let safe: Vec<&str> = left
+            .iter()
+            .map(|l| l.0.as_str())
+            .filter(|n| {
+                let holds = facts.arrays.iter().any(|a| a.role == ArrayRole::Data && array_disks(facts, a).iter().any(|d| d == n));
+                holds && !plan.straddling.iter().any(|s| s.left.iter().any(|d| d == n))
+            })
+            .collect();
+        if !safe.is_empty() {
+            msg.push_str(&format!(" The DSM data on {} stays as it is.", safe.join(", ")));
+        }
+        plan.warnings.push(msg);
+    }
+    for s in &plan.straddling {
+        plan.warnings.push(s.warning());
     }
     if fw == Firmware::UBoot {
         plan.warnings.push("This ARM board has no UEFI. Debian boots from raw disk sectors through U-Boot; the U-Boot environment must be changed once over the serial console (Debian wiki: InstallingDebianOn/Synology). Keep a TTL serial adapter ready (115200 baud).".into());
@@ -1976,5 +2060,73 @@ mod tests {
         });
         let plan2 = build_plan(&f2, &PlanRequest::default());
         assert!(plan2.warnings.iter().any(|w| w.contains("Not used and not touched") && w.contains("sde")), "{:?}", plan2.warnings);
+    }
+
+    fn real_ds918() -> DeviceFacts {
+        crate::inspect::parse_inspect(&crate::inspect::fixtures::ds918_two_volumes()).unwrap()
+    }
+
+    #[test]
+    fn an_array_with_members_on_an_erased_and_an_untouched_disk_is_called_out() {
+        // sdb reports removable and its port is unknown (an old saved report): it is left alone while sda, sdc and sdd are erased
+        let mut f = real_ds918();
+        f.disks.iter_mut().find(|d| d.name == "sdb").unwrap().transport = Transport::Unknown;
+        assert_eq!(f.excluded_disks().len(), 2, "the boot flash and sdb");
+        let p = build_plan(&f, &PlanRequest::default());
+        let names: Vec<&str> = p.straddling.iter().map(|s| s.array.as_str()).collect();
+        assert_eq!(names, ["md2", "md3"], "{:?}", p.straddling);
+        assert_eq!((p.straddling[0].erased.clone(), p.straddling[0].left.clone()), (vec!["sda".into(), "sdc".into(), "sdd".into()], vec!["sdb".to_string()]));
+        let all = p.warnings.join("\n");
+        assert!(all.contains("md2 spans sda, sdc, sdd (erased) and sdb (not touched): it is lost as a whole"), "{all}");
+        assert!(all.contains("Not used and not touched: sdb (removable, unknown port). synofurb does not write to them."), "{all}");
+        assert!(!all.contains("stays as it is"), "the reassurance is false for sdb and must not be printed: {all}");
+        // keeping the arrays removes the straddle: they are not erased
+        let keep = build_plan(&f, &PlanRequest { mode: StorageMode::KeepVolumes, ..Default::default() });
+        assert!(keep.straddling.is_empty(), "{:?}", keep.straddling);
+    }
+
+    #[test]
+    fn dsm_data_stays_as_it_is_is_only_said_when_it_is_true() {
+        let mut f = real_ds918();
+        // a USB stick without DSM data: nothing to promise about DSM
+        let usb = |name: &str, parts: Vec<Part>| Disk {
+            name: name.into(),
+            model: "SanDisk".into(),
+            serial: "X".into(),
+            sectors: 62_500_000,
+            logical_sector: 512,
+            rotational: false,
+            removable: true,
+            table: PartTable::Gpt,
+            parts,
+            transport: Transport::Usb,
+            device_path: String::new(),
+        };
+        f.disks.push(usb("sde", vec![]));
+        let w = build_plan(&f, &PlanRequest::default()).warnings.join("\n");
+        assert!(w.contains("sde (USB disk). synofurb does not write to them."), "{w}");
+        assert!(!w.contains("stays as it is"), "{w}");
+        // a USB disk that holds a whole DSM data array of its own: that one really stays
+        f.disks.push(usb("sdf", vec![Part { name: "sdf1".into(), number: 1, start: 2048, sectors: 1_000_000 }]));
+        let mut md = f.arrays.iter().find(|a| a.name == "md2").unwrap().clone();
+        (md.name, md.members, md.vg) = ("md9".into(), vec!["sdf1".into()], None);
+        f.arrays.push(md);
+        let p = build_plan(&f, &PlanRequest::default());
+        assert!(p.straddling.is_empty());
+        assert!(p.warnings.join("\n").contains("The DSM data on sdf stays as it is."), "{:?}", p.warnings);
+    }
+
+    #[test]
+    fn only_a_resync_or_a_missing_member_says_the_data_is_not_protected() {
+        let mut f = real_ds918();
+        let w = build_plan(&f, &PlanRequest::default()).warnings.join("\n");
+        assert!(w.contains("md2 is resyncing 90.8%. Let it finish before installing; until then your data is not fully protected."), "{w}");
+        for a in &mut f.arrays {
+            if a.name == "md2" {
+                a.sync_action = "check".into();
+            }
+        }
+        let w = build_plan(&f, &PlanRequest::default()).warnings.join("\n");
+        assert!(w.contains("md2 is checking") && !w.contains("not fully protected"), "a check leaves every copy intact: {w}");
     }
 }

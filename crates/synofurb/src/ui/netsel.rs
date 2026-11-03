@@ -38,6 +38,19 @@ pub struct Effective {
     pub fell_back: bool,
 }
 
+impl Effective {
+    /// Do two selections scan different networks? (Order and the remembered-but-gone ids do not count.)
+    pub fn differs_from(&self, other: &Effective) -> bool {
+        let key = |e: &Effective| {
+            let (mut a, mut b) = (e.ids.clone(), e.custom.clone());
+            a.sort();
+            b.sort();
+            (a, b)
+        };
+        key(self) != key(other)
+    }
+}
+
 impl NetSelection {
     pub fn effective(&self, avail: &[NetworkInfo]) -> Effective {
         let recommended: Vec<String> = avail.iter().filter(|n| n.recommended).map(|n| n.id.clone()).collect();
@@ -49,12 +62,21 @@ impl NetSelection {
                 (keep, gone)
             }
         };
+        // Everything remembered is gone: the recommended networks stand in. Choosing nothing on purpose is not the same thing, and it
+        // is not turned back into a choice: the dialog says "select at least one network" and Done waits.
         let mut fell_back = false;
-        if ids.is_empty() && custom.is_empty() {
-            fell_back = self.ids.is_some() && !dropped.is_empty();
+        if ids.is_empty() && custom.is_empty() && !dropped.is_empty() {
+            fell_back = true;
             ids = recommended;
         }
         Effective { ids, custom, dropped, fell_back }
+    }
+
+    /// Is a VPN or a virtual network among the ticked ones (slow to sweep, a NAS is rarely there)?
+    pub fn selects_slow(&self, avail: &[NetworkInfo]) -> bool {
+        use synofurb_core::discovery::networks::NetworkKind;
+        let e = self.effective(avail);
+        avail.iter().any(|n| e.ids.contains(&n.id) && matches!(n.kind, NetworkKind::Vpn | NetworkKind::Virtual))
     }
 
     /// The scan selection for the core.
@@ -167,6 +189,34 @@ mod tests {
     }
 
     #[test]
+    fn choosing_nothing_on_purpose_is_nothing_not_the_recommended_networks_again() {
+        let av = avail();
+        let mut s = NetSelection::default();
+        let lan = av[0].id.clone();
+        s.toggle(&av, &lan);
+        let e = s.effective(&av);
+        assert!(e.ids.is_empty() && e.custom.is_empty() && !e.fell_back, "unticking the last network leaves none: {e:?}");
+        assert_eq!(s.counts(&av), (0, 5));
+        assert!(s.to_scan(&av).is_empty(), "so a scan refuses to start with its own sentence, instead of scanning what was unticked");
+        s.toggle(&av, &lan);
+        assert_eq!(s.effective(&av).ids, vec![lan], "ticking it again brings it back");
+    }
+
+    #[test]
+    fn a_vpn_or_virtual_network_selected_is_flagged_as_slow() {
+        let av = avail();
+        let mut s = NetSelection::default();
+        assert!(!s.selects_slow(&av), "the default is the LAN only");
+        s.toggle(&av, &av.iter().find(|n| n.interface == "Tailscale").unwrap().id.clone());
+        assert!(s.selects_slow(&av));
+        let mut t = NetSelection::default();
+        t.toggle(&av, &av.iter().find(|n| n.interface == "docker0").unwrap().id.clone());
+        assert!(t.selects_slow(&av));
+        s.select_recommended();
+        assert!(!s.selects_slow(&av));
+    }
+
+    #[test]
     fn the_first_toggle_keeps_the_recommended_choice_and_adds_to_it() {
         let av = avail();
         let mut s = NetSelection::default();
@@ -226,6 +276,29 @@ mod tests {
         let e = s.effective(&av);
         assert_eq!((e.ids.len(), e.custom.len(), e.fell_back), (0, 1, false));
         assert_eq!(s.to_scan(&av).len(), 1);
+    }
+
+    #[test]
+    fn the_dialog_knows_when_the_selection_changed_and_so_whether_to_scan_again() {
+        let av = avail();
+        let mut s = NetSelection::default();
+        let before = s.effective(&av);
+        // opening and closing, or ticking and unticking the same network, changes nothing
+        let vpn = av.iter().find(|n| n.interface == "Tailscale").unwrap().id.clone();
+        s.toggle(&av, &vpn);
+        assert!(s.effective(&av).differs_from(&before), "a VPN ticked: the results on screen are stale");
+        s.toggle(&av, &vpn);
+        assert!(!s.effective(&av).differs_from(&before), "back where it was: no rescan");
+        // a custom network counts, in either state
+        s.add_custom("10.1.0.0/24").unwrap();
+        assert!(s.effective(&av).differs_from(&before));
+        s.toggle_custom("10.1.0.0/24");
+        assert!(!s.effective(&av).differs_from(&before), "a custom network that is off scans nothing extra");
+        // the order of the ticks is not a change
+        let (mut a, mut b) = (NetSelection::default(), NetSelection::default());
+        a.select_all(&av);
+        b.ids = Some(av.iter().rev().map(|n| n.id.clone()).collect());
+        assert!(!a.effective(&av).differs_from(&b.effective(&av)));
     }
 
     #[test]

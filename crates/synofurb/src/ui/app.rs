@@ -193,6 +193,9 @@ pub struct App {
     pub ack_backup: bool,
     pub ack_loss: bool,
     pub ack_unit: bool,
+    /// The add-on privileges the person accepted on Confirm: `addons::consent_signature` of what was on screen. A different set of
+    /// add-ons later is not covered by it.
+    pub ack_priv: Option<String>,
     /// Source: Offline in the System form.
     pub source_offline: bool,
     /// The app itself could not reach the Internet (a check failed); the status bar says Offline.
@@ -463,6 +466,7 @@ impl App {
             ack_backup: false,
             ack_loss: false,
             ack_unit: false,
+            ack_priv: None,
             source_offline: false,
             app_offline: false,
             password_copied: false,
@@ -607,11 +611,18 @@ impl App {
     // ------------------------------------------------------------------------------------------ demo
 
     fn start_demo(&mut self, t: DemoTarget, unit: DemoUnit, window: &mut Window, cx: &mut Context<App>) {
+        let unit = if t.degraded {
+            DemoUnit::VolumesDegraded
+        } else if t.usb {
+            DemoUnit::VolumesUsb
+        } else {
+            unit
+        };
         self.selected_ip = Some(unit.address().to_string());
         self.set_input(&self.inp.host.clone(), &format!("{} (demo)", unit.address()), window, cx);
         self.set_input(&self.inp.password.clone(), "demo-not-a-real-password", window, cx);
         self.app_offline = t.offline;
-        self.source_offline = t.offline && t.screen == Screen::System;
+        self.source_offline = t.offline && matches!(t.screen, Screen::System | Screen::Addons);
         let past_inspect = !matches!(t.screen, Screen::Inventory | Screen::Connect | Screen::Settings | Screen::About);
         if past_inspect {
             let raw = unit.raw();
@@ -619,7 +630,7 @@ impl App {
             self.on_inspected(facts, raw, false, window, cx);
         }
         self.demo_scan = t.scan;
-        if matches!(t.scan, DemoScan::Empty | DemoScan::Running) {
+        if matches!(t.scan, DemoScan::Empty | DemoScan::Running | DemoScan::Stopped | DemoScan::AllFailed | DemoScan::NoNetwork | DemoScan::Vpn32) {
             self.selected_ip = None;
         }
         if t.added {
@@ -637,7 +648,10 @@ impl App {
             self.addons.picks.apply_preset(synofurb_core::addons::PRESETS.last().expect("presets"));
             self.ensure_addon_inputs(window, cx);
             if let Some(st) = self.addons.inputs.get(&("frigate", "retain_days")).cloned() {
-                self.set_input(&st, "14", window, cx);
+                self.set_input(&st, if t.bad_fields { "400" } else { "14" }, window, cx);
+            }
+            if t.bad_fields && let Some(st) = self.addons.inputs.get(&("plex", "plex_claim")).cloned() {
+                self.set_input(&st, "oops", window, cx);
             }
         }
         if t.screen == Screen::Failed {
@@ -649,6 +663,8 @@ impl App {
                 self.ack_backup = true;
                 self.ack_loss = true;
                 self.ack_unit = true;
+                let sig = synofurb_core::addons::consent_signature(&self.addon_choices(cx));
+                self.ack_priv = (!sig.is_empty()).then_some(sig);
                 let phrase = self.phrase(cx);
                 self.set_input(&self.inp.typed.clone(), &phrase, window, cx);
             }
@@ -725,6 +741,14 @@ impl App {
         }
         if matches!(t.screen, Screen::Inventory) {
             self.start_scan(cx);
+            if t.scan == DemoScan::Stopped {
+                // the person pressed Stop half way through
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(1800)).await;
+                    this.update(cx, |a, cx| a.stop_scan(cx)).ok();
+                })
+                .detach();
+            }
         }
         if t.screen.is_side_page() {
             self.return_to = Screen::Inventory;
@@ -788,7 +812,7 @@ impl App {
             ),
             Overlay::Quick => self.open_quick_dialog(window, cx),
             Overlay::Add(d) => self.open_add_dialog(None, Some(d), window, cx),
-            Overlay::Networks => self.open_networks_dialog(window, cx),
+            Overlay::Networks(d) => self.open_networks_dialog_demo(Some(d), window, cx),
             Overlay::Manual => self.open_manual_recovery(window, cx),
             Overlay::NextDialog => self.open_next_dialog(window, cx),
             Overlay::Welcome(step) => self.open_welcome(step, false, window, cx),
@@ -1043,14 +1067,18 @@ impl App {
         self.scan.begin();
         let cancel = CancelToken::new();
         self.scan_cancel = Some(cancel.clone());
-        if self.demo.is_some() {
+        if self.demo.is_some() && self.demo_scan == DemoScan::NoNetwork {
+            self.scan.fail(copy::SCAN_NO_NETWORK.short.to_string());
+            self.scan_cancel = None;
+        } else if self.demo.is_some() {
             // A scripted scan: the same events the real one sends, nothing touches the network.
             self.inv = Inventory::default();
             demo::spawn_scan_script(self.tx.clone(), self.demo_scan, cancel);
         } else {
             let nets = self.settings.scan_networks.to_scan(&self.nets);
             if nets.is_empty() {
-                self.scan.fail(copy::SCAN_NO_NETWORK.short.to_string());
+                // two different reasons: no adapter at all, or every network unticked
+                self.scan.fail(if self.nets.is_empty() { &copy::SCAN_NO_NETWORK } else { &copy::SCAN_NONE_SELECTED }.short.to_string());
                 self.scan_cancel = None;
             } else {
                 worker::spawn_scan(self.tx.clone(), ScanOptions::recommended().with_networks(nets), cancel);
@@ -1121,12 +1149,24 @@ impl App {
     }
 
     pub fn select_host(&mut self, host: &str, window: &mut Window, cx: &mut Context<App>) {
-        if self.selected_ip.as_deref() != Some(host) {
+        let changed = self.selected_ip.as_deref() != Some(host);
+        if changed {
             self.reset_unit_session();
         }
         self.selected_ip = Some(host.to_string());
         self.set_input(&self.inp.host.clone(), host, window, cx);
+        self.restore_port(host, None, changed, window, cx);
         self.go(Screen::Connect, window, cx);
+    }
+
+    /// The SSH port of the unit that was just selected: an explicitly given one, else the one stored with an added address, else the
+    /// default 22 when another unit was selected (so a port typed for one unit never leaks into the next). Selecting the same unit
+    /// again leaves what is typed.
+    pub fn restore_port(&mut self, host: &str, explicit: Option<u16>, unit_changed: bool, window: &mut Window, cx: &mut Context<App>) {
+        let stored = self.added.get(host).and_then(|h| h.target.port);
+        if let Some(p) = super::addhost::port_to_show(explicit, stored, unit_changed) {
+            self.set_input(&self.inp.port.clone(), &p.to_string(), window, cx);
+        }
     }
 
     /// Compatibility status for a discovered unit (before inspection): the list entry, or Untested.
@@ -1380,13 +1420,14 @@ impl App {
             .unwrap_or_default()
     }
 
-    pub fn gate<'a>(&'a self, typed: &'a str, phrase: &'a str) -> ConfirmGate<'a> {
+    pub fn gate<'a>(&'a self, typed: &'a str, phrase: &'a str, cx: &gpui_kit::App) -> ConfirmGate<'a> {
         ConfirmGate {
             phrase,
             typed,
             ack_backup: self.ack_backup,
             ack_loss: self.ack_loss,
             ack_unit: self.ack_unit,
+            priv_ok: super::addons::consent_given(&self.addon_choices(cx), self.ack_priv.as_deref()),
             plan_ok: self.plan_ok(),
         }
     }
@@ -1453,7 +1494,7 @@ impl App {
     pub fn start_install(&mut self, window: &mut Window, cx: &mut Context<App>) {
         let typed = self.input_value(&self.inp.typed, cx);
         let phrase = self.phrase(cx);
-        if !self.gate(&typed, &phrase).is_open() {
+        if !self.gate(&typed, &phrase, cx).is_open() {
             self.error = Some("The confirmation is not complete.".into());
             cx.notify();
             return;
@@ -1511,6 +1552,7 @@ impl App {
         self.ack_backup = false;
         self.ack_loss = false;
         self.ack_unit = false;
+        self.ack_priv = None;
         self.password_copied = false;
         self.sys.generated_key = None;
         self.reveal_password = false;

@@ -282,6 +282,21 @@ class CatalogShape(unittest.TestCase):
             with self.subTest(addon=aid):
                 self.assertEqual(validate_manifest(load(aid), aid), [])
 
+    def test_summaries_fit_the_web_word_budget(self):
+        """A card summary is text a person reads on the Add-ons page: the web audit counts it (tests/test_ui.py, MANIFEST_BUDGET), so each one stays short."""
+        for aid in addon_ids():
+            with self.subTest(addon=aid):
+                words = [w for w in load(aid)["summary"].split() if re.search(r"[A-Za-z]", w)]
+                self.assertLessEqual(len(words), 20, "%s: %d words" % (aid, len(words)))
+
+    def test_choices_have_labels_a_person_can_read(self):
+        """A choice given as a bare string is shown as that raw value (\"ro\"): every choice of the shipped add-ons has its own label."""
+        for aid in addon_ids():
+            for st in load(aid)["settings"] if "settings" in load(aid) else []:
+                if st["type"] == "choice":
+                    with self.subTest(addon=aid, setting=st["key"]):
+                        self.assertTrue(all(isinstance(c, dict) and c.get("label") and c["label"] != c["value"] for c in st["choices"]))
+
     def test_validator_rejects_broken_manifests(self):
         base = load("frigate")
         bad = json.loads(json.dumps(base))

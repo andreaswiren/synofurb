@@ -582,7 +582,7 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
         writeln!(w, "run mkdir -p /target/boot/efi")?;
         writeln!(w, "run mount \"$DEV_ESP\" /target/boot/efi")?;
     }
-    let has_data_lv = plan.vgs.iter().any(|v| v.name == "vg_data" && !v.lvs.is_empty());
+    let has_data_lv = plan.has_data_volume();
     if has_data_lv {
         writeln!(w, "run mkdir -p /target/srv/data")?;
         writeln!(w, "run mount /dev/mapper/vg_data-data /target/srv/data")?;

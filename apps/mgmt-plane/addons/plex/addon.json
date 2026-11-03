@@ -121,8 +121,8 @@
       "type": "choice",
       "default": "ro",
       "choices": [
-        "ro",
-        "rw"
+        { "value": "ro", "label": "Read only (safe)" },
+        { "value": "rw", "label": "Read and write" }
       ],
       "help": "ro: Plex can only read your media (safe). rw: Plex may also delete files and write sidecar files."
     }

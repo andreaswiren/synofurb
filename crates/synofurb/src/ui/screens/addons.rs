@@ -5,7 +5,7 @@
 
 use crate::ui::app::App;
 use crate::ui::copy::{self, Item};
-use crate::ui::disclosure::info_tip;
+use crate::ui::disclosure::info_lines;
 use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
@@ -58,51 +58,55 @@ impl App {
         let errors = picks.field_errors(&secrets);
         let blocker = self.addons_blocker(cx);
 
+        let plan = self.form.plan.as_ref();
+        let redundant = crate::ui::addons::data_is_redundant(plan);
         let mut list = v_flex().gap(px(8.0));
         for (ix, e) in addons::catalog().iter().enumerate() {
             let id = e.id;
             let on = picks.is_on(id);
             let required = picks.required_by(id);
             let locked = !required.is_empty();
-            let box_ = Checkbox::new(("addon", ix)).label(e.name).checked(on).disabled(locked).on_click(cx.listener(
-                move |this, v: &bool, _, cx| {
+            // Keep mode creates no data volume: an add-on that keeps its data below /srv/data cannot be ticked (and can be unticked)
+            let unavailable = crate::ui::addons::unavailable_reason(e, plan);
+            let box_ = Checkbox::new(("addon", ix))
+                .label(e.name)
+                .checked(on)
+                .disabled(locked || (unavailable.is_some() && !on))
+                .on_click(cx.listener(move |this, v: &bool, _, cx| {
                     this.addons.picks.set(id, *v);
                     cx.notify();
-                },
-            ));
+                }));
+            // One risk tag at most (what it may do) and one info button for everything else: needs, size, time.
+            let risk = e.privileges.first().map(|pr| privilege_item(pr));
             let head = h_flex()
                 .gap(px(8.0))
                 .items_center()
                 .flex_wrap()
                 .child(box_)
                 .when(locked, |d| d.child(kit::tag(&p, Tone::Info, Some(role::LINK), copy::ADDON_REQUIRED.fmt(&[&required.join(", ")]))))
-                .when(!e.requires.is_empty(), |d| d.child(kit::chip(&p, copy::ADDON_NEEDS_DOCKER.short)))
-                .when(e.needs_internet, |d| {
-                    d.child(
-                        h_flex()
-                            .gap(px(2.0))
-                            .items_center()
-                            .child(kit::tag(&p, Tone::Neutral, Some(role::NETWORK), copy::ADDON_NEEDS_NET.short))
-                            .child(info_tip(("net-info", ix), &copy::ADDON_NEEDS_NET, &app)),
-                    )
-                })
-                .children(e.privileges.iter().enumerate().map(|(j, pr)| {
-                    let item = privilege_item(pr);
-                    h_flex().gap(px(2.0)).items_center().child(kit::tag(&p, Tone::Warn, Some(role::WARN), item.short)).child(info_tip(
-                        ("priv-info", ix * 8 + j),
-                        item,
-                        &app,
-                    ))
-                }));
+                .when_some(risk, |d, item| d.child(kit::tag(&p, Tone::Warn, Some(role::WARN), item.short)))
+                .child(info_lines(("about-info", ix), copy::ADDON_ABOUT.short, crate::ui::addons::about_lines(e)));
             let mut row = v_flex()
                 .gap(px(6.0))
                 .px(px(12.0))
-                .py(px(10.0))
+                .py(px(8.0))
                 .rounded(cx.theme().radius)
                 .border_1()
                 .border_color(if on { p.border_strong } else { cx.theme().border })
                 .child(head)
-                .child(div().pl(px(28.0)).child(kit::caption(cx, e.summary)));
+                .child(div().pl(px(32.0)).child(kit::caption(cx, crate::ui::addons::display_summary(e, redundant))));
+            if let Some(why) = unavailable {
+                row = row.child(
+                    h_flex()
+                        .pl(px(32.0))
+                        .gap(px(6.0))
+                        .items_start()
+                        .text_sm()
+                        .text_color(p.warn_fg)
+                        .child(icons::icon_sized(role::WARN, 14.0, p.warn_fg))
+                        .child(div().flex_1().min_w_0().child(why)),
+                );
+            }
             if picks.is_picked(id) && !e.settings.is_empty() {
                 let mut form = Form::vertical();
                 for (j, s) in e.settings.iter().enumerate() {
@@ -112,18 +116,35 @@ impl App {
                         let i = Input::new(st).aria_label(item.short);
                         if s.is_secret() { i.mask_toggle() } else { i }
                     }));
+                    // the field's own honest advice in plain sight, not only behind its info button
+                    if (id, s.key) == ("plex", "plex_claim") && err.is_none() {
+                        control = control.child(kit::caption(cx, copy::ADDON_PLEX_HINT.short));
+                    }
                     if let Some(m) = err {
-                        control = control.child(div().text_xs().text_color(p.err_fg).child(m));
+                        control = control.child(
+                            h_flex()
+                                .gap(px(6.0))
+                                .items_start()
+                                .text_xs()
+                                .text_color(p.err_fg)
+                                .child(icons::icon_sized(role::ERR, 12.0, p.err_fg))
+                                .child(div().flex_1().min_w_0().child(m)),
+                        );
                     }
                     form = form.child(kit::field(("f-addon", ix * 8 + j), item, &app, control));
                 }
-                row = row.child(div().pl(px(28.0)).child(form));
+                row = row.child(div().pl(px(32.0)).child(form));
             }
             list = list.child(row);
         }
 
-        let mut body =
-            v_flex().w_full().max_w(px(900.0)).gap(px(16.0)).child(self.setup_tabs(cx)).child(kit::muted(cx, copy::ADDONS_INTRO.short));
+        // the intro, and the one caveat: these have not run on a real NAS (Tag + info button, as on Quick setup and Confirm)
+        let intro = h_flex().gap(px(8.0)).items_center().flex_wrap().child(kit::muted(cx, copy::ADDONS_INTRO.short)).child(kit::untested(
+            &p,
+            "untested-info",
+            &app,
+        ));
+        let mut body = v_flex().w_full().max_w(px(900.0)).gap(px(16.0)).child(self.setup_tabs(cx)).child(intro);
         if !picks.is_empty() && !self.sys.enable_mgmt {
             body = body.child(Alert::warning("addons-web", copy::ADDON_NEEDS_WEB.short).icon(icons::icon(role::WARN)));
         }

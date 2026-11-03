@@ -363,7 +363,7 @@ pub mod fixtures {
         s
     }
     /// The owner's real DS918+ (4x 8 TB, Synology Hybrid RAID-like: md2 + md3 are PVs of `vg1`, two volumes behind `cachedev_N`).
-    /// Disk paths, md layout, LV sizes and mounts are from the unit's own output; the mount sizes/usage and serials are sample data.
+    /// Disk paths, md layout, LV sizes and mounts are from the unit's own output; the mount sizes are the owner's (volume1 15.99 TiB, volume2 5.83 TiB); usage and serials are sample data.
     /// sda/sdb sit behind an add-in SATA controller and report `removable=1`; md2 was resyncing (90.8 %) when it was captured.
     pub fn ds918_two_volumes() -> String {
         let mut s = String::new();
@@ -402,9 +402,9 @@ pub mod fixtures {
         s.push_str("PV|/dev/md2|vg1\nPV|/dev/md3|vg1\n");
         s.push_str("LV|vg1|syno_vg_reserved_area|12582912\nLV|vg1|volume_1|17581000000000\nLV|vg1|volume_2|6410000000000\n");
         s.push_str("MNT|/dev/md0|/|ext4|2385000|1500000\n");
-        s.push_str("MNT|/dev/mapper/cachedev_0|/volume1|ext4|16990000000|9100000000\n");
-        s.push_str("MNT|/dev/mapper/cachedev_1|/volume2|btrfs|6100000000|2500000000\n");
-        s.push_str("MNT|/dev/mapper/cachedev_1|/volume2/@docker|btrfs|6100000000|2500000000\n");
+        s.push_str("MNT|/dev/mapper/cachedev_0|/volume1|ext4|17170000000|9100000000\n");
+        s.push_str("MNT|/dev/mapper/cachedev_1|/volume2|btrfs|6260000000|2500000000\n");
+        s.push_str("MNT|/dev/mapper/cachedev_1|/volume2/@docker|btrfs|6260000000|2500000000\n");
         s.push_str("MNT|synodedup-fused|/volume2/ActiveBackupforBusiness/ActiveBackupData|fuse.synodedup-fused|0|0\n");
         s.push_str("END|ok\n");
         s

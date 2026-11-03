@@ -707,6 +707,14 @@
   }
   st.ad = {};
   AD.list.addons.forEach(a => { st.ad[a.id] = {installed: a.installed, status: a.status, detail: '', values: null}; });
+  /* ?addons=states|problems|nodocker: other states of the page (default: Docker and Portainer running, Frigate and Plex available) */
+  const ADS = qs.get('addons') || '';
+  const adPreset = {
+    states: {docker: ['running'], portainer: ['stopped'], plex: ['needs-attention', 'No space left on device while downloading the images. Free some space and retry.'], frigate: ['updating']},
+    problems: {docker: ['running'], portainer: ['unhealthy', 'The health check at https://nas:9443 does not answer.'], plex: ['error', 'The container plex keeps stopping; the last log line says: permission denied on /data.'], frigate: ['starting']},
+    nodocker: {docker: ['not-installed'], portainer: ['not-installed'], plex: ['not-installed'], frigate: ['not-installed']},
+  }[ADS];
+  if (adPreset) for (const [id, [status, detail]] of Object.entries(adPreset)) { st.ad[id] = {installed: status !== 'not-installed', status, detail: detail || '', values: null}; }
   function adEffPrivs(d, settings) {
     const out = d.privileges.map(p => p.id);
     d.settings.filter(s => s.type === 'choice').forEach(s => { const c = s.choices.find(x => x.value === (settings[s.key] || d.values[s.key])); if (c) c.privileges.forEach(p => { if (!out.includes(p)) out.push(p); }); });
@@ -774,6 +782,11 @@
   ];
   function dynRoute(route) { for (const [rx, fn] of DYN) { const m = rx.exec(route); if (m) return b => fn(m, b); } return null; }
   AD.list.addons.forEach(a => adSync(a.id));
+  if (ADS === 'states') {                                           // Frigate is being updated: a job that outlasts the screenshot
+    const jid = 'jabcdef012345';
+    ADJ[jid] = {id: jid, kind: 'update', addon: 'frigate', state: 'running', ok: null, t0: Date.now() - 2200000, dur: 3600, steps: ['check', 'render', 'pull', 'start', 'health'],
+      msgs: ['Checking Docker', 'Writing the configuration', 'Downloading images (needs Internet)', 'Starting', 'Waiting for Frigate NVR to answer'], final: {status: 'running', installed: true}};
+  }
 
   window.fetch = async function (url, opt) {
     const u = new URL(typeof url === 'string' ? url : url.url, location.href);

@@ -148,20 +148,122 @@ pub fn cli_spec(c: &AddonChoice) -> String {
     if parts.is_empty() { c.id.clone() } else { format!("{}:{}", c.id, parts.join(",")) }
 }
 
-/// Lines under the confirmation: what is installed after the first boot and what it needs.
-pub fn confirm_notes(choices: &[AddonChoice], ctx: &AddonContext) -> Vec<String> {
+/// The one-line summary of an add-on as the tab shows it. The catalog says "the redundant data volume" for Frigate; that is only
+/// true when the plan builds a redundant data array, so without one the word is dropped ("RAID 0" and "None" survive no failure).
+pub fn display_summary(e: &addons::CatalogEntry, redundant: bool) -> String {
+    if redundant { e.summary.to_string() } else { e.summary.replace("redundant data volume", "data volume") }
+}
+
+/// What the one info button of an add-on says, a line each: what it needs, what it is allowed to do, how big it is and how long the
+/// first boot spends on it. Everything the tab used to spread over five tags and three buttons.
+pub fn about_lines(e: &addons::CatalogEntry) -> Vec<String> {
     let mut v = vec![];
-    if choices.is_empty() {
-        return v;
+    let docker_names: Vec<&str> = e.requires.iter().filter_map(|r| addons::entry(r).map(|x| x.name)).collect();
+    if !docker_names.is_empty() {
+        v.push(format!("Needs {}, which is installed with it.", docker_names.join(" and ")));
     }
-    let all = addons::resolve(choices).unwrap_or_default();
-    if all.iter().any(|r| r.entry.needs_internet) {
-        v.push(crate::ui::copy::CONF_ADDONS_NET.short.to_string());
+    if e.needs_internet {
+        v.push(crate::ui::copy::ADDON_NEEDS_NET.tip.to_string());
     }
-    if ctx.offline {
-        v.push(crate::ui::copy::CONF_ADDONS_OFFLINE.short.to_string());
+    for p in e.privileges {
+        let it = crate::ui::screens::addons::privilege_item(p);
+        v.push(format!("{}: {}", it.short, it.tip));
+    }
+    let size = if e.approx_size_mib >= 1000 { format!("{:.1} GB", e.approx_size_mib as f64 / 1000.0) } else { format!("{} MB", e.approx_size_mib) };
+    v.push(format!("Download about {size}, about {} min on a 20 Mbit/s line.", addons::approx_minutes(e)));
+    if e.data_gib > 0 {
+        v.push(format!("Wants at least {} GiB free on the data volume.", e.data_gib));
+    } else if e.needs_data_volume {
+        v.push("Keeps its temporary files on the data volume.".to_string());
     }
     v
+}
+
+/// Is the data volume of the plan redundant (a disk may fail and the data is still there)? No plan, or no data array: no.
+pub fn data_is_redundant(plan: Option<&synofurb_core::plan::Plan>) -> bool {
+    plan.and_then(crate::ui::raid::survives).is_some_and(|n| n > 0)
+}
+
+/// Why an add-on cannot be ticked with this plan (None = it can). Frigate and Plex keep their data below `/srv/data`, which only
+/// exists when the plan creates a data volume; Keep mode does not.
+pub fn unavailable_reason(e: &addons::CatalogEntry, plan: Option<&synofurb_core::plan::Plan>) -> Option<String> {
+    let has = plan.is_none_or(|p| p.has_data_volume());
+    (e.needs_data_volume && !has).then(|| crate::ui::copy::ADDON_NEEDS_DATA.short.to_string())
+}
+
+/// The sentence for the Next button when something ticked cannot work with the plan: `Needs a data volume: Frigate NVR, Plex Media
+/// Server. Keep mode does not create one.`
+pub fn keep_mode_blocker(picks: &AddonPicks, plan: Option<&synofurb_core::plan::Plan>) -> Option<String> {
+    let has = plan.is_none_or(|p| p.has_data_volume());
+    let names = addons::needing_data_volume(&picks.choices(&BTreeMap::new()), has);
+    (!names.is_empty()).then(|| crate::ui::copy::ADDON_KEEP_BLOCK.fmt(&[&names.join(", ")]))
+}
+
+/// Quick setup's radio label: the preset and everything it installs, so nothing arrives unnamed: `Plex: Docker, Portainer, Plex Media Server`.
+pub fn preset_label(p: &addons::Preset) -> String {
+    format!("{}: {}", p.label, addons::preset_names(p))
+}
+
+/// The line under the Quick setup add-ons choice when the chosen preset carries privileges: `Portainer controls Docker.`
+pub fn preset_privilege_line(p: &addons::Preset) -> Option<String> {
+    let c: Vec<AddonChoice> = p.addons.iter().map(|i| AddonChoice::new(i)).collect();
+    privilege_line(&addons::consent_items(&c))
+}
+
+/// `Portainer controls Docker \u{b7} Plex Media Server uses NAS network`: the privileges in the words of the Add-ons tab.
+pub fn privilege_line(items: &[addons::Consent]) -> Option<String> {
+    if items.is_empty() {
+        return None;
+    }
+    Some(
+        items
+            .iter()
+            .map(|c| {
+                let what: Vec<String> = c
+                    .privileges
+                    .iter()
+                    .map(|p| synofurb_core::model::lower_first(crate::ui::screens::addons::privilege_item(p).short))
+                    .collect();
+                format!("{} {}", c.name, what.join(", "))
+            })
+            .collect::<Vec<_>>()
+            .join(" \u{b7} "),
+    )
+}
+
+/// Has the person accepted exactly the privileges that are on screen now? `acked` is the signature that was ticked.
+pub fn consent_given(choices: &[AddonChoice], acked: Option<&str>) -> bool {
+    let need = addons::consent_signature(choices);
+    need.is_empty() || acked == Some(need.as_str())
+}
+
+/// The "what the Add-ons choice means" part of Confirm, built from the engine's own text so Quick setup and the Add-ons tab say
+/// the same: names, the privileges to acknowledge, and the engine's warnings (Internet, disk use, data volume).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfirmModel {
+    pub names: Vec<&'static str>,
+    pub privileges: Vec<addons::Consent>,
+    /// The lines in plain sight: privileges, a tight system volume, no data volume, no Docker in the offline bundle.
+    pub loud: Vec<String>,
+    /// The rest (Internet, sizes), one click away.
+    pub details: Vec<String>,
+}
+
+pub fn confirm_model(choices: &[AddonChoice], ctx: &AddonContext) -> ConfirmModel {
+    let Ok(all) = addons::resolve(choices) else { return ConfirmModel::default() };
+    let (loud, details): (Vec<_>, Vec<_>) = addons::notes(choices, ctx).into_iter().partition(|(k, _)| k.is_loud());
+    ConfirmModel {
+        names: all.iter().map(|r| r.entry.name).collect(),
+        privileges: addons::consent_items(choices),
+        loud: loud.into_iter().map(|(_, t)| t).collect(),
+        details: details.into_iter().map(|(_, t)| t).collect(),
+    }
+}
+
+/// The per-add-on line of the Done screen: `about 2 min \u{b7} 300 MB`.
+pub fn done_meta(a: &addons::AfterInstall) -> String {
+    let size = if a.size_mib >= 1000 { format!("{:.1} GB", a.size_mib as f64 / 1000.0) } else { format!("{} MB", a.size_mib) };
+    format!("about {} min \u{b7} {size}", a.minutes)
 }
 
 /// The catalog setting behind a key, if it exists.
@@ -237,7 +339,8 @@ impl App {
         if !self.sys.enable_mgmt {
             return Some(crate::ui::copy::ADDON_NEEDS_WEB.short.to_string());
         }
-        picks.field_errors(&secrets).into_iter().next().map(|(_, m)| m)
+        // a pick that cannot work with the plan (Frigate or Plex in Keep mode) is a reason too, said before a field's error
+        keep_mode_blocker(&picks, self.form.plan.as_ref()).or_else(|| picks.field_errors(&secrets).into_iter().next().map(|(_, m)| m))
     }
 }
 
@@ -356,10 +459,104 @@ mod tests {
         assert!(line.starts_with("Will be installed after first boot:") && line.ends_with("Docker, Portainer"), "{line}");
         assert!(p.needs_internet());
         assert!(!picks(&["docker"]).needs_internet());
-        let c = p.choices(&BTreeMap::new());
-        assert_eq!(confirm_notes(&c, &AddonContext::default()).len(), 1);
-        assert_eq!(confirm_notes(&c, &AddonContext { offline: true, root_mib: None }).len(), 2);
-        assert!(confirm_notes(&[], &AddonContext::default()).is_empty());
+    }
+
+    #[test]
+    fn confirm_shows_the_engines_own_warnings_for_every_way_of_ticking() {
+        // the same text whether Quick setup or the Add-ons tab ticked it: it is built from the choices, not from the screen
+        let tab = picks(&["portainer", "plex"]).choices(&BTreeMap::new());
+        let mut q = AddonPicks::default();
+        q.apply_preset(&addons::PRESETS[2]);
+        let quick = q.choices(&BTreeMap::new());
+        let ctx = AddonContext { has_data_volume: Some(true), root_mib: Some(20 * 1024), ..Default::default() };
+        let (a, b) = (confirm_model(&tab, &ctx), confirm_model(&quick, &ctx));
+        assert_eq!(a, b);
+        assert_eq!(a.names, ["Docker", "Portainer", "Plex Media Server"]);
+        assert!(a.loud.join("\n").contains("administrator of the NAS"), "{:?}", a.loud);
+        let rest = a.details.join("\n");
+        assert!(rest.contains("Internet") && rest.contains("GiB on the system volume"), "{rest}");
+        assert_eq!(a.privileges.iter().map(|c| c.id).collect::<Vec<_>>(), ["portainer", "plex"]);
+        assert_eq!(
+            privilege_line(&a.privileges).as_deref(),
+            Some("Portainer controls Docker \u{b7} Plex Media Server uses NAS network"),
+            "{:?}",
+            privilege_line(&a.privileges)
+        );
+        // the offline source adds its own line, and a plan without a data volume adds the data-volume line
+        let off = confirm_model(&quick, &AddonContext { offline: true, has_data_volume: Some(false), ..Default::default() });
+        assert!(off.loud.iter().any(|w| w.contains("offline bundle")), "{:?}", off.loud);
+        let keep = confirm_model(&picks(&["frigate"]).choices(&BTreeMap::new()), &AddonContext { has_data_volume: Some(false), ..Default::default() });
+        assert!(keep.loud.iter().any(|w| w.contains("creates no data volume")), "{:?}", keep.loud);
+        assert!(confirm_model(&[], &ctx).names.is_empty() && confirm_model(&[], &ctx).loud.is_empty());
+    }
+
+    #[test]
+    fn quick_setup_names_what_each_preset_installs() {
+        let labels: Vec<String> = addons::PRESETS.iter().map(preset_label).collect();
+        assert_eq!(labels[0], "Docker + Portainer: Docker, Portainer");
+        assert_eq!(labels[2], "Plex: Docker, Portainer, Plex Media Server", "Plex also installs Portainer, and the label says so");
+        assert!(labels.iter().all(|l| l.contains("Portainer")), "every preset carries Portainer today, and none hides it");
+        // the privilege line is there exactly for the presets that carry a privileged add-on
+        for (p, l) in addons::PRESETS.iter().zip(&labels) {
+            assert_eq!(preset_privilege_line(p).is_some(), l.contains("Portainer") || p.addons.contains(&"plex"), "{l}");
+        }
+        assert!(preset_privilege_line(&addons::PRESETS[2]).unwrap().contains("Portainer"));
+    }
+
+    #[test]
+    fn the_redundant_wording_is_dropped_when_the_plan_is_not_redundant() {
+        let frigate = addons::entry("frigate").unwrap();
+        assert!(frigate.summary.contains("redundant data volume"));
+        assert!(display_summary(frigate, true).contains("redundant data volume"));
+        let plain = display_summary(frigate, false);
+        assert!(!plain.contains("redundant") && plain.ends_with("go to the data volume."), "{plain}");
+        // from a real plan: RAID 5 is redundant, RAID 0 and None are not, and no plan claims nothing
+        use synofurb_core::plan::{DataRaid, PlanRequest, build_plan};
+        let f = synofurb_core::inspect::parse_inspect(&synofurb_core::inspect::fixtures::ds918_two_volumes()).unwrap();
+        let plan = |r: DataRaid| build_plan(&f, &PlanRequest { data_raid: r, ..Default::default() });
+        assert!(data_is_redundant(Some(&plan(DataRaid::Raid5))));
+        assert!(!data_is_redundant(Some(&plan(DataRaid::Raid0))), "RAID 0 survives no failure");
+        assert!(!data_is_redundant(Some(&plan(DataRaid::None))));
+        assert!(!data_is_redundant(None));
+    }
+
+    #[test]
+    fn data_hungry_add_ons_are_blocked_in_keep_mode_with_a_visible_reason() {
+        use synofurb_core::plan::{PlanRequest, StorageMode, build_plan};
+        let f = synofurb_core::inspect::parse_inspect(&synofurb_core::inspect::fixtures::ds918_two_volumes()).unwrap();
+        let wipe = build_plan(&f, &PlanRequest::default());
+        let keep = build_plan(&f, &PlanRequest { mode: StorageMode::KeepVolumes, ..Default::default() });
+        assert!(wipe.has_data_volume() && !keep.has_data_volume(), "the rule reads the plan, as the installer does");
+        let (frigate, plex, portainer) =
+            (addons::entry("frigate").unwrap(), addons::entry("plex").unwrap(), addons::entry("portainer").unwrap());
+        assert!(unavailable_reason(frigate, Some(&keep)).is_some() && unavailable_reason(plex, Some(&keep)).is_some());
+        assert!(unavailable_reason(portainer, Some(&keep)).is_none(), "Portainer keeps nothing below /srv/data");
+        assert!(unavailable_reason(frigate, Some(&wipe)).is_none() && unavailable_reason(frigate, None).is_none());
+        // Next explains itself when such an add-on is already ticked
+        let p = picks(&["frigate", "plex", "portainer"]);
+        let why = keep_mode_blocker(&p, Some(&keep)).unwrap();
+        assert_eq!(why, "Needs a data volume: Frigate NVR, Plex Media Server. Keep mode does not create one.");
+        assert!(keep_mode_blocker(&p, Some(&wipe)).is_none());
+        assert!(keep_mode_blocker(&picks(&["portainer"]), Some(&keep)).is_none());
+    }
+
+    #[test]
+    fn the_info_button_carries_everything_the_tags_used_to() {
+        let l = about_lines(addons::entry("portainer").unwrap()).join("\n");
+        assert!(l.contains("Needs Docker") && l.contains("Internet") && l.contains("Controls Docker"), "{l}");
+        assert!(l.contains("Download about 300 MB, about 2 min"), "{l}");
+        let f = about_lines(addons::entry("frigate").unwrap()).join("\n");
+        assert!(f.contains("3.0 GB") && f.contains("at least 50 GiB free on the data volume"), "{f}");
+        assert!(about_lines(addons::entry("docker").unwrap()).iter().all(|x| !x.contains("Internet")));
+    }
+
+    #[test]
+    fn the_done_line_says_how_long_and_how_big() {
+        let a = addons::after_install(&[AddonChoice::new("frigate")], "192.168.1.20");
+        let frigate = a.iter().find(|x| x.id == "frigate").unwrap();
+        assert_eq!(done_meta(frigate), "about 20 min \u{b7} 3.0 GB");
+        let p = addons::after_install(&[AddonChoice::new("portainer")], "192.168.1.20");
+        assert_eq!(done_meta(p.iter().find(|x| x.id == "portainer").unwrap()), "about 2 min \u{b7} 300 MB");
     }
 
     #[test]

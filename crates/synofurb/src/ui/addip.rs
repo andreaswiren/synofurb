@@ -302,14 +302,13 @@ impl App {
 
     /// Select a row of Find without leaving the screen.
     pub fn select_row(&mut self, key: &str, port: Option<u16>, window: &mut Window, cx: &mut Context<App>) {
-        if self.selected_ip.as_deref() != Some(key) {
+        let changed = self.selected_ip.as_deref() != Some(key);
+        if changed {
             self.reset_unit_session();
         }
         self.selected_ip = Some(key.to_string());
         self.set_input(&self.inp.host.clone(), key, window, cx);
-        if let Some(p) = port {
-            self.set_input(&self.inp.port.clone(), &p.to_string(), window, cx);
-        }
+        self.restore_port(key, port, changed, window, cx);
         cx.notify();
     }
 

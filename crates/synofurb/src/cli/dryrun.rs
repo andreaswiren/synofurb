@@ -117,7 +117,7 @@ pub fn render(
         bundle: offline_bundle.map(|d| d.display().to_string()),
         addons: synofurb_core::addons::summary_json(
             &cfg.addons,
-            &synofurb_core::addons::AddonContext { offline: offline_bundle.is_some(), root_mib: Some(plan.sizes.root_mib) },
+            &synofurb_core::addons::AddonContext { offline: offline_bundle.is_some(), root_mib: Some(plan.sizes.root_mib), has_data_volume: Some(plan.has_data_volume()) },
         ),
     })
 }

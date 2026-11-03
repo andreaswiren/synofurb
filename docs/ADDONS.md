@@ -226,10 +226,14 @@ Internet access". `update` runs `apt-get install --only-upgrade`; `remove` is re
 **Portainer.** `portainer/portainer-ce:lts`, `9443` (https, self-signed), `${DATA_DIR}/data`, mounts `/var/run/docker.sock` (privilege `docker-socket`, shown and confirmed before install). The first-run note (create the
 administrator within 5 minutes, otherwise restart the add-on) is `post_install`, shown in the job log and in Details.
 
-**Web UI.** Add-ons page: installed list (name, state Tag, open / stop-start / restart / update / logs / details / remove), catalog cards for what is not installed (icon, name, summary, state Tag, Install, disabled with the
-reason when `requires` is missing), install dialog (settings form from the manifest, `help` behind an info button, devices with Found / Not found, storage with free space and the data-volume error,
-**privileges listed before install with a required confirmation**, changes), job dialog (progress bar, step, log), logs viewer, update and remove confirmations (**delete data** needs the typed id).
-The open link is `http(s)://<host>:<port>` (Stage 2 replaces it). Add-on names, summaries and labels come from the manifests and count as data in the word-budget audit (`data-d`); all chrome text is in `COPY`.
+**Web UI.** Add-ons page: installed list (name, state Tag, open / stop-start / restart / update / logs / details / remove; a problem's reason, such as "No space left on device", is a second line under the name; an add-on that needs
+attention is listed only here, with **Retry**), catalog cards for what is not installed (icon, name, summary, state Tag, Install; without Docker the button is `aria-disabled` and the card says "Install Docker first." in text),
+install dialog (settings form from the manifest, `help` behind an info button whose accessible name carries the setting ("Help: Media access"), devices with Found / Not found, storage with free space and the data-volume error,
+**privileges listed before install with a required confirmation**, changes; the pinned footer says "Accept the privileges first." beside the disabled Install), job dialog (progress bar, step, log; its button reads **Hide** while the job
+runs, because closing the dialog does not stop it, and **Close** afterwards), logs viewer, update and remove confirmations (**delete data** needs the typed id).
+The open link is `http(s)://<host>:<port>` (Stage 2 replaces it). Add-on names and labels come from the manifests and count as data in the word-budget audit (`data-d`); summaries and notes are manifest prose (`data-d="prose"`), which the audit
+counts separately and caps on its own: **a summary has at most 20 words** (tested) and one page at most 60 words of manifest prose. Give every `choice` option a `label` (`{ "value": "ro", "label": "Read only (safe)" }`): a bare string is shown as the raw value.
+All chrome text is in `COPY`. Screenshots of every state: `design/screenshots/mgmt-demo-addons-*` (made with `apps/mgmt-plane/tools/shots.js`, see the README of the management plane).
 
 **API.** `GET /api/addons` `{addons[], problems[], job}`; `GET /api/addons/<id>` (settings, values with secrets as `{set}`, `storage_report`, `device_states`, `privileges`, `changes`, `warnings`);
 `POST /api/addons/<id>/install` body `{settings:{}, storage:{key:path}, devices:{id:true|false}, accept:true|[privileges]}`; `.../update|start|stop|restart` (empty body); `.../remove` body `{delete_data, confirm}`;

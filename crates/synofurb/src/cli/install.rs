@@ -51,7 +51,7 @@ pub fn plan(out: &Out, a: PlanArgs) -> CliResult<()> {
     let asm = assess(&db, &insp.facts);
     let plan = build_plan(&insp.facts, &a.opts.request());
     let chosen = addons_cmd::addons_from_args(&a.addon.addons)?;
-    let ctx = AddonContext { offline: false, root_mib: Some(plan.sizes.root_mib) };
+    let ctx = AddonContext { offline: false, root_mib: Some(plan.sizes.root_mib), has_data_volume: Some(plan.has_data_volume()) };
     if a.json {
         let mut doc = plan_doc(&insp.facts, &plan, &asm);
         doc["kernel"] = facts::kernel_json(a.kernel.channel());
@@ -104,7 +104,7 @@ pub fn install(out: &Out, a: InstallArgs) -> CliResult<()> {
 
     let mut lines = render::plan_report(&insp.facts, &plan, &asm);
     lines
-        .extend(addons_cmd::plan_text(&spec.addons, &AddonContext { offline: spec.bundle.is_some(), root_mib: Some(plan.sizes.root_mib) }));
+        .extend(addons_cmd::plan_text(&spec.addons, &AddonContext { offline: spec.bundle.is_some(), root_mib: Some(plan.sizes.root_mib), has_data_volume: Some(plan.has_data_volume()) }));
     if !a.dry_run {
         for l in &lines {
             out.info(l);

@@ -78,6 +78,13 @@ pub enum AddonKind {
     Compose,
 }
 
+/// The web page of an add-on (the manifest's `web`): `scheme://<host>:port`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct WebSpec {
+    pub scheme: &'static str,
+    pub port: u16,
+}
+
 /// A catalog entry as the installer shows it.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct CatalogEntry {
@@ -95,6 +102,12 @@ pub struct CatalogEntry {
     pub approx_size_mib: u32,
     /// Free space the add-on's data wants on the data volume, GiB (0: no fixed need).
     pub data_gib: u32,
+    /// Keeps bulk data below `/srv/data`, which only exists when the install creates a data volume (not when volumes are kept).
+    pub needs_data_volume: bool,
+    /// The add-on's web page after the first boot, if it has one.
+    pub web: Option<WebSpec>,
+    /// What to do the first time it is opened (empty: nothing special).
+    pub first_use: &'static str,
     pub settings: &'static [SettingSpec],
 }
 
@@ -112,6 +125,9 @@ static CATALOG: &[CatalogEntry] = &[
         needs_internet: false,
         approx_size_mib: 500,
         data_gib: 0,
+        needs_data_volume: false,
+        web: None,
+        first_use: "",
         settings: &[],
     },
     CatalogEntry {
@@ -124,6 +140,9 @@ static CATALOG: &[CatalogEntry] = &[
         needs_internet: true,
         approx_size_mib: 300,
         data_gib: 0,
+        needs_data_volume: false,
+        web: Some(WebSpec { scheme: "https", port: 9443 }),
+        first_use: "Open it within 5 minutes and create the administrator, or it locks itself.",
         settings: &[],
     },
     CatalogEntry {
@@ -136,6 +155,9 @@ static CATALOG: &[CatalogEntry] = &[
         needs_internet: true,
         approx_size_mib: 3000,
         data_gib: 50,
+        needs_data_volume: true,
+        web: Some(WebSpec { scheme: "https", port: 8971 }),
+        first_use: "",
         settings: &[SettingSpec {
             key: "retain_days",
             label: "Keep recordings (days)",
@@ -155,6 +177,9 @@ static CATALOG: &[CatalogEntry] = &[
         needs_internet: true,
         approx_size_mib: 700,
         data_gib: 0,
+        needs_data_volume: true,
+        web: Some(WebSpec { scheme: "http", port: 32400 }),
+        first_use: "",
         settings: &[SettingSpec {
             key: "plex_claim",
             label: "Claim token (optional)",
@@ -189,6 +214,12 @@ pub const PRESETS: &[Preset] = &[
     Preset { id: "plex", label: "Plex", addons: &["docker", "portainer", "plex"] },
     Preset { id: "frigate-plex", label: "Frigate + Plex", addons: &["docker", "portainer", "frigate", "plex"] },
 ];
+
+/// What the add-ons of a preset are, with what they need: `Docker, Portainer, Plex Media Server`.
+pub fn preset_names(p: &Preset) -> String {
+    let c: Vec<AddonChoice> = p.addons.iter().map(|i| AddonChoice::new(i)).collect();
+    resolve(&c).map(|r| r.iter().map(|x| x.entry.name).collect::<Vec<_>>().join(", ")).unwrap_or_default()
+}
 
 /// One add-on picked for the install: its id and the settings typed for it.
 ///
@@ -388,6 +419,8 @@ pub struct AddonContext {
     pub offline: bool,
     /// Size of the root volume, MiB, when the plan is known.
     pub root_mib: Option<u64>,
+    /// Does the plan create the data volume (`/srv/data`)? `None`: not known.
+    pub has_data_volume: Option<bool>,
 }
 
 /// Lines for the plan / confirm page: what will be installed and when.
@@ -417,49 +450,173 @@ fn names(ids: &[String]) -> String {
     ids.iter().map(|i| entry(i).map_or(i.as_str(), |e| e.name)).collect::<Vec<_>>().join(", ")
 }
 
-/// Things to know before starting: the Internet, privileges, disk use, offline limits.
-pub fn warnings(choices: &[AddonChoice], ctx: &AddonContext) -> Vec<String> {
+/// An add-on that asks for more than an ordinary container, with the plain sentence about what that means. The installer asks for
+/// an explicit acknowledgement of exactly this list before it erases anything (the web interface asks the same at install).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Consent {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub privileges: &'static [&'static str],
+    pub note: &'static str,
+}
+
+/// The privileged add-ons among what will be installed (Docker itself asks for none).
+pub fn consent_items(choices: &[AddonChoice]) -> Vec<Consent> {
+    resolve(choices)
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| !r.entry.privileges.is_empty())
+        .map(|r| Consent { id: r.entry.id, name: r.entry.name, privileges: r.entry.privileges, note: privilege_note(r.entry.privileges) })
+        .collect()
+}
+
+/// A short stable text that changes whenever the set of acknowledged privileges changes (`portainer:docker-socket;plex:host-network`);
+/// empty when nothing privileged is chosen. A consent given for one signature is not a consent for another.
+pub fn consent_signature(choices: &[AddonChoice]) -> String {
+    consent_items(choices).iter().map(|c| format!("{}:{}", c.id, c.privileges.join("+"))).collect::<Vec<_>>().join(";")
+}
+
+/// Names of the chosen add-ons (dependencies included) that keep their data below `/srv/data` although the install creates no data volume.
+pub fn needing_data_volume(choices: &[AddonChoice], has_data_volume: bool) -> Vec<&'static str> {
+    if has_data_volume {
+        return vec![];
+    }
+    resolve(choices).unwrap_or_default().iter().filter(|r| r.entry.needs_data_volume).map(|r| r.entry.name).collect()
+}
+
+/// Download speed the "about N minutes" estimate assumes: 20 Mbit/s, about 150 MiB a minute. It is an estimate for planning, not a
+/// measurement; a slower line takes longer.
+pub const ASSUMED_MIB_PER_MIN: u32 = 150;
+
+/// Rough minutes the first boot spends on an add-on (at least 1): its download at [`ASSUMED_MIB_PER_MIN`].
+pub fn approx_minutes(e: &CatalogEntry) -> u32 {
+    e.approx_size_mib.div_ceil(ASSUMED_MIB_PER_MIN).max(1)
+}
+
+/// `https://192.168.1.20:9443` for an add-on with a web page (IPv6 hosts get brackets); `None` without one.
+pub fn web_address(e: &CatalogEntry, host: &str) -> Option<String> {
+    let w = e.web?;
+    let h = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
+    Some(format!("{}://{h}:{}", w.scheme, w.port))
+}
+
+/// What the Done screen says about one add-on after the unit is installed. Nothing here is read back from the unit: it is what the
+/// first boot is going to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AfterInstall {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Where it answers once it has started (`None`: a system add-on without a page).
+    pub address: Option<String>,
+    pub minutes: u32,
+    pub size_mib: u32,
+    pub first_use: &'static str,
+}
+
+/// One entry per add-on that will be installed, in install order, for a unit at `host`.
+pub fn after_install(choices: &[AddonChoice], host: &str) -> Vec<AfterInstall> {
+    resolve(choices)
+        .unwrap_or_default()
+        .iter()
+        .map(|r| AfterInstall {
+            id: r.entry.id,
+            name: r.entry.name,
+            address: web_address(r.entry, host),
+            minutes: approx_minutes(r.entry),
+            size_mib: r.entry.approx_size_mib,
+            first_use: r.entry.first_use,
+        })
+        .collect()
+}
+
+/// What kind of thing a [`warnings`] line is, so a screen can show the ones that matter in plain sight and fold the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteKind {
+    /// Images are pulled from the Internet at the first boot.
+    Internet,
+    /// The offline bundle has no Docker.
+    Offline,
+    /// An add-on asks for more than an ordinary container (who can log in controls the NAS).
+    Privilege,
+    /// How much room the add-ons take on the system volume.
+    Size,
+    /// The system volume is small for the add-ons.
+    Tight,
+    /// The plan creates no data volume although an add-on keeps data below `/srv/data`.
+    NoDataVolume,
+    /// What an add-on wants on the data volume.
+    DataWants,
+}
+
+impl NoteKind {
+    /// Lines a person must not miss before erasing: privileges, a tight system volume, a missing data volume, a missing Docker.
+    pub fn is_loud(self) -> bool {
+        matches!(self, NoteKind::Privilege | NoteKind::Tight | NoteKind::NoDataVolume | NoteKind::Offline)
+    }
+}
+
+/// [`warnings`] with the kind of each line.
+pub fn notes(choices: &[AddonChoice], ctx: &AddonContext) -> Vec<(NoteKind, String)> {
     let Ok(items) = resolve(choices) else { return vec![] };
-    let mut w = vec![];
+    let mut w: Vec<(NoteKind, String)> = vec![];
     if items.is_empty() {
         return w;
     }
     let net: Vec<&str> = items.iter().filter(|r| r.entry.needs_internet).map(|r| r.entry.name).collect();
     if !net.is_empty() {
-        w.push(format!(
+        w.push((NoteKind::Internet, format!(
             "{} will pull container images from the Internet when the unit first boots. Without Internet the add-on shows \"needs attention\" in the web page; the installation itself does not fail.",
             net.join(", ")
-        ));
+        )));
     }
     if ctx.offline {
-        w.push(
+        w.push((
+            NoteKind::Offline,
             "The offline bundle does not contain Docker: its packages are downloaded from the Debian mirrors on the first boot, so the unit needs Internet for that too."
                 .into(),
-        );
+        ));
     }
     for r in &items {
         if !r.entry.privileges.is_empty() {
-            w.push(format!("{} asks for: {}. {}", r.entry.name, r.entry.privileges.join(", "), privilege_note(r.entry.privileges)));
+            w.push((
+                NoteKind::Privilege,
+                format!("{} asks for: {}. {}", r.entry.name, r.entry.privileges.join(", "), privilege_note(r.entry.privileges)),
+            ));
         }
     }
     let size_mib: u64 = items.iter().map(|r| r.entry.approx_size_mib as u64).sum();
-    w.push(format!(
-        "The add-ons need about {:.1} GiB on the system volume (Docker keeps images under /var/lib/docker).",
-        size_mib as f64 / 1024.0
+    w.push((
+        NoteKind::Size,
+        format!("The add-ons need about {:.1} GiB on the system volume (Docker keeps images under /var/lib/docker).", size_mib as f64 / 1024.0),
     ));
     if let Some(root) = ctx.root_mib {
         // leave room for the system itself, logs and updates
         if root < size_mib + 4096 {
-            w.push(format!(
-                "The system volume is only {} GiB: that is tight for the add-ons. Raise the system size in the storage settings.",
-                root / 1024
+            w.push((
+                NoteKind::Tight,
+                format!("The system volume is only {} GiB: that is tight for the add-ons. Raise the system size in the storage settings.", root / 1024),
             ));
         }
     }
-    for r in items.iter().filter(|r| r.entry.data_gib > 0) {
-        w.push(format!("{} stores its data on the data volume and wants at least {} GiB free there.", r.entry.name, r.entry.data_gib));
+    let missing = needing_data_volume(choices, ctx.has_data_volume != Some(false));
+    if !missing.is_empty() {
+        w.push((
+            NoteKind::NoDataVolume,
+            format!(
+                "This plan creates no data volume (kept volumes are not mounted automatically), but these add-ons keep data below /srv/data: {}. Until /srv/data is a mount of its own they show \"needs attention\".",
+                missing.join(", ")
+            ),
+        ));
+    }
+    for r in items.iter().filter(|r| r.entry.data_gib > 0 && !missing.contains(&r.entry.name)) {
+        w.push((NoteKind::DataWants, format!("{} stores its data on the data volume and wants at least {} GiB free there.", r.entry.name, r.entry.data_gib)));
     }
     w
+}
+
+/// Things to know before starting: the Internet, privileges, disk use, offline limits.
+pub fn warnings(choices: &[AddonChoice], ctx: &AddonContext) -> Vec<String> {
+    notes(choices, ctx).into_iter().map(|(_, t)| t).collect()
 }
 
 fn privilege_note(p: &[&str]) -> &'static str {
@@ -672,17 +829,33 @@ mod tests {
         let l = plan_lines(&[choice("frigate"), choice("portainer")]);
         assert!(l[0].starts_with("Add-ons: Docker (required by Frigate NVR, Portainer), Portainer, Frigate NVR"), "{l:?}");
         assert!(l.iter().any(|x| x.contains("Internet")));
-        let w = warnings(&[choice("portainer"), choice("frigate")], &AddonContext { offline: false, root_mib: Some(20 * 1024) });
+        let w = warnings(&[choice("portainer"), choice("frigate")], &AddonContext { offline: false, root_mib: Some(20 * 1024), has_data_volume: Some(true) });
         let all = w.join("\n");
         assert!(all.contains("pull container images from the Internet"), "{all}");
         assert!(all.contains("docker-socket") && all.contains("administrator of the NAS"), "{all}");
         assert!(all.contains("at least 50 GiB"), "{all}");
         assert!(!all.contains("offline bundle"), "{all}");
         assert!(!all.contains("tight"), "{all}");
-        let w = warnings(&[choice("frigate")], &AddonContext { offline: true, root_mib: Some(6 * 1024) }).join("\n");
+        let w = warnings(&[choice("frigate")], &AddonContext { offline: true, root_mib: Some(6 * 1024), has_data_volume: None }).join("\n");
         assert!(w.contains("offline bundle does not contain Docker") && w.contains("tight"), "{w}");
         // a Docker-only choice needs no Internet for images
         assert!(!warnings(&[choice("docker")], &AddonContext::default()).join("\n").contains("pull container images"));
+    }
+
+    #[test]
+    fn notes_say_which_lines_a_person_must_not_miss() {
+        let ctx = AddonContext { offline: true, root_mib: Some(6 * 1024), has_data_volume: Some(false) };
+        let n = notes(&[choice("portainer"), choice("frigate")], &ctx);
+        let kinds: Vec<NoteKind> = n.iter().map(|(k, _)| *k).collect();
+        assert_eq!(
+            kinds,
+            [NoteKind::Internet, NoteKind::Offline, NoteKind::Privilege, NoteKind::Size, NoteKind::Tight, NoteKind::NoDataVolume]
+        );
+        let loud: Vec<NoteKind> = kinds.iter().copied().filter(|k| k.is_loud()).collect();
+        assert_eq!(loud, [NoteKind::Offline, NoteKind::Privilege, NoteKind::Tight, NoteKind::NoDataVolume]);
+        assert!(!NoteKind::Internet.is_loud() && !NoteKind::Size.is_loud() && !NoteKind::DataWants.is_loud());
+        // the plain list is the same text
+        assert_eq!(warnings(&[choice("portainer"), choice("frigate")], &ctx), n.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>());
     }
 
     #[test]
@@ -744,6 +917,17 @@ mod tests {
                 AddonKind::Compose => "compose",
             };
             assert_eq!(m["kind"], kind, "{}: kind differs", e.id);
+            // the page and the data volume need the installer tells the user about are the manifest's
+            match e.web {
+                Some(w) => {
+                    assert_eq!((m["web"]["scheme"].as_str(), m["web"]["port"].as_u64()), (Some(w.scheme), Some(w.port as u64)), "{}: web differs", e.id)
+                }
+                None => assert!(m["web"].is_null(), "{}: the manifest has a web page the installer does not know", e.id),
+            }
+            let bulk = m["storage"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x["bulk"] == true && x["path"].as_str().is_some_and(|p| p.starts_with("/srv/data"))));
+            assert_eq!(e.needs_data_volume, bulk, "{}: needs_data_volume differs from the manifest's bulk storage", e.id);
             for s in e.settings {
                 let ms = m["settings"].as_array().and_then(|a| a.iter().find(|x| x["key"] == s.key));
                 let ms = ms.unwrap_or_else(|| panic!("{}: the manifest has no setting '{}'", e.id, s.key));
@@ -757,6 +941,64 @@ mod tests {
             checked += 1;
         }
         eprintln!("catalog checked against {checked} manifest(s) in {}", dir.display());
+    }
+
+    #[test]
+    fn privileged_add_ons_need_an_acknowledgement_that_names_them() {
+        assert!(consent_items(&[]).is_empty() && consent_signature(&[]).is_empty());
+        assert!(consent_items(&[choice("docker")]).is_empty(), "Docker alone asks for nothing");
+        assert!(consent_items(&[choice("frigate")]).is_empty(), "Frigate has no privilege");
+        let c = consent_items(&[choice("plex"), choice("portainer")]);
+        assert_eq!(c.iter().map(|x| x.id).collect::<Vec<_>>(), ["portainer", "plex"]);
+        assert!(c[0].note.contains("administrator of the NAS") && c[1].note.contains("network"), "{c:?}");
+        let sig = consent_signature(&[choice("plex"), choice("portainer")]);
+        assert_eq!(sig, "portainer:docker-socket;plex:host-network");
+        // a consent for one set is not a consent for another
+        assert_ne!(sig, consent_signature(&[choice("portainer")]));
+        assert_eq!(consent_signature(&[choice("portainer")]), consent_signature(&[choice("docker"), choice("portainer")]));
+        // every preset that carries Portainer carries the consent
+        for p in PRESETS {
+            let c: Vec<AddonChoice> = p.addons.iter().map(|i| choice(i)).collect();
+            assert_eq!(!consent_items(&c).is_empty(), p.addons.contains(&"portainer"), "{}", p.id);
+        }
+    }
+
+    #[test]
+    fn presets_say_everything_they_install() {
+        let names: Vec<String> = PRESETS.iter().map(preset_names).collect();
+        assert_eq!(names[0], "Docker, Portainer");
+        assert_eq!(names[2], "Docker, Portainer, Plex Media Server", "the Plex preset also installs Portainer, and says so");
+        assert_eq!(names[3], "Docker, Portainer, Frigate NVR, Plex Media Server");
+    }
+
+    #[test]
+    fn add_ons_that_keep_data_on_the_data_volume_are_flagged_without_one() {
+        assert!(needing_data_volume(&[choice("frigate"), choice("plex")], true).is_empty());
+        assert_eq!(needing_data_volume(&[choice("frigate"), choice("plex")], false), ["Frigate NVR", "Plex Media Server"]);
+        assert!(needing_data_volume(&[choice("portainer")], false).is_empty(), "Portainer keeps nothing below /srv/data");
+        let w = warnings(&[choice("frigate")], &AddonContext { has_data_volume: Some(false), ..Default::default() }).join("\n");
+        assert!(w.contains("This plan creates no data volume") && w.contains("keep data below /srv/data: Frigate NVR."), "{w}");
+        assert!(!w.contains("at least 50 GiB free there"), "the free-space line is not said for a volume that is not created: {w}");
+        let w = warnings(&[choice("frigate")], &AddonContext { has_data_volume: Some(true), ..Default::default() }).join("\n");
+        assert!(w.contains("at least 50 GiB") && !w.contains("creates no data volume"), "{w}");
+        // unknown plan: no claim either way
+        assert!(!warnings(&[choice("frigate")], &AddonContext::default()).join("\n").contains("creates no data volume"));
+    }
+
+    #[test]
+    fn after_install_lines_give_the_address_the_time_and_the_first_use() {
+        let a = after_install(&[choice("portainer"), choice("plex")], "192.168.1.20");
+        assert_eq!(a.iter().map(|x| x.id).collect::<Vec<_>>(), ["docker", "portainer", "plex"]);
+        assert_eq!(a[0].address, None, "Docker has no page");
+        assert_eq!(a[1].address.as_deref(), Some("https://192.168.1.20:9443"));
+        assert_eq!(a[2].address.as_deref(), Some("http://192.168.1.20:32400"));
+        assert!(a[1].first_use.contains("5 minutes") && a[2].first_use.is_empty());
+        assert_eq!(web_address(entry("portainer").unwrap(), "fe80::1").as_deref(), Some("https://[fe80::1]:9443"));
+        // 3000 MiB at 150 MiB a minute: 20 minutes; a tiny one never reads "0 minutes"
+        assert_eq!(approx_minutes(entry("frigate").unwrap()), 20);
+        assert_eq!(approx_minutes(entry("portainer").unwrap()), 2);
+        assert!(catalog().iter().all(|e| approx_minutes(e) >= 1));
+        assert!(after_install(&[], "x").is_empty());
     }
 
     #[test]

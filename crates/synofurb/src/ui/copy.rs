@@ -230,6 +230,13 @@ mod strings {
         SCAN_SKIPPED: Label, "Skipped", "", "", "";
         SCAN_STOPPED: Label, "Stopped", "", "", "";
         SCAN_CHOOSE: Button, "Choose networks", "", "", "";
+        SCAN_HEADLINE_WORDS: Prose, "Scanning of hosts found", "", "", "";
+        SCAN_EMPTY_WORDS: Prose, "Scanned with methods in", "", "", "";
+        HELP_LINK: Label, "Help", "", "", "";
+        SCAN_NONE_SELECTED: Prose, "No network is selected. Choose at least one.", "", "", "";
+        INV_EMPTY_WHY: Prose, "The NAS may be on another network, asleep or firewalled.", "", "", "";
+        NET_VPN_WARN: Prose, "VPN and virtual networks scan slowly; a NAS is rarely there.", "", "", "";
+        NET_RESCAN: Prose, "Done scans again.", "", "", "";
         SCAN_NO_NETWORK: Prose, "This computer is on no network. Connect it, or add a network.", "", "", "";
 
         // ===================================================================== D1b welcome guide (first launch, Help, menu)
@@ -313,6 +320,7 @@ mod strings {
         INSPECT_COL_STATUS: Label, "Status", "", "", "";
         INSPECT_USE_TARGET: Label, "Install target", "", "", "";
         INSPECT_USE_NOT: Label, "Not used: {}", "", "", "";
+        INSPECT_ERASE_NOTE: Prose, "Install targets are erased in Wipe mode.", "", "", "";
         INSPECT_NOT_CHECKED: Label, "Not checked", "", "", "";
         INSPECT_LAYOUT: Label, "Current layout", "DSM's partitions on each disk.", "", "";
         INSPECT_CHOOSE: Button, "Choose goal", "", "", "";
@@ -363,16 +371,27 @@ mod strings {
         ADDON_PRIV_FULL: Label, "Full access", "It runs with almost unrestricted access to the NAS.", "", "";
         ADDON_PRIV_OTHER: Label, "Extra rights", "It asks for more rights than an ordinary container.", "", "";
         ADDON_RETAIN: Label, "Keep recordings (days)", "Older recordings are deleted.", "", "Cameras and the detector are set up later, in Frigate's own web page.";
-        ADDON_PLEX_CLAIM: Label, "Claim token (optional)", "Ties the server to your Plex account.",
+        ADDON_PLEX_CLAIM: Label, "Claim token (leave empty)", "Ties the server to your Plex account.",
             "", "Get a token at plex.tv/claim. It is valid for only 4 minutes and the first boot comes much later, so normally leave this empty and claim the server in its web page.";
         ADDON_DEFAULT: Label, "Default: {value}", "", "", "";
+        ADDON_PLEX_HINT: Prose, "Valid 4 minutes, the first boot comes later. Leave it empty.", "", "", "";
+        ADDON_UNTESTED: Label, "Untested", "Add-ons have only run against simulated Docker so far.", "",
+            "These add-ons have been tested only against simulated Docker, never on a real NAS. The first boot is their first real run. If one fails it shows \"needs attention\" in the web interface; the system is unaffected.";
+        ADDON_ABOUT: Label, "About this add-on", "", "", "";
+        ADDON_NEEDS_DATA: Prose, "Needs the data volume, which Keep mode does not create.", "", "", "";
+        ADDON_KEEP_BLOCK: Prose, "Needs a data volume: {names}. Keep mode does not create one.", "", "", "";
+        ADDON_QUICK_ACCEPT: Prose, "You accept this on the next screen.", "", "", "";
         ADDON_QUICK: Label, "Add-ons", "Optional apps, installed after the first boot.", "", "";
         ADDON_QUICK_NONE: Label, "None", "", "", "";
         ADDON_NEEDS_WEB: Prose, "Add-ons need the web interface: switch it on in System.", "", "", "";
         SYS_NEXT_ADDONS: Button, "Next: Add-ons", "", "", "";
         CONF_ADDONS: Prose, "Will be installed after first boot:", "", "", "";
         CONF_ADDONS_NET: Prose, "The first boot needs Internet to pull the container images.", "", "", "";
-        CONF_ADDONS_OFFLINE: Prose, "The offline bundle has no Docker: its packages download at first boot.", "", "", "";
+        CONF_ADDONS_OFFLINE: Prose, "Without Internet at first boot, Docker and the add-ons are not installed.", "", "", "";
+        CONF_ADDON_ACK: Label, "I accept these privileges", "", "", "";
+        CONF_WARNINGS: Label, "Warnings", "", "", "";
+        DONE_ADDONS: Label, "Installing after first boot", "What the first boot does.", "",
+            "Without Internet at the first boot nothing is downloaded and the add-ons show \"needs attention\". Connect the NAS, then press Retry on the Add-ons page of the web interface.";
         PLAN_TITLE: Title, "Storage plan", "", "", "";
         PLAN_SUB: Subtitle, "Nothing is written yet.", "", "", "";
         PLAN_MODE: Label, "Mode", "Wipe erases all {n} disks.", "backups", "";
@@ -920,6 +939,48 @@ pub static SCREENS: &[ScreenCopy] = &[
             &INV_CONNECT,
         ],
     },
+    // the scan panel is on screen with the table (headline words, a line's state, Stop)
+    ScreenCopy {
+        name: "inventory-scanning",
+        visible: &[
+            &INV_TITLE,
+            &INV_SUB,
+            &INV_FILTER,
+            &INV_RESCAN,
+            &INV_ADD,
+            &NET_CHIP,
+            &INV_COL_MODEL,
+            &INV_COL_ADDR,
+            &INV_COL_DSM,
+            &INV_COL_FOUND,
+            &INV_COL_STATUS,
+            &INV_CONNECT,
+            &SCAN_HEADLINE_WORDS,
+            &SCAN_RUNNING,
+            &SCAN_WAITING,
+            &SCAN_DONE,
+            &SCAN_STOP,
+        ],
+    },
+    // nothing found: the empty state instead of the table
+    ScreenCopy {
+        name: "inventory-empty",
+        visible: &[
+            &INV_TITLE,
+            &INV_SUB,
+            &INV_FILTER,
+            &INV_RESCAN,
+            &INV_ADD,
+            &NET_CHIP,
+            &INV_EMPTY,
+            &INV_EMPTY_WHY,
+            &SCAN_EMPTY_WORDS,
+            &SCAN_CHOOSE,
+            &INV_SCAN_AGAIN,
+            &HELP_LINK,
+            &INV_CONNECT,
+        ],
+    },
     ScreenCopy {
         name: "connect",
         visible: &[
@@ -967,6 +1028,7 @@ pub static SCREENS: &[ScreenCopy] = &[
             &INSPECT_COL_STATUS,
             &INSPECT_USE_TARGET,
             &INSPECT_USE_NOT,
+            &INSPECT_ERASE_NOTE,
             &INSPECT_NOT_CHECKED,
             &INSPECT_LAYOUT,
             &INSPECT_CHOOSE,
@@ -1042,7 +1104,7 @@ pub static SCREENS: &[ScreenCopy] = &[
     },
     ScreenCopy {
         name: "addons",
-        visible: &[&SETUP_ADDONS, &ADDONS_SUB, &ADDONS_INTRO, &ADDON_NEEDS_DOCKER, &ADDON_NEEDS_NET, &ADDON_REQUIRED, &SYS_NEXT, &BTN_BACK],
+        visible: &[&SETUP_ADDONS, &ADDONS_SUB, &ADDONS_INTRO, &ADDON_UNTESTED, &ADDON_REQUIRED, &ADDON_NEEDS_DATA, &SYS_NEXT, &BTN_BACK],
     },
     ScreenCopy {
         name: "confirm",

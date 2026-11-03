@@ -263,7 +263,27 @@ pub enum Exclusion {
     TooSmall,
 }
 
+/// Make the first word of a reason start in lower case for use inside a sentence, but leave acronyms and units alone:
+/// `Boot flash` -> `boot flash`, `Under 8 GiB` -> `under 8 GiB`, `USB disk` -> `USB disk` (a plain `to_lowercase` gives `usb disk`).
+pub fn lower_first(s: &str) -> String {
+    let first = s.split(' ').next().unwrap_or("");
+    let acronym = first.chars().count() > 1 && first.chars().skip(1).any(|c| c.is_uppercase());
+    if acronym {
+        return s.to_string();
+    }
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
 impl Exclusion {
+    /// [`Exclusion::reason`] ready to sit inside a sentence ("usb" stays "USB", "GiB" stays "GiB").
+    pub fn reason_inline(&self) -> String {
+        lower_first(self.reason())
+    }
+
     pub fn reason(&self) -> &'static str {
         match self {
             Exclusion::BootFlash => "Boot flash",
@@ -355,6 +375,11 @@ impl MdArray {
     /// A sync, rebuild or reshape is running, or members are missing: the array is not fully redundant right now.
     pub fn is_busy_or_degraded(&self) -> bool {
         self.degraded > 0 || (!self.sync_action.is_empty() && self.sync_action != "idle")
+    }
+    /// Does what is running (or missing) mean the data is not fully protected right now? True for a resync, a rebuild, a
+    /// reshape and missing members; false for a read-only `check`, where every copy is intact.
+    pub fn reduces_redundancy(&self) -> bool {
+        self.degraded > 0 || matches!(self.sync_action.as_str(), "resync" | "recover" | "reshape")
     }
     /// One-line status for the UI, e.g. `resyncing 90.8%` or `degraded (1 missing)`.
     pub fn health_note(&self) -> Option<String> {

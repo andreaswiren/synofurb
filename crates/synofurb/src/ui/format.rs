@@ -4,6 +4,16 @@
 use synofurb_core::model::{GIB, MIB};
 
 /// `10.90 TiB`, `3.64 GiB`, `512 MiB`, `700 B`.
+/// Glue a number to its unit (`21.82 TiB`, `32 GiB`, `7 MB`) with a no-break space, so a line that wraps never leaves a unit alone on
+/// the next line.
+pub fn keep_units(s: &str) -> String {
+    let mut out = s.to_string();
+    for u in ["TiB", "GiB", "MiB", "KiB", "TB", "GB", "MB", "min"] {
+        out = out.replace(&format!(" {u}"), &format!("\u{a0}{u}"));
+    }
+    out
+}
+
 pub fn size_2dp(bytes: u64) -> String {
     const KIB: u64 = 1024;
     const TIB: u64 = 1024 * GIB;
@@ -88,6 +98,15 @@ pub fn tilde(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_number_and_its_unit_never_wrap_apart() {
+        assert_eq!(keep_units("RAID 5 \u{b7} 21.82 TiB"), "RAID 5 \u{b7} 21.82\u{a0}TiB");
+        assert_eq!(keep_units("32 GiB \u{d7} 4 copies"), "32\u{a0}GiB \u{d7} 4 copies");
+        assert_eq!(keep_units("about 2 min"), "about 2\u{a0}min");
+        assert_eq!(keep_units("no units here"), "no units here");
+        assert!(keep_units("21.82 TiB").contains('\u{a0}') && !keep_units("21.82 TiB").contains(' '));
+    }
+
     use super::*;
 
     #[test]

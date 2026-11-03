@@ -59,6 +59,17 @@ pub fn tag(p: &Palette, tone: Tone, icon: Option<IconName>, label: impl Into<Sha
     t.child(row)
 }
 
+/// The "Untested" tag with its info button: add-ons have only run against simulated Docker. One shape on the Add-ons tab, Quick setup
+/// and Confirm, so the caveat reads the same wherever add-ons are offered.
+pub fn untested(p: &Palette, id: impl Into<ElementId>, app: &Entity<App>) -> AnyElement {
+    h_flex()
+        .gap(px(2.0))
+        .items_center()
+        .child(tag(p, Tone::Warn, Some(role::WARN), super::copy::ADDON_UNTESTED.short))
+        .child(info_tip(id, &super::copy::ADDON_UNTESTED, app))
+        .into_any_element()
+}
+
 /// Neutral tag without an icon (facts such as "4 disks").
 pub fn chip(p: &Palette, label: impl Into<SharedString>) -> Tag {
     tag(p, Tone::Neutral, None, label)

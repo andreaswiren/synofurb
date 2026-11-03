@@ -442,6 +442,9 @@ pub struct DiskScope {
     pub big_excluded: usize,
     /// Every disk the install leaves alone except the boot flash: `(name, reason)`.
     pub left_alone: Vec<(String, &'static str)>,
+    /// Left-alone disks that hold a piece of a DSM data array which is erased on another disk (see `plan::Straddle`): the install does
+    /// not write to them, but their DSM data does not survive, so they are not "preserved".
+    pub straddled: Vec<String>,
 }
 
 impl DiskScope {
@@ -458,20 +461,40 @@ impl DiskScope {
                 .filter(|(_, e)| !matches!(e, synofurb_core::model::Exclusion::BootFlash))
                 .map(|(d, e)| (d.name.clone(), e.reason()))
                 .collect(),
+            straddled: vec![],
         }
+    }
+    /// The same scope, told which untouched disks hold a piece of an array that is erased (from the plan).
+    pub fn with_plan(mut self, plan: &synofurb_core::plan::Plan) -> DiskScope {
+        self.straddled = plan.straddling.iter().flat_map(|s| s.left.iter().cloned()).collect();
+        self.straddled.sort();
+        self.straddled.dedup();
+        self
     }
     /// "4 disks", or "3 of 4 disks" when a disk of 8 GiB or more is left out.
     pub fn count_text(&self) -> String {
         let n = |k: usize| format!("{k} {}", if k == 1 { "disk" } else { "disks" });
         if self.big_excluded == 0 { n(self.used) } else { format!("{} of {}", self.used, n(self.used + self.big_excluded)) }
     }
-    /// "Not touched: sde (USB disk), sdf (Removable, unknown port)", or None when every disk is used.
+    fn reason_text(r: &str) -> String {
+        synofurb_core::model::lower_first(r)
+    }
+    /// "Not touched: sde (USB disk), sdf (removable, unknown port)", or None when every disk is used.
     pub fn not_touched(&self) -> Option<String> {
         if self.left_alone.is_empty() {
             return None;
         }
-        let list = self.left_alone.iter().map(|(n, r)| format!("{n} ({})", r.to_lowercase())).collect::<Vec<_>>().join(", ");
+        let list = self.left_alone.iter().map(|(n, r)| format!("{n} ({})", Self::reason_text(r))).collect::<Vec<_>>().join(", ");
         Some(format!("Not touched: {list}"))
+    }
+    /// What the Preserved card of Confirm lists for disks that are left alone: `sde (USB disk) \u{b7} not touched`. A disk that holds
+    /// a piece of an erased array is not listed here (it is not preserved); the plan's warning names it.
+    pub fn preserved_lines(&self) -> Vec<String> {
+        self.left_alone
+            .iter()
+            .filter(|(n, _)| !self.straddled.contains(n))
+            .map(|(n, r)| format!("{n} ({}) \u{b7} not touched", Self::reason_text(r)))
+            .collect()
     }
 }
 
@@ -793,7 +816,8 @@ mod tests {
         let s = DiskScope::of(&parse_inspect(&raw).unwrap());
         assert_eq!((s.used, s.big_excluded), (4, 1));
         assert_eq!(s.count_text(), "4 of 5 disks");
-        assert_eq!(s.not_touched().as_deref(), Some("Not touched: sde (usb disk)"));
+        assert_eq!(s.not_touched().as_deref(), Some("Not touched: sde (USB disk)"), "an acronym stays an acronym");
+        assert_eq!(s.preserved_lines(), ["sde (USB disk) \u{b7} not touched"]);
         assert_eq!(DiskScope { used: 1, ..DiskScope::default() }.count_text(), "1 disk");
     }
 }

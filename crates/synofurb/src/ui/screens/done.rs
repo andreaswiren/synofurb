@@ -7,6 +7,7 @@ use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::theme::Themed;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -136,11 +137,62 @@ impl App {
             .bordered(true)
             .item(|i| i.title(h_flex().gap(px(2.0)).child(copy::DONE_NEXT_STEPS.short)).child(next_ui));
 
+        // Add-ons chosen in Setup are installed by the first boot, after this screen: what is coming, where it will answer, how long
+        // it takes and what to do first. Nothing here is read back from the unit; it says what the first boot is going to do.
+        let after_addons = synofurb_core::addons::after_install(&self.addon_choices(cx), &ip);
+        let p = cx.pal();
+        let addons_card = (!after_addons.is_empty()).then(|| {
+            let rows = after_addons.iter().enumerate().map(|(i, a)| {
+                let meta = crate::ui::addons::done_meta(a);
+                v_flex()
+                    .gap(px(2.0))
+                    .child(
+                        h_flex()
+                            .gap(px(8.0))
+                            .items_center()
+                            .flex_wrap()
+                            .child(div().w(px(144.0)).flex_none().child(kit::strong(a.name)))
+                            .when_some(a.address.clone(), |d, addr| {
+                                d.child(kit::mono(cx, addr.clone())).child(Clipboard::new(("c-addon", i)).value(addr).tooltip("Copy"))
+                            })
+                            .child(kit::caption(cx, crate::ui::format::keep_units(&meta))),
+                    )
+                    .when(!a.first_use.is_empty(), |d| {
+                        d.child(
+                            h_flex()
+                                .pl(px(152.0))
+                                .gap(px(6.0))
+                                .items_start()
+                                .text_sm()
+                                .text_color(p.warn_fg)
+                                .child(icons::icon_sized(role::WARN, 14.0, p.warn_fg))
+                                .child(div().flex_1().min_w_0().child(a.first_use)),
+                        )
+                    })
+            });
+            v_flex()
+                .gap(px(6.0))
+                .px(px(12.0))
+                .py(px(8.0))
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().border)
+                .child(
+                    h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .child(icons::icon(role::PACKAGE))
+                        .child(kit::strong(copy::DONE_ADDONS.short))
+                        .child(crate::ui::disclosure::info_popover("d-addons-info", &copy::DONE_ADDONS, &app)),
+                )
+                .children(rows)
+        });
+
         let mut body = v_flex().w_full().max_w(px(680.0)).gap(px(12.0));
         if !o.mgmt_reachable {
             body = body.child(Alert::warning("web-wait", "Web UI not answering yet.").small().icon(icons::icon(role::WARN)));
         }
-        body = body.child(list);
+        body = body.child(list).children(addons_card);
         if !self.install.uboot_lines.is_empty() {
             let lines = self.install.uboot_lines.clone();
             body = body.child(

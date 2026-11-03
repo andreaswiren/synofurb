@@ -25,6 +25,8 @@ pub enum DemoUnit {
     Volumes,
     /// The same unit with a USB stick attached (a disk that is listed but not touched).
     VolumesUsb,
+    /// The same unit with one disk missing from md3 (a degraded array): the Alert on Inspect.
+    VolumesDegraded,
 }
 
 impl DemoUnit {
@@ -35,6 +37,7 @@ impl DemoUnit {
             "mixed" => DemoUnit::Mixed,
             "volumes" | "ds918-volumes" => DemoUnit::Volumes,
             "volumes-usb" | "usb" => DemoUnit::VolumesUsb,
+            "volumes-degraded" | "degraded" => DemoUnit::VolumesDegraded,
             _ => DemoUnit::Ds918,
         }
     }
@@ -43,7 +46,14 @@ impl DemoUnit {
     pub fn raw(self) -> String {
         let base = fixtures::ds_4bay();
         match self {
-            DemoUnit::Volumes => fixtures::ds918_two_volumes().replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n"),
+            DemoUnit::Volumes | DemoUnit::Ds918 => {
+                fixtures::ds918_two_volumes().replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n")
+            }
+            DemoUnit::VolumesDegraded => fixtures::ds918_two_volumes()
+                .replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n")
+                // md3 lost sdb6: one member missing, the other state words as the kernel reports them
+                .replace("MD|md3|raid5|clean|35162439168|sda6,sdd6,sdc6,sdb6|u3|awss01:3|1.2|idle|none|0", "MD|md3|raid5|clean, degraded|35162439168|sda6,sdd6,sdc6|u3|awss01:3|1.2|idle|none|1")
+                .replace("MD|md2|raid5|active|11692677888|sdd5,sda5,sdb5,sdc5|u2|awss01:2|1.2|resync|1770222464_/_1948779648|0", "MD|md2|raid5|clean|11692677888|sdd5,sda5,sdb5,sdc5|u2|awss01:2|1.2|idle|none|0"),
             DemoUnit::VolumesUsb => {
                 let usb = "DISK|sde|SanDisk Ultra|4C530001|125045424|512|1|1|gpt|/sys/devices/pci0000:00/0000:00:15.0/usb1/1-2/1-2:1.0/host5/target5:0:0/5:0:0:0\nPART|sde|sde1|1|2048|125043376\n";
                 fixtures::ds918_two_volumes()
@@ -62,7 +72,6 @@ impl DemoUnit {
                 }
                 out
             }
-            DemoUnit::Ds918 => base.replace("KV|uefi|0\n", "KV|uefi|0\nKV|cpu_vendor|GenuineIntel\n"),
             DemoUnit::Ds1621 => base
                 .replace("KV|unique|synology_apollolake_918+", "KV|unique|synology_v1000_1621+")
                 .replace("KV|model|DS918+", "KV|model|DS1621+")
@@ -91,7 +100,7 @@ impl DemoUnit {
 
     pub fn address(self) -> &'static str {
         match self {
-            DemoUnit::Ds918 | DemoUnit::Mixed | DemoUnit::Volumes | DemoUnit::VolumesUsb => "192.168.1.20",
+            DemoUnit::Ds918 | DemoUnit::Mixed | DemoUnit::Volumes | DemoUnit::VolumesUsb | DemoUnit::VolumesDegraded => "192.168.1.20",
             DemoUnit::Ds1621 => "192.168.1.31",
             DemoUnit::Rs816 => "192.168.1.44",
         }
@@ -154,7 +163,7 @@ pub fn inventory() -> Inventory {
         DemoUnit::Ds918.address(),
         "00:11:32:aa:bb:01",
         "7.2.1-69057",
-        "1920PDN123456",
+        "18A0PDN014408",
         &["udp", "mdns", "ssdp", "dsm-api"],
         false,
         "diskstation",
@@ -209,10 +218,11 @@ pub fn networks() -> Vec<synofurb_core::discovery::networks::NetworkInfo> {
     ])
 }
 
-fn demo_network() -> synofurb_core::discovery::networks::ResolvedNetwork {
+fn demo_network(kind: super::state::DemoScan) -> synofurb_core::discovery::networks::ResolvedNetwork {
+    use super::state::DemoScan;
     use synofurb_core::discovery::networks::{Ipv4Cidr, NetworkKind, ResolvedNetwork};
     let cidr: Ipv4Cidr = "192.168.1.0/24".parse().expect("demo cidr");
-    ResolvedNetwork {
+    let mut n = ResolvedNetwork {
         key: "Ethernet|192.168.1.10/24".into(),
         label: "Ethernet 192.168.1.0/24".into(),
         cidr,
@@ -223,7 +233,32 @@ fn demo_network() -> synofurb_core::discovery::networks::ResolvedNetwork {
         custom: false,
         sweep: cidr,
         sweep_hosts: 253,
+    };
+    match kind {
+        // a /16 is swept in the /24 around this computer only
+        DemoScan::Wide => {
+            let wide: Ipv4Cidr = "192.168.0.0/16".parse().expect("demo cidr");
+            (n.cidr, n.broadcast, n.label) = (wide, wide.broadcast(), "Ethernet 192.168.0.0/16".into());
+        }
+        // a VPN address: nothing to sweep
+        DemoScan::Vpn32 => {
+            let one: Ipv4Cidr = "100.101.4.7/32".parse().expect("demo cidr");
+            n = ResolvedNetwork {
+                key: "Tailscale|100.101.4.7/32".into(),
+                label: "Tailscale 100.101.4.7/32".into(),
+                cidr: one,
+                interface: Some("Tailscale".into()),
+                local_ip: "100.101.4.7".parse().ok(),
+                broadcast: one.broadcast(),
+                kind: Some(NetworkKind::Vpn),
+                custom: false,
+                sweep: one,
+                sweep_hosts: 0,
+            };
+        }
+        _ => {}
     }
+    n
 }
 
 /// The scripted scan: `(milliseconds to wait before the event, event)`. `Running` stops half way (the progress panel);
@@ -231,22 +266,39 @@ fn demo_network() -> synofurb_core::discovery::networks::ResolvedNetwork {
 pub fn scan_script(kind: super::state::DemoScan) -> Vec<(u64, synofurb_core::discovery::ScanEvent)> {
     use super::state::DemoScan;
     use synofurb_core::discovery::{ScanEvent as E, ScanMethod as M};
-    let net = demo_network();
+    let net = demo_network(kind);
     let key = net.key.clone();
+    let hosts = net.sweep_hosts;
     let mut v: Vec<(u64, E)> =
-        vec![(150, E::Started { networks: vec![net], methods: vec![M::SynologyUdp, M::Mdns, M::Ssdp, M::ProbeSweep], total_hosts: 253 })];
+        vec![(150, E::Started { networks: vec![net], methods: vec![M::SynologyUdp, M::Mdns, M::Ssdp, M::ProbeSweep], total_hosts: hosts })];
     for m in [M::SynologyUdp, M::Mdns, M::Ssdp, M::ProbeSweep] {
         v.push((40, E::MethodStarted { method: m, network: key.clone() }));
     }
-    let empty = kind == DemoScan::Empty;
+    let empty = matches!(kind, DemoScan::Empty | DemoScan::AllFailed | DemoScan::Vpn32);
     let found: Vec<Found> = if empty { vec![] } else { inventory().devices.into_iter().filter(|d| !d.synofurb_debian).collect() };
     let failed = kind == DemoScan::Failed;
+    if kind == DemoScan::AllFailed {
+        // nothing ran: every method ends with its own reason
+        let why = [
+            (M::SynologyUdp, "UDP socket: permission denied (os error 13)"),
+            (M::Mdns, "multicast is blocked on this adapter (os error 10013)"),
+            (M::Ssdp, "multicast is blocked on this adapter (os error 10013)"),
+            (M::ProbeSweep, "network is unreachable (os error 10051)"),
+        ];
+        for (m, e) in why {
+            v.push((120, E::MethodFinished { method: m, network: key.clone(), found: 0, error: Some(e.to_string()) }));
+        }
+        v.push((50, E::Finished { found_total: 0, elapsed: std::time::Duration::from_millis(1200) }));
+        return v;
+    }
     // listening methods: 4 s of listening, shown in steps
     for step in 1..=3u32 {
         for m in [M::SynologyUdp, M::Mdns, M::Ssdp] {
             v.push((120, E::MethodProgress { method: m, network: key.clone(), done: step * 1000, total: 4000 }));
         }
-        v.push((60, E::MethodProgress { method: M::ProbeSweep, network: key.clone(), done: step * 28, total: 253 }));
+        if hosts > 0 {
+            v.push((60, E::MethodProgress { method: M::ProbeSweep, network: key.clone(), done: step * 28, total: hosts }));
+        }
         if let Some(f) = found.get(step as usize - 1) {
             v.push((30, E::Found(f.clone())));
         }
@@ -261,16 +313,18 @@ pub fn scan_script(kind: super::state::DemoScan) -> Vec<(u64, synofurb_core::dis
             error: failed.then(|| "multicast is blocked on this adapter (os error 10013)".to_string()),
         },
     ));
-    if kind == DemoScan::Running {
+    if matches!(kind, DemoScan::Running | DemoScan::Stopped) {
         // stuck here: 87 of 253 hosts, two units found, the sweep still running
-        v.push((50, E::MethodProgress { method: M::ProbeSweep, network: key.clone(), done: 87, total: 253 }));
+        v.push((50, E::MethodProgress { method: M::ProbeSweep, network: key.clone(), done: 87, total: hosts }));
         return v;
     }
     v.push((100, E::MethodFinished { method: M::Ssdp, network: key.clone(), found: found.len().min(2), error: None }));
     for f in found.iter().skip(3) {
         v.push((60, E::Found(f.clone())));
     }
-    v.push((100, E::MethodProgress { method: M::ProbeSweep, network: key.clone(), done: 253, total: 253 }));
+    if hosts > 0 {
+        v.push((100, E::MethodProgress { method: M::ProbeSweep, network: key.clone(), done: hosts, total: hosts }));
+    }
     v.push((50, E::MethodFinished { method: M::ProbeSweep, network: key.clone(), found: found.len().min(2), error: None }));
     v.push((50, E::Finished { found_total: found.len(), elapsed: std::time::Duration::from_millis(5600) }));
     v
@@ -294,7 +348,7 @@ pub fn spawn_scan_script(tx: Tx, kind: super::state::DemoScan, cancel: synofurb_
                 return;
             }
         }
-        if kind == super::state::DemoScan::Running {
+        if matches!(kind, super::state::DemoScan::Running | super::state::DemoScan::Stopped) {
             while !cancel.is_cancelled() {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
@@ -504,7 +558,7 @@ pub fn script_events(script: Script, unit: DemoUnit, model: &str) -> Vec<Event> 
         &mut v,
         Level::Warn,
         Source::App,
-        "disk metadata backup (partition tables, not your files): ~/.local/share/synofurb/backups/disk-metadata-1920PDN123456",
+        "disk metadata backup (partition tables, not your files): ~/.local/share/synofurb/backups/disk-metadata-18A0PDN014408",
         &mut ts,
     );
     v.push(Event::Phase(Phase::Staging));

@@ -31,10 +31,17 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 77] = [
+pub const DEMO_SCREEN_NAMES: [&str; 92] = [
     "addons",
     "addons-chosen",
+    "addons-offline",
+    "addons-errors",
+    "addons-keep",
     "confirm-addons",
+    "confirm-addons-keep",
+    "confirm-usb",
+    "inspect-degraded",
+    "done-addons",
     "failed-agent",
     "manage-rebuild",
     "manage-faildisk",
@@ -60,6 +67,14 @@ pub const DEMO_SCREEN_NAMES: [&str; 77] = [
     "dlg-add-invalid",
     "dlg-add-probing",
     "dlg-networks",
+    "dlg-networks-none",
+    "dlg-networks-invalid",
+    "dlg-networks-vpn",
+    "inventory-stopped",
+    "inventory-all-failed",
+    "inventory-no-network",
+    "inventory-wide",
+    "inventory-vpn32",
     "connect",
     "inspect",
     "goal",
@@ -159,14 +174,27 @@ pub enum Overlay {
     Quick,
     /// "Add NAS" dialog on Find: idle, with an invalid address typed, or while checking one.
     Add(AddDemo),
-    /// "Networks to scan" dialog on Find.
-    Networks,
+    /// "Networks to scan" dialog on Find, in one of its states.
+    Networks(NetDemo),
     /// "Manual recovery" dialog (Recovery).
     Manual,
     /// "What happens next" dialog of the failure screen.
     NextDialog,
     /// The Welcome guide (first launch, Help, menu) on a 0-based step.
     Welcome(usize),
+}
+
+/// How the Networks dialog starts in a demo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetDemo {
+    /// The recommended network ticked.
+    Normal,
+    /// Every network unticked: "Select at least one network", Done waits.
+    None,
+    /// A network that is too large was typed: the core's sentence under the field.
+    Invalid,
+    /// The VPN ticked next to the LAN: the slow-scan warning.
+    Vpn,
 }
 
 /// How the Add NAS dialog starts in a demo.
@@ -191,6 +219,16 @@ pub enum DemoScan {
     Empty,
     /// Ended with the sample units.
     Done,
+    /// Stopped by the user half way: "Stopped after N s".
+    Stopped,
+    /// Every method failed, nothing found.
+    AllFailed,
+    /// This computer is on no network: the scan does not start.
+    NoNetwork,
+    /// A /16 of this computer: only the /24 around it is swept ("part of 10.0.0.0/16"); ended with the sample units.
+    Wide,
+    /// Only a /32 VPN address: nothing to sweep; ended with nothing found.
+    Vpn32,
 }
 
 /// Where a demo run starts: a screen, optionally with something open on top.
@@ -223,6 +261,12 @@ pub struct DemoTarget {
     pub update: DemoUpdate,
     /// Add-ons are ticked (Docker, Portainer, Frigate NVR and Plex).
     pub addons: bool,
+    /// The unit has a degraded array (Inspect shows the Alert).
+    pub degraded: bool,
+    /// The add-on fields hold values the checks refuse (Frigate days out of range, a malformed Plex claim token).
+    pub bad_fields: bool,
+    /// A USB stick is plugged in (listed, not touched).
+    pub usb: bool,
 }
 
 /// What a demo run pretends to know about the unit (drives the risk Tag and the Recovery rows).
@@ -257,6 +301,9 @@ impl DemoTarget {
             added: false,
             update: DemoUpdate::None,
             addons: false,
+            degraded: false,
+            bad_fields: false,
+            usb: false,
         }
     }
 
@@ -277,10 +324,33 @@ impl DemoTarget {
             "dlg-add-probing" => {
                 DemoTarget { overlay: Overlay::Add(AddDemo::Probing), scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) }
             }
-            "dlg-networks" => DemoTarget { overlay: Overlay::Networks, scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) },
+            "dlg-networks" => {
+                DemoTarget { overlay: Overlay::Networks(NetDemo::Normal), scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) }
+            }
+            "dlg-networks-none" => {
+                DemoTarget { overlay: Overlay::Networks(NetDemo::None), scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) }
+            }
+            "dlg-networks-invalid" => {
+                DemoTarget { overlay: Overlay::Networks(NetDemo::Invalid), scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) }
+            }
+            "dlg-networks-vpn" => {
+                DemoTarget { overlay: Overlay::Networks(NetDemo::Vpn), scan: DemoScan::Done, ..DemoTarget::at(Screen::Inventory) }
+            }
+            "inventory-stopped" => DemoTarget { scan: DemoScan::Stopped, ..DemoTarget::at(Screen::Inventory) },
+            "inventory-all-failed" => DemoTarget { scan: DemoScan::AllFailed, ..DemoTarget::at(Screen::Inventory) },
+            "inventory-no-network" => DemoTarget { scan: DemoScan::NoNetwork, ..DemoTarget::at(Screen::Inventory) },
+            "inventory-wide" => DemoTarget { scan: DemoScan::Wide, ..DemoTarget::at(Screen::Inventory) },
+            "inventory-vpn32" => DemoTarget { scan: DemoScan::Vpn32, ..DemoTarget::at(Screen::Inventory) },
             "inventory-offline" => DemoTarget { offline: true, ..DemoTarget::at(Screen::Inventory) },
             "connect" => DemoTarget::at(Screen::Connect),
             "inspect" => DemoTarget::at(Screen::Inspect),
+            "inspect-degraded" => DemoTarget { degraded: true, ..DemoTarget::at(Screen::Inspect) },
+            "done-addons" => DemoTarget { addons: true, ..DemoTarget::at(Screen::Done) },
+            "addons-offline" => DemoTarget { addons: true, offline: true, ..DemoTarget::at(Screen::Addons) },
+            "addons-errors" => DemoTarget { addons: true, bad_fields: true, ..DemoTarget::at(Screen::Addons) },
+            "addons-keep" => DemoTarget { addons: true, keep: true, ..DemoTarget::at(Screen::Addons) },
+            "confirm-addons-keep" => DemoTarget { addons: true, keep: true, ..DemoTarget::at(Screen::Confirm) },
+            "confirm-usb" => DemoTarget { usb: true, ..DemoTarget::at(Screen::Confirm) },
             "goal" => DemoTarget::at(Screen::Goal),
             "plan" | "layout" | "storage" => DemoTarget::at(Screen::Plan),
             "plan-keep" => DemoTarget { keep: true, ..DemoTarget::at(Screen::Plan) },
@@ -436,6 +506,8 @@ pub enum GateItem {
     Backup,
     Accept,
     Unit,
+    /// "I accept these privileges": add-ons that control Docker or share the NAS's network were ticked and not acknowledged.
+    Privileges,
     Phrase,
 }
 
@@ -449,6 +521,8 @@ pub struct ConfirmGate<'a> {
     pub ack_loss: bool,
     /// "This is the unit" (the identity line above was compared with the label on the NAS)
     pub ack_unit: bool,
+    /// The add-on privileges on screen were acknowledged (or there are none): see `addons::consent_given`.
+    pub priv_ok: bool,
     pub plan_ok: bool,
 }
 
@@ -497,6 +571,9 @@ impl ConfirmGate<'_> {
         if !self.ack_unit {
             m.push(GateItem::Unit);
         }
+        if !self.priv_ok {
+            m.push(GateItem::Privileges);
+        }
         if self.phrase_state() != PhraseMatch::Match {
             m.push(GateItem::Phrase);
         }
@@ -523,6 +600,7 @@ impl ConfirmGate<'_> {
                 GateItem::Backup => "Backup is tested",
                 GateItem::Accept => "I accept data loss",
                 GateItem::Unit => "This is the unit",
+                GateItem::Privileges => "I accept these privileges",
                 GateItem::Phrase => "the typed phrase",
             })
             .collect();
@@ -869,7 +947,7 @@ mod tests {
     }
 
     fn gate<'a>(typed: &'a str, b: bool, l: bool, ok: bool) -> ConfirmGate<'a> {
-        ConfirmGate { phrase: "ERASE DS918+", typed, ack_backup: b, ack_loss: l, ack_unit: true, plan_ok: ok }
+        ConfirmGate { phrase: "ERASE DS918+", typed, ack_backup: b, ack_loss: l, ack_unit: true, priv_ok: true, plan_ok: ok }
     }
 
     #[test]
@@ -900,6 +978,30 @@ mod tests {
         let mut g = gate("ERASE DS918+", true, true, true);
         g.ack_unit = false;
         assert_eq!(g.reason().unwrap(), "Missing: This is the unit.");
+    }
+
+    #[test]
+    fn add_on_privileges_are_a_fourth_confirmation_only_when_something_privileged_is_ticked() {
+        use synofurb_core::addons::AddonChoice;
+        let none: Vec<AddonChoice> = vec![];
+        let docker = vec![AddonChoice::new("docker"), AddonChoice::new("frigate")];
+        let portainer = vec![AddonChoice::new("portainer")];
+        let plex = vec![AddonChoice::new("plex"), AddonChoice::new("portainer")];
+        // nothing privileged: no acknowledgement is asked for, so the gate is as before
+        assert!(crate::ui::addons::consent_given(&none, None) && crate::ui::addons::consent_given(&docker, None));
+        // Portainer (Docker socket) needs it, whichever way it was ticked
+        assert!(!crate::ui::addons::consent_given(&portainer, None));
+        let sig = synofurb_core::addons::consent_signature(&portainer);
+        assert!(crate::ui::addons::consent_given(&portainer, Some(&sig)));
+        // a consent given for Portainer alone does not cover Plex's network access added later
+        assert!(!crate::ui::addons::consent_given(&plex, Some(&sig)));
+        // and the gate stays shut, with the name of the missing item, until it is given
+        let mut g = gate("ERASE DS918+", true, true, true);
+        g.priv_ok = false;
+        assert!(!g.is_open());
+        assert_eq!(g.reason().unwrap(), "Missing: I accept these privileges.");
+        g.typed = "";
+        assert_eq!(g.reason().unwrap(), "Missing: I accept these privileges, the typed phrase.");
     }
 
     #[test]

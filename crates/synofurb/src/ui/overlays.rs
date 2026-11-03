@@ -183,7 +183,7 @@ impl App {
             Screen::Confirm => {
                 let typed = self.input_value(&self.inp.typed, cx);
                 let phrase = self.phrase(cx);
-                if self.gate(&typed, &phrase).is_open() { spec.install_command(Some(&phrase)) } else { spec.plan_command() }
+                if self.gate(&typed, &phrase, cx).is_open() { spec.install_command(Some(&phrase)) } else { spec.plan_command() }
             }
             _ => spec.install_command(None),
         })
@@ -198,7 +198,7 @@ impl App {
         // the confirmation flags are in the command only after the gate is satisfied
         let typed = self.input_value(&self.inp.typed, cx);
         let phrase = self.phrase(cx);
-        let confirm = (self.screen == Screen::Confirm && self.gate(&typed, &phrase).is_open()).then_some(phrase);
+        let confirm = (self.screen == Screen::Confirm && self.gate(&typed, &phrase, cx).is_open()).then_some(phrase);
         let plan_only = self.screen == Screen::Plan || (self.screen == Screen::Confirm && confirm.is_none());
         let text = if plan_only { spec.plan_command() } else { spec.install_command(confirm.as_deref()) };
         let view = cx.new(|cx| CommandView::new(spec, confirm, plan_only, text, window, cx));
@@ -376,6 +376,7 @@ pub struct QuickView {
     rows: Vec<(&'static str, String)>,
     /// Add-ons preset: 0 = none, n = `addons::PRESETS[n - 1]`.
     pub addons_sel: usize,
+    app: gpui_kit::Entity<App>,
 }
 
 impl gpui_kit::Render for QuickView {
@@ -401,25 +402,51 @@ impl gpui_kit::Render for QuickView {
         col = col.child(v_flex().gap(px(4.0)).children(self.rows.iter().map(|(k, v)| {
             gpui_kit::component::h_flex()
                 .gap(px(12.0))
-                .items_baseline()
+                .items_start()
                 .child(div().w(px(72.0)).flex_none().text_sm().text_color(muted).child(*k))
-                .child(div().flex_1().min_w_0().text_sm().child(v.clone()))
+                .child(div().flex_1().min_w_0().text_sm().child(super::format::keep_units(v)))
         })));
+        // Every preset says everything it installs (the Plex preset also installs Portainer), and a preset that carries a privilege says
+        // what it may do; the person accepts it on Confirm. The caveat that add-ons never ran on a real NAS sits in the group header.
+        use super::theme::Themed;
+        let p = cx.pal();
+        let chosen = self.addons_sel.checked_sub(1).and_then(|i| synofurb_core::addons::PRESETS.get(i));
+        let priv_line = chosen.and_then(super::addons::preset_privilege_line);
         col = col.child(
-            v_flex().gap(px(4.0)).child(div().text_sm().text_color(muted).child(copy::ADDON_QUICK.short)).child(
-                RadioGroup::vertical("quick-addons")
-                    .selected_index(Some(self.addons_sel))
-                    .children(
-                        std::iter::once(copy::ADDON_QUICK_NONE.short)
-                            .chain(synofurb_core::addons::PRESETS.iter().map(|p| p.label))
-                            .enumerate()
-                            .map(|(i, l)| Radio::new(("qa", i)).label(l)),
+            v_flex()
+                .gap(px(4.0))
+                .child(
+                    gpui_kit::component::h_flex()
+                        .gap(px(8.0))
+                        .items_center()
+                        .child(div().text_sm().text_color(muted).child(copy::ADDON_QUICK.short))
+                        .child(super::kit::untested(&p, "quick-untested", &self.app)),
+                )
+                .child(
+                    RadioGroup::vertical("quick-addons")
+                        .selected_index(Some(self.addons_sel))
+                        .children(
+                            std::iter::once(copy::ADDON_QUICK_NONE.short.to_string())
+                                .chain(synofurb_core::addons::PRESETS.iter().map(super::addons::preset_label))
+                                .enumerate()
+                                .map(|(i, l)| Radio::new(("qa", i)).label(l)),
+                        )
+                        .on_click(cx.listener(|v, ix: &usize, _, cx| {
+                            v.addons_sel = *ix;
+                            cx.notify();
+                        })),
+                )
+                .when_some(priv_line, |d, l| {
+                    d.child(
+                        gpui_kit::component::h_flex()
+                            .gap(px(6.0))
+                            .items_start()
+                            .text_sm()
+                            .text_color(p.warn_fg)
+                            .child(super::icons::icon_sized(role::WARN, 14.0, p.warn_fg))
+                            .child(div().flex_1().min_w_0().child(format!("{l}. {}", copy::ADDON_QUICK_ACCEPT.short))),
                     )
-                    .on_click(cx.listener(|v, ix: &usize, _, cx| {
-                        v.addons_sel = *ix;
-                        cx.notify();
-                    })),
-            ),
+                }),
         );
         col.child(div().text_sm().text_color(muted).child(copy::QUICK_NOTES.body))
     }
@@ -458,7 +485,7 @@ impl App {
             rows.push(("Storage", {
                 let scope = super::facts::DiskScope::of(&f);
                 let n = if scope.big_excluded == 0 { format!("all {} disks", scope.used) } else { scope.count_text() };
-                let left = scope.not_touched().map(|t| format!(" \u{00b7} {}", t.to_lowercase())).unwrap_or_default();
+                let left = scope.not_touched().map(|t| format!(" \u{00b7} {}", synofurb_core::model::lower_first(&t))).unwrap_or_default();
                 format!("Wipe {n} \u{00b7} {}{left}", opts[0].1)
             }));
         }
@@ -468,8 +495,8 @@ impl App {
         let single = opts.len() == 1;
         let n_opts = opts.len();
         let addons_sel = self.addons.picks.matching_preset().map_or(0, |i| i + 1);
-        let view = cx.new(|_| QuickView { opts: if single { vec![] } else { opts }, sel: single.then_some(0), rows, addons_sel });
         let app = cx.entity();
+        let view = cx.new(|_| QuickView { opts: if single { vec![] } else { opts }, sel: single.then_some(0), rows, addons_sel, app: app.clone() });
         window.open_dialog(cx, move |d, _, cx| {
             let (app, view2, raids) = (app.clone(), view.clone(), raids.clone());
             let unchosen = !super::facts::quick_ready(view.read(cx).sel, n_opts);

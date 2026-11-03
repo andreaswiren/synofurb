@@ -114,6 +114,20 @@ No `color-mix()`, gradients or inset shadows (tested). Type floor 12 px, weights
 **Icons**: Lucide only (ISC), a fixed list of 56 symbols inlined as an SVG sprite; a test checks that every icon the UI asks for exists and equals the Lucide source. No external fonts, scripts, images or CDNs. `prefers-reduced-motion` and
 `forced-colors` are honoured. Destructive actions use the typed-name confirm dialog (button stays disabled until the text matches).
 **60-word rule** (`design/v2/UX-SPEC.md`): every page shows at most 60 words by default, shell included (headings, labels, column headers, buttons, prose; values that come from the system are data). Explanations live in tooltips (`tip`), popovers (native `popover`, Esc closes) and the Help topics; all text is in the `COPY` module with budgets per kind. `tests/test_ui.py` checks the copy budgets, forbids hard-coded prose in the script and, when node and Playwright are installed, opens every page of the demo (both units, desktop and phone) and counts the words really rendered.
+**Manifest prose is counted too.** Add-on summaries (`data-d="prose"`) are not exempt from the audit: the browser audit counts them apart from the 60 words of the page chrome and caps them on their own, at most 20 words per summary (`tests/test_addons_catalog.py`) and at most 60 words of manifest prose on one page (`MANIFEST_BUDGET` in `tests/test_ui.py`, measured with nothing installed, which is the worst case: four cards).
+**A control that is off says why in text.** A disabled button swallows hover, focus and touch, so a tooltip on it is never seen. Controls that are off for a reason (Update now, Install without Docker, Install before the privileges are accepted, Remove before the name is typed, Roll back while a job runs) use `aria-disabled` plus a visible line of text the control points to with `aria-describedby` (`setOff()` and `whyLine()` in the script): the button stays focusable, clicks are ignored, keyboard and touch users read the reason. The browser tests fail on a native `disabled` control without a reason and on a reason that is hidden or outside the viewport (`tests/ui_lib.js`).
+**No stray text.** The same library fails any page state that shows the words `null`, `undefined`, `NaN`, `[object ...]` or an unresolved `{placeholder}` (it caught the "null" under the Health step of the update card); `tests/test_ui.py` also proves that the check detects them.
+
+**Screenshots of the new pages** (`design/screenshots/mgmt-demo-<state>-<light|dark>[-phone].png`, 1280 and 390 wide; the demo shows Add-ons states with `?addons=states|problems|nodocker`, Updates states with `?update=available|current|offline|rollback|busy|unhealthy`):
+
+```sh
+python3 apps/mgmt-plane/tools/build-demo.py                       # rebuild apps/mgmt-plane/demo/index.html
+NODE_PATH="$(npm root -g)" node apps/mgmt-plane/tools/shots.js apps/mgmt-plane/demo/index.html design/screenshots   # all states (about 4 minutes, ~100 files)
+... shots.js demo/index.html OUT --only addons-nodocker,updates-current   # some states      ... shots.js demo/index.html OUT --list   # the names
+```
+
+Needs node, playwright and a chromium build. Every state is checked with `tests/ui_lib.js` while it is captured (the exit code is 1 on stray text, a reason only a mouse can see, or overflow) and each PNG must stay below 120 KB.
+
 Regenerate the embedded fonts, logos, favicon, icons and licence texts with `python3 tools/build-assets.py` (needs `pip install fonttools brotli`, `assets/brand` and a Lucide icon directory, `LUCIDE_DIR=...`).
 
 ## API

@@ -456,6 +456,12 @@ fn merge_found(t: &Target, ip: IpAddr, found: Vec<Found>) -> Option<Found> {
 
 // ------------------------------------------------------------------------------------------------ what is kept
 
+/// The SSH port the Connect form shows after a row was selected: the one just typed (`explicit`), else the one stored with the added
+/// address, else 22 when another unit was selected, else nothing (the same unit again keeps what is typed).
+pub fn port_to_show(explicit: Option<u16>, stored: Option<u16>, unit_changed: bool) -> Option<u16> {
+    explicit.or(stored).or(unit_changed.then_some(22))
+}
+
 /// One address added by the user, with what the last check found.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AddedHost {
@@ -641,6 +647,27 @@ mod tests {
         assert_eq!(AddedHosts::load(&path), AddedHosts::default(), "a corrupt file never stops the app");
         assert!(a.remove("nas.lan") && !a.remove("nas.lan"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_stored_ssh_port_comes_back_when_the_row_is_selected_and_never_leaks_to_another_unit() {
+        // just added as nas:2222: the typed port is used
+        assert_eq!(port_to_show(Some(2222), Some(2222), true), Some(2222));
+        // selected again later (Connect, a click on the row): the port stored with the added address
+        assert_eq!(port_to_show(None, Some(2222), true), Some(2222));
+        assert_eq!(port_to_show(None, Some(2222), false), Some(2222));
+        // another unit, no stored port: back to 22 instead of keeping 2222 from the last one
+        assert_eq!(port_to_show(None, None, true), Some(22));
+        // the same unit again: whatever is typed on the Connect form stays
+        assert_eq!(port_to_show(None, None, false), None);
+        // and the row says it when the port is not 22 (see UnitRow::address_text)
+        let mut a = AddedHosts::default();
+        a.upsert(AddedHost {
+            target: t("nas.lan:2222"),
+            report: ProbeReport { checks: vec![], found: None },
+            checked: String::new(),
+        });
+        assert_eq!(a.get("nas.lan").and_then(|h| h.target.port), Some(2222));
     }
 
     #[test]

@@ -49,7 +49,7 @@ impl App {
         let name = self.unit_name();
         let phrase = self.phrase(cx);
         let typed = self.input_value(&self.inp.typed, cx);
-        let gate = self.gate(&typed, &phrase);
+        let gate = self.gate(&typed, &phrase, cx);
         let open = gate.is_open();
         let state = gate.phrase_state();
         let reason = gate.reason();
@@ -72,10 +72,11 @@ impl App {
                     .min_w_0(),
             )
             .child(info_tip("backup-info", &copy::CONF_NO_BACKUP, &app));
+        let scope0 = crate::ui::facts::DiskScope::of(&f);
         let destroyed_value = if keep {
             format!("{} GiB DSM system", f.candidate_disks().len() * 10)
         } else {
-            format!("{} \u{00b7} {}", crate::ui::facts::DiskScope::of(&f).count_text(), size_2dp(raw_total))
+            format!("{} \u{00b7} {}", scope0.count_text(), size_2dp(raw_total))
         };
         let dest = self.triad_card(
             "tri-d",
@@ -114,10 +115,15 @@ impl App {
                     .into_any_element(),
             ],
         );
-        let kept_text = if plan.preserved.is_empty() {
-            copy::CONF_NOTHING_PRESERVED.short.to_string()
+        // Preserved: what stays of the DSM data (kept volumes) and the disks the install does not touch. The red card lists only what is
+        // erased; a disk that is left alone is safe news and belongs here.
+        let scope = crate::ui::facts::DiskScope::of(&f).with_plan(&plan);
+        let mut kept: Vec<String> = plan.preserved.iter().map(|d| d.what.clone()).collect();
+        kept.extend(scope.preserved_lines());
+        let kept_lines: Vec<AnyElement> = if kept.is_empty() {
+            vec![div().text_sm().child(copy::CONF_NOTHING_PRESERVED.short).into_any_element()]
         } else {
-            plan.preserved.iter().map(|d| d.what.clone()).collect::<Vec<_>>().join(", ")
+            kept.into_iter().map(|l| div().text_sm().child(l).into_any_element()).collect()
         };
         let pres = self.triad_card(
             "tri-p",
@@ -130,7 +136,7 @@ impl App {
                 .child(info_tip("pres-info", if keep { &copy::PLAN_PRESERVED_KEEP } else { &copy::CONF_PRESERVED }, &app))
                 .into_any_element(),
             p.ok_solid,
-            vec![div().text_sm().child(kept_text).into_any_element()],
+            kept_lines,
         );
         let usable = size_2dp(plan.sizes.data_usable_bytes);
         let survives = raid::survives(&plan).map(|n| format!(" \u{00b7} survives {}", raid::survives_text(n))).unwrap_or_default();
@@ -157,30 +163,78 @@ impl App {
             .border_color(cx.theme().border)
             .child(icons::icon(role::LAYERS))
             .child(div().text_sm().flex_1().min_w_0().child(after_text));
-        // Add-ons chosen in Setup: what is installed after the first boot, and what that needs.
+        // Add-ons chosen in Setup, however they were ticked (Add-ons tab or a Quick setup preset): the same engine text, so Quick setup
+        // cannot skip it. One line of names, the lines that must not be missed in plain sight, the rest one click away.
         let addon_choices = self.addon_choices(cx);
-        let addon_lines: Vec<String> = {
-            let (picks, _) = self.addon_state(cx);
-            picks
-                .confirm_line()
-                .into_iter()
-                .chain(crate::ui::addons::confirm_notes(
-                    &addon_choices,
-                    &synofurb_core::addons::AddonContext { offline: self.source_offline, root_mib: None },
-                ))
-                .collect()
-        };
-        let addons_card = (!addon_lines.is_empty()).then(|| {
-            h_flex()
-                .gap(px(8.0))
-                .items_start()
+        let addon_model = crate::ui::addons::confirm_model(
+            &addon_choices,
+            &synofurb_core::addons::AddonContext {
+                offline: self.source_offline,
+                root_mib: Some(plan.sizes.root_mib),
+                has_data_volume: Some(plan.has_data_volume()),
+            },
+        );
+        let priv_sig = synofurb_core::addons::consent_signature(&addon_choices);
+        let addons_card = (!addon_model.names.is_empty()).then(|| {
+            let loud = addon_model.loud.clone();
+            let details = addon_model.details.clone();
+            v_flex()
+                .gap(px(4.0))
                 .px(px(12.0))
                 .py(px(8.0))
                 .rounded(cx.theme().radius)
                 .border_1()
                 .border_color(cx.theme().border)
-                .child(icons::icon(role::PACKAGE))
-                .child(v_flex().gap(px(2.0)).flex_1().min_w_0().children(addon_lines.into_iter().map(|l| div().text_sm().child(l))))
+                .child(
+                    h_flex()
+                        .gap(px(8.0))
+                        .items_center()
+                        .flex_wrap()
+                        .child(icons::icon(role::PACKAGE))
+                        .child(div().text_sm().min_w_0().child(format!("{} {}", copy::CONF_ADDONS.short, addon_model.names.join(", "))))
+                        .child(kit::untested(&p, "conf-untested", &app))
+                        .child(crate::ui::disclosure::info_lines("conf-addon-info", copy::ADDON_ABOUT.short, details)),
+                )
+                .children(loud.into_iter().map(|l| {
+                    h_flex()
+                        .gap(px(6.0))
+                        .items_start()
+                        .text_sm()
+                        .text_color(p.warn_fg)
+                        .child(icons::icon_sized(role::WARN, 14.0, p.warn_fg))
+                        .child(div().flex_1().min_w_0().child(l))
+                }))
+        });
+        // What the plan itself warns about (a resyncing array, low RAM, a hybrid layout), on the Quick setup path too: the last screen
+        // before the erase must not forget what the earlier one said. The not-touched sentence is in Preserved, a straddled array has its
+        // own alert.
+        let straddle_lines: Vec<String> = plan.straddling.iter().map(|s| s.warning()).collect();
+        let plan_warnings: Vec<String> = plan
+            .warnings
+            .iter()
+            .filter(|w| !w.starts_with("Not used and not touched") && !straddle_lines.contains(w))
+            .cloned()
+            .collect();
+        let warnings_card = (!plan_warnings.is_empty()).then(|| {
+            v_flex()
+                .id("plan-warnings")
+                .gap(px(2.0))
+                .px(px(12.0))
+                .py(px(8.0))
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().border)
+                .border_l_4()
+                .border_color(p.warn_solid)
+                .child(
+                    h_flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .text_color(p.warn_fg)
+                        .child(icons::icon_sized(role::WARN, 14.0, p.warn_fg))
+                        .child(kit::strong(copy::CONF_WARNINGS.short)),
+                )
+                .children(plan_warnings.into_iter().map(|w| div().text_sm().child(w)))
         });
         // The disks that change, by name and size, always visible (B4): not behind "Details".
         let cand = f.candidate_disks();
@@ -207,8 +261,7 @@ impl App {
                 .children(cand.iter().take(shown).map(|d| {
                     kit::mono_sm(cx, crate::ui::facts::destroyed_disk_line(&d.name, &d.model, &d.serial, &size_2dp(d.size_bytes())))
                 }))
-                .when(cand.len() > shown, |c| c.child(kit::caption(cx, format!("and {} more", cand.len() - shown))))
-                .when_some(crate::ui::facts::DiskScope::of(&f).not_touched(), |c, t| c.child(kit::caption(cx, t)));
+                .when(cand.len() > shown, |c| c.child(kit::caption(cx, format!("and {} more", cand.len() - shown))));
         let details = v_flex().gap(px(2.0)).children(plan.destroyed.iter().map(|d| div().text_xs().child(d.clone())));
         let acc = Accordion::new("conf-details").bordered(true).item(|i| i.title(copy::CONF_DETAILS.short).child(details));
 
@@ -242,6 +295,10 @@ impl App {
                     .child(div().flex_1().min_w_0().child(pres)),
             )
             .child(disk_list)
+            .children(plan.straddling.iter().enumerate().map(|(i, st)| {
+                Alert::error(("straddle", i), st.warning()).icon(icons::icon(role::ERR))
+            }))
+            .children(warnings_card)
             .child(after)
             .children(addons_card)
             .child(acc);
@@ -281,6 +338,24 @@ impl App {
                             cx.notify();
                         },
                     )))
+                    .when(!priv_sig.is_empty(), |d| {
+                        let sig = priv_sig.clone();
+                        let line = crate::ui::addons::privilege_line(&addon_model.privileges).unwrap_or_default();
+                        d.child(
+                            v_flex()
+                                .gap(px(2.0))
+                                .child(
+                                    Checkbox::new("ack-priv")
+                                        .label(copy::CONF_ADDON_ACK.short)
+                                        .checked(self.ack_priv.as_deref() == Some(priv_sig.as_str()))
+                                        .on_click(cx.listener(move |this, v: &bool, _, cx| {
+                                            this.ack_priv = v.then(|| sig.clone());
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(div().pl(px(28.0)).child(kit::caption(cx, line))),
+                        )
+                    })
                     .child(Checkbox::new("ack-unit").label(copy::CONF_UNIT.fmt(&[&unit_label])).checked(self.ack_unit).on_click(
                         cx.listener(|this, v: &bool, _, cx| {
                             this.ack_unit = *v;

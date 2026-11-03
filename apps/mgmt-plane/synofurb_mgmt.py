@@ -5769,7 +5769,8 @@ COPY.update({
     "ad.install": _c("Install", "button"), "ad.retry": _c("Retry", "button", "The last install did not finish; try it again."), "ad.open": _c("Open", "button", "Open the app's web page."),
     "ad.start": _c("Start", "button"), "ad.stop": _c("Stop", "button"), "ad.restart": _c("Restart", "button"), "ad.update": _c("Update", "button", "Download newer images and restart; data is kept."),
     "ad.logs": _c("Logs", "button"), "ad.remove": _c("Remove", "button"), "ad.details": _c("Details", "button"), "ad.refresh": _c("Refresh", "button"), "ad.view": _c("View", "button"),
-    "ad.help": _c("Help", "button"), "ad.lines": _c("Lines"),
+    "ad.help": _c("Help", "button"), "ad.lines": _c("Lines"), "ad.hide": _c("Hide", "button"), "ad.progress": _c("Progress"), "ad.rev": _c("Revision"),
+    "ad.why_priv": _c("Accept the privileges first.", "safety"), "ad.why_type": _c("Type the name first.", "safety"),
     "ad.st.running": _c("Running", "label", "Containers run and the health check answers."), "ad.st.stopped": _c("Stopped", "label", "Installed, but not running."),
     "ad.st.starting": _c("Starting", "label", "Running; the health check does not answer yet."), "ad.st.installing": _c("Installing", "label", "A job is installing it."),
     "ad.st.updating": _c("Updating", "label", "A job is updating it."), "ad.st.removing": _c("Removing", "label", "A job is removing it."),
@@ -5781,7 +5782,7 @@ COPY.update({
     "ad.install_t": _c("Install {name}", "title"), "ad.settings": _c("Settings"), "ad.privs": _c("Privileges"), "ad.devices": _c("Devices"), "ad.storage": _c("Storage"),
     "ad.changes": _c("Changes to this unit"), "ad.accept": _c("I accept these privileges", "safety"), "ad.present": _c("Found"), "ad.absent": _c("Not found"),
     "ad.absent_warn": _c("Not found: the app may not start.", "prose"), "ad.free": _c("free"), "ad.once": _c("Used on first install only.", "tip"),
-    "ad.secret_set": _c("Set; leave empty to keep it.", "tip"), "ad.needs": _c("Install {name} first.", "tip"), "ad.noweb": _c("No web page.", "prose"),
+    "ad.secret_set": _c("Set; leave empty to keep it.", "tip"), "ad.needs": _c("Install {name} first.", "safety"), "ad.noweb": _c("No web page.", "prose"),
     "ad.update_q": _c("Update {name}?", "title"), "ad.update_b": _c("Newer images are downloaded and the app restarts. Your data is kept.", "prose"),
     "ad.remove_q": _c("Remove {name}?", "title"), "ad.remove_b": _c("Containers are removed. Data is kept unless you tick the box.", "prose"),
     "ad.deldata": _c("Delete data", "label", "Erases the settings, configuration and stored files for good."),
@@ -5801,7 +5802,7 @@ COPY_SCREENS = {
     "raid": ["raid.title", "raid.create", "raid.arrays", "raid.hybrid", "raid.empty", "raid.members", "raid.size", "raid.usedby", "raid.monthly", "raid.actions",
              "state.clean", "state.degraded", "ms.active", "act.add_spare", "act.replace", "act.check", "shr.add", "shr.slice"],
     "mounts": ["nav.mounts", "mnt.mounted", "mnt.imported", "col.mount", "col.device", "col.type", "col.used", "mnt.fstab", "act.unmount"],
-    "addons": ["nav.addons", "ad.installed", "ad.available", "col.name", "col.state", "ad.install", "ad.open"],
+    "addons": ["nav.addons", "ad.installed", "ad.available", "col.name", "col.state", "ad.install", "ad.open", "ad.retry", "ad.needs"],
     "network": ["nav.network", "net.ipv4", "net.mac", "act.edit"],
     "users": ["nav.users", "usr.new", "col.name", "col.groups", "col.keys", "col.state"],
     "boot": ["nav.boot", "boot.return_dsm", "boot.entries", "boot.default", "boot.failsafe", "boot.missing", "boot.set_default", "boot.reboot_go", "boot.flash", "boot.part1", "boot.part2", "boot.backup"],
@@ -5858,6 +5859,8 @@ COPY.update({
     "upd.unsigned": _c("Not signed", "label", "Only the SHA-256 is checked, so a tampered release would not be noticed."),
     "upd.signed": _c("Signed", "label", "The signature of this release was verified."),
     "upd.consent": _c("I understand and want to update", "safety"),
+    "upd.why_consent": _c("Tick the box first.", "safety"), "upd.why_typed": _c("Type the commit first.", "safety"),
+    "upd.why_current": _c("Already up to date.", "safety"), "upd.why_older": _c("Only an older version is offered.", "safety"),
     "upd.src.app": _c("Desktop app"), "upd.src.manual": _c("Command line"), "upd.src.github-stable": _c("GitHub release"), "upd.src.github-main": _c("GitHub source"),
     "upd.src.rollback": _c("Roll back"),
     "upd.s.ok": _c("Updated"), "upd.s.refused": _c("Refused"), "upd.s.rolled_back": _c("Rolled back"), "upd.s.rollback_failed": _c("Rollback failed"),
@@ -5870,12 +5873,12 @@ COPY.update({
     "upd.restarting": _c("Restarting. This page reconnects by itself.", "prose"), "upd.signin": _c("Sign in again", "button"), "upd.reload": _c("Reload", "button"),
     "upd.done": _c("Updated to {v}.", "prose"), "upd.rolled": _c("Rolled back to {v}.", "prose"), "upd.refused": _c("Update refused.", "prose"),
     "upd.failed": _c("Update failed.", "prose"), "upd.rbfail": _c("Rollback failed. Check the unit.", "prose"), "upd.busy": _c("Another job is running.", "prose"),
-    "upd.nocheck": _c("Check first.", "tip"), "upd.none": _c("No updates yet.", "prose"), "upd.unchecked": _c("Not checked", "label"),
+    "upd.nocheck": _c("Check first.", "safety"), "upd.none": _c("No updates yet.", "prose"), "upd.unchecked": _c("Not checked", "label"),
     "upd.plane": _c("Management plane"), "upd.force": _c("Update anyway", "button"), "upd.force_note": _c("The unit reports a problem.", "prose"),
 })
 COPY_SHELL.append("nav.updates")
 COPY_SCREENS["updates"] = ["nav.updates", "upd.plane", "upd.installed", "upd.available", "upd.channel", "upd.stable", "upd.main", "upd.check", "upd.now", "upd.rollback", "upd.history",
-                           "upd.when", "upd.from", "upd.to", "upd.source", "upd.result"]
+                           "upd.when", "upd.from", "upd.to", "upd.source", "upd.result", "upd.nocheck"]
 HELP_TOPICS.append(
     {"id": "updates", "title": "Updates", "keywords": "update upgrade version github release channel rollback signed unsigned sha-256 app push",
      "body": "Stable installs the newest release of the management plane from GitHub. Main installs the source folder of a branch or tag: it is for testing and is never signed.\n\n"
@@ -6074,7 +6077,7 @@ dialog::backdrop{background:rgb(0 0 0/.6)}
 .db{padding:16px 20px 4px;overflow:auto;min-height:0}
 dialog[open]{display:flex;flex-direction:column;max-height:calc(100vh - 32px)}.dh,.df{flex:none}
 .df{display:flex;gap:8px;justify-content:flex-end;padding:14px 20px;background:var(--surface-2);border-top:1px solid var(--border);margin-top:12px;flex-wrap:wrap}
-.err{color:var(--err-fg);display:flex;gap:6px;margin:0 0 10px;font-size:13px;font-weight:600}
+div.err{color:var(--err-fg);display:flex;gap:6px;margin:0 0 10px;font-size:13px;font-weight:600}
 /* login */
 .lw{min-height:100vh;display:grid;place-items:center;padding:16px}
 .lw>div{width:min(400px,100%)}
@@ -6134,6 +6137,7 @@ details>summary{cursor:pointer}
  table.st td::before{content:attr(data-l);color:var(--fg-2);font-size:12px;font-weight:600;text-align:left;flex:none}
  table.st td[data-l=""]::before{content:none}
  table.st td[data-l=""]{justify-content:flex-start;text-align:left}
+ .hres{align-items:flex-end;text-align:right}
  table.st tr.attn>td:first-child,table.st tr.bad>td:first-child{border-left:0}
  table.st tr.attn{border-left:3px solid var(--warn-solid)}table.st tr.bad{border-left:3px solid var(--err-solid)}
  table.st tbody tr:hover td{background:none}
@@ -6167,7 +6171,10 @@ details>summary{cursor:pointer}
 .helpsearch{max-width:420px;margin:0 0 16px}
 .helpbody p,.card .cb p{max-width:68ch}
 input[type=search]{width:100%}
-.btn[aria-disabled=true]{background:var(--surface-2);color:var(--fg-2);border:1px dashed var(--border-strong);cursor:not-allowed}
+.btn[aria-disabled=true],.btn[aria-disabled=true]:is(:hover,:active,.primary,.danger){background:var(--surface-2);color:var(--fg-2);border:1px dashed var(--border-strong);cursor:not-allowed;font-weight:600}
+/* a control that is off keeps its reason as visible text beside it (a disabled button swallows hover, focus and touch) */
+.why{display:flex;gap:6px;align-items:flex-start;font-size:12px;line-height:16px;color:var(--fg-2)}.why .ic{margin-top:1px}
+.df .why{flex:1 1 180px;margin-right:auto;align-self:center}
 /* themed scrollbars */
 *{scrollbar-width:thin;scrollbar-color:var(--border-strong) transparent}
 *::-webkit-scrollbar{width:12px;height:12px}*::-webkit-scrollbar-track{background:transparent}
@@ -6194,14 +6201,18 @@ textarea.mono{width:100%}
 /* add-ons */
 .agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin:0 0 16px}
 .acard{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--e1);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
-.acard p{margin:0;color:var(--fg-2);font-size:13px;line-height:19px}
+.acard p{margin:0;color:var(--fg-2)}
 .acard .ft{margin-top:auto;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
-.aname{display:flex;gap:10px;align-items:center;min-width:0}.aname b{overflow-wrap:anywhere}
-.aico{width:40px;height:40px;border-radius:10px;background:var(--accent-bg);color:var(--accent-fg);display:inline-flex;align-items:center;justify-content:center;flex:none}
-.sec{display:flex;gap:8px;align-items:center;margin:20px 0 12px;font:600 15px/22px var(--font-ui)}
-.dsec{margin:0 0 16px}.dsec>h4{margin:0 0 8px;font:600 13px/19px var(--font-ui)}
+.aname{display:flex;gap:12px;align-items:center;min-width:0}.aname b{overflow-wrap:anywhere}.anm{display:flex;flex-direction:column;min-width:0}
+.adet{color:var(--fg-2);font-size:12px;line-height:16px;font-weight:400;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.aico{width:40px;height:40px;border-radius:8px;background:var(--accent-bg);color:var(--accent-fg);display:inline-flex;align-items:center;justify-content:center;flex:none}
+.sec{margin:20px 0 12px}
+.dsec{margin:0 0 16px}.dsec>h4{margin:0 0 8px;font:600 14px/20px var(--font-ui)}
 .dsec .row{margin-bottom:6px}
 pre.code.log2{max-height:50vh;min-height:120px}
+.chips .chip{white-space:normal;height:auto;min-height:24px;padding:4px 8px;max-width:100%;overflow-wrap:anywhere}
+#main:focus,#main:focus-visible{outline:none}
+.hres{display:flex;flex-direction:column;gap:4px;align-items:flex-start}.hres small{color:var(--fg-2);font-size:12px;line-height:16px;overflow-wrap:anywhere;max-width:40ch}
 dialog.wide progress{margin:0 0 10px}
 @media (max-width:1000px){.helpcols{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}.spin{animation:none}}
@@ -6424,16 +6435,26 @@ function brandSvg(key, cls) {
 const logo = (kind, label) => h('span', {class: 'logo ' + kind, role: 'img', 'aria-label': label || 'synofurb'}, brandSvg(kind === 'mark' ? 'mark' : 'logo', 'lg-l'), brandSvg(kind === 'mark' ? 'mark_dark' : 'logo_dark', 'lg-d'));
 /* popover (native popover attribute: Esc and click-outside close it) */
 let popN = 0;
-function popover(trigger, content, icon) {
+function popover(trigger, content, icon, label) {
   const id = 'pop' + (++popN);
   const p = h('div', {id, popover: 'auto', class: 'popover', role: 'dialog'}, content);
-  const b = h('button', {type: 'button', class: 'btn ghost sm', popovertarget: id}, icon ? ic(icon, 'sm') : null, trigger);
+  const b = h('button', {type: 'button', class: 'btn ghost sm', popovertarget: id, 'aria-label': label ? trigger + ': ' + label : null}, icon ? ic(icon, 'sm') : null, trigger);
   p.addEventListener('toggle', ev => {
     if (ev.newState !== 'open') return;
     const r = b.getBoundingClientRect(), w = p.offsetWidth;
     p.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px'; p.style.top = (r.bottom + 6) + 'px';
   });
   return h('span', {class: 'popwrap'}, b, p);
+}
+/* a control that is off for a reason: aria-disabled keeps it focusable, clicks are ignored, and the reason is visible text the control points to with aria-describedby
+   (a native disabled button swallows hover, focus and touch, so a tooltip on it is never seen) */
+let whyN = 0;
+const whyLine = () => h('small', {class: 'why', id: 'why' + (++whyN), role: 'status', hidden: true});
+function setOff(b, line, text, show) {
+  if (!b._off) { b._off = true; b.addEventListener('click', ev => { if (b.getAttribute('aria-disabled') === 'true') { ev.preventDefault(); ev.stopImmediatePropagation(); } }, true); }
+  if (text) { b.setAttribute('aria-disabled', 'true'); b.setAttribute('aria-describedby', line.id); } else { b.removeAttribute('aria-disabled'); b.removeAttribute('aria-describedby'); }
+  if (show !== false) { line.hidden = !text; line.replaceChildren(...(text ? [ic('info', 'sm'), text] : [])); }
+  return b;
 }
 /* ---------- login ---------- */
 /*PAGE:login*/
@@ -6750,21 +6771,22 @@ const AD_KIND = {running: 'ok', stopped: 'neutral', starting: 'info', installing
 const adIcon = n => ($('#i-' + n) ? n : 'package');
 const adTag = st => tip(badge(AD_KIND[st] || 'neutral', T('ad.st.' + st)), TIP('ad.st.' + st));
 const adUrl = a => (a.link ? a.link.scheme + '://' + location.host.replace(/:\d+$/, '') + ':' + a.link.port + a.link.path : null);
-const adHelp = text => popover(T('ad.help'), h('p', {}, text), 'info');
+const adHelp = (text, label) => popover(T('ad.help'), h('p', {}, text), 'info', label);
 const adPriv = p => tip(h('span', {class: 'chip'}, ic('triangle-alert', 'sm'), p.startsWith('cap:') ? T('ad.priv.cap') + ' ' + p.slice(4) : T('ad.priv.' + p)), p.startsWith('cap:') ? TIP('ad.priv.cap') : TIP('ad.priv.' + p));
-const adName = a => h('span', {class: 'aname'}, h('span', {class: 'aico'}, ic(adIcon(a.icon), 'lg')), h('b', {'data-d': ''}, a.name));
+const adName = (a, note) => h('span', {class: 'aname'}, h('span', {class: 'aico'}, ic(adIcon(a.icon), 'lg')), h('span', {class: 'anm'}, h('b', {'data-d': ''}, a.name), note ? h('small', {class: 'adet', 'data-d': 'prose'}, note) : null));
 /* a job in a dialog: progress bar, current step, log; polls until the job ends */
 function adJob(first, name, action, done) {
-  const bar = h('progress', {max: 100, value: first.progress || 0}), msg = h('p', {'data-d': ''}, first.message || ''), log = h('pre', {class: 'code log2', 'aria-live': 'off'}, '');
-  let timer = null;
-  const dlg = dialog(T('ad.job_t', {name, action: T('ad.act.' + action)}), {icon: 'refresh-cw', wide: true}, () => h('div', {}, bar, msg, log), close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))]);
+  const bar = h('progress', {max: 100, value: first.progress || 0, 'aria-label': T('ad.progress')}), msg = h('p', {'data-d': '', role: 'status'}, first.message || ''), log = h('pre', {class: 'code log2', 'aria-live': 'off'}, '');
+  let timer = null, hideB = null;
+  /* the primary button says Hide while the job runs (closing only hides it) and Close once it has ended */
+  const dlg = dialog(T('ad.job_t', {name, action: T('ad.act.' + action)}), {icon: 'refresh-cw', wide: true}, () => h('div', {}, bar, msg, log), close => [hideB = h('button', {type: 'button', class: 'btn primary', onclick: close}, T('ad.hide'))]);
   const poll = async () => {
     try {
       const j = (await api('GET', '/api/jobs/' + first.id)).job;
       bar.value = j.progress; msg.textContent = j.state === 'running' ? j.message : (j.ok ? T('ad.done') : j.error);
       log.textContent = j.log.join('\n'); log.scrollTop = log.scrollHeight;
       if (j.state !== 'running') {
-        clearInterval(timer); bar.className = j.ok ? 'ok' : 'err';
+        clearInterval(timer); bar.className = j.ok ? 'ok' : 'err'; hideB.replaceChildren(T('btn.close'));
         if (j.warnings.length) log.textContent += '\n' + j.warnings.join('\n');
         toast(j.ok ? T('ad.done') : j.error, !j.ok); if (done) done();
       }
@@ -6790,10 +6812,10 @@ function adLogs(a) {
 async function adDetails(a) {
   const d = (await api('GET', '/api/addons/' + a.id)).addon, url = adUrl(d);
   dialog(d.name, {icon: adIcon(d.icon), wide: true, sub: d.summary}, () => h('div', {},
-    h('div', {class: 'row dsec'}, chip(d.installed_version || d.version), adTag(d.status), url ? h('a', {class: 'btn sm', href: url, target: '_blank', rel: 'noopener noreferrer'}, ic('external-link'), T('ad.open')) : h('span', {class: 'muted'}, T('ad.noweb')),
+    h('div', {class: 'row dsec'}, chip(T('ad.rev'), d.installed_version || d.version), adTag(d.status), url ? h('a', {class: 'btn sm', href: url, target: '_blank', rel: 'noopener noreferrer'}, ic('external-link'), T('ad.open')) : h('span', {class: 'muted'}, T('ad.noweb')),
       d.homepage ? h('a', {class: 'btn sm', href: d.homepage, target: '_blank', rel: 'noopener noreferrer'}, ic('external-link'), T('ad.homepage')) : null),
     d.detail ? banner('warn', T('ad.st.' + d.status), d.detail) : null,
-    d.post_install ? h('div', {class: 'dsec'}, h('h4', {}, T('ad.note')), h('p', {'data-d': ''}, d.post_install)) : null,
+    d.post_install ? h('div', {class: 'dsec'}, h('h4', {}, T('ad.note')), h('p', {'data-d': 'prose'}, d.post_install)) : null,
     d.privileges.length ? h('div', {class: 'dsec'}, h('h4', {}, T('ad.privs')), h('div', {class: 'chips'}, d.privileges.map(p => adPriv(p.id)))) : null,
     d.ports.length ? h('div', {class: 'dsec'}, h('h4', {}, T('ad.ports')), h('div', {class: 'chips'}, d.ports.map(p => chip(p.host + '/' + p.proto, p.label)))) : null,
     d.storage_report.length ? h('div', {class: 'dsec'}, h('h4', {}, T('ad.storage')), d.storage_report.map(s => h('div', {class: 'row'}, h('b', {'data-d': ''}, s.label), h('span', {class: 'mono'}, s.path)))) : null),
@@ -6804,22 +6826,23 @@ async function adInstall(a, byId, reload) {
   const priv = h('div', {class: 'chips'}), accept = h('input', {type: 'checkbox', id: 'ad-accept'});
   const privSec = h('div', {class: 'dsec'}, h('h4', {}, T('ad.privs')), priv, h('label', {class: 'chk'}, accept, h('span', {}, T('ad.accept'))));
   let ok = null;
+  const why = whyLine();
   const cur = () => { const v = {}; for (const s of d.settings) v[s.key] = get[s.key](); return v; };
   function redraw() {
     const v = cur(), list = d.privileges.map(p => p.id);
     for (const s of d.settings) if (s.type === 'choice') { const c = s.choices.find(x => x.value === v[s.key]); if (c) for (const p of c.privileges) if (!list.includes(p)) list.push(p); }
     priv.replaceChildren(...list.map(adPriv)); privSec.hidden = !list.length;
-    if (ok) ok.disabled = !!list.length && !accept.checked;
+    if (ok) setOff(ok, why, list.length && !accept.checked ? T('ad.why_priv') : null);
   }
   accept.addEventListener('change', redraw);
-  if (d.changes.length) parts.push(h('div', {class: 'dsec'}, h('h4', {}, T('ad.changes')), h('ul', {}, d.changes.map(c => h('li', {'data-d': ''}, c)))));
+  if (d.changes.length) parts.push(h('div', {class: 'dsec'}, h('h4', {}, T('ad.changes')), h('ul', {}, d.changes.map(c => h('li', {'data-d': 'prose'}, c)))));
   const miss = d.requires.filter(r => !(byId[r] && byId[r].installed));
   if (miss.length) parts.push(banner('warn', T('ad.needs', {name: miss.map(r => (byId[r] ? byId[r].name : r)).join(', ')}), null));
   if (d.settings.length) {
     const rows = d.settings.map(s => {
       const id = 'ad-' + s.key, once = s.first_install_only ? h('small', {class: 'help'}, T('ad.once')) : null;
       let inp;
-      if (s.type === 'bool') { inp = h('input', {type: 'checkbox', id, checked: !!d.values[s.key]}); get[s.key] = () => inp.checked; return h('div', {class: 'row'}, h('label', {class: 'chk'}, inp, h('span', {'data-d': ''}, s.label)), s.help ? adHelp(s.help) : null); }
+      if (s.type === 'bool') { inp = h('input', {type: 'checkbox', id, checked: !!d.values[s.key]}); get[s.key] = () => inp.checked; return h('div', {class: 'row'}, h('label', {class: 'chk'}, inp, h('span', {'data-d': ''}, s.label)), s.help ? adHelp(s.help, s.label) : null); }
       if (s.type === 'choice') { inp = h('select', {id, onchange: redraw}, s.choices.map(c => h('option', {value: c.value, selected: c.value === d.values[s.key]}, c.label))); get[s.key] = () => inp.value; }
       else if (s.type === 'text') { inp = h('textarea', {id, rows: 4, class: 'mono'}, d.values[s.key] == null ? '' : d.values[s.key]); get[s.key] = () => inp.value; }
       else {
@@ -6828,7 +6851,7 @@ async function adInstall(a, byId, reload) {
           value: sec ? '' : (d.values[s.key] == null ? '' : d.values[s.key]), placeholder: sec ? (d.values[s.key] && d.values[s.key].set ? T('ad.secret_set') : '') : ''});
         get[s.key] = () => (s.type === 'int' && inp.value !== '' ? Number(inp.value) : inp.value);
       }
-      return h('div', {class: 'f'}, h('div', {class: 'row'}, h('label', {class: 'lab', for: id, 'data-d': ''}, s.label + (s.required ? ' *' : '')), s.help ? adHelp(s.help) : null), inp, once);
+      return h('div', {class: 'f'}, h('div', {class: 'row'}, h('label', {class: 'lab', for: id, 'data-d': ''}, s.label + (s.required ? ' *' : '')), s.help ? adHelp(s.help, s.label) : null), inp, once);
     });
     parts.push(h('div', {class: 'dsec'}, h('h4', {}, T('ad.settings')), rows));
   }
@@ -6857,14 +6880,15 @@ async function adInstall(a, byId, reload) {
       } catch (e) { setErr(e.message); busy(ok, false); }
     });
     redraw();
-    return [h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
+    return [why, h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
   });
 }
 function adRemove(a, reload) {
   const del = h('input', {type: 'checkbox'}), typed = h('input', {class: 'mono', autocomplete: 'off', spellcheck: 'false', 'aria-label': T('raid.type', {name: a.id})});
   const typedF = field(T('raid.type', {name: a.id}), typed); typedF.hidden = true;
   let ok = null;
-  const sync = () => { typedF.hidden = !del.checked; if (ok) ok.disabled = del.checked && typed.value !== a.id; };
+  const why = whyLine();
+  const sync = () => { typedF.hidden = !del.checked; if (ok) setOff(ok, why, del.checked && typed.value !== a.id ? T('ad.why_type') : null); };
   del.addEventListener('change', sync); typed.addEventListener('input', sync);
   dialog(T('ad.remove_q', {name: a.name}), {danger: true, sub: T('ad.remove_b')}, () => h('div', {}, tip(h('label', {class: 'chk'}, del, h('span', {}, T('ad.deldata'))), TIP('ad.deldata')), typedF), (close, setErr) => {
     ok = h('button', {type: 'button', class: 'btn danger'}, ic('trash'), T('ad.remove'));
@@ -6874,34 +6898,39 @@ function adRemove(a, reload) {
       try { const r = await api('POST', '/api/addons/' + a.id + '/remove', {delete_data: del.checked, confirm: del.checked ? typed.value : ''}); close(); adJob(r.job, a.name, 'remove', reload); }
       catch (e) { setErr(e.message); busy(ok, false); }
     });
-    return [h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
+    sync();
+    return [why, h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
   });
 }
 PAGES.addons = async () => {
   const r = await api('GET', '/api/addons'), reload = () => show('addons');
   const byId = Object.fromEntries(r.addons.map(a => [a.id, a])), inst = r.addons.filter(a => a.installed);
+  const missing = a => a.requires.filter(id => !(byId[id] && byId[id].installed && byId[id].status !== 'needs-attention'));
   const parts = [h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.addons')), infoBtn('addons', T('nav.addons'))))];
   if (r.job) parts.push(banner('neutral', T('ad.busy'), r.job.message, btn(T('ad.view'), {size: 'sm', onclick: () => adJob(r.job, r.job.addon, r.job.kind, reload)})));
   for (const p of r.problems) parts.push(banner('warn', T('ad.problems'), p.id + ': ' + p.error));
   if (inst.length) {
     const rows = inst.map(a => {
       const url = a.status === 'running' || a.status === 'starting' ? adUrl(a) : null, up = a.status === 'running' || a.status === 'starting' || a.status === 'unhealthy' || a.status === 'error';
-      const acts = [url ? h('a', {class: 'btn sm', href: url, target: '_blank', rel: 'noopener noreferrer'}, ic('external-link'), T('ad.open')) : null,
-        up ? btnIcon('square', T('ad.stop'), () => adAct(a, 'stop', reload)) : btnIcon('play', T('ad.start'), () => adAct(a, 'start', reload)),
-        btnIcon('refresh-cw', T('ad.restart'), () => adAct(a, 'restart', reload)),
-        btnIcon('download', T('ad.update'), () => confirmAction({title: T('ad.update_q', {name: a.name}), danger: false, icon: 'download', label: T('ad.update'), body: T('ad.update_b'),
+      const miss = missing(a), att = a.status === 'needs-attention', why = whyLine();
+      const retry = att ? setOff(h('button', {type: 'button', class: 'btn primary sm', onclick: () => adInstall(a, byId, reload)}, ic('download'), T('ad.retry')), why, miss.length ? T('ad.needs', {name: miss.map(id => (byId[id] ? byId[id].name : id)).join(', ')}) : null) : null;
+      const acts = [retry, url ? h('a', {class: 'btn sm', href: url, target: '_blank', rel: 'noopener noreferrer'}, ic('external-link'), T('ad.open')) : null,
+        att ? null : up ? btnIcon('square', T('ad.stop'), () => adAct(a, 'stop', reload)) : btnIcon('play', T('ad.start'), () => adAct(a, 'start', reload)),
+        att ? null : btnIcon('refresh-cw', T('ad.restart'), () => adAct(a, 'restart', reload)),
+        att ? null : btnIcon('download', T('ad.update'), () => confirmAction({title: T('ad.update_q', {name: a.name}), danger: false, icon: 'download', label: T('ad.update'), body: T('ad.update_b'),
           onConfirm: async () => { const j = await api('POST', '/api/addons/' + a.id + '/update', {}); adJob(j.job, a.name, 'update', reload); }}), a.update_available ? 'primary' : 'ghost'),
         btnIcon('scroll-text', T('ad.logs'), () => adLogs(a)), btnIcon('info', T('ad.details'), () => adDetails(a)),
         a.kind === 'system' ? null : btnIcon('trash', T('ad.remove'), () => adRemove(a, reload))];
-      return [adName(a), adTag(a.status), h('div', {class: 'row'}, acts)];
+      /* the reason of a problem is on the row, not only in the details dialog */
+      return [adName(a, ['error', 'unhealthy', 'needs-attention'].includes(a.status) && a.detail ? a.detail : null), adTag(a.status), h('div', {class: 'row'}, acts, retry ? why : null)];
     });
     parts.push(cardFlush(T('ad.installed'), 'container', null, table(th('name', 'state', ''), rows)));
   }
-  const cards = r.addons.filter(a => !a.installed || a.status === 'needs-attention').map(a => {
-    const miss = a.requires.filter(id => !(byId[id] && byId[id].installed && byId[id].status !== 'needs-attention'));
-    const can = h('button', {type: 'button', class: 'btn primary sm', disabled: miss.length > 0, onclick: () => adInstall(a, byId, reload)}, ic('download'), a.status === 'needs-attention' ? T('ad.retry') : T('ad.install'));
-    const foot = miss.length ? tip(h('span', {}, can), T('ad.needs', {name: miss.map(id => (byId[id] ? byId[id].name : id)).join(', ')})) : can;
-    return h('section', {class: 'acard'}, adName(a), h('p', {'data-d': ''}, a.summary), h('div', {class: 'ft'}, adTag(a.status), foot));
+  /* available: not installed yet. An add-on that needs attention is installed, so it is only listed above (with Retry) */
+  const cards = r.addons.filter(a => !a.installed).map(a => {
+    const miss = missing(a), why = whyLine();
+    const can = setOff(h('button', {type: 'button', class: 'btn primary sm', onclick: () => adInstall(a, byId, reload)}, ic('download'), T('ad.install')), why, miss.length ? T('ad.needs', {name: miss.map(id => (byId[id] ? byId[id].name : id)).join(', ')}) : null);
+    return h('section', {class: 'acard'}, adName(a), h('p', {'data-d': 'prose'}, a.summary), h('div', {class: 'ft'}, adTag(a.status), can), why);
   });
   if (cards.length) parts.push(h('h2', {class: 'sec'}, ic('plus', 'lg'), T('ad.available')), h('div', {class: 'agrid'}, cards));
   else if (!inst.length) parts.push(h('div', {class: 'empty'}, ic('info'), T('ad.empty')));
@@ -7043,21 +7072,23 @@ function watchJob(jid, host, onEnd, retry) {
     for (const e of events || []) last[e.step] = e;
     const steps = UPD_STEPS.concat(last.rollback ? ['rollback'] : []);
     const ci = j && j.step ? UPD_STEPS.indexOf(j.step) : -1;
-    host.replaceChildren(h('ul', {class: 'us', 'aria-live': 'polite'}, steps.map(k => {
+    host.replaceChildren(...[h('ul', {class: 'us', 'aria-live': 'polite'}, steps.map(k => {
       const e = last[k], i = UPD_STEPS.indexOf(k);
       const st = e ? e.status : events ? 'pending' : (i < ci ? 'ok' : i === ci ? 'start' : 'pending');
       const cls = st === 'fail' ? 'fail' : st === 'ok' ? 'ok' : st === 'start' ? 'run' : '';
       const sp = st === 'start' ? 'spin' : '';
       return h('li', {class: cls}, ic(UPD_ICON[st], sp), T('upd.step.' + k), e && e.message ? h('small', {}, e.message) : null);
-    })), restarting ? banner('info', T('upd.restarting'), '') : null);
+    })), restarting ? banner('info', T('upd.restarting'), '') : null].filter(Boolean));       // replaceChildren(null) would print the word "null"
   };
   const end = (j, events) => {
     const fail = (events || []).filter(e => e.status === 'fail').pop();
     const kind = j.state === 'ok' || j.state === 'current' ? 'ok' : j.state === 'refused' || j.state === 'rolled_back' ? 'warn' : 'err';
     const text = j.state === 'ok' && j.kind === 'rollback' ? T('upd.rolled', {v: j.to || ''}) : j.state === 'ok' ? T('upd.done', {v: j.to || ''}) : j.state === 'current' ? T('upd.uptodate') : j.state === 'rolled_back' ? T('upd.rolled', {v: j.from || ''})
       : j.state === 'refused' ? T('upd.refused') : j.state === 'rollback_failed' ? T('upd.rbfail') : T('upd.failed');
-    draw(j, events, false);
-    host.append(banner(kind, text, fail ? fail.message : '', btn(lost ? T('upd.signin') : T('upd.reload'), {kind: 'primary', icon: 'refresh-cw', onclick: () => location.reload()}),
+    if (events) draw(j, events, false); else host.replaceChildren();          // after a restart the session is gone and no events are readable: a list of grey "pending" steps would say nothing true
+    const lastOf = {}; for (const e of events || []) lastOf[e.step] = e;
+    const shown = fail && lastOf[fail.step] === fail && (UPD_STEPS.includes(fail.step) || fail.step === 'rollback');        // the step list above already prints this message
+    host.append(banner(kind, text, fail && !shown ? fail.message : '', btn(lost ? T('upd.signin') : T('upd.reload'), {kind: 'primary', icon: 'refresh-cw', onclick: () => location.reload()}),
       retry && fail && fail.step === 'health' ? btn(T('upd.force'), {icon: 'triangle-alert', onclick: retry}) : null));
     onEnd && onEnd(j);
   };
@@ -7093,35 +7124,39 @@ PAGES.updates = async () => {
     const trust = c ? (c.mode === 'signed' ? tip(badge('ok', T('upd.signed'), 'shield-check'), TIP('upd.signed')) : tip(badge('warn', T('upd.unsigned'), 'triangle-alert'), TIP('upd.unsigned'))) : null;
     const chk = btn(T('upd.check'), {icon: 'refresh-cw', onclick: () => act(chk, async () => { const r = await api('POST', '/api/update/check', {channel: F.channel, ref: F.ref}); F.check = r.check; draw(); })});
     const can = c && !running() && !c.blocked && (c.state === 'available' || c.state === 'same');
-    const go = btn(T('upd.now'), {kind: 'primary', icon: 'download', disabled: !can, onclick: () => updateDialog(c)});
-    const goTip = !c ? TIP('upd.nocheck') : c.blocked ? c.blocked : running() ? T('upd.busy') : null;
-    const rb = st.previous ? btn(T('upd.rollback'), {icon: 'undo-2', disabled: running(), onclick: () => rollbackDialog()}) : null;
+    const why = whyLine(), go = btn(T('upd.now'), {kind: 'primary', icon: 'download', onclick: () => updateDialog(c)});
+    const goWhy = can ? null : !c ? T('upd.nocheck') : c.blocked ? c.blocked : running() ? T('upd.busy') : c.state === 'older' ? T('upd.why_older') : T('upd.why_current');
+    const rb = st.previous ? btn(T('upd.rollback'), {icon: 'undo-2', onclick: () => rollbackDialog()}) : null;
+    setOff(go, why, goWhy); if (rb) setOff(rb, why, running() ? T('upd.busy') : null, false);
+    if (!goWhy && running()) { why.hidden = false; why.replaceChildren(ic('info', 'sm'), T('upd.busy')); }
     const notes = c && c.notes ? btn(T('upd.notes'), {size: 'sm', kind: 'ghost', icon: 'file-text', onclick: () => dialog(T('upd.notes'), {icon: 'file-text', wide: true, sub: (c.tag || c.commit.slice(0, 7)) + ' ' + (c.published || '')},
       () => h('pre', {class: 'code'}, c.notes), close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))])}) : null;
     top.replaceChildren(card(T('upd.plane'), 'download', h('div', {class: 'row'}, state, trust),
       h('dl', {class: 'kv'}, h('dt', {}, T('upd.installed')), h('dd', {class: 'mono'}, st.installed || '-'), h('dt', {}, T('upd.available')), h('dd', {class: 'mono'}, c ? c.version + (c.commit ? ' ' + c.commit.slice(0, 7) : '') : '-'),
         h('dt', {}, T('upd.channel')), h('dd', {}, seg, F.channel === 'main' ? field(T('upd.ref'), refIn) : null)),
       c && c.blocked ? banner('warn', c.blocked, '') : null,
-      h('div', {class: 'row'}, tip(chk, TIP('upd.check')), tip(go, goTip), rb ? tip(rb, TIP('upd.rollback')) : null, notes)));
+      h('div', {class: 'row'}, tip(chk, TIP('upd.check')), go, rb && !running() ? tip(rb, TIP('upd.rollback')) : rb, notes), why));
   }
   function updateDialog(c, force) {
     const need = c.mode === 'unsigned', typed = c.channel === 'main' ? c.commit.slice(0, 7) : '';
     let box = null, inp = null, ok = null;
-    const gate = () => { ok.disabled = (need && !box.checked) || (typed && inp.value !== typed); };
+    const why = whyLine();
+    const gate = () => setOff(ok, why, need && !box.checked ? T('upd.why_consent') : typed && inp.value !== typed ? T('upd.why_typed') : null);
     return dialog(T('upd.confirm_q', {v: c.version}), {icon: 'download', sub: (st.installed || '-') + ' → ' + c.version + (c.commit ? ' (' + c.commit.slice(0, 7) + ')' : '')}, () => h('div', {},
       h('p', {}, T('upd.restart_note')),
       force ? banner('warn', T('upd.force_note'), '') : null,
+      need ? banner('warn', T('upd.unsigned'), TIP('upd.unsigned')) : null,
       need ? h('label', {class: 'chk'}, box = h('input', {type: 'checkbox', onchange: gate}), h('span', {}, T('upd.consent'))) : null,
-      need ? h('p', {class: 'muted'}, ic('triangle-alert', 'sm'), ' ', TIP('upd.unsigned')) : null,
       typed ? field(T('raid.type', {name: typed}), inp = h('input', {class: 'mono', autocomplete: 'off', spellcheck: 'false', oninput: gate})) : null), (close, setErr) => {
-      ok = h('button', {type: 'button', class: 'btn primary', disabled: need || !!typed}, ic('download'), T('upd.now'));
+      ok = h('button', {type: 'button', class: 'btn primary'}, ic('download'), T('upd.now'));
       ok.addEventListener('click', async () => {
         if (ok.classList.contains('is-loading')) return;
         busy(ok, true); setErr('');
         try { const r = await api('POST', '/api/update/start', {channel: c.channel, ref: c.ref || '', expect: c.channel === 'main' ? c.commit : c.version, accept_unsigned: !!(box && box.checked), force: !!force, confirm: typed}); close(); follow(r.job); }
         catch (e) { setErr(e.message); busy(ok, false); }
       });
-      return [h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
+      gate();
+      return [why, h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
     });
   }
   function rollbackDialog() {
@@ -7138,7 +7173,8 @@ PAGES.updates = async () => {
   const hist = cardFlush(T('upd.history'), 'clock', null, table(['upd.when', 'upd.from', 'upd.to', 'upd.source', 'upd.result'].map(k => T(k)),
     st.jobs.map(j => [fmtWhen(j.started), h('span', {class: 'mono'}, j.from || '-'), h('span', {class: 'mono'}, j.to || '-'),
       tip(h('span', {}, T('upd.src.' + j.source) + (j.by && j.by !== '-' ? ' · ' + j.by : '')), j.ref || j.commit ? (j.ref || '') + ' ' + (j.commit || '').slice(0, 7) : null),
-      tip(badge(UPD_STATE_KIND[j.state] || 'neutral', T('upd.s.' + j.state)), j.message || null)]), T('upd.none')));
+      h('div', {class: 'hres'}, badge(UPD_STATE_KIND[j.state] || 'neutral', T('upd.s.' + j.state)),
+        !['ok', 'current', 'running', 'queued'].includes(j.state) && j.message ? h('small', {}, j.message) : null)]), T('upd.none')));            // why it failed is text in the row, not a tooltip
   const page = h('div', {}, h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.updates')), infoBtn('updates', T('nav.updates')))), top, live, hist);
   if (st.active) follow(st.active);
   return page;

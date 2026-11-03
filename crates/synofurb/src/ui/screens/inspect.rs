@@ -110,8 +110,9 @@ impl App {
             .child(TableBody::new().children(f.disks.iter().map(|d| {
                 // every disk says whether it is an install target, or why it is not (never silently left out)
                 let use_tag = match d.exclusion() {
-                    None => kit::tag(&p, Tone::Ok, Some(role::OK), copy::INSPECT_USE_TARGET.short),
-                    Some(e) => kit::tag(&p, Tone::Neutral, Some(role::INFO), copy::INSPECT_USE_NOT.fmt(&[&e.reason().to_lowercase()])),
+                    // not green: a disk that is about to be erased must not read as "safe" (Confirm shows the same disks in red)
+                    None => kit::tag(&p, Tone::Neutral, Some(role::DISK), copy::INSPECT_USE_TARGET.short),
+                    Some(e) => kit::tag(&p, Tone::Neutral, Some(role::INFO), copy::INSPECT_USE_NOT.fmt(&[&e.reason_inline()])),
                 };
                 TableRow::new()
                     .child(TableCell::new().child(kit::mono(cx, d.name.clone())))
@@ -202,15 +203,17 @@ impl App {
         if f.candidate_disks().is_empty() {
             body = body.child(Alert::error("no-disks", "No disks visible").icon(icons::icon(role::ERR)));
         }
-        for a in f.busy_arrays() {
+        for (i, a) in f.busy_arrays().into_iter().enumerate() {
             if let Some(note) = a.health_note() {
+                // only a resync, a rebuild, a reshape or a missing member means less protection; a check leaves every copy intact
+                let tail = if a.reduces_redundancy() { "; your data is not fully protected until then" } else { "" };
                 body = body.child(
-                    Alert::warning("busy-array", format!("{} is {note}. Let it finish before installing.", a.name))
+                    Alert::warning(("busy-array", i), format!("{} is {note}. Let it finish before installing{tail}.", a.name))
                         .icon(icons::icon(role::WARN)),
                 );
             }
         }
-        body = body.child(facts).child(disks).child(accordion);
+        body = body.child(facts).child(disks).child(kit::caption(cx, copy::INSPECT_ERASE_NOTE.short)).child(accordion);
         let blocked = verdict.blocking || f.candidate_disks().is_empty();
         Page::new(copy::INSPECT_TITLE.short, body)
             .subtitle(copy::INSPECT_SUB.short)

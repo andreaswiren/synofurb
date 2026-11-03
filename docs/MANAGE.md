@@ -114,6 +114,11 @@ add-on definitions `addons/<id>/<file>` are validated (names, sizes, counts) and
 `tools/make-update-bundle.py` does; links, duplicates and a second top directory are refused; `MANIFEST.sha256` is written by `write_manifest`, whose output a test compares
 with the tool's, byte for byte. `VERSION` must equal the version that was checked and `DEFAULT_VERSION` in the script.
 
+**What the page shows.** Disabled controls give their reason as visible text next to them, never only as a tooltip (a disabled button shows none, and touch and keyboard users never see hover): "Check first.", "Already up to date.",
+"Only an older version is offered.", the blocking reason of the check, "Another job is running." (also for Roll back), and in the confirm dialog "Tick the box first." / "Type the commit first." in the footer beside the button.
+The warning for an unsigned release is a banner above the consent box. The progress card lists the steps (Check, Download, Verify, Stage, Swap, Restart, Health, Roll back when it ran) and prints a failure's message once: under the step
+that failed, or in the result banner when no step carries it. The history table shows why a row did not succeed ("update to 0.4.0 failed; rolled back") as text under its result badge.
+
 **Trust.** Releases carry `SHA256SUMS` but no signature today (the signing key is a placeholder, `docs/UPDATES.md`), so the desktop app's model applies:
 the asset's SHA-256 is compared with the line in the `SHA256SUMS` *of the same release*, which catches a damaged download but not a tampered release,
 and the person must consent: the web UI shows "Not signed" and a required "I understand and want to update" (for Main also the short commit to type);
@@ -262,7 +267,7 @@ Done in the development sandbox:
   release selection (newest non-draft non-pre-release, foreign assets ignored), SHA-256 match and mismatch, hostile archives (traversal, links, extra members, a second top directory, duplicates, add-on entries, a size cap on unpacking), signed mode with a fake `minisign`,
   consent and "what you saw is what you get", the health gate, the job lock (busy and stale), audit lines, job records and their reaping, the full flow and the automatic rollback through the same `Updater` with a fake systemd and health,
   the CLI (`--check`, `--ref`, `--status`, offline), the web routes against the real HTTP server (`systemd-run` argv checked, 409 while busy, typed commit for Main, public progress route), the real release asset built by `scripts/package-mgmt.sh` and a tarball of the real
-  `apps/mgmt-plane` tree staged byte-identical to `make-update-bundle.py`; the Updates page in a real browser against the demo (check, consent, typed commit, restart and reconnect, rollback, refusal and "Update anyway", phone width).
+  `apps/mgmt-plane` tree staged byte-identical to `make-update-bundle.py`; the Updates page in a real browser against the demo (check, consent, typed commit, restart and reconnect, rollback, refusal and "Update anyway", phone width, the reason next to every disabled control, the failure reason in the history row, no stray text such as "null" in any state).
 
 **Not verified:**
 
