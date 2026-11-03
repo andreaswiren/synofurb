@@ -45,6 +45,7 @@ const BASE = process.argv[2], SHOTS = process.argv[3] || null;
   await p.waitForSelector('text=Restarting', {timeout: 15000}); out.flows.sawRestart = true; await shot(p, '5-restarting');
   await p.waitForSelector('.banner.ok', {timeout: 30000}); await shot(p, '6-done');
   out.flows.done = {banner: (await p.locator('.banner.ok').innerText()).replace(/\s+/g, ' '), button: await p.locator('.banner.ok button').innerText(), rows: await p.locator('tbody tr').count()};
+  out.flows.afterDone = await p.evaluate(() => { const b = [...document.querySelectorAll('main button')].find(x => x.textContent.includes('Update now')), d = document.getElementById(b.getAttribute('aria-describedby') || '-'); return {off: b.getAttribute('aria-disabled') === 'true', text: d ? d.textContent.trim() : null}; });
   await p.context().close();
   // 2. main channel needs the typed commit
   p = await open('update=available');
@@ -62,6 +63,7 @@ const BASE = process.argv[2], SHOTS = process.argv[3] || null;
   await p.click('button:has-text("Update now")'); await p.check('dialog input[type=checkbox]'); await p.click('dialog button.primary:has-text("Update now")');
   await p.waitForSelector('main .banner.warn', {timeout: 40000}); await shot(p, '8-rolled-back');
   out.flows.rolledBack = (await p.locator('main .banner.warn').innerText()).replace(/\s+/g, ' ');
+  out.flows.afterRollback = await p.evaluate(() => { const b = [...document.querySelectorAll('main button')].find(x => x.textContent.includes('Update now')); return {off: b.getAttribute('aria-disabled') === 'true', busyLine: [...document.querySelectorAll('main .why')].some(x => !x.hidden && x.textContent.includes('Another job'))}; });
   await p.context().close();
   // 4. offline check and busy lock, phone width
   p = await open('update=offline', 390, 844);

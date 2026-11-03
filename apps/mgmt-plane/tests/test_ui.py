@@ -289,6 +289,8 @@ class BrowserAuditTests(unittest.TestCase):
         self.assertEqual(f["busyReason"], "Another job is running.")
         self.assertEqual(f["currentReason"], "Already up to date.")
         self.assertTrue(f["refusedMessageOnce"])
+        self.assertEqual(f["afterDone"], {"off": True, "text": "Reload the page first."})          # the page no longer claims a job is running
+        self.assertEqual(f["afterRollback"], {"off": False, "busyLine": False})
         self.assertTrue(f["initial"]["updateDisabled"])                       # nothing to install before a check
         self.assertEqual((f["checked"]["available"], f["checked"]["unsigned"]), ("0.7.0", 1))
         self.assertTrue(f["dialogDisabledUntilConsent"] and f["dialogEnabledAfterConsent"])

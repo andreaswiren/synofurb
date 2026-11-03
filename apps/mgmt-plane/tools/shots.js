@@ -71,7 +71,7 @@ const S = [
       if (s.run) await s.run(p);
       if (phone) await p.addStyleTag({content: '#demo-ribbon{display:none!important}'});          // on a phone the demo pill floats over the content
       await p.mouse.move(1, 1); await p.waitForTimeout(100);          // no leftover hover tooltip
-      if (s.cap === 'page') {            // a tall window instead of a full-page capture, so the fixed tab bar and the demo ribbon stay at the bottom edge
+      if (s.cap !== 'view' && s.cap !== 'dialog[open]') {            // a tall window instead of a full-page capture, so the fixed tab bar and the demo ribbon stay at the bottom edge
         const full = await p.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight));
         await p.setViewportSize({width: w, height: Math.min(Math.max(h, full), 3000)}); await p.waitForTimeout(200);
       }

@@ -3998,6 +3998,7 @@ UNIT_PATH = "/etc/systemd/system/synofurb-mgmt.service"
 BUNDLE_REQUIRED = ("synofurb_mgmt.py", "VERSION", "README.md")
 BUNDLE_OPTIONAL_UNIT = "synofurb-mgmt.service"
 BUNDLE_ADDON_FILES = ("synofurb_addons.py", "addons.pack.json")      # the add-on framework and the packed add-on definitions (optional)
+BUNDLE_EDGE_FILES = ("synofurb_edge.py",)                             # certificates (lego) and the HAProxy front (optional, docs/CERTIFICATES.md)
 MANIFEST_NAME = "MANIFEST.sha256"
 MAX_BUNDLE_FILE = 8 * 1024 * 1024
 EXIT_OK, EXIT_REFUSED, EXIT_ROLLED_BACK, EXIT_ROLLBACK_FAILED = 0, 2, 3, 4
@@ -4171,7 +4172,7 @@ def verify_bundle(src: str) -> tuple[dict[str, str], str]:
     for name in BUNDLE_REQUIRED:
         if name not in expected:
             raise ValidationError("%s is missing from the update" % name)
-    allowed = set(BUNDLE_REQUIRED) | {BUNDLE_OPTIONAL_UNIT} | set(BUNDLE_ADDON_FILES)
+    allowed = set(BUNDLE_REQUIRED) | {BUNDLE_OPTIONAL_UNIT} | set(BUNDLE_ADDON_FILES) | set(BUNDLE_EDGE_FILES)
     if set(expected) - allowed:
         raise ValidationError("unexpected file(s): %s" % ", ".join(sorted(set(expected) - allowed)))
     for name, digest in expected.items():
@@ -4399,7 +4400,7 @@ UPDATE_SUBDIR = "apps/mgmt-plane"
 UPDATE_HOSTS = ("api.github.com", "github.com", "codeload.github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com")
 UPDATE_PLACEHOLDER_KEY = "REPLACE_WITH_MINISIGN_PUBLIC_KEY"       # same placeholder as install.sh; a real key makes signatures mandatory
 UPDATE_PUBKEY = UPDATE_PLACEHOLDER_KEY
-BUNDLE_FILES = BUNDLE_REQUIRED + (BUNDLE_OPTIONAL_UNIT,) + BUNDLE_ADDON_FILES          # manifest order, identical to FILES in tools/make-update-bundle.py
+BUNDLE_FILES = BUNDLE_REQUIRED + (BUNDLE_OPTIONAL_UNIT,) + BUNDLE_ADDON_FILES + BUNDLE_EDGE_FILES          # manifest order, identical to FILES in tools/make-update-bundle.py
 MAX_API, MAX_SUMS, MAX_ASSET, MAX_REPO_TARBALL, MAX_REPO_UNPACKED = 2 << 20, 256 << 10, 8 << 20, 256 << 20, 2 << 30
 MAX_ADDON_FILE, MAX_ADDON_FILES, MAX_ADDON_BYTES = 256 << 10, 600, 8 << 20       # add-on definitions found in a source tree
 BUNDLE_GENERATED = ("addons.pack.json",)                                          # made at build/stage time, never copied from an archive tree
@@ -5860,7 +5861,7 @@ COPY.update({
     "upd.signed": _c("Signed", "label", "The signature of this release was verified."),
     "upd.consent": _c("I understand and want to update", "safety"),
     "upd.why_consent": _c("Tick the box first.", "safety"), "upd.why_typed": _c("Type the commit first.", "safety"),
-    "upd.why_current": _c("Already up to date.", "safety"), "upd.why_older": _c("Only an older version is offered.", "safety"),
+    "upd.why_current": _c("Already up to date.", "safety"), "upd.why_reload": _c("Reload the page first.", "safety"), "upd.why_older": _c("Only an older version is offered.", "safety"),
     "upd.src.app": _c("Desktop app"), "upd.src.manual": _c("Command line"), "upd.src.github-stable": _c("GitHub release"), "upd.src.github-main": _c("GitHub source"),
     "upd.src.rollback": _c("Roll back"),
     "upd.s.ok": _c("Updated"), "upd.s.refused": _c("Refused"), "upd.s.rolled_back": _c("Rolled back"), "upd.s.rollback_failed": _c("Rollback failed"),
@@ -7123,19 +7124,20 @@ PAGES.updates = async () => {
     const state = c ? (c.state === 'available' ? badge('accent', T('upd.new'), 'download') : c.state === 'current' ? badge('ok', T('upd.uptodate'), 'check') : c.state === 'older' ? badge('neutral', T('upd.older'), 'clock') : badge('info', T('upd.same'), 'info')) : null;
     const trust = c ? (c.mode === 'signed' ? tip(badge('ok', T('upd.signed'), 'shield-check'), TIP('upd.signed')) : tip(badge('warn', T('upd.unsigned'), 'triangle-alert'), TIP('upd.unsigned'))) : null;
     const chk = btn(T('upd.check'), {icon: 'refresh-cw', onclick: () => act(chk, async () => { const r = await api('POST', '/api/update/check', {channel: F.channel, ref: F.ref}); F.check = r.check; draw(); })});
-    const can = c && !running() && !c.blocked && (c.state === 'available' || c.state === 'same');
+    const can = c && !running() && !st.stale && !c.blocked && (c.state === 'available' || c.state === 'same');
     const why = whyLine(), go = btn(T('upd.now'), {kind: 'primary', icon: 'download', onclick: () => updateDialog(c)});
-    const goWhy = can ? null : !c ? T('upd.nocheck') : c.blocked ? c.blocked : running() ? T('upd.busy') : c.state === 'older' ? T('upd.why_older') : T('upd.why_current');
+    const goWhy = can ? null : !c ? T('upd.nocheck') : c.blocked ? c.blocked : running() ? T('upd.busy') : st.stale ? T('upd.why_reload') : c.state === 'older' ? T('upd.why_older') : T('upd.why_current');
     const rb = st.previous ? btn(T('upd.rollback'), {icon: 'undo-2', onclick: () => rollbackDialog()}) : null;
-    setOff(go, why, goWhy); if (rb) setOff(rb, why, running() ? T('upd.busy') : null, false);
-    if (!goWhy && running()) { why.hidden = false; why.replaceChildren(ic('info', 'sm'), T('upd.busy')); }
+    const rbWhy = running() ? T('upd.busy') : st.stale ? T('upd.why_reload') : null;
+    setOff(go, why, goWhy); if (rb) setOff(rb, why, rbWhy, false);
+    if (!goWhy && rbWhy) { why.hidden = false; why.replaceChildren(ic('info', 'sm'), rbWhy); }
     const notes = c && c.notes ? btn(T('upd.notes'), {size: 'sm', kind: 'ghost', icon: 'file-text', onclick: () => dialog(T('upd.notes'), {icon: 'file-text', wide: true, sub: (c.tag || c.commit.slice(0, 7)) + ' ' + (c.published || '')},
       () => h('pre', {class: 'code'}, c.notes), close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))])}) : null;
     top.replaceChildren(card(T('upd.plane'), 'download', h('div', {class: 'row'}, state, trust),
       h('dl', {class: 'kv'}, h('dt', {}, T('upd.installed')), h('dd', {class: 'mono'}, st.installed || '-'), h('dt', {}, T('upd.available')), h('dd', {class: 'mono'}, c ? c.version + (c.commit ? ' ' + c.commit.slice(0, 7) : '') : '-'),
         h('dt', {}, T('upd.channel')), h('dd', {}, seg, F.channel === 'main' ? field(T('upd.ref'), refIn) : null)),
       c && c.blocked ? banner('warn', c.blocked, '') : null,
-      h('div', {class: 'row'}, tip(chk, TIP('upd.check')), go, rb && !running() ? tip(rb, TIP('upd.rollback')) : rb, notes), why));
+      h('div', {class: 'row'}, tip(chk, TIP('upd.check')), go, rb && !rbWhy ? tip(rb, TIP('upd.rollback')) : rb, notes), why));
   }
   function updateDialog(c, force) {
     const need = c.mode === 'unsigned', typed = c.channel === 'main' ? c.commit.slice(0, 7) : '';
@@ -7167,7 +7169,7 @@ PAGES.updates = async () => {
     st.active = jid; draw();
     const body = h('div', {});
     live.replaceChildren(card(T('upd.plane'), 'refresh-cw', null, body));
-    watchJob(jid, body, () => { st.active = null; }, () => F.check && updateDialog(F.check, true));
+    watchJob(jid, body, j => { st.active = null; st.stale = j.state === 'ok'; draw(); }, () => F.check && updateDialog(F.check, true));
   }
   draw();
   const hist = cardFlush(T('upd.history'), 'clock', null, table(['upd.when', 'upd.from', 'upd.to', 'upd.source', 'upd.result'].map(k => T(k)),
