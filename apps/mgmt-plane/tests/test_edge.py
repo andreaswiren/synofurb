@@ -343,6 +343,8 @@ class DnsTests(Base):
         fx = Fx()
         self.addCleanup(fx.close)
         os.unlink(os.path.join(fx.fb.bin, "dig"))
+        real_which = fx.env.which
+        fx.env._which_fn = lambda name: None if name == "dig" else real_which(name)    # a real dig on the host (CI runners have one) must not be used
         E.update_settings(fx.env, {"secret": SECRET})
         dns = FakeDns({"_acme-challenge.example.org": E.cname_target(SECRET)})
         self.addCleanup(dns.close)
