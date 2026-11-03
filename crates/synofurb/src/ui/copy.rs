@@ -181,7 +181,7 @@ mod strings {
         INV_MANAGE: Button, "Manage", "Open this unit's page.", "", "";
         INV_CONNECT: Button, "Connect", "Select a unit first.", "", "";
         INV_TWIN: Label, "Twin", "Another unit of this model is on the network; check serials.", "first-install", "";
-        INV_EMPTY: Title, "No NAS found", "", "troubleshooting", "";
+        INV_EMPTY: Label, "No NAS found", "", "troubleshooting", "";
         INV_SCAN_AGAIN: Button, "Scan again", "", "", "";
         INV_ADD_TITLE: Dialog, "Add NAS", "", "", "Enter the address of a unit that discovery did not find.";
         INV_ADD_ADDR: Label, "Address", "", "", "";

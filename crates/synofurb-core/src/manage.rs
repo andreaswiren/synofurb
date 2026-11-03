@@ -48,6 +48,8 @@ const MGMT_FILES: &[(&str, bool, bool)] = &[
     // optional so a bundle from before add-ons still verifies
     ("synofurb_addons.py", false, false),
     ("addons.pack.json", false, false),
+    // certificates (lego) and the HAProxy front (docs/CERTIFICATES.md); optional like the add-on framework
+    ("synofurb_edge.py", false, false),
 ];
 
 const EMBEDDED: &[(&str, &str)] = &[
@@ -57,6 +59,7 @@ const EMBEDDED: &[(&str, &str)] = &[
     ("synofurb-mgmt.service", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/mgmt-plane/synofurb-mgmt.service"))),
     ("synofurb_addons.py", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/mgmt-plane/synofurb_addons.py"))),
     ("addons.pack.json", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/mgmt-plane/addons.pack.json"))),
+    ("synofurb_edge.py", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/mgmt-plane/synofurb_edge.py"))),
 ];
 
 /// Per-file size limit when reading a bundle directory.
@@ -1544,13 +1547,14 @@ if [ -d "$OPT" ]; then
   if [ -f "$UNIT" ]; then cp -p "$UNIT" "$PREV/unit.backup"; fi
 fi
 mkdir -p "$NEW" || fail stage "cannot create a staging folder"
-for f in synofurb_mgmt.py VERSION README.md synofurb-mgmt.service synofurb_addons.py addons.pack.json; do
+for f in synofurb_mgmt.py VERSION README.md synofurb-mgmt.service synofurb_addons.py addons.pack.json synofurb_edge.py; do
   if [ -f "$STAGE/$f" ]; then cp "$STAGE/$f" "$NEW/$f" || fail stage "could not copy $f"; fi
 done
 chmod 0755 "$NEW/synofurb_mgmt.py"; chmod 0644 "$NEW/VERSION" "$NEW/README.md"
 [ -f "$NEW/synofurb-mgmt.service" ] && chmod 0644 "$NEW/synofurb-mgmt.service"
 [ -f "$NEW/synofurb_addons.py" ] && chmod 0644 "$NEW/synofurb_addons.py"
 [ -f "$NEW/addons.pack.json" ] && chmod 0644 "$NEW/addons.pack.json"
+[ -f "$NEW/synofurb_edge.py" ] && chmod 0644 "$NEW/synofurb_edge.py"
 say stage ok "files staged"
 say swap start "putting the new files in place"
 [ -d "$OPT" ] && mv "$OPT" "$OPT.old"

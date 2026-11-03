@@ -402,7 +402,7 @@ pub mod fixtures {
         s.push_str("PV|/dev/md2|vg1\nPV|/dev/md3|vg1\n");
         s.push_str("LV|vg1|syno_vg_reserved_area|12582912\nLV|vg1|volume_1|17581000000000\nLV|vg1|volume_2|6410000000000\n");
         s.push_str("MNT|/dev/md0|/|ext4|2385000|1500000\n");
-        s.push_str("MNT|/dev/mapper/cachedev_0|/volume1|ext4|17170000000|9100000000\n");
+        s.push_str("MNT|/dev/mapper/cachedev_0|/volume1|ext4|17170000000|9300000000\n");
         s.push_str("MNT|/dev/mapper/cachedev_1|/volume2|btrfs|6260000000|2500000000\n");
         s.push_str("MNT|/dev/mapper/cachedev_1|/volume2/@docker|btrfs|6260000000|2500000000\n");
         s.push_str("MNT|synodedup-fused|/volume2/ActiveBackupforBusiness/ActiveBackupData|fuse.synodedup-fused|0|0\n");

@@ -61,6 +61,8 @@ const STATIC_FILES: &[(&str, &str)] = &[
     // the add-on framework and the packed add-on definitions (apps/mgmt-plane/addons/*), installed next to the management plane
     mgmt_asset!("mgmt/synofurb_addons.py", "synofurb_addons.py"),
     mgmt_asset!("mgmt/addons.pack.json", "addons.pack.json"),
+    // certificates (lego) and the HAProxy front
+    mgmt_asset!("mgmt/synofurb_edge.py", "synofurb_edge.py"),
 ];
 
 pub struct Payload {
@@ -248,6 +250,7 @@ mod tests {
             "mgmt/VERSION",
             "mgmt/synofurb_addons.py",
             "mgmt/addons.pack.json",
+            "mgmt/synofurb_edge.py",
             "files/etc/ssh/sshd_config.d/10-synofurb.conf",
         ] {
             assert!(names.iter().any(|n| n == need), "missing {need} in {names:?}");

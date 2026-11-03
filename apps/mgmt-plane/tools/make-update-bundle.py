@@ -3,7 +3,7 @@
 
     python3 tools/make-update-bundle.py OUT_DIR
 
-OUT_DIR gets synofurb_mgmt.py, synofurb_addons.py, addons.pack.json (the add-on definitions of addons/ as one file), VERSION, README.md,
+OUT_DIR gets synofurb_mgmt.py, synofurb_addons.py, addons.pack.json (the add-on definitions of addons/ as one file), synofurb_edge.py (certificates and the HAProxy front), VERSION, README.md,
 synofurb-mgmt.service and MANIFEST.sha256 (sha256sum format, every file listed).
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ import shutil
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FILES = ("synofurb_mgmt.py", "VERSION", "README.md", "synofurb-mgmt.service", "synofurb_addons.py", "addons.pack.json")
+FILES = ("synofurb_mgmt.py", "VERSION", "README.md", "synofurb-mgmt.service", "synofurb_addons.py", "addons.pack.json", "synofurb_edge.py")
 
 
 def build_bundle(out: str, root: str = ROOT) -> list[str]:

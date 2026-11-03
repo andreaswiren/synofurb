@@ -3,7 +3,7 @@
 #
 #   scripts/package-mgmt.sh [--out dist/release]
 #
-# Flat archive (extract straight into /opt/synofurb-mgmt):  synofurb_mgmt.py  synofurb-mgmt.service  README.md  VERSION  [synofurb_addons.py  addons.pack.json]
+# Flat archive (extract straight into /opt/synofurb-mgmt):  synofurb_mgmt.py  synofurb-mgmt.service  README.md  VERSION  [synofurb_addons.py  addons.pack.json  synofurb_edge.py]
 # Refuses to build when VERSION disagrees with the built-in `DEFAULT_VERSION = "..."` (or literal `VERSION = "..."`) in
 # synofurb_mgmt.py, so a release cannot report a different version than the one it ships under.
 # Reproducible: fixed mtimes (SOURCE_DATE_EPOCH, default 0), root ownership.
@@ -45,6 +45,9 @@ files = [("synofurb_mgmt.py", 0o755), ("synofurb-mgmt.service", 0o644), ("README
 # tools/make-update-bundle.py produce (the flat bundle cannot carry addons/<id>/*)
 if os.path.isfile(os.path.join(src, "synofurb_addons.py")):
     files += [("synofurb_addons.py", 0o644), ("addons.pack.json", 0o644)]
+# certificates (lego) and the HAProxy front: one module, optional like the add-ons
+if os.path.isfile(os.path.join(src, "synofurb_edge.py")):
+    files += [("synofurb_edge.py", 0o644)]
 sys.path.insert(0, src)
 raw = io.BytesIO()
 with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tf:

@@ -27,11 +27,37 @@ use synofurb_core::discovery::Found;
 
 /// Narrowest each data column may be, in rem (so it grows with the text size): model + radio (+ Twin), address, DSM version, status
 /// tag. "Found by" is the one flexible column: it takes what is left and ends in an ellipsis when it must.
-const MIN_REM: [f32; 4] = [9.0, 8.0, 5.6, 9.8];
-/// "Found by" also holds the "Added by you" chip, which cannot shrink.
-const FOUND_MIN_REM: f32 = 7.0;
+const MIN_REM: [f32; 4] = [10.3, 8.0, 5.4, 10.2];
+/// "Found by" is text ("udp \u{b7} mdns", "Added by you"): it ends in an ellipsis when it must.
+const FOUND_MIN_REM: f32 = 6.3;
 /// Width of the actions column (Check again, Remove: two 24 px icon buttons, a 2 px gap and 4 px padding). It exists only while a row has actions.
 pub const ACTIONS_PX: f32 = 60.0;
+
+/// Width the table's columns may use in a window `viewport` px wide: the page without its padding, minus the table's own border and a few
+/// px so that no rounding can push a column out (the old margin of 24 px left a gap at the right of the table at every size).
+pub fn table_avail(viewport: f32) -> f32 {
+    viewport - 2.0 * crate::ui::theme::layout::PAGE_PAD - 5.0
+}
+
+/// Test hook for `assets/tools/gui-walk.sh` (only active when `SYNOFURB_LAYOUT_DUMP=<file>` is set): an invisible element that fills the
+/// table box and writes where the table really is on screen and how wide each column is, so the walk can look for glyphs cut off at a
+/// column edge (the pixel check needs the column edges; the table draws no vertical rules in its rows).
+fn layout_dump_probe(widths: Vec<f32>) -> gpui_kit::Canvas<()> {
+    gpui_kit::canvas(
+        move |b, _, _| {
+            if let Some(path) = std::env::var_os("SYNOFURB_LAYOUT_DUMP") {
+                let cols = widths.iter().map(|w| format!("{w:.0}")).collect::<Vec<_>>().join(" ");
+                let _ = std::fs::write(
+                    path,
+                    format!("table {:.0} {:.0} {:.0} {:.0}\ncols {cols}\n", f32::from(b.origin.x), f32::from(b.origin.y), f32::from(b.size.width), f32::from(b.size.height)),
+                );
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full()
+}
 
 /// Number of columns of the Find table: the row actions get a column only while an added address is in the list.
 pub fn column_count(has_actions: bool) -> usize {
@@ -200,8 +226,10 @@ impl TableDelegate for InventoryTable {
                 .when(r.twin, |d| d.child(kit::tag(&p, Tone::Warn, Some(role::WARN), copy::INV_TWIN.short)))
                 .into_any_element(),
             1 => cell.child(kit::mono(cx, r.address_text()).min_w_0().truncate()).into_any_element(),
-            2 => cell.child(div().text_sm().min_w_0().truncate().child(r.dsm.clone())).into_any_element(),
-            3 if r.added => cell.child(kit::chip(&p, copy::INV_ADDED.short)).into_any_element(),
+            2 => cell.child(div().text_xs().min_w_0().truncate().child(r.dsm.clone())).into_any_element(),
+            3 if r.added => cell
+                .child(div().min_w_0().text_xs().text_color(cx.theme().muted_foreground).truncate().child(copy::INV_ADDED.short))
+                .into_any_element(),
             3 => cell
                 .child(div().min_w_0().text_xs().text_color(cx.theme().muted_foreground).truncate().child(r.found.clone()))
                 .into_any_element(),
@@ -343,7 +371,7 @@ impl App {
         let n_rows = rows.len();
         let weak = cx.weak_entity();
         let scale = self.settings.text_scale.factor();
-        let avail = f32::from(_window.viewport_size().width) - 2.0 * crate::ui::theme::layout::PAGE_PAD - 24.0;
+        let avail = table_avail(f32::from(_window.viewport_size().width));
         self.inv_table.update(cx, |t, cx| {
             t.delegate_mut().set_app(weak);
             t.delegate_mut().set_selected(sel_ix);
@@ -395,16 +423,19 @@ impl App {
                 );
 
         let converted: Vec<Found> = self.inv.devices.iter().filter(|d| d.synofurb_debian).cloned().collect();
+        let widths = column_widths(avail, scale, self.inv_table.read(cx).delegate().has_actions());
         let table = |cx: &mut Context<App>| -> gpui_kit::AnyElement {
             let h = 36.0 * (n_rows.min(10) as f32 + 1.0) + 8.0;
             div()
                 .w_full()
                 .h(px(h))
+                .relative()
                 .border_1()
                 .border_color(cx.theme().border)
                 .rounded(cx.theme().radius)
                 .overflow_hidden()
                 .child(DataTable::new(&self.inv_table).stripe(false))
+                .when(std::env::var_os("SYNOFURB_LAYOUT_DUMP").is_some(), |d| d.child(layout_dump_probe(widths.clone())))
                 .into_any_element()
         };
         let units_ui = if n_rows == 0 && !scanning {
@@ -674,7 +705,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACTIONS_PX, column_count, column_widths};
+    use super::{ACTIONS_PX, column_count, column_widths, table_avail};
 
     #[test]
     fn the_find_columns_always_fit_the_table() {
@@ -693,12 +724,12 @@ mod tests {
 
     /// UI review 0.2.3 B1: at Largest text in the smallest window the data columns must keep what their content needs. The widths
     /// below are the ones measured on the 960 x 640 captures at 130 % (the longest demo cell of each column, padding included):
-    /// "Unknown device" with its radio, a 15-character address, "7.2.2-72806", "Community-reported" and the "Added by you" chip.
+    /// "Unknown device" with its radio, a 15-character address, "7.2.2-72806", "Added by you" and the "Community-reported" tag.
     #[test]
     fn at_largest_text_in_the_smallest_window_no_data_column_is_narrower_than_its_content() {
-        let avail = 960.0 - 2.0 * 24.0 - 24.0;
+        let avail = table_avail(960.0);
         let w = column_widths(avail, 1.3, true);
-        let need = [186.0, 160.0, 116.0, 146.0, 200.0];
+        let need = [214.0, 166.0, 110.0, 130.0, 210.0];
         for (i, n) in need.iter().enumerate() {
             assert!(w[i] >= *n, "column {i} is {} px, its content needs {n}: {w:?}", w[i]);
         }

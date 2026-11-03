@@ -388,7 +388,7 @@ fn the_embedded_management_plane_is_complete_and_consistent() {
     for f in &b.files {
         assert!(f.name.len() <= 64 && f.name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')), "{}", f.name);
         assert!(
-            ["synofurb_mgmt.py", "VERSION", "README.md", "synofurb-mgmt.service", "synofurb_addons.py", "addons.pack.json"]
+            ["synofurb_mgmt.py", "VERSION", "README.md", "synofurb-mgmt.service", "synofurb_addons.py", "addons.pack.json", "synofurb_edge.py"]
                 .contains(&f.name.as_str())
         );
     }

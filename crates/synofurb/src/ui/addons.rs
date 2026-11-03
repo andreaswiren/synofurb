@@ -543,11 +543,11 @@ mod tests {
     #[test]
     fn the_info_button_carries_everything_the_tags_used_to() {
         let l = about_lines(addons::entry("portainer").unwrap()).join("\n");
-        assert!(l.contains("Needs Docker") && l.contains("Internet") && l.contains("Controls Docker"), "{l}");
+        assert!(l.contains("Needs Docker") && l.contains("downloaded when the NAS first starts") && l.contains("Controls Docker"), "{l}");
         assert!(l.contains("Download about 300 MB, about 2 min"), "{l}");
         let f = about_lines(addons::entry("frigate").unwrap()).join("\n");
         assert!(f.contains("3.0 GB") && f.contains("at least 50 GiB free on the data volume"), "{f}");
-        assert!(about_lines(addons::entry("docker").unwrap()).iter().all(|x| !x.contains("Internet")));
+        assert!(about_lines(addons::entry("docker").unwrap()).iter().all(|x| !x.contains("downloaded when")));
     }
 
     #[test]

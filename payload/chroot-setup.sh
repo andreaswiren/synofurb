@@ -262,6 +262,7 @@ if [ "$ENABLE_MGMT" = 1 ]; then
   install -m 644 "$P/mgmt/VERSION" /opt/synofurb-mgmt/VERSION
   [ -f "$P/mgmt/synofurb_addons.py" ] && install -m 644 "$P/mgmt/synofurb_addons.py" /opt/synofurb-mgmt/synofurb_addons.py
   [ -f "$P/mgmt/addons.pack.json" ] && install -m 644 "$P/mgmt/addons.pack.json" /opt/synofurb-mgmt/addons.pack.json
+  [ -f "$P/mgmt/synofurb_edge.py" ] && install -m 644 "$P/mgmt/synofurb_edge.py" /opt/synofurb-mgmt/synofurb_edge.py
   install -m 644 "$P/mgmt/synofurb-mgmt.service" /etc/systemd/system/synofurb-mgmt.service
   systemctl enable synofurb-mgmt.service || true
 fi

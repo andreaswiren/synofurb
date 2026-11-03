@@ -182,7 +182,7 @@ static CATALOG: &[CatalogEntry] = &[
         first_use: "",
         settings: &[SettingSpec {
             key: "plex_claim",
-            label: "Claim token (optional)",
+            label: "Claim token (leave empty)",
             kind: SettingKind::Secret { prefix: "claim-", min: 14, max: 70 },
             default: "",
             help: CLAIM_HELP,
