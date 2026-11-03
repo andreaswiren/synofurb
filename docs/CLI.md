@@ -130,15 +130,36 @@ The boot agent has a new key at every boot; it is reached with a per-unit client
 ### scan, inventory
 
 ```sh
-synofurb-cli scan [--timeout SECONDS] [--no-sweep] [--json | --ndjson] [--all] [--no-save]
+synofurb-cli scan [--network CIDR|INTERFACE|ID]... [--all-networks] [--timeout SECONDS] [--no-sweep] [--json | --ndjson] [--all] [--no-save]
+synofurb-cli scan --list-networks [--json]
 synofurb-cli inventory list [--json] [--all]
 synofurb-cli inventory add --ip ADDRESS [--name NAME]
 synofurb-cli inventory forget (PATTERN | --all)       # PATTERN: address, MAC, serial, model or host name
 ```
 
-`scan` runs the app's discovery methods at once (Synology Assistant broadcast, mDNS, SSDP and a /24 port sweep unless `--no-sweep`), prints units as they appear when stderr is a
-terminal, then a summary, and merges the result into the saved inventory (`--no-save` to skip). `--json` prints `{"devices":[...]}` at the end; `--ndjson` one device object per
-line as it is found (the last line per unit is the most complete). `-v` lists which methods worked. `--all` also lists hosts not identified as Synology.
+`scan` runs the app's discovery methods at once (Synology Assistant broadcast, mDNS, SSDP and a port sweep of the DSM port unless `--no-sweep`) **on the selected networks only**,
+prints units as they appear when stderr is a terminal, then a summary, and merges the result into the saved inventory (`--no-save` to skip). `--json` prints
+`{"devices":[...],"networks":[...],"errors":[...]}` at the end; `--ndjson` prints one JSON event per line (below). `-v` lists which methods worked. `--all` also lists hosts not identified as Synology.
+
+**Which networks.** By default only the real LAN networks of this computer are scanned; VPN (Tailscale and other 100.64.0.0/10), virtual (Docker, WSL, Hyper-V, VMware, VirtualBox)
+and link-local (169.254.x.x) networks are listed by `--list-networks` but skipped. The first lines of a scan say what is scanned and what is not ("Not scanned: ..."). Choose the networks yourself:
+
+```sh
+synofurb-cli scan --list-networks                       # [x] marks the default selection; --json for scripts
+synofurb-cli scan --network 192.168.69.0/24             # a network of this computer, or any other (custom) network
+synofurb-cli scan --network eth0 --network 10.0.5.0/24  # an interface name (all its networks), repeatable
+synofurb-cli scan --network "eth0|192.168.1.5/24"       # an id from --list-networks, or one of this computer's addresses
+synofurb-cli scan --all-networks                        # everything, VPN and virtual included
+```
+
+A custom network may be at most a `/20` (4094 addresses); a larger one is refused with exit 2. One of this computer's own networks larger than a `/20` is swept in the `/24` around
+its address. The port sweep never probes this computer's own addresses. A custom network this computer is not attached to is probed by the port sweep and the UDP query only (multicast
+does not cross routers), and mDNS/SSDP report `skipped` for it. Failures are reported per method and network (a warning in text mode, `error` in the events, `errors` in `--json`), not swallowed.
+
+**`--ndjson` events** (stdout, one object per line, each with an `event` tag): `started` (`networks[]`, `methods[]`, `total_hosts`), `method_started`, `method_progress` (`done`/`total`:
+addresses for `probe_sweep`, milliseconds for the listening methods), `method_finished` (`found`, `error`), `skipped` (`reason`), `found` (the device object plus `"event":"found"`; the
+last one per unit is the most complete) and `finished` (`found_total`, `elapsed_ms`). `method` is `synology_udp`, `mdns`, `ssdp` or `probe_sweep`; `network` is the network's `key`
+(its id, or the CIDR for a custom one).
 
 ### inspect
 
@@ -318,7 +339,9 @@ synofurb-cli self-update [--check [--json]] [--channel stable|prerelease] [--all
 
 All `--json` documents carry `"schema": 1` and are printed with stable keys; new keys may be added, existing ones keep their meaning.
 
-**`scan --json`, `inventory list --json`**: `{"devices":[{"ips":["192.168.1.20"],"mac":"00:11:32:..","hostname":"","model":"DS923+","serial":"","dsm_version":"","platform":"","http_port":5000,"https_port":5001,"synology":true,"synofurb_debian":false,"sources":["mdns","udp"],"last_seen":"2026-11-01 12:00:00"}]}`
+**`scan --json`, `inventory list --json`**: (`scan --json` adds `networks` and `errors`) `{"devices":[{"ips":["192.168.1.20"],"mac":"00:11:32:..","hostname":"","model":"DS923+","serial":"","dsm_version":"","platform":"","http_port":5000,"https_port":5001,"synology":true,"synofurb_debian":false,"sources":["mdns","udp"],"last_seen":"2026-11-01 12:00:00"}]}`
+
+**`scan --list-networks --json`**: `{"networks":[{"id":"eth0|192.168.1.5/24","interface":"eth0","ip":"192.168.1.5","prefix":24,"cidr":"192.168.1.0/24","broadcast":"192.168.1.255","kind":"lan","recommended":true,"sweep_hosts":253}]}`; `kind` is `lan`, `vpn`, `virtual`, `link_local` or `other`.
 
 **`compat MODEL --json`**: `{"schema":1,"query":"DS923+","found":true,"status":"community","status_label":"Community-reported","explanation":"...","blocking":false,"entry":{model, series, platform, cpu, arch, boot, status, evidence[], notes, ...}}`
 (`found:false` and `entry:null` for unlisted models, status `untested`). Without a model: `{"schema":1,"models":272,"updated":"2026-11-01","origin":"embedded|cache","by_status":{"verified":0,"community":1,"untested":202,"known-issues":0,"unsupported":69}}`.
