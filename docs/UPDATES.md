@@ -7,6 +7,8 @@ this only for releases that are **signed by the project key**, and it never inst
 is refused with an explanation, unless you explicitly opt in to the [unsigned path](#the-unsigned-path-opt-in-placeholder-key-only)
 (SHA-256 only, clearly labelled).** Nothing is silently skipped.
 
+The management plane on a converted unit updates itself with the same model (SHA-256 of the same release plus an explicit consent while the key is a placeholder, signatures mandatory afterwards): see [MANAGE.md](MANAGE.md#updating-the-management-plane-itself-web-ui-and-github).
+
 ## The unsigned path (opt-in, placeholder key only)
 
 The project has not set up a signing key yet, and its releases carry `SHA256SUMS` but no `SHA256SUMS.minisig`. So that updates can work

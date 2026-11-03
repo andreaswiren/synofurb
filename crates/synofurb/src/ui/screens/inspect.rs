@@ -9,7 +9,7 @@ use crate::ui::icons::{self, role};
 use crate::ui::kit;
 use crate::ui::render::Page;
 use crate::ui::state::Screen;
-use crate::ui::theme::Themed;
+use crate::ui::theme::{Themed, Tone};
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -17,7 +17,7 @@ use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, Entity, IntoElement, Window, px};
+use gpui_kit::{AnyElement, Context, Entity, IntoElement, Window, div, px};
 use synofurb_core::model::{ArrayRole, Firmware, SECTOR, human_bytes};
 
 fn label(id: &'static str, item: &'static Item, app: &Entity<App>) -> AnyElement {
@@ -61,6 +61,8 @@ impl App {
             .into_any_element();
         let pin = self.host_pin(cx);
         let facts = DescriptionList::horizontal()
+            // in rem: a label with its info icon is wider than the stock 120 px at bigger text and ran into the value
+            .label_width(gpui_kit::rems(8.0))
             .columns(2)
             .bordered(false)
             .child(
@@ -79,8 +81,9 @@ impl App {
                     .value(kit::mono_sm(cx, console).into_any_element()),
             )
             .child(
-                gpui_kit::component::description_list::DescriptionItem::new(label("l-backups", &copy::INSPECT_BACKUPS, &app))
-                    .value(kit::chip(&p, "not checked").into_any_element()),
+                gpui_kit::component::description_list::DescriptionItem::new(label("l-backups", &copy::INSPECT_BACKUPS, &app)).value(
+                    h_flex().child(kit::tag(&p, Tone::Neutral, Some(role::INFO), copy::INSPECT_NOT_CHECKED.short)).into_any_element(),
+                ),
             )
             .child(
                 gpui_kit::component::description_list::DescriptionItem::new(label("l-hostkey", &copy::HK_PIN, &app)).value(match pin {
@@ -91,7 +94,7 @@ impl App {
                         .child(kit::mono_sm(cx, fp.clone()).min_w_0().truncate())
                         .child(gpui_kit::component::clipboard::Clipboard::new("hk-pin-copy").value(fp).tooltip("Copy"))
                         .into_any_element(),
-                    None => kit::chip(&p, copy::HK_NOT_PINNED.short).into_any_element(),
+                    None => h_flex().child(kit::chip(&p, copy::HK_NOT_PINNED.short)).into_any_element(),
                 }),
             );
 
@@ -102,16 +105,65 @@ impl App {
                         .child(TableHead::new().child(copy::INSPECT_DISK.short))
                         .child(TableHead::new().child(copy::INSPECT_COL_MODEL.short))
                         .child(TableHead::new().child(copy::INSPECT_COL_SERIAL.short))
+                        .child(TableHead::new().child(copy::INSPECT_COL_USE.short))
                         .child(TableHead::new().text_right().child(copy::INSPECT_COL_SIZE.short)),
                 ),
             )
             .child(TableBody::new().children(f.disks.iter().map(|d| {
+                // every disk says whether it is an install target, or why it is not (never silently left out)
+                let use_tag = match d.exclusion() {
+                    // not green: a disk that is about to be erased must not read as "safe" (Confirm shows the same disks in red)
+                    None => kit::tag(&p, Tone::Neutral, Some(role::DISK), copy::INSPECT_USE_TARGET.short),
+                    Some(e) => kit::tag(&p, Tone::Neutral, Some(role::INFO), copy::INSPECT_USE_NOT.fmt(&[&e.reason_inline()])),
+                };
                 TableRow::new()
                     .child(TableCell::new().child(kit::mono(cx, d.name.clone())))
                     .child(TableCell::new().child(d.model.clone()))
                     .child(TableCell::new().child(kit::mono_sm(cx, d.serial.clone())))
+                    .child(TableCell::new().child(use_tag))
                     .child(TableCell::new().text_right().child(kit::mono(cx, size_2dp(d.size_bytes()))))
             })));
+
+        // DSM's volumes as the user knows them: /volume1, /volume2 with filesystem, size, use and what backs them.
+        let vols = f.volumes();
+        let volumes = if vols.is_empty() {
+            div().child(copy::INSPECT_NO_VOLUMES.short).into_any_element()
+        } else {
+            Table::new()
+                .child(
+                    TableHeader::new().child(
+                        TableRow::new()
+                            .child(TableHead::new().child(copy::INSPECT_COL_VOLUME.short))
+                            .child(TableHead::new().child(copy::INSPECT_COL_FS.short))
+                            .child(TableHead::new().text_right().child(copy::INSPECT_COL_SIZE.short))
+                            .child(TableHead::new().text_right().child(copy::INSPECT_COL_USED.short))
+                            .child(TableHead::new().child(copy::INSPECT_COL_BACKED.short)),
+                    ),
+                )
+                .child(TableBody::new().children(vols.iter().map(|v| {
+                    let mut levels = v.levels.iter().map(|l| crate::ui::facts::md_level_label(l)).collect::<Vec<_>>().join(" + ");
+                    // several arrays under one volume group is what Synology calls SHR: say the word people know
+                    if v.arrays.len() > 1 && !levels.is_empty() {
+                        levels.push_str(" (SHR-like)");
+                    }
+                    let backed = if v.disks.is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        format!("{} \u{00b7} {}", if levels.is_empty() { "-".to_string() } else { levels }, v.disks.join(" "))
+                    };
+                    TableRow::new()
+                        .child(TableCell::new().child(kit::strong(v.name.clone())))
+                        .child(TableCell::new().child(v.fstype.clone()))
+                        .child(TableCell::new().text_right().child(kit::mono(cx, size_2dp(v.size_bytes()))))
+                        .child(
+                            TableCell::new()
+                                .text_right()
+                                .child(kit::mono(cx, format!("{} ({}%)", size_2dp(v.used_bytes()), v.used_percent()))),
+                        )
+                        .child(TableCell::new().child(backed))
+                })))
+                .into_any_element()
+        };
 
         let arrays = Table::new()
             .child(
@@ -120,6 +172,7 @@ impl App {
                         .child(TableHead::new().child("md"))
                         .child(TableHead::new().child("RAID"))
                         .child(TableHead::new().child(copy::INSPECT_COL_USE.short))
+                        .child(TableHead::new().child(copy::INSPECT_COL_STATUS.short))
                         .child(TableHead::new().text_right().child(copy::INSPECT_COL_SIZE.short)),
                 ),
             )
@@ -131,8 +184,9 @@ impl App {
                 };
                 TableRow::new()
                     .child(TableCell::new().child(kit::mono(cx, a.name.clone())))
-                    .child(TableCell::new().child(a.level.to_uppercase()))
+                    .child(TableCell::new().child(crate::ui::facts::md_level_label(&a.level)))
                     .child(TableCell::new().child(role_text))
+                    .child(TableCell::new().child(a.health_note().unwrap_or_else(|| "OK".to_string())))
                     .child(TableCell::new().text_right().child(kit::mono(cx, size_2dp(a.sectors * SECTOR))))
             })));
         let layout = v_flex().gap(px(4.0)).children(f.disks.iter().map(|d| {
@@ -143,7 +197,8 @@ impl App {
         let accordion = Accordion::new("inspect-acc")
             .multiple(true)
             .bordered(true)
-            .item(|i| i.title(h_flex().gap(px(2.0)).items_center().child(copy::INSPECT_VOLUMES.short)).child(arrays))
+            .item(|i| i.open(true).title(h_flex().gap(px(2.0)).items_center().child(copy::INSPECT_VOLUMES.short)).child(volumes))
+            .item(|i| i.title(copy::INSPECT_ARRAYS.short).child(arrays))
             .item(|i| i.title(copy::INSPECT_LAYOUT.short).child(layout));
 
         let mut body = v_flex().w_full().gap(px(16.0));
@@ -154,7 +209,14 @@ impl App {
         if f.candidate_disks().is_empty() {
             body = body.child(Alert::error("no-disks", "No disks visible").icon(icons::icon(role::ERR)));
         }
-        body = body.child(facts).child(disks).child(accordion);
+        for (i, a) in f.busy_arrays().into_iter().enumerate() {
+            if let Some(note) = a.health_note() {
+                body = body.child(
+                    Alert::warning(("busy-array", i), format!("{} is {note}. {}", a.name, a.advice())).icon(icons::icon(role::WARN)),
+                );
+            }
+        }
+        body = body.child(facts).child(disks).child(kit::caption(cx, copy::INSPECT_ERASE_NOTE.short)).child(accordion);
         let blocked = verdict.blocking || f.candidate_disks().is_empty();
         Page::new(copy::INSPECT_TITLE.short, body)
             .subtitle(copy::INSPECT_SUB.short)

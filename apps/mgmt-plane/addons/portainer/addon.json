@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "id": "portainer",
+  "name": "Portainer",
+  "version": "1",
+  "summary": "Web page to manage Docker containers, images, volumes and networks.",
+  "category": "system",
+  "icon": "container",
+  "homepage": "https://docs.portainer.io/",
+  "kind": "compose",
+  "requires": ["docker"],
+  "web": { "port": 9443, "scheme": "https", "path": "/", "hostname_hint": "portainer" },
+  "ports": [
+    { "host": 9443, "container": 9443, "proto": "tcp", "label": "Web UI (self-signed certificate)" }
+  ],
+  "settings": [],
+  "storage": [],
+  "devices": [],
+  "privileges": ["docker-socket"],
+  "compose": "compose.yml.tmpl",
+  "files": [],
+  "healthcheck": { "type": "http", "url": "https://127.0.0.1:9443/api/system/status", "timeout": 180 },
+  "post_install": "Open https://<this NAS>:9443 within 5 minutes and create the administrator account. Portainer locks itself for safety if nobody does; restart the add-on to unlock it. The browser warns about the self-signed certificate. Portainer controls Docker through its socket, which is the same as root on this unit: use a strong password."
+}

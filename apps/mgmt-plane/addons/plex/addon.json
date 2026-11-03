@@ -1,0 +1,158 @@
+{
+  "schema": 1,
+  "id": "plex",
+  "name": "Plex Media Server",
+  "version": "1",
+  "summary": "Stream your movies, series and music to TVs, phones and browsers. Media folders on the data volume.",
+  "category": "media",
+  "icon": "play",
+  "homepage": "https://github.com/plexinc/pms-docker",
+  "kind": "compose",
+  "requires": [
+    "docker"
+  ],
+  "web": {
+    "port": 32400,
+    "scheme": "http",
+    "path": "/web",
+    "hostname_hint": "plex"
+  },
+  "ports": [
+    {
+      "host": 32400,
+      "container": 32400,
+      "proto": "tcp",
+      "label": "Web UI and apps"
+    },
+    {
+      "host": 8324,
+      "container": 8324,
+      "proto": "tcp",
+      "label": "Plex Companion"
+    },
+    {
+      "host": 32469,
+      "container": 32469,
+      "proto": "tcp",
+      "label": "DLNA"
+    },
+    {
+      "host": 1900,
+      "container": 1900,
+      "proto": "udp",
+      "label": "DLNA discovery"
+    },
+    {
+      "host": 32410,
+      "container": 32410,
+      "proto": "udp",
+      "label": "Network discovery (GDM)"
+    },
+    {
+      "host": 32412,
+      "container": 32412,
+      "proto": "udp",
+      "label": "Network discovery (GDM)"
+    },
+    {
+      "host": 32413,
+      "container": 32413,
+      "proto": "udp",
+      "label": "Network discovery (GDM)"
+    },
+    {
+      "host": 32414,
+      "container": 32414,
+      "proto": "udp",
+      "label": "Network discovery (GDM)"
+    }
+  ],
+  "settings": [
+    {
+      "key": "plex_claim",
+      "label": "Claim token (optional)",
+      "type": "secret",
+      "default": "",
+      "pattern": "^claim-[A-Za-z0-9_-]{8,64}$",
+      "help": "From https://www.plex.tv/claim, valid for 4 minutes, used only the first time the server starts. Leave empty to claim the server later in the browser."
+    },
+    {
+      "key": "network",
+      "label": "Network mode",
+      "type": "choice",
+      "default": "host",
+      "choices": [
+        {
+          "value": "host",
+          "label": "Host network (recommended)",
+          "vars": {
+            "NETWORK_BLOCK": "    network_mode: host\n"
+          }
+        },
+        {
+          "value": "bridge",
+          "label": "Bridge with published ports",
+          "vars": {
+            "NETWORK_BLOCK": "    ports:\n      - \"32400:32400/tcp\"\n      - \"8324:8324/tcp\"\n      - \"32469:32469/tcp\"\n      - \"1900:1900/udp\"\n      - \"32410:32410/udp\"\n      - \"32412:32412/udp\"\n      - \"32413:32413/udp\"\n      - \"32414:32414/udp\"\n"
+          }
+        }
+      ],
+      "help": "Host network gives Plex the NAS's own network address: LAN discovery (GDM, DLNA) works and no port needs mapping, but the container is not isolated from the NAS's network. Bridge keeps Plex isolated and publishes only its ports; discovery may not work and the address below may be needed."
+    },
+    {
+      "key": "advertise_url",
+      "label": "Address clients should use (bridge only)",
+      "type": "string",
+      "default": "",
+      "pattern": "^(https?://[A-Za-z0-9._:-]+/?)?$",
+      "help": "For example http://192.168.1.10:32400/. Only used with the bridge network mode; leave empty with host network."
+    },
+    {
+      "key": "media_dir",
+      "label": "Media folder",
+      "type": "path",
+      "default": "/srv/data/media",
+      "required": true,
+      "help": "Folder on the data volume that holds your libraries (for example Movies, Series, Music subfolders). It appears as /data inside Plex. It must exist."
+    },
+    {
+      "key": "media_access",
+      "label": "Media access",
+      "type": "choice",
+      "default": "ro",
+      "choices": [
+        { "value": "ro", "label": "Read only (safe)" },
+        { "value": "rw", "label": "Read and write" }
+      ],
+      "help": "ro: Plex can only read your media (safe). rw: Plex may also delete files and write sidecar files."
+    }
+  ],
+  "storage": [
+    {
+      "key": "transcode",
+      "label": "Transcoder temporary files",
+      "path": "/srv/data/addons/plex/transcode",
+      "bulk": true,
+      "min_free_gib": 20
+    }
+  ],
+  "devices": [
+    {
+      "id": "dri",
+      "label": "Intel Quick Sync (hardware transcoding, needs Plex Pass)",
+      "host": "/dev/dri",
+      "optional": true,
+      "detect": "path:/dev/dri/renderD128"
+    }
+  ],
+  "privileges": [
+    "host-network"
+  ],
+  "compose": "compose.yml.tmpl",
+  "files": [],
+  "healthcheck": {
+    "type": "http",
+    "url": "http://127.0.0.1:32400/identity"
+  },
+  "post_install": "First start: if you entered a claim token, the server is linked to your Plex account when it first starts. The token is valid for only 4 minutes and the image is downloaded first, so get it (https://www.plex.tv/claim) right before you install, and expect that on a slow connection it may already have expired. The token is optional: without it, open http://<this NAS>:32400/web from a computer in the same network and sign in to claim the server there (with bridge networking or from another subnet, use an SSH tunnel: ssh <user>@<NAS> -L 32400:<NAS address>:32400 -N, then open http://localhost:32400/web). Then add libraries from the media folder (shown as /data). Network: host mode (default) shows Plex on the NAS's own address so LAN discovery (GDM, DLNA) works; it is the less isolated choice. Hardware transcoding needs a Plex Pass and the Intel Quick Sync device switched on here; then enable it in Plex under Settings > Transcoder. Library metadata is kept in /srv/addons/plex/config on the system volume and can grow to tens of GB for large libraries; transcoder files go to /srv/data/addons/plex/transcode."
+}

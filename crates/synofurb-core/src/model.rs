@@ -195,6 +195,103 @@ pub struct Disk {
     pub removable: bool,
     pub table: PartTable,
     pub parts: Vec<Part>,
+    /// How the disk is attached (from its sysfs device path). Old saved facts have no value: `Unknown`.
+    #[serde(default)]
+    pub transport: Transport,
+    /// `readlink -f /sys/block/<name>/device` on the unit (diagnostics; empty when not collected).
+    #[serde(default)]
+    pub device_path: String,
+}
+
+/// How a disk is attached to the unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Transport {
+    #[default]
+    Unknown,
+    Sata,
+    Sas,
+    Nvme,
+    Usb,
+    Mmc,
+    Virtual,
+}
+
+impl Transport {
+    /// Classify a resolved sysfs device path such as `/sys/devices/pci0000:00/0000:00:12.0/ata1/host0/target0:0:0/0:0:0:0`.
+    pub fn from_sysfs_path(path: &str) -> Transport {
+        let p = path.to_ascii_lowercase();
+        if p.contains("/usb") {
+            Transport::Usb
+        } else if p.contains("/mmc") {
+            Transport::Mmc
+        } else if p.contains("/nvme") {
+            Transport::Nvme
+        } else if p.contains("/virtio") || p.contains("/vmbus") || p.contains("/xen") {
+            Transport::Virtual
+        } else if p.contains("/ata") {
+            Transport::Sata
+        } else if p.contains("/port-") || p.contains("/sas") || p.contains("/end_device") {
+            Transport::Sas
+        } else {
+            Transport::Unknown
+        }
+    }
+    pub fn label(&self) -> &'static str {
+        match self {
+            Transport::Unknown => "unknown",
+            Transport::Sata => "SATA",
+            Transport::Sas => "SAS",
+            Transport::Nvme => "NVMe",
+            Transport::Usb => "USB",
+            Transport::Mmc => "memory card",
+            Transport::Virtual => "virtual",
+        }
+    }
+}
+
+/// Why a disk is not an install target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Exclusion {
+    /// Synology's internal boot flash module (`synoboot`).
+    BootFlash,
+    /// Attached over USB (or a memory card).
+    Usb,
+    /// Reports itself as removable and its transport is unknown: not touched unless the transport proves it is internal.
+    Removable,
+    /// Smaller than 8 GiB.
+    TooSmall,
+}
+
+/// Make the first word of a reason start in lower case for use inside a sentence, but leave acronyms and units alone:
+/// `Boot flash` -> `boot flash`, `Under 8 GiB` -> `under 8 GiB`, `USB disk` -> `USB disk` (a plain `to_lowercase` gives `usb disk`).
+pub fn lower_first(s: &str) -> String {
+    let first = s.split(' ').next().unwrap_or("");
+    let acronym = first.chars().count() > 1 && first.chars().skip(1).any(|c| c.is_uppercase());
+    if acronym {
+        return s.to_string();
+    }
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+impl Exclusion {
+    /// [`Exclusion::reason`] ready to sit inside a sentence ("usb" stays "USB", "GiB" stays "GiB").
+    pub fn reason_inline(&self) -> String {
+        lower_first(self.reason())
+    }
+
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Exclusion::BootFlash => "Boot flash",
+            Exclusion::Usb => "USB disk",
+            Exclusion::Removable => "Removable, unknown port",
+            Exclusion::TooSmall => "Under 8 GiB",
+        }
+    }
 }
 
 impl Disk {
@@ -204,9 +301,25 @@ impl Disk {
     pub fn human_size(&self) -> String {
         human_bytes(self.size_bytes())
     }
-    /// Internal flash modules (Synology `synoboot`) and USB sticks are never install targets.
+    /// Why this disk is not an install target (None = it is one). Internal flash modules (Synology `synoboot`) and USB sticks
+    /// never are. The kernel's `removable` flag alone does not exclude a disk: some Synology bays (for example the ones behind an
+    /// add-in SATA controller on a DS918+) report `removable=1` although they hold ordinary internal disks, so a removable disk
+    /// on an internal transport (SATA, SAS, NVMe) stays a target; only an unknown transport plus `removable` keeps it out.
+    pub fn exclusion(&self) -> Option<Exclusion> {
+        if self.name.starts_with("synoboot") {
+            Some(Exclusion::BootFlash)
+        } else if matches!(self.transport, Transport::Usb | Transport::Mmc) {
+            Some(Exclusion::Usb)
+        } else if self.removable && !matches!(self.transport, Transport::Sata | Transport::Sas | Transport::Nvme | Transport::Virtual) {
+            Some(Exclusion::Removable)
+        } else if self.sectors * SECTOR < 8 * GIB {
+            Some(Exclusion::TooSmall)
+        } else {
+            None
+        }
+    }
     pub fn is_candidate(&self) -> bool {
-        !self.removable && self.sectors * SECTOR >= 8 * GIB && !self.name.starts_with("synoboot")
+        self.exclusion().is_none()
     }
     pub fn part(&self, number: u32) -> Option<&Part> {
         self.parts.iter().find(|p| p.number == number)
@@ -247,6 +360,60 @@ pub struct MdArray {
     pub role: ArrayRole,
     /// LVM volume group living on this array, if any (e.g. `vg1000`).
     pub vg: Option<String>,
+    /// `md/sync_action` (`idle`, `resync`, `recover`, `check`, `reshape`, ...); empty when not collected.
+    #[serde(default)]
+    pub sync_action: String,
+    /// Progress of a running sync in tenths of a percent (0..=1000), when one is running.
+    #[serde(default)]
+    pub sync_permille: Option<u32>,
+    /// `md/degraded`: number of missing members (0 = complete).
+    #[serde(default)]
+    pub degraded: u32,
+}
+
+impl MdArray {
+    /// A sync, rebuild or reshape is running, or members are missing: the array is not fully redundant right now.
+    pub fn is_busy_or_degraded(&self) -> bool {
+        self.degraded > 0 || (!self.sync_action.is_empty() && self.sync_action != "idle")
+    }
+    /// Does what is running (or missing) mean the data is not fully protected right now? True for a resync, a rebuild, a
+    /// reshape and missing members; false for a read-only `check`, where every copy is intact.
+    pub fn reduces_redundancy(&self) -> bool {
+        self.degraded > 0 || matches!(self.sync_action.as_str(), "resync" | "recover" | "reshape")
+    }
+    /// What to do about a busy or degraded array before an install, in one sentence. Only a resync, a rebuild, a reshape or a missing
+    /// member means less protection (a check leaves every copy intact); a missing member needs a disk or a repair, not time.
+    pub fn advice(&self) -> &'static str {
+        if self.degraded > 0 && self.sync_action != "recover" {
+            "Repair it before installing: your data is not fully protected."
+        } else if self.reduces_redundancy() {
+            "Let it finish before installing; until then your data is not fully protected."
+        } else {
+            "Let it finish before installing."
+        }
+    }
+
+    /// One-line status for the UI, e.g. `resyncing 90.8%` or `degraded (1 missing)`.
+    pub fn health_note(&self) -> Option<String> {
+        if self.degraded > 0 {
+            return Some(format!("degraded ({} missing)", self.degraded));
+        }
+        if self.sync_action.is_empty() || self.sync_action == "idle" {
+            return None;
+        }
+        let verb = match self.sync_action.as_str() {
+            "resync" => "resyncing",
+            "recover" => "rebuilding",
+            "check" => "checking",
+            "repair" => "repairing",
+            "reshape" => "reshaping",
+            other => other,
+        };
+        Some(match self.sync_permille {
+            Some(p) => format!("{verb} {}.{}%", p / 10, p % 10),
+            None => verb.to_string(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +530,63 @@ pub struct DeviceFacts {
     pub mounts: Vec<Mount>,
 }
 
+/// A DSM storage volume as the user knows it (`volume1`), with what backs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DsmVolume {
+    /// `volume1`
+    pub name: String,
+    pub mountpoint: String,
+    pub fstype: String,
+    pub size_kib: u64,
+    pub used_kib: u64,
+    /// LVM logical volume (`volume_1`) and its volume group (`vg1`), when the volume lives on LVM.
+    pub lv: Option<String>,
+    pub vg: Option<String>,
+    pub lv_bytes: Option<u64>,
+    /// Data RAID arrays that back it (`md2`, `md3`): several when the pool is Synology Hybrid RAID-like.
+    pub arrays: Vec<String>,
+    /// Disks that hold those arrays.
+    pub disks: Vec<String>,
+    /// Distinct RAID levels among the arrays (`raid5`, ...).
+    pub levels: Vec<String>,
+}
+
+impl DsmVolume {
+    pub fn size_bytes(&self) -> u64 {
+        self.size_kib * 1024
+    }
+    pub fn used_bytes(&self) -> u64 {
+        self.used_kib * 1024
+    }
+    /// Used share in whole percent (0 when the size is unknown).
+    pub fn used_percent(&self) -> u32 {
+        if self.size_kib == 0 { 0 } else { ((self.used_kib as f64 / self.size_kib as f64) * 100.0).round() as u32 }
+    }
+}
+
+#[doc(hidden)]
+pub fn split_dm_name_for_test(name: &str) -> Option<(String, String)> {
+    split_dm_name(name)
+}
+
+/// `vg1-volume_1` -> (`vg1`, `volume_1`); LVM doubles the dashes that belong to a name (`my--vg-lv` is `my-vg` / `lv`).
+fn split_dm_name(name: &str) -> Option<(String, String)> {
+    let b = name.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'-' {
+            if i + 1 < b.len() && b[i + 1] == b'-' {
+                i += 2;
+                continue;
+            }
+            let (vg, lv) = (&name[..i], &name[i + 1..]);
+            return (!vg.is_empty() && !lv.is_empty()).then(|| (vg.replace("--", "-"), lv.replace("--", "-")));
+        }
+        i += 1;
+    }
+    None
+}
+
 impl DeviceFacts {
     /// Serial console to configure on the new system: whatever DSM uses, else ttyS0@115200.
     pub fn serial_console(&self) -> SerialConsole {
@@ -371,8 +595,73 @@ impl DeviceFacts {
     pub fn candidate_disks(&self) -> Vec<&Disk> {
         self.disks.iter().filter(|d| d.is_candidate()).collect()
     }
+    /// Disks that are NOT install targets, each with the reason (never silently dropped: the UI lists them).
+    pub fn excluded_disks(&self) -> Vec<(&Disk, Exclusion)> {
+        self.disks.iter().filter_map(|d| d.exclusion().map(|e| (d, e))).collect()
+    }
     pub fn data_arrays(&self) -> Vec<&MdArray> {
         self.arrays.iter().filter(|a| a.role == ArrayRole::Data).collect()
+    }
+    /// Arrays that are resyncing, rebuilding, reshaping or missing members right now (an install should wait for them).
+    pub fn busy_arrays(&self) -> Vec<&MdArray> {
+        self.arrays.iter().filter(|a| a.is_busy_or_degraded()).collect()
+    }
+    /// DSM storage volumes (`/volume1`, `/volume2`, ...): the mounts that DSM exposes, joined with the LVM logical volume and the
+    /// RAID arrays and disks behind them. Sub-mounts (`/volume2/@docker`, FUSE mounts) are not volumes and are skipped.
+    pub fn volumes(&self) -> Vec<DsmVolume> {
+        let mut out: Vec<DsmVolume> = vec![];
+        for m in &self.mounts {
+            let Some(num) = m.mountpoint.strip_prefix("/volume") else { continue };
+            if num.is_empty() || !num.bytes().all(|c| c.is_ascii_digit()) || out.iter().any(|v| v.mountpoint == m.mountpoint) {
+                continue;
+            }
+            let lv = self.lv_for_mount(&m.device, num);
+            let arrays: Vec<&MdArray> = match lv {
+                Some(l) => self.arrays.iter().filter(|a| a.role == ArrayRole::Data && a.vg.as_deref() == Some(l.vg.as_str())).collect(),
+                None => m.device.strip_prefix("/dev/").and_then(|n| self.arrays.iter().find(|a| a.name == n)).into_iter().collect(),
+            };
+            let mut disks: Vec<String> =
+                arrays.iter().flat_map(|a| a.members.iter()).filter_map(|mem| self.locate_part(mem).map(|(d, _)| d.name.clone())).collect();
+            disks.sort();
+            disks.dedup();
+            let mut levels: Vec<String> = arrays.iter().map(|a| a.level.clone()).collect();
+            levels.sort();
+            levels.dedup();
+            out.push(DsmVolume {
+                name: format!("volume{num}"),
+                mountpoint: m.mountpoint.clone(),
+                fstype: m.fstype.clone(),
+                size_kib: m.size_kib,
+                used_kib: m.used_kib,
+                lv: lv.map(|l| l.name.clone()),
+                vg: lv.map(|l| l.vg.clone()),
+                lv_bytes: lv.map(|l| l.bytes),
+                arrays: arrays.iter().map(|a| a.name.clone()).collect(),
+                disks,
+                levels,
+            });
+        }
+        out.sort_by(|a, b| a.mountpoint.len().cmp(&b.mountpoint.len()).then(a.mountpoint.cmp(&b.mountpoint)));
+        out
+    }
+
+    /// The LVM logical volume behind a mount: from the device name when it says so (`/dev/mapper/vg1-volume_1`, `/dev/vg1/volume_1`),
+    /// else by DSM's naming (`/volume1` is `volume_1`, also behind `cachedev_N` devices), else the only logical volume there is.
+    fn lv_for_mount(&self, device: &str, num: &str) -> Option<&Lv> {
+        if let Some(rest) = device.strip_prefix("/dev/mapper/") {
+            if let Some((vg, lv)) = split_dm_name(rest)
+                && let Some(l) = self.lvs.iter().find(|l| l.vg == vg && l.name == lv)
+            {
+                return Some(l);
+            }
+        } else if let Some(rest) = device.strip_prefix("/dev/")
+            && let Some((vg, lv)) = rest.split_once('/')
+            && let Some(l) = self.lvs.iter().find(|l| l.vg == vg && l.name == lv)
+        {
+            return Some(l);
+        }
+        let want = format!("volume_{num}");
+        self.lvs.iter().find(|l| l.name == want).or_else(|| (self.lvs.len() == 1).then(|| &self.lvs[0]))
     }
     pub fn mem_gib(&self) -> f64 {
         self.mem_kib as f64 / (1024.0 * 1024.0)

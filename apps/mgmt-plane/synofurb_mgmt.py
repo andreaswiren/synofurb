@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Iterable
 
-DEFAULT_VERSION = "0.5.0"
+DEFAULT_VERSION = "0.6.0"
 
 
 def read_version() -> str:
@@ -83,6 +83,7 @@ class Config:
     rollback_seconds: int = 90
     fail_delay: float = 0.4
     login_group: str = "sudo"
+    trust_proxy: bool = False         # the HAProxy front (docs/CERTIFICATES.md): believe X-Forwarded-For from a loopback peer
     sys_root: str = "/sys"            # where md sysfs attributes are read/written (tests point it into a temp dir)
     proc_root: str = "/proc"
     state_dir: str = "/var/lib/synofurb-mgmt"
@@ -109,6 +110,8 @@ class Config:
                 setattr(self, key, data[key])
         if isinstance(data.get("bind"), str) and data["bind"]:
             self.bind = data["bind"]
+        if data.get("trust_proxy") is True:
+            self.trust_proxy = True
         if isinstance(data.get("login_group"), str) and valid_group_name_ok(data["login_group"]):
             self.login_group = data["login_group"]
 
@@ -1456,6 +1459,7 @@ class Request:
     audit_user: str | None = None
     audit_note: str = ""
     cookies_out: list[str] = field(default_factory=list)
+    query: str = ""                       # raw query string (add-on logs use ?tail=N)
 
     @property
     def user(self) -> str | None:
@@ -1470,6 +1474,14 @@ class Route:
 
 
 ROUTES: dict[tuple[str, str], Route] = {}
+DYNAMIC_ROUTES: list[tuple[str, "re.Pattern[str]", Route]] = []      # (method, path regex, route): paths with an id in them (add-ons, jobs)
+
+
+def find_route(method: str, path: str) -> Route | None:
+    rt = ROUTES.get((method, path))
+    if rt is not None:
+        return rt
+    return next((r for m_, rx, r in DYNAMIC_ROUTES if m_ == method and rx.fullmatch(path)), None)
 
 
 def route(method: str, path: str, auth: bool = True, mutating: bool | None = None):
@@ -1628,7 +1640,7 @@ def api_me(req: Request) -> dict:
     s = req.session
     assert s is not None
     return {"ok": True, "user": s.user, "csrf": s.csrf, "hostname": socket.gethostname(), "version": VERSION,
-            "dry_run": req.app.cfg.dry_run, "net_pending": net_pending_info(req.app)}
+            "dry_run": req.app.cfg.dry_run, "net_pending": net_pending_info(req.app), "edge_pending": edge_pending_info(req.app)}
 
 
 def parse_os_release(text: str) -> dict[str, str]:
@@ -3683,6 +3695,18 @@ def client_ip(addr: str) -> str:
     return addr[7:] if addr.startswith("::ffff:") else addr
 
 
+def forwarded_ip(peer: str, header: str | None, trust: bool) -> str:
+    """Behind the HAProxy front the peer is always 127.0.0.1; the real client is in X-Forwarded-For, which HAProxy overwrites (never appends).
+    It is believed only from a loopback peer and only when /etc/synofurb/mgmt.json says trust_proxy; anything that is not an IP address is ignored."""
+    if trust and peer in ("127.0.0.1", "::1") and header:
+        cand = header.split(",")[-1].strip()
+        try:
+            return str(ipaddress.ip_address(cand))
+        except ValueError:
+            pass
+    return peer
+
+
 def origin_ok(origin: str, host: str) -> bool:
     if origin == "null":
         return False
@@ -3796,13 +3820,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle(self, method: str) -> None:
         app = self.app
-        ip = client_ip(self.client_address[0])
+        ip = forwarded_ip(client_ip(self.client_address[0]), self.headers.get("X-Forwarded-For"), app.cfg.trust_proxy)
         path = urllib.parse.urlsplit(self.path).path
         if method == "GET" and path in ("/", "/index.html"):
             return self._serve_ui()
-        rt = ROUTES.get((method, path))
+        rt = find_route(method, path)
         if rt is None:
-            other = any(p == path for (_, p) in ROUTES)
+            other = any(p == path for (_, p) in ROUTES) or any(rx.fullmatch(path) for _, rx, _r in DYNAMIC_ROUTES)
             return self._json(405 if other else 404, {"ok": False, "error": "not found"})
         host = self.headers.get("Host")
         if not host:
@@ -3821,7 +3845,7 @@ class Handler(BaseHTTPRequestHandler):
             if not session or not hmac.compare_digest(tok.encode(), session.csrf.encode()):
                 app.audit.log(session.user if session else None, ip, path, {}, "rejected: bad CSRF token")
                 return self._json(403, {"ok": False, "error": "missing or invalid CSRF token"})
-        req = Request(app, method, path, {}, session, ip, sid)
+        req = Request(app, method, path, {}, session, ip, sid, query=urllib.parse.urlsplit(self.path).query)
         status, obj, headers = 200, {}, {}
         result = "ok"
         try:
@@ -3912,6 +3936,143 @@ def make_ssl_context(cert: str, key: str) -> ssl.SSLContext:
 
 
 # ============================================================================
+# 17b. Add-ons (plugin framework for Docker apps). The implementation is synofurb_addons.py (docs/ADDONS.md);
+#      this block is the whole glue: environment, routes, CLI. A bundle without that module simply has no add-ons.
+# ============================================================================
+
+try:
+    import synofurb_addons as addons_mod
+except ImportError:                                           # pragma: no cover - an update bundle from before add-ons existed
+    addons_mod = None
+
+
+class _AddonJobLock:
+    """Add-on jobs and management-plane updates exclude each other through the same job.lock."""
+
+    def __init__(self, cfg: Config):
+        self.lock = JobLock(cfg)
+
+    def acquire(self, kind: str, label: str, job_id: str = "") -> dict | None:
+        return self.lock.acquire(kind, label, job_id)
+
+    def release(self, token: dict | None) -> None:
+        self.lock.release(token)
+
+    def holder(self) -> dict | None:
+        return self.lock.holder()
+
+
+def addons_env(app: App) -> Any:
+    cfg, runner = app.cfg, app.runner
+    real = isinstance(runner, RealRunner)
+    extra: dict = {}
+    if cfg.dry_run:                                           # nothing real exists to probe or wait for
+        if isinstance(runner, DryRunRunner):
+            runner.canned.setdefault("dpkg-query", "ii ")
+            runner.canned.setdefault("apt-cache", "  Candidate: 1.0\n")
+        extra = dict(http_probe=lambda url, timeout=4: 200, tcp_probe=lambda port, timeout=3: True, sleep=lambda s: None, port_in_use=lambda port: False)
+    return addons_mod.AddonEnv(**extra, 
+        root=cfg.root, run=runner.run, stream=(lambda argv, on_line, timeout: addons_mod.stream_command(argv, on_line, timeout)) if real else None,
+        mounts=app.findmnt, audit=app.audit.log, script_dir=os.path.dirname(os.path.abspath(__file__)), state_dir=cfg.state_dir,
+        login_group=cfg.login_group, sys_root=cfg.sys_root, job_lock=_AddonJobLock(cfg))
+
+
+def addons_manager(app: App) -> Any:
+    """One manager per App (created on first use). In --dry-run the Docker calls go to the in-memory test double."""
+    mgr = getattr(app, "_addons", None)
+    if mgr is None:
+        env = addons_env(app)
+        docker = addons_mod.FakeDocker(env) if app.cfg.dry_run else None
+        mgr = app._addons = addons_mod.Manager(env, docker)                # type: ignore[attr-defined]
+    return mgr
+
+
+if addons_mod is not None:
+    addons_mod.register_routes(sys.modules[__name__], addons_manager)
+
+
+def addons_cli(args: argparse.Namespace, extra: list[str], cfg: Config, runner: Runner) -> int:
+    if addons_mod is None:
+        print("error: this management plane has no add-on module", file=sys.stderr)
+        return 2
+    if getattr(args, "json", False):
+        extra = extra + ["--json"]
+    return addons_mod.cli_main(extra, addons_manager(App(cfg, runner)))
+
+
+# ============================================================================
+# 17c. Certificates and the HAProxy front. The implementation is synofurb_edge.py (docs/CERTIFICATES.md); this block is the whole glue:
+#      environment, routes, CLI, the pending banner. A bundle without that module simply has neither.
+# ============================================================================
+
+try:
+    import synofurb_edge as edge_mod
+except ImportError:                                           # pragma: no cover - an update bundle from before certificates existed
+    edge_mod = None
+
+
+def edge_env(app: App) -> Any:
+    cfg, runner = app.cfg, app.runner
+    dry = isinstance(runner, DryRunRunner)
+
+    def sites() -> list[dict]:                                # installed add-ons that have a web page: what the front can publish
+        if addons_mod is None:
+            return []
+        try:
+            mgr = addons_manager(app)
+            return [{"id": a.id, "name": a.name, "icon": a.icon, "port": a.web["port"], "scheme": a.web["scheme"], "path": a.web["path"], "hint": a.web["hostname_hint"]}
+                    for a in mgr.catalog().order() if a.web and mgr.installed(a.id)]
+        except Exception:                                     # noqa: BLE001 - the Hostnames page must not fail because the add-on catalog does
+            return []
+
+    def run_fn(argv: list[str], input: str | None = None, timeout: int = 60, env: dict | None = None) -> Any:
+        r = runner.run(argv, input=input, timeout=timeout)
+        return edge_mod.Result(r.rc, r.out, r.err)
+    extra: dict = {}
+    if dry:
+        extra = dict(run_fn=run_fn, which_fn=lambda name: "/usr/bin/" + name, sleep=lambda s_: None, port_busy=lambda port: False)
+    return edge_mod.EdgeEnv(root=cfg.root, state_dir=cfg.state_dir, script_path=INSTALL_DIR + "/synofurb_mgmt.py", audit=app.audit.log, job_lock=_AddonJobLock(cfg),
+                            local_ips=app.ip_addresses, sites=sites, mgmt_port=cfg.port, defer=app.defer,
+                            restart_mgmt=lambda: runner.run(["systemctl", "restart", "synofurb-mgmt.service"], timeout=60), **extra)
+
+
+def edge_for(app: App) -> Any:
+    """One Edge (certificates + proxy) per App, created on first use."""
+    e = getattr(app, "_edge", None)
+    if e is None:
+        e = app._edge = edge_mod.Edge(edge_env(app))        # type: ignore[attr-defined]
+    return e
+
+
+def edge_pending_info(app: App) -> dict | None:
+    """An unconfirmed front change (the banner in every page offers Keep); None when certificates are not part of this bundle."""
+    if edge_mod is None:
+        return None
+    try:
+        return edge_for(app).proxy.pending()
+    except Exception:                                         # noqa: BLE001
+        return None
+
+
+if edge_mod is not None:
+    edge_mod.register_routes(sys.modules[__name__], edge_for)
+
+
+def edge_cli(args: argparse.Namespace, extra: list[str], cfg: Config, runner: Runner) -> int:
+    if edge_mod is None:
+        print("error: this management plane has no certificate module", file=sys.stderr)
+        return 2
+    if getattr(args, "json", False):
+        extra = extra + ["--json"]
+    if getattr(args, "force", False):
+        extra = extra + ["--force"]
+    app = App(cfg, runner)
+    e = edge_for(app)
+    e.env.defer = lambda fn, delay: fn()                      # a console session has no response to deliver first
+    return edge_mod.cli_main(extra, e, args.command)
+
+
+# ============================================================================
 # 18a. CLI contract for the desktop app (no server, usable over SSH as root)
 #      synofurb_mgmt.py health --json
 #      synofurb_mgmt.py update --from DIR [--force] [--json]  /  update --rollback [--json]
@@ -3923,6 +4084,8 @@ INSTALL_DIR = "/opt/synofurb-mgmt"
 UNIT_PATH = "/etc/systemd/system/synofurb-mgmt.service"
 BUNDLE_REQUIRED = ("synofurb_mgmt.py", "VERSION", "README.md")
 BUNDLE_OPTIONAL_UNIT = "synofurb-mgmt.service"
+BUNDLE_ADDON_FILES = ("synofurb_addons.py", "addons.pack.json")      # the add-on framework and the packed add-on definitions (optional)
+BUNDLE_EDGE_FILES = ("synofurb_edge.py",)                             # certificates (lego) and the HAProxy front (optional, docs/CERTIFICATES.md)
 MANIFEST_NAME = "MANIFEST.sha256"
 MAX_BUNDLE_FILE = 8 * 1024 * 1024
 EXIT_OK, EXIT_REFUSED, EXIT_ROLLED_BACK, EXIT_ROLLBACK_FAILED = 0, 2, 3, 4
@@ -4045,6 +4208,12 @@ def collect_health(app: App, quick: bool = False, budget_s: float = 40.0) -> dic
     mm = doc["mem"] or {}
     if mm.get("total") and mm.get("avail") is not None and mm["avail"] < mm["total"] * 0.05:
         warnings.append("memory almost full")
+    if edge_mod is not None:                                # certificates: expiring / failed ones feed the verdict; absent when there are none
+        sect, cw, cc = part("certificates", lambda: edge_mod.health_section(edge_env(app)), (None, [], []))
+        if sect:
+            doc["certs"] = sect
+        warnings += cw
+        crit += cc
     doc["overall"] = "crit" if crit else "warn" if warnings else "ok"
     doc["warnings"] = (crit + warnings)[:20]
     return doc
@@ -4096,8 +4265,9 @@ def verify_bundle(src: str) -> tuple[dict[str, str], str]:
     for name in BUNDLE_REQUIRED:
         if name not in expected:
             raise ValidationError("%s is missing from the update" % name)
-    if set(expected) - set(BUNDLE_REQUIRED) - {BUNDLE_OPTIONAL_UNIT}:
-        raise ValidationError("unexpected file(s): %s" % ", ".join(sorted(set(expected) - set(BUNDLE_REQUIRED) - {BUNDLE_OPTIONAL_UNIT})))
+    allowed = set(BUNDLE_REQUIRED) | {BUNDLE_OPTIONAL_UNIT} | set(BUNDLE_ADDON_FILES) | set(BUNDLE_EDGE_FILES)
+    if set(expected) - allowed:
+        raise ValidationError("unexpected file(s): %s" % ", ".join(sorted(set(expected) - allowed)))
     for name, digest in expected.items():
         if not hmac.compare_digest(sha256_file(os.path.join(src, name)), digest):
             raise ValidationError("checksum mismatch for %s" % name)
@@ -4141,6 +4311,7 @@ class Updater:
                  health_timeout: float = 30.0, sleep: Callable[[float], None] = time.sleep):
         self.cfg, self.runner, self.emit = cfg, runner, emit
         self.probe, self.health_timeout, self.sleep = probe or default_probe, health_timeout, sleep
+        self.before_restart: Callable[[], None] | None = None          # the web job waits here so its response is delivered before the service goes down
         self.inst, self.new, self.prev = cfg.p(INSTALL_DIR), cfg.p(INSTALL_DIR + ".new"), cfg.p(INSTALL_DIR + ".prev")
 
     def installed_version(self) -> str | None:
@@ -4148,6 +4319,8 @@ class Updater:
         return t.splitlines()[0] if t else None
 
     def restart(self, reload_units: bool) -> bool:
+        if self.before_restart:
+            self.before_restart()
         if reload_units:
             self.runner.run(["systemctl", "daemon-reload"], timeout=30)
         return self.runner.run(["systemctl", "restart", "synofurb-mgmt.service"], timeout=60).ok
@@ -4299,6 +4472,905 @@ class Updater:
         return EXIT_OK
 
 
+# ============================================================================
+# 18b. Self-update: ONE pipeline for the web UI, `update --from-github` and the app's push
+#      check -> stage -> verify -> swap -> health -> rollback.  The last four steps are `Updater` above (offline, shared with
+#      `update --from DIR`); this section adds the sources (a GitHub release asset or the monorepo sub-folder), the job lock,
+#      the job records (version history: who/what/when), the audit trail and the web routes.  Nothing here runs on the app's
+#      push path except the lock, the history record and the audit line.
+# ============================================================================
+
+import gzip  # noqa: E402
+import http.client  # noqa: E402
+import tarfile  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+import zlib  # noqa: E402
+
+UPDATE_REPO = "andreaswiren/synofurb"
+UPDATE_SUBDIR = "apps/mgmt-plane"
+# the only hosts a download may touch (https, every redirect hop); release downloads end up on a githubusercontent.com CDN host
+UPDATE_HOSTS = ("api.github.com", "github.com", "codeload.github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com")
+UPDATE_PLACEHOLDER_KEY = "REPLACE_WITH_MINISIGN_PUBLIC_KEY"       # same placeholder as install.sh; a real key makes signatures mandatory
+UPDATE_PUBKEY = UPDATE_PLACEHOLDER_KEY
+BUNDLE_FILES = BUNDLE_REQUIRED + (BUNDLE_OPTIONAL_UNIT,) + BUNDLE_ADDON_FILES + BUNDLE_EDGE_FILES          # manifest order, identical to FILES in tools/make-update-bundle.py
+MAX_API, MAX_SUMS, MAX_ASSET, MAX_REPO_TARBALL, MAX_REPO_UNPACKED = 2 << 20, 256 << 10, 8 << 20, 256 << 20, 2 << 30
+MAX_ADDON_FILE, MAX_ADDON_FILES, MAX_ADDON_BYTES = 256 << 10, 600, 8 << 20       # add-on definitions found in a source tree
+BUNDLE_GENERATED = ("addons.pack.json",)                                          # made at build/stage time, never copied from an archive tree
+UPDATE_CHANNELS = ("stable", "main")
+UPDATE_SOURCES = ("app", "manual", "github-stable", "github-main", "rollback")
+ASSET_RE = re.compile(r"synofurb-mgmt-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\.tar\.gz")
+TAG_RE = re.compile(r"v?\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.+-]{0,40})?")
+REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}")
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+APP_STAGE_PREFIX = ".synofurb-mgmt-stage-"                          # what the desktop app's push stages into (manage.rs); informational only
+
+
+class UpdateError(Exception):
+    """A refusal before anything on the unit changed. ``kind`` is stable (the UI and tests key on it); ``message`` is short and safe to show."""
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(message)
+        self.kind, self.message = kind, message
+
+
+def bundle_member_ok(name: str) -> bool:
+    """Which files an update may contain. The one place to extend if the bundle contract ever grows (verify_bundle must agree)."""
+    return name in BUNDLE_FILES
+
+
+def write_manifest(directory: str, names: Iterable[str] = BUNDLE_FILES) -> list[str]:
+    """MANIFEST.sha256 in `sha256sum` format; the same lines `tools/make-update-bundle.py` writes (a test compares them)."""
+    lines = ["%s  %s" % (sha256_file(os.path.join(directory, n)), n) for n in names if os.path.isfile(os.path.join(directory, n))]
+    write_atomic(os.path.join(directory, MANIFEST_NAME), "\n".join(lines) + "\n")
+    return lines
+
+
+# ---- HTTP (https to GitHub only) ---------------------------------------------
+
+class _PolicyRedirect(urllib.request.HTTPRedirectHandler):
+    max_redirections = 5
+
+    def __init__(self, check: Callable[[str], None]):
+        self._check = check
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):          # type: ignore[no-untyped-def]
+        self._check(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class HttpFetcher:
+    """GET with a host policy (https, GitHub hosts, no credentials in the URL, every redirect hop checked), hard size limits and
+    typed errors. No token is ever sent. ``loopback_http`` exists for the tests' fake release server only."""
+
+    def __init__(self, hosts: Iterable[str] = UPDATE_HOSTS, loopback_http: bool = False, timeout: float = 20.0):
+        self.hosts, self.loopback_http, self.timeout = tuple(hosts), loopback_http, timeout
+        self.opener = urllib.request.build_opener(_PolicyRedirect(self.check_url))
+
+    def check_url(self, url: str) -> None:
+        u = urllib.parse.urlsplit(url)
+        host = (u.hostname or "").lower()
+        try:
+            port = u.port
+        except ValueError:
+            port = -1
+        if u.username or u.password or "\\" in url:
+            raise UpdateError("policy", "refusing a URL with credentials")
+        if u.scheme == "https" and host in self.hosts and port in (None, 443):
+            return
+        if self.loopback_http and u.scheme in ("http", "https") and host in ("127.0.0.1", "localhost", "::1"):
+            return
+        raise UpdateError("policy", "refusing %s: only https to GitHub is allowed" % (host or "that address"))
+
+    def _open(self, url: str, accept: str):
+        self.check_url(url)
+        req = urllib.request.Request(url, headers={"User-Agent": "synofurb-mgmt/" + VERSION, "Accept": accept})
+        try:
+            return self.opener.open(req, timeout=self.timeout)
+        except urllib.error.HTTPError as e:
+            if e.code == 429 or (e.code == 403 and e.headers.get("X-RateLimit-Remaining") == "0"):
+                try:
+                    mins = max(1, int((int(e.headers.get("X-RateLimit-Reset", "0")) - time.time()) / 60) + 1)
+                except ValueError:
+                    mins = 10
+                raise UpdateError("rate_limit", "GitHub rate limit reached; try again in about %d minute(s)" % min(mins, 120))
+            if e.code == 404:
+                raise UpdateError("not_found", "GitHub did not find it (HTTP 404); a private repository cannot be checked")
+            raise UpdateError("http", "GitHub answered HTTP %d" % e.code)
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as e:
+            reason = getattr(e, "reason", e)
+            raise UpdateError("offline", "Cannot reach GitHub (%s)" % type(reason).__name__)
+
+    def get_bytes(self, url: str, max_bytes: int, accept: str = "application/json") -> bytes:
+        try:
+            with self._open(url, accept) as r:
+                if int(r.headers.get("Content-Length") or 0) > max_bytes:
+                    raise UpdateError("size", "the answer is larger than the %d KiB limit" % (max_bytes >> 10))
+                data = r.read(max_bytes + 1)
+        except (OSError, http.client.HTTPException, ValueError) as e:
+            raise UpdateError("offline", "the answer from GitHub was interrupted (%s)" % type(e).__name__)
+        if len(data) > max_bytes:
+            raise UpdateError("size", "the answer is larger than the %d KiB limit" % (max_bytes >> 10))
+        return data
+
+    def download(self, url: str, dest: str, max_bytes: int) -> tuple[str, int]:
+        """Stream to ``dest`` (0600), hashing as it goes. Returns (sha256, size). A partial file is removed."""
+        h = hashlib.sha256()
+        n = 0
+        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as out, self._open(url, "application/octet-stream") as r:
+                if int(r.headers.get("Content-Length") or 0) > max_bytes:
+                    raise UpdateError("size", "the download is larger than the %d MiB limit" % (max_bytes >> 20))
+                while True:
+                    chunk = r.read(1 << 16)
+                    if not chunk:
+                        break
+                    n += len(chunk)
+                    if n > max_bytes:
+                        raise UpdateError("size", "the download is larger than the %d MiB limit" % (max_bytes >> 20))
+                    h.update(chunk)
+                    out.write(chunk)
+        except UpdateError:
+            _unlink(dest)
+            raise
+        except (OSError, ValueError, http.client.HTTPException) as e:
+            _unlink(dest)
+            raise UpdateError("offline", "the download was interrupted (%s)" % type(e).__name__)
+        except BaseException:
+            _unlink(dest)
+            raise
+        return h.hexdigest(), n
+
+
+def _unlink(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+class _CapReader:
+    """File-like wrapper that refuses to hand out more than ``cap`` bytes (a gzip bomb stops here)."""
+
+    def __init__(self, fh: Any, cap: int):
+        self.fh, self.cap, self.n = fh, cap, 0
+
+    def read(self, size: int = -1) -> bytes:
+        data = self.fh.read(size)
+        self.n += len(data)
+        if self.n > self.cap:
+            raise UpdateError("size", "the archive unpacks to more than %d MiB" % (self.cap >> 20))
+        return data
+
+
+def _config_json(cfg: Config) -> dict:
+    try:
+        with open(cfg.p(cfg.config_path), encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def update_pubkey(cfg: Config) -> str:
+    """The minisign public key releases must be signed with. The placeholder (nothing configured) means releases are unsigned today."""
+    k = _config_json(cfg).get("update_pubkey")
+    return k if isinstance(k, str) and re.fullmatch(r"RW[A-Za-z0-9+/=]{20,100}", k) else UPDATE_PUBKEY
+
+
+def update_trust(cfg: Config, channel: str, has_signature: bool) -> tuple[str, str | None]:
+    """(mode, blocked_reason). mode: `signed` (minisign verified), `unsigned` (SHA-256 only, needs the person's consent) or `blocked`."""
+    if update_pubkey(cfg) == UPDATE_PLACEHOLDER_KEY:
+        return "unsigned", None
+    if channel == "stable":
+        return ("signed", None) if has_signature else ("blocked", "this release has no SHA256SUMS.minisig")
+    if _config_json(cfg).get("update_allow_unsigned_source") is True:
+        return "unsigned", None
+    return "blocked", "a signing key is configured and a source tree cannot be verified"
+
+
+def plain_notes(md: str, limit: int = 1500) -> str:
+    out = []
+    for ln in (md or "").replace("\r", "").splitlines()[:40]:
+        ln = re.sub(r"^\s{0,3}#{1,6}\s*", "", ln)
+        ln = re.sub(r"^\s*[-*]\s+", "\u2022 ", ln)
+        ln = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", ln).replace("**", "").replace("`", "")
+        out.append(ln.rstrip())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()[:limit]
+
+
+def parse_sums(text: str, name: str) -> str:
+    for ln in text.splitlines():
+        parts = ln.strip().split(None, 1)
+        if len(parts) == 2 and parts[1].lstrip("*") == name:
+            if not re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+                raise UpdateError("parse", "SHA256SUMS has a malformed line for %s" % name)
+            return parts[0].lower()
+    raise UpdateError("checksum", "%s is not listed in SHA256SUMS: refusing an unlisted file" % name)
+
+
+def valid_ref(ref: Any) -> str:
+    if not isinstance(ref, str) or not REF_RE.fullmatch(ref) or ".." in ref or "//" in ref or ref.endswith(("/", ".lock", ".")):
+        raise UpdateError("policy", "not a valid branch or tag name")
+    return ref
+
+
+def installed_info(cfg: Config) -> tuple[str | None, str | None]:
+    inst = cfg.p(INSTALL_DIR)
+    t = read_text(os.path.join(inst, "VERSION")).strip()
+    script = os.path.join(inst, "synofurb_mgmt.py")
+    return (t.splitlines()[0] if t else None), (sha256_file(script) if os.path.isfile(script) else None)
+
+
+def _cmp_state(remote: str, installed: str | None, channel: str) -> str:
+    try:
+        r, i = parse_version(remote), parse_version(installed or "")
+    except ValidationError:
+        return "available"
+    return "available" if r > i else "older" if r < i else ("same" if channel == "main" else "current")
+
+
+class GithubSource:
+    """Where an update can come from: the newest release asset (`stable`) or apps/mgmt-plane of a ref of the monorepo (`main`)."""
+
+    def __init__(self, fetch: HttpFetcher, repo: str = UPDATE_REPO, api_base: str = "https://api.github.com",
+                 dl_base: str = "https://github.com", codeload_base: str = "https://codeload.github.com"):
+        self.fetch, self.repo, self.api, self.dl, self.code = fetch, repo, api_base.rstrip("/"), dl_base.rstrip("/"), codeload_base.rstrip("/")
+
+    def _json(self, url: str) -> Any:
+        try:
+            return json.loads(self.fetch.get_bytes(url, MAX_API, "application/vnd.github+json").decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            raise UpdateError("parse", "GitHub sent an answer that could not be read")
+
+    # -- check -----------------------------------------------------------------
+    def check(self, cfg: Config, channel: str, ref: str = "") -> dict:
+        installed, _ = installed_info(cfg)
+        if channel == "stable":
+            info = self._check_stable()
+        elif channel == "main":
+            info = self._check_main(valid_ref(ref or "main"))
+        else:
+            raise UpdateError("policy", "unknown channel")
+        mode, blocked = update_trust(cfg, channel, info.pop("has_signature", False))
+        info.update(channel=channel, installed=installed, state=_cmp_state(info["version"], installed, channel), mode=mode, blocked=blocked,
+                    checked_at=int(time.time()), repo=self.repo)
+        return info
+
+    def _check_stable(self) -> dict:
+        rels = self._json("%s/repos/%s/releases?per_page=30" % (self.api, self.repo))
+        best = None
+        for rel in rels if isinstance(rels, list) else []:
+            if not isinstance(rel, dict) or rel.get("draft") or rel.get("prerelease"):
+                continue
+            tag = rel.get("tag_name")
+            assets = {a.get("name"): a for a in rel.get("assets") or [] if isinstance(a, dict)}
+            if not isinstance(tag, str) or not TAG_RE.fullmatch(tag):
+                continue
+            for name, a in assets.items():
+                m_ = ASSET_RE.fullmatch(name) if isinstance(name, str) else None
+                if not m_ or "-" in m_.group(1):
+                    continue
+                key = parse_version(m_.group(1))
+                if best is None or key > best[0]:
+                    best = (key, m_.group(1), tag, name, rel, assets)
+        if best is None:
+            raise UpdateError("no_release", "No management plane release found")
+        _, version, tag, name, rel, assets = best
+        if "SHA256SUMS" not in assets:
+            raise UpdateError("blocked", "release %s has no SHA256SUMS: refusing to install it" % tag)
+        size = assets[name].get("size")
+        if isinstance(size, int) and size > MAX_ASSET:
+            raise UpdateError("size", "the release asset is larger than the %d MiB limit" % (MAX_ASSET >> 20))
+        return {"version": version, "tag": tag, "asset": name, "ref": "", "commit": "", "published": str(rel.get("published_at") or "")[:10],
+                "notes": plain_notes(str(rel.get("body") or "")), "has_signature": "SHA256SUMS.minisig" in assets}
+
+    def _check_main(self, ref: str) -> dict:
+        qref = urllib.parse.quote(ref, safe="/")
+        commits = self._json("%s/repos/%s/commits?sha=%s&path=%s&per_page=5" % (self.api, self.repo, qref, UPDATE_SUBDIR))
+        rows = [c for c in commits if isinstance(c, dict) and isinstance(c.get("sha"), str) and SHA_RE.fullmatch(c["sha"])] if isinstance(commits, list) else []
+        if not rows:
+            raise UpdateError("not_found", "No commit of %s found at %r" % (UPDATE_SUBDIR, ref))
+        sha = rows[0]["sha"]
+        raw = self.fetch.get_bytes("%s/repos/%s/contents/%s/VERSION?ref=%s" % (self.api, self.repo, UPDATE_SUBDIR, sha), 4096, "application/vnd.github.raw+json")
+        version = raw.decode("utf-8", "replace").strip().splitlines()[0] if raw.strip() else ""
+        try:
+            parse_version(version)
+        except ValidationError:
+            raise UpdateError("parse", "the VERSION file at that ref is not a version")
+        def notes_date(c: dict) -> str:
+            who = (c.get("commit") or {}).get("author") if isinstance(c.get("commit"), dict) else None
+            return str(who.get("date") or "")[:10] if isinstance(who, dict) else ""
+
+        def subject(c: dict) -> str:
+            msg = (c.get("commit") or {}).get("message") if isinstance(c.get("commit"), dict) else ""
+            return (str(msg or "").splitlines() or [""])[0][:100]
+        notes = ["\u2022 %s %s (%s)" % (c["sha"][:7], subject(c), notes_date(c)) for c in rows]
+        return {"version": version, "tag": "", "asset": "", "ref": ref, "commit": sha, "published": notes_date(rows[0]), "notes": "\n".join(notes), "has_signature": False}
+
+    # -- stage -----------------------------------------------------------------
+    def stage(self, cfg: Config, runner: Runner, info: dict, work: str, emit: Callable[[str, str, str], None]) -> str:
+        """Download and verify what ``check`` found into ``work``/bundle (files + MANIFEST.sha256). Returns the directory."""
+        dest = os.path.join(work, "bundle")
+        os.makedirs(dest, mode=0o700, exist_ok=True)
+        if info["channel"] == "stable":
+            self._stage_stable(cfg, runner, info, work, dest, emit)
+        else:
+            self._stage_main(info, work, dest, emit)
+        names = [n for n in BUNDLE_FILES if os.path.isfile(os.path.join(dest, n))]
+        for n in BUNDLE_REQUIRED:
+            if n not in names:
+                raise UpdateError("archive", "%s is missing from the update" % n)
+        ver = read_text(os.path.join(dest, "VERSION")).strip().splitlines()
+        if not ver or ver[0] != info["version"]:
+            raise UpdateError("archive", "the downloaded VERSION (%s) is not the version that was checked (%s)" % (ver[0] if ver else "none", info["version"]))
+        code_v = re.search(r'^DEFAULT_VERSION = "([^"]+)"', read_text(os.path.join(dest, "synofurb_mgmt.py")), re.M)
+        if not code_v or code_v.group(1) != info["version"]:
+            raise UpdateError("archive", "VERSION and DEFAULT_VERSION in synofurb_mgmt.py disagree: refusing")
+        write_manifest(dest, names)
+        return dest
+
+    def _stage_stable(self, cfg: Config, runner: Runner, info: dict, work: str, dest: str, emit: Callable[[str, str, str], None]) -> None:
+        base = "%s/%s/releases/download/%s" % (self.dl, self.repo, info["tag"])
+        sums_raw = self.fetch.get_bytes(base + "/SHA256SUMS", MAX_SUMS, "application/octet-stream")
+        sums = sums_raw.decode("utf-8", "replace")
+        if info["mode"] == "signed":
+            minisign = runner.which("minisign")
+            if not minisign:
+                raise UpdateError("signature", "cannot verify the signature: minisign is not installed (apt install minisign)")
+            sig = self.fetch.get_bytes(base + "/SHA256SUMS.minisig", MAX_SUMS, "application/octet-stream")
+            p_sums, p_sig = os.path.join(work, "SHA256SUMS"), os.path.join(work, "SHA256SUMS.minisig")
+            for p, data in ((p_sums, sums_raw), (p_sig, sig)):
+                with open(p, "wb") as fh:
+                    fh.write(data)
+            if not runner.run([minisign, "-Vm", p_sums, "-x", p_sig, "-P", update_pubkey(cfg)], timeout=30).ok:
+                raise UpdateError("signature", "SIGNATURE VERIFICATION FAILED for SHA256SUMS: the release is not authentic")
+            emit("download", "ok", "signature verified (minisign)")
+        expected = parse_sums(sums, info["asset"])
+        archive = os.path.join(work, info["asset"])
+        digest, size = self.fetch.download("%s/%s" % (base, info["asset"]), archive, MAX_ASSET)
+        if not hmac.compare_digest(digest, expected):
+            raise UpdateError("checksum", "SHA-256 MISMATCH for %s: nothing was installed" % info["asset"])
+        emit("download", "ok", "%s %d KiB, SHA-256 %s... matches SHA256SUMS%s" % (info["asset"], size >> 10, digest[:12], "" if info["mode"] == "signed" else " (unsigned)"))
+        try:
+            with tarfile.open(archive, "r:gz") as tf:
+                seen: set[str] = set()
+                for mem in tf:
+                    name = mem.name[2:] if mem.name.startswith("./") else mem.name
+                    if mem.isdir() and name in ("", "."):
+                        continue
+                    if not mem.isreg() or not bundle_member_ok(name) or name in seen:
+                        raise UpdateError("archive", "unexpected member in the archive: %s" % name[:60])
+                    seen.add(name)
+                    _write_member(dest, name, tf.extractfile(mem), mem.size)
+        except (tarfile.TarError, EOFError, OSError, zlib.error) as e:
+            raise UpdateError("archive", "cannot read the archive (%s)" % type(e).__name__)
+
+    def _stage_main(self, info: dict, work: str, dest: str, emit: Callable[[str, str, str], None]) -> None:
+        archive = os.path.join(work, "repo.tar.gz")
+        digest, size = self.fetch.download("%s/%s/tar.gz/%s" % (self.code, self.repo, info["commit"]), archive, MAX_REPO_TARBALL)
+        emit("download", "ok", "commit %s, %d MiB, SHA-256 %s... (no signature exists for a source tree)" % (info["commit"][:7], size >> 20, digest[:12]))
+        top, seen, n_addon, b_addon = None, set(), 0, 0
+        addons_dir = os.path.join(work, "addons")
+        try:
+            with open(archive, "rb") as raw, gzip.GzipFile(fileobj=raw) as gz, tarfile.open(fileobj=_CapReader(gz, MAX_REPO_UNPACKED), mode="r|") as tf:      # type: ignore[arg-type]
+                for mem in tf:
+                    parts = mem.name.split("/")
+                    rel = parts[3:]
+                    if len(parts) < 4 or parts[1:3] != UPDATE_SUBDIR.split("/"):
+                        continue
+                    flat = len(rel) == 1 and bundle_member_ok(rel[0]) and rel[0] not in BUNDLE_GENERATED
+                    adn = len(rel) == 3 and rel[0] == "addons"                # addons/<id>/<file>: packed into addons.pack.json below, never installed as files
+                    if not (flat or adn):
+                        continue
+                    if not mem.isreg() or (flat and rel[0] in seen) or (top is not None and parts[0] != top) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", parts[0]):
+                        raise UpdateError("archive", "unexpected entry in the source archive: %s" % rel[-1])
+                    top = parts[0]
+                    if flat:
+                        seen.add(rel[0])
+                        _write_member(dest, rel[0], tf.extractfile(mem), mem.size)
+                        continue
+                    n_addon, b_addon = n_addon + 1, b_addon + mem.size
+                    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", rel[1]) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", rel[2]) or rel[2].startswith(".") \
+                            or mem.size > MAX_ADDON_FILE or n_addon > MAX_ADDON_FILES or b_addon > MAX_ADDON_BYTES:
+                        raise UpdateError("archive", "an add-on definition is not acceptable: %s/%s" % (rel[1][:32], rel[2][:32]))
+                    os.makedirs(os.path.join(addons_dir, rel[1]), mode=0o700, exist_ok=True)
+                    _write_member(os.path.join(addons_dir, rel[1]), rel[2], tf.extractfile(mem), mem.size, MAX_ADDON_FILE)
+        except (tarfile.TarError, EOFError, OSError, zlib.error) as e:
+            raise UpdateError("archive", "cannot read the source archive (%s)" % type(e).__name__)
+        finally:
+            _unlink(archive)
+        if "synofurb_addons.py" in seen:                                      # the same packing make-update-bundle.py does, by the installed (trusted) module
+            if addons_mod is None:
+                emit("download", "ok", "add-on definitions skipped: the installed version has no add-on framework to pack them")
+            else:
+                try:
+                    pack = addons_mod.build_pack(addons_dir)
+                except Exception as e:                                        # noqa: BLE001 - AddonError or OSError: refuse, nothing was installed
+                    raise UpdateError("archive", "the add-on definitions in the source are not valid (%s)" % str(e)[:120])
+                write_atomic(os.path.join(dest, "addons.pack.json"), pack)
+
+
+def _write_member(dest: str, name: str, src: Any, size: int, limit: int = MAX_BUNDLE_FILE) -> None:
+    if size > limit or src is None:
+        raise UpdateError("size", "%s is too large" % name)
+    fd = os.open(os.path.join(dest, name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)       # name comes from a fixed allow-list, never from the archive path
+    with os.fdopen(fd, "wb") as out:
+        left = size
+        while left > 0:
+            chunk = src.read(min(1 << 16, left))
+            if not chunk:
+                raise UpdateError("archive", "%s is truncated" % name)
+            out.write(chunk)
+            left -= len(chunk)
+
+
+# ---- job lock, job records, settings -------------------------------------------
+
+def _pid_alive(pid: Any) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+class JobLock:
+    """`<state>/job.lock`: at most one update or add-on job at a time, across processes (the web service, the transient unit and the
+    app's SSH session). Created with O_EXCL; a lock whose process is gone is stale and is removed. Add-on jobs use the same class:
+    ``acquire("addon", label)``."""
+
+    def __init__(self, cfg: Config):
+        self.path = cfg.p(cfg.state_dir + "/job.lock")
+
+    def holder(self) -> dict | None:
+        try:
+            with open(self.path, encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        if isinstance(d, dict) and _pid_alive(d.get("pid")):
+            return d
+        _unlink(self.path)
+        return None
+
+    def acquire(self, kind: str, label: str, job_id: str = "") -> dict | None:
+        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+        rec = {"kind": kind, "label": label[:80], "id": job_id, "pid": os.getpid(), "since": int(time.time()), "token": secrets.token_hex(8)}
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                if self.holder() is not None:
+                    return None
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(rec, fh)
+            return rec
+        return None
+
+    def release(self, rec: dict | None) -> None:
+        if rec is None:
+            return
+        cur = self.holder()
+        if cur and cur.get("token") == rec.get("token"):
+            _unlink(self.path)
+
+
+def _update_dir(cfg: Config, *sub: str) -> str:
+    return cfg.p(os.path.join(cfg.state_dir, "update", *sub))
+
+
+def load_update_settings(cfg: Config) -> dict:
+    try:
+        with open(_update_dir(cfg, "settings.json"), encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        d = {}
+    ch = d.get("channel") if isinstance(d, dict) else None
+    ref = d.get("ref") if isinstance(d, dict) else None
+    return {"channel": ch if ch in UPDATE_CHANNELS else "stable", "ref": ref if isinstance(ref, str) and REF_RE.fullmatch(ref) else "main"}
+
+
+def save_update_settings(cfg: Config, channel: str, ref: str) -> None:
+    write_atomic(_update_dir(cfg, "settings.json"), json.dumps({"channel": channel, "ref": ref}), mode=0o600)
+
+
+def load_check(cfg: Config) -> dict | None:
+    try:
+        with open(_update_dir(cfg, "check.json"), encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) and "version" in d else None
+    except (OSError, ValueError):
+        return None
+
+
+class JobRecord:
+    """One update/rollback, whoever started it (web, GitHub CLI, app push, manual bundle): the version history and the live progress."""
+
+    KEEP = 30
+    MAX_EVENTS = 80
+
+    def __init__(self, cfg: Config, data: dict):
+        self.cfg, self.data = cfg, data
+        self.id = data["id"]
+        self.path = _update_dir(cfg, "jobs", self.id + ".json")
+        self.echo: Callable[[str, str, str], None] | None = None
+
+    @classmethod
+    def create(cls, cfg: Config, **meta: Any) -> "JobRecord":
+        jid = meta.pop("id", None) or secrets.token_hex(8)
+        if not re.fullmatch(r"[0-9a-f]{16}", jid):
+            raise UpdateError("policy", "bad job id")
+        rec = cls(cfg, {"id": jid, "state": "queued", "started": round(time.time(), 3), "finished": None, "exit": None, "events": [], "pid": None,
+                        "kind": "update", "source": "manual", "ref": "", "commit": "", "by": "", "via": "cli", "from": None, "to": None, "unsigned": False, **meta})
+        rec.save()
+        rec.prune()
+        return rec
+
+    @classmethod
+    def load(cls, cfg: Config, jid: str) -> "JobRecord | None":
+        if not re.fullmatch(r"[0-9a-f]{16}", jid or ""):
+            return None
+        try:
+            with open(_update_dir(cfg, "jobs", jid + ".json"), encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return cls(cfg, d) if isinstance(d, dict) and d.get("id") == jid else None
+
+    def save(self) -> None:
+        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+        write_atomic(self.path, json.dumps(self.data, separators=(",", ":")), mode=0o600)
+
+    def prune(self) -> None:
+        d = os.path.dirname(self.path)
+        files = sorted((f for f in os.listdir(d) if re.fullmatch(r"[0-9a-f]{16}\.json", f)), key=lambda f: os.path.getmtime(os.path.join(d, f)))
+        for f in files[:-self.KEEP]:
+            _unlink(os.path.join(d, f))
+
+    def start(self) -> None:
+        self.data.update(state="running", pid=os.getpid())
+        self.save()
+
+    def emit(self, step: str, status: str, message: str) -> None:
+        ev = self.data["events"]
+        ev.append({"t": int(time.time()), "step": step, "status": status, "message": message[:300]})
+        del ev[:-self.MAX_EVENTS]
+        self.save()
+        if self.echo:
+            self.echo(step, status, message)
+
+    def set(self, **kw: Any) -> None:
+        self.data.update(kw)
+        self.save()
+
+    def finish(self, state: str, code: int) -> None:
+        self.data.update(state=state, exit=code, finished=round(time.time(), 3), pid=None)
+        self.save()
+
+    def summary(self) -> dict:
+        d = self.data
+        last = d["events"][-1] if d.get("events") else {}
+        return {k: d.get(k) for k in ("id", "kind", "source", "ref", "commit", "by", "via", "from", "to", "state", "exit", "started", "finished", "unsigned")} | {
+            "step": last.get("step"), "message": last.get("message")}
+
+
+def list_jobs(cfg: Config, limit: int = 15) -> list[JobRecord]:
+    d = _update_dir(cfg, "jobs")
+    try:
+        names = [f for f in os.listdir(d) if re.fullmatch(r"[0-9a-f]{16}\.json", f)]
+    except OSError:
+        return []
+    out = [r for r in (JobRecord.load(cfg, f[:-5]) for f in names) if r]
+    out.sort(key=lambda r: (r.data.get("started") or 0, r.id), reverse=True)
+    return out[:limit]
+
+
+def reap_jobs(cfg: Config) -> None:
+    """A job that says it is queued/running but has no live process (power loss, killed) is closed as failed, so the page never waits for ever."""
+    now = time.time()
+    for r in list_jobs(cfg, 30):
+        d = r.data
+        if d.get("state") == "running" and not _pid_alive(d.get("pid")):
+            r.emit("result", "fail", "interrupted: the update process ended without a result; check the unit")
+            r.finish("failed", EXIT_ROLLBACK_FAILED)
+        elif d.get("state") == "queued" and now - (d.get("started") or now) > 90:
+            r.emit("result", "fail", "the update process did not start")
+            r.finish("failed", EXIT_REFUSED)
+
+
+# ---- the shared flow -------------------------------------------------------------
+
+def update_audit(cfg: Config, rec: JobRecord, action: str, result: str) -> None:
+    d = rec.data
+    AuditLog(cfg.p(cfg.audit_path)).log(d.get("by") or "-", d.get("ip") or "-", action, {"job": rec.id, "source": d.get("source"), "via": d.get("via"), "ref": d.get("ref"),
+                                                                                         "commit": (d.get("commit") or "")[:12], "from": d.get("from"), "to": d.get("to")}, result)
+
+
+def preflight(cfg: Config, runner: Runner, force: bool) -> str | None:
+    """Reason to refuse an update from GitHub, or None. (The app checks health itself before a push; `--from DIR` stays as it was.)"""
+    if force:
+        return None
+    if not cfg.dry_run and runner.run(["systemctl", "is-active", "synofurb-mgmt.service"], timeout=10).out.strip() != "active":
+        return "the web UI service is not active: fix it first, or force the update"
+    parent = os.path.dirname(cfg.p(INSTALL_DIR))
+    try:
+        free = shutil.disk_usage(parent if os.path.isdir(parent) else cfg.p("/")).free
+    except OSError:
+        free = 1 << 40
+    if free < 64 << 20:
+        return "less than 64 MiB free next to %s" % INSTALL_DIR
+    try:
+        doc = collect_health(App(cfg, runner), quick=True, budget_s=20.0)
+    except Exception:                                             # noqa: BLE001
+        return None
+    if doc.get("overall") == "crit":
+        return ("the unit is in a critical state (%s); an update needs force" % "; ".join(doc.get("warnings", [])[:2]))[:200]
+    return None
+
+
+def run_update_flow(cfg: Config, runner: Runner, spec: dict, rec: JobRecord, *, fetch: HttpFetcher | None = None, probe: Callable[[Config], bool] | None = None,
+                    health_timeout: float = 30.0, sleep: Callable[[float], None] = time.sleep) -> int:
+    """check -> stage -> verify -> swap -> health -> rollback, with the job lock, history and audit. ``spec``: mode (dir|github|rollback), src,
+    channel, ref, expect, accept_unsigned, force, restart_delay. Exit codes are the Updater's: 0 ok, 2 refused, 3 rolled back, 4 rollback failed."""
+    lock = JobLock(cfg)
+    held = lock.acquire("update", rec.data["source"], rec.id)
+    rec.start()
+    update_audit(cfg, rec, "mgmt-update-start", "started")
+    work, phase = None, "check"
+    code, state = EXIT_REFUSED, "refused"
+    try:
+        if held is None:
+            rec.emit("lock", "fail", "another job is running (%s): wait for it to finish" % ((lock.holder() or {}).get("kind") or "unknown"))
+            return code
+        cur, _ = installed_info(cfg)
+        rec.set(**{"from": cur})
+        force, src = bool(spec.get("force")), spec.get("src")
+        if spec["mode"] == "github":
+            gh = GithubSource(fetch or HttpFetcher())
+            rec.emit("check", "start", "asking GitHub (%s)" % ("releases" if spec["channel"] == "stable" else "ref " + spec["ref"]))
+            info = gh.check(cfg, spec["channel"], spec["ref"])
+            rec.set(ref=info["ref"], commit=info["commit"], to=info["version"], unsigned=info["mode"] == "unsigned")
+            rec.emit("check", "ok", "%s %s, %s (installed %s)" % ("release" if info["channel"] == "stable" else "commit " + info["commit"][:7], info["version"], info["state"], cur or "none"))
+            expect = spec.get("expect") or ""
+            if expect and expect != info["version"] and not (len(expect) >= 7 and info["commit"].startswith(expect)):
+                raise UpdateError("mismatch", "GitHub now offers %s, not the %s you were shown: check again" % ((info["commit"] or info["version"])[:12], expect[:12]))
+            if info["blocked"]:
+                raise UpdateError("blocked", info["blocked"])
+            if info["mode"] == "unsigned" and not spec.get("accept_unsigned"):
+                raise UpdateError("consent", "this update is not signed (SHA-256 only): pass --accept-unsigned, or tick the box in the web UI")
+            if info["state"] == "current" and not force:
+                rec.emit("result", "ok", "already up to date (%s)" % cur)
+                code, state = EXIT_OK, "current"
+                return code
+            if info["state"] == "older" and not force:
+                raise UpdateError("older", "version %s is older than the installed %s (use --force to downgrade)" % (info["version"], cur))
+            why = preflight(cfg, runner, force)
+            if why:
+                raise UpdateError("unhealthy", why)
+            os.makedirs(_update_dir(cfg), mode=0o700, exist_ok=True)
+            work = tempfile.mkdtemp(prefix="stage-", dir=_update_dir(cfg))
+            phase = "download"
+            rec.emit("download", "start", "downloading")
+            src = gh.stage(cfg, runner, info, work, rec.emit)
+        elif spec["mode"] == "dir":
+            vf = os.path.join(src or "", "VERSION")
+            rec.set(to=(read_text(vf).strip().splitlines() or [None])[0] if os.path.isfile(vf) else None)
+        phase = "update"
+        upd = Updater(cfg, runner, rec.emit, probe=probe, health_timeout=health_timeout, sleep=sleep)
+        delay = float(spec.get("restart_delay") or 0)
+        if delay > 0:
+            upd.before_restart = lambda: sleep(delay)
+        code = upd.rollback() if spec["mode"] == "rollback" else upd.update(src, force=force)
+        if code == EXIT_OK:
+            rec.set(to=upd.installed_version())
+        state = {EXIT_OK: "ok", EXIT_REFUSED: "refused", EXIT_ROLLED_BACK: "rolled_back", EXIT_ROLLBACK_FAILED: "rollback_failed"}[code]
+    except UpdateError as e:
+        step = {"consent": "consent", "blocked": "check", "mismatch": "check", "older": "check", "unhealthy": "health"}.get(e.kind, phase)
+        rec.emit(step, "fail", e.message)
+        code, state = EXIT_REFUSED, "refused"
+    except Exception as e:                                         # noqa: BLE001
+        traceback.print_exc(file=sys.stderr)
+        rec.emit("result", "fail", "unexpected error: %s" % type(e).__name__)
+        code, state = (EXIT_ROLLBACK_FAILED if phase == "update" else EXIT_REFUSED), "failed"
+    finally:
+        if work:
+            shutil.rmtree(work, ignore_errors=True)
+        if held is not None or rec.data.get("state") == "running":
+            rec.finish(state, code)
+            update_audit(cfg, rec, "mgmt-update", "%s (exit %d)" % (state, code))
+        lock.release(held)
+    return code
+
+
+def default_source(src: str) -> str:
+    return "app" if os.path.basename(os.path.normpath(src)).startswith(APP_STAGE_PREFIX) else "manual"
+
+
+def run_update_cli(args: argparse.Namespace, cfg: Config, runner: Runner, emit: Callable[[str, str, str], None]) -> int:
+    """`update --from DIR | --from-github [--ref R] [--check] | --rollback | --status` (called by run_cli after the root check)."""
+    who = args.by or os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
+    ip = (os.environ.get("SSH_CONNECTION") or "-").split()[0]
+    meta = {"by": who[:64], "ip": ip, "via": args.via or "cli"}
+    if args.status:
+        reap_jobs(cfg)
+        print(json.dumps(update_state(cfg), separators=(",", ":")) if args.json else "installed: %s" % (installed_info(cfg)[0] or "unknown"), flush=True)
+        return EXIT_OK
+    if args.check:
+        if not args.from_github:
+            emit("check", "fail", "--check needs --from-github")
+            return EXIT_REFUSED
+        try:
+            info = GithubSource(HttpFetcher()).check(cfg, "main" if args.ref else "stable", args.ref or "")
+        except UpdateError as e:
+            emit("check", "fail", e.message)
+            return EXIT_REFUSED
+        print(json.dumps(info, separators=(",", ":")) if args.json else "%s: %s (installed %s) - %s" % (info["channel"], info["version"], info["installed"] or "none", info["state"]), flush=True)
+        return EXIT_OK
+    spec: dict[str, Any] = {"force": args.force, "restart_delay": args.restart_delay, "accept_unsigned": args.accept_unsigned, "expect": args.expect or "", "src": None}
+    if args.rollback:
+        spec["mode"] = "rollback"
+        meta.update(kind="rollback", source="rollback")
+    elif args.from_github:
+        spec.update(mode="github", channel="main" if args.ref else "stable", ref=args.ref or "")
+        if args.ref:
+            try:
+                valid_ref(args.ref)
+            except UpdateError as e:
+                emit("check", "fail", e.message)
+                return EXIT_REFUSED
+        meta["source"] = "github-main" if args.ref else "github-stable"
+    elif args.src:
+        spec.update(mode="dir", src=args.src)
+        meta["source"] = args.source if args.source in UPDATE_SOURCES else default_source(args.src)
+    else:
+        emit("verify", "fail", "update needs --from DIR, --from-github or --rollback")
+        return EXIT_REFUSED
+    if args.job_id:
+        rec = JobRecord.load(cfg, args.job_id)
+        if rec is None:
+            emit("verify", "fail", "unknown job id")
+            return EXIT_REFUSED
+        rec.data.update({k: v for k, v in meta.items() if not rec.data.get(k)})
+    else:
+        rec = JobRecord.create(cfg, **meta)
+    rec.echo = emit
+    return run_update_flow(cfg, runner, spec, rec, health_timeout=args.health_timeout)
+
+
+# ---- state and web routes ----------------------------------------------------------
+
+def update_state(cfg: Config) -> dict:
+    reap_jobs(cfg)
+    inst, sha = installed_info(cfg)
+    prev = read_text(os.path.join(cfg.p(INSTALL_DIR + ".prev"), "VERSION")).strip().splitlines()
+    jobs = list_jobs(cfg)
+    active = next((j for j in jobs if j.data.get("state") in ("queued", "running")), None)
+    lock = JobLock(cfg).holder()
+    s = load_update_settings(cfg)
+    chk = load_check(cfg)
+    if chk:
+        chk["state"], chk["installed"] = _cmp_state(chk["version"], inst, chk.get("channel", "stable")), inst
+    return {"ok": True, "installed": inst, "sha256": sha, "previous": prev[0] if prev else None, "channel": s["channel"], "ref": s["ref"], "check": chk,
+            "active": active.id if active else None, "busy": (lock or {}).get("kind"), "jobs": [j.summary() for j in jobs],
+            "signed": update_pubkey(cfg) != UPDATE_PLACEHOLDER_KEY, "repo": UPDATE_REPO}
+
+
+def _channel_ref(body: dict) -> tuple[str, str]:
+    ch = body.get("channel")
+    if ch not in UPDATE_CHANNELS:
+        raise ApiError(400, "channel must be stable or main")
+    try:
+        return ch, (valid_ref(body.get("ref") or "main") if ch == "main" else "")
+    except UpdateError as e:
+        raise ApiError(400, e.message)
+
+
+@route("GET", "/api/update")
+def api_update(req: Request) -> dict:
+    return update_state(req.app.cfg)
+
+
+@route("POST", "/api/update/check", mutating=False)
+def api_update_check(req: Request) -> dict:
+    app = req.app
+    ch, ref = _channel_ref(req.body)
+    try:
+        info = GithubSource(getattr(app, "update_fetch", None) or HttpFetcher()).check(app.cfg, ch, ref)
+    except UpdateError as e:
+        raise ApiError(502 if e.kind in ("offline", "http", "rate_limit") else 400, e.message)
+    save_update_settings(app.cfg, ch, ref or "main")
+    write_atomic(_update_dir(app.cfg, "check.json"), json.dumps(info, separators=(",", ":")), mode=0o600)
+    return {"ok": True, "check": info}
+
+
+def launch_update_job(app: App, argv: list[str], jid: str) -> None:
+    """Start the job OUTSIDE this service's cgroup (a transient systemd unit), so restarting the service cannot kill it."""
+    custom = getattr(app, "update_launcher", None)
+    if custom:
+        custom(argv)
+        return
+    full = [sys.executable or "/usr/bin/python3", app.script_path] + argv
+    if app.cfg.root:
+        full += ["--root", app.cfg.root] + (["--dry-run"] if app.cfg.dry_run else [])
+    if app.runner.which("systemd-run") and not app.cfg.dry_run:
+        r = app.run(["systemd-run", "--unit", "synofurb-mgmt-update-" + jid[:8], "--collect", "--quiet", "--description", "synofurb management plane update",
+                     "--setenv=PYTHONUNBUFFERED=1", "--setenv=PYTHONDONTWRITEBYTECODE=1", "--"] + full, timeout=20)
+        if not r.ok:
+            raise ApiError(500, "could not start the update job: " + (r.err or r.out).strip()[:200])
+        return
+    subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=RealRunner.ENV)
+
+
+def _start_job(req: Request, argv: list[str], **meta: Any) -> dict:
+    app = req.app
+    reap_jobs(app.cfg)
+    h = JobLock(app.cfg).holder()
+    if h or any(j.data.get("state") in ("queued", "running") for j in list_jobs(app.cfg, 30)):
+        raise ApiError(409, "another job is running (%s): wait for it to finish" % ((h or {}).get("kind") or "update"))
+    rec = JobRecord.create(app.cfg, by=req.user or "-", ip=req.ip, via="web", **meta)
+    try:
+        launch_update_job(app, ["update", "--json", "--job-id", rec.id, "--by", req.user or "-", "--via", "web", "--restart-delay", "3"] + argv, rec.id)
+    except ApiError as e:
+        rec.emit("result", "fail", e.message)
+        rec.finish("failed", EXIT_REFUSED)
+        raise
+    req.audit_note = "job " + rec.id
+    return {"ok": True, "job": rec.id}
+
+
+@route("POST", "/api/update/start")
+def api_update_start(req: Request) -> dict:
+    b = req.body
+    ch, ref = _channel_ref(b)
+    expect = b.get("expect")
+    if not isinstance(expect, str) or not re.fullmatch(r"[0-9A-Za-z.+-]{1,40}", expect):
+        raise ApiError(400, "expect must be the version or commit that was shown")
+    if ch == "main":
+        need_confirm(b, expect[:7])
+    argv = ["--from-github", "--expect", expect] + (["--ref", ref] if ch == "main" else []) + (["--accept-unsigned"] if b.get("accept_unsigned") is True else []) + (["--force"] if b.get("force") is True else [])
+    return _start_job(req, argv, source="github-" + ch, ref=ref)
+
+
+@route("POST", "/api/update/rollback")
+def api_update_rollback(req: Request) -> dict:
+    if not os.path.isfile(os.path.join(req.app.cfg.p(INSTALL_DIR + ".prev"), "synofurb_mgmt.py")):
+        raise ApiError(409, "no previous version is kept")
+    return _start_job(req, ["--rollback"], kind="rollback", source="rollback")
+
+
+def _job_id(body: dict) -> str:
+    jid = body.get("job")
+    if not isinstance(jid, str) or not re.fullmatch(r"[0-9a-f]{16}", jid):
+        raise ApiError(400, "bad job id")
+    return jid
+
+
+@route("POST", "/api/update/job", mutating=False)
+def api_update_job(req: Request) -> dict:
+    reap_jobs(req.app.cfg)
+    rec = JobRecord.load(req.app.cfg, _job_id(req.body))
+    if rec is None:
+        raise ApiError(404, "no such job")
+    return {"ok": True, "job": rec.summary(), "events": rec.data.get("events", [])}
+
+
+@route("POST", "/api/update/progress", auth=False, mutating=False)
+def api_update_progress(req: Request) -> dict:
+    """What the page can still read after the restart dropped its session: state and version numbers only, found by the unguessable job id."""
+    rec = JobRecord.load(req.app.cfg, _job_id(req.body))
+    if rec is None:
+        raise ApiError(404, "no such job")
+    s = rec.summary()
+    return {"ok": True, "job": {k: s[k] for k in ("id", "kind", "state", "step", "from", "to", "finished")}}
+
+
 def run_cli(args: argparse.Namespace, cfg: Config, runner: Runner) -> int:
     """Dispatch ``health`` and ``update``. Exit codes: 0 ok, 2 refused/bad input, 3 failed and rolled back, 4 failed and rollback failed."""
     if args.command == "health":
@@ -4319,13 +5391,7 @@ def run_cli(args: argparse.Namespace, cfg: Config, runner: Runner) -> int:
     if not cfg.root and os.geteuid() != 0:
         emit("verify", "fail", "must run as root")
         return EXIT_REFUSED
-    upd = Updater(cfg, runner, emit, health_timeout=args.health_timeout)
-    if args.rollback:
-        return upd.rollback()
-    if not args.src:
-        emit("verify", "fail", "update needs --from DIR or --rollback")
-        return EXIT_REFUSED
-    return upd.update(args.src, force=args.force)
+    return run_update_cli(args, cfg, runner, emit)
 
 
 # ============================================================================
@@ -4360,15 +5426,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--dry-run", action="store_true", help="never modify the system; record commands only")
     ap.add_argument("--no-tls", action="store_true", help="plain HTTP (development only, requires --dry-run)")
     ap.add_argument("--net-rollback", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("command", nargs="?", choices=("health", "update"), help="health --json | update --from DIR | update --rollback (no server is started)")
+    ap.add_argument("command", nargs="?", choices=("health", "update", "addons", "certs", "proxy"), help="health --json | update --from DIR | update --rollback (no server is started)")
     ap.add_argument("--json", action="store_true", help="machine-readable output (health, update)")
     ap.add_argument("--quick", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--from", dest="src", help="update: directory with the new version and MANIFEST.sha256")
     ap.add_argument("--force", action="store_true", help="update: allow installing an older version")
     ap.add_argument("--rollback", action="store_true", help="update: restore the previous version")
     ap.add_argument("--health-timeout", type=float, default=30.0, help=argparse.SUPPRESS)
+    ap.add_argument("--from-github", action="store_true", help="update: fetch from GitHub (newest release; with --ref the apps/mgmt-plane folder of that branch or tag)")
+    ap.add_argument("--ref", help="update --from-github: branch or tag of the monorepo (default: the newest release asset)")
+    ap.add_argument("--check", action="store_true", help="update --from-github: only look; change nothing")
+    ap.add_argument("--status", action="store_true", help="update: installed version and the last updates")
+    ap.add_argument("--accept-unsigned", action="store_true", help="update --from-github: accept a download that has a SHA-256 but no signature")
+    ap.add_argument("--source", help=argparse.SUPPRESS)
+    ap.add_argument("--by", help=argparse.SUPPRESS)
+    ap.add_argument("--via", help=argparse.SUPPRESS)
+    ap.add_argument("--job-id", help=argparse.SUPPRESS)
+    ap.add_argument("--expect", help=argparse.SUPPRESS)
+    ap.add_argument("--restart-delay", type=float, default=0.0, help=argparse.SUPPRESS)
     ap.add_argument("--raid-scrub", action="store_true", help=argparse.SUPPRESS)
-    return ap.parse_args(argv)
+    args, extra = ap.parse_known_args(argv)
+    if extra and args.command not in ("addons", "certs", "proxy"):      # these have their own parsers (synofurb_addons.cli_main, synofurb_edge.cli_main)
+        ap.error("unrecognized arguments: %s" % " ".join(extra))
+    args.addons_argv = extra
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -4391,6 +5472,10 @@ def main(argv: list[str] | None = None) -> int:
         print("error: must run as root (or use --dry-run)", file=sys.stderr)
         return 2
     runner: Runner = DryRunRunner(passthrough=True, verbose=not args.command) if args.dry_run else RealRunner()
+    if args.command == "addons":
+        return addons_cli(args, args.addons_argv, cfg, runner)
+    if args.command in ("certs", "proxy"):
+        return edge_cli(args, args.addons_argv, cfg, runner)
     if args.command:
         return run_cli(args, cfg, runner)
     if args.dry_run:
@@ -4405,6 +5490,13 @@ def main(argv: list[str] | None = None) -> int:
         app.audit.log("system", "-", "raid-scrub", {}, "ok: started %d check(s)" % n)
         return 0
     startup_recovery(app)
+    if edge_mod is not None:
+        try:
+            if edge_for(app).proxy.startup_recovery():
+                app.audit.log("system", "-", "proxy.revert", {}, "ok: unconfirmed front change reverted at startup")
+        except Exception:                                     # noqa: BLE001 - never stop the web UI from starting
+            traceback.print_exc(file=sys.stderr)
+    reap_jobs(cfg)
     ctx = None
     if cfg.tls:
         cert, key = ensure_tls(cfg, runner, socket.gethostname(), app.ip_addresses())
@@ -4621,6 +5713,11 @@ _LUCIDE = {
     'scroll-text': '<path d="M15 12h-5" /> <path d="M15 8h-5" /> <path d="M19 17V5a2 2 0 0 0-2-2H4" /> <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3" />',
     'clipboard-copy': '<rect width="8" height="4" x="8" y="2" rx="1" ry="1" /> <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /> <path d="M16 4h2a2 2 0 0 1 2 2v4" /> <path d="M21 14H11" /> <path d="m15 10-4 4 4 4" />',
     'bell': '<path d="M10.268 21a2 2 0 0 0 3.464 0" /> <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />',
+    'container': '<path d="M22 7.7c0-.6-.4-1.2-.8-1.5l-6.3-3.9a1.72 1.72 0 0 0-1.7 0l-10.3 6c-.5.2-.9.8-.9 1.4v6.6c0 .5.4 1.2.8 1.5l6.3 3.9a1.72 1.72 0 0 0 1.7 0l10.3-6c.5-.3.9-1 .9-1.5Z" /> <path d="M10 21.9V14L2.1 9.1" /> <path d="m10 14 11.9-6.9" /> <path d="M14 19.8v-8.1" /> <path d="M18 17.5V9.4" />',
+    'camera': '<path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z" /> <circle cx="12" cy="13" r="3" />',
+    'play': '<path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" />',
+    'square': '<rect width="18" height="18" x="3" y="3" rx="2" />',
+    'globe': '<circle cx="12" cy="12" r="10" /> <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /> <path d="M2 12h20" />',
 }
 _BRAND = {
     'mark': ('0 0 100 100', '<path d="M68.43 48.92L78.91 67.07Q82.91 74.00 74.91 74.00L65.63 74.00" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="52.63,74.00 66.63,63.64 66.63,84.36" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><path d="M46.05 74.00L25.09 74.00Q17.09 74.00 21.09 67.07L25.73 59.04" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="32.23,47.78 34.20,65.08 16.26,54.72" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><path d="M35.52 42.08L46.00 23.93Q50.00 17.00 54.00 23.93L58.64 31.96" fill="none" stroke="#7139CB" stroke-width="8.6" stroke-linecap="butt" stroke-linejoin="round"/><polygon points="65.14,43.22 49.17,36.28 67.11,25.92" fill="#7139CB" stroke="#7139CB" stroke-width="1.6" stroke-linejoin="round"/><rect x="38.50" y="48.25" width="23" height="15.5" rx="4.34" fill="#0A0A0A"/><rect x="42.18" y="54.45" width="10.58" height="3.10" rx="1.55" fill="#FFFFFF"/><circle cx="56.90" cy="56.00" r="2.32" fill="#04853A"/>'),
@@ -4769,10 +5866,37 @@ COPY.update({
     "raid.need2": _c("Needs 2 disks", "tip"), "raid.need4": _c("Needs 4 disks", "tip"), "raid.needeven": _c("Needs an even number", "tip"), "api.expired": _c("Session expired.", "prose"),
     "help.back": _c("Back", "button"), "help.docs": _c("Open docs", "button"),
 })
+# ---- copy for the Add-ons page (same budgets: label <= 4 words, button <= 3, tip <= 12) ----
+COPY.update({
+    "nav.addons": _c("Add-ons"), "ad.installed": _c("Installed"), "ad.available": _c("Available"),
+    "ad.install": _c("Install", "button"), "ad.retry": _c("Retry", "button", "The last install did not finish; try it again."), "ad.open": _c("Open", "button", "Open the app's web page."),
+    "ad.start": _c("Start", "button"), "ad.stop": _c("Stop", "button"), "ad.restart": _c("Restart", "button"), "ad.update": _c("Update", "button", "Download newer images and restart; data is kept."),
+    "ad.logs": _c("Logs", "button"), "ad.remove": _c("Remove", "button"), "ad.details": _c("Details", "button"), "ad.refresh": _c("Refresh", "button"), "ad.view": _c("View", "button"),
+    "ad.help": _c("Help", "button"), "ad.lines": _c("Lines"), "ad.hide": _c("Hide", "button"), "ad.progress": _c("Progress"), "ad.rev": _c("Revision"),
+    "ad.why_priv": _c("Accept the privileges first.", "safety"), "ad.why_type": _c("Type the name first.", "safety"),
+    "ad.st.running": _c("Running", "label", "Containers run and the health check answers."), "ad.st.stopped": _c("Stopped", "label", "Installed, but not running."),
+    "ad.st.starting": _c("Starting", "label", "Running; the health check does not answer yet."), "ad.st.installing": _c("Installing", "label", "A job is installing it."),
+    "ad.st.updating": _c("Updating", "label", "A job is updating it."), "ad.st.removing": _c("Removing", "label", "A job is removing it."),
+    "ad.st.unhealthy": _c("Not answering", "label", "Running, but the health check fails; see the logs."), "ad.st.error": _c("Problem", "label", "A container keeps stopping; see the logs."),
+    "ad.st.needs-attention": _c("Needs attention", "label", "The last operation failed; see the details."), "ad.st.not-installed": _c("Not installed", "label"),
+    "ad.priv.docker-socket": _c("Docker control", "label", "Full control of Docker here, which is the same as root."),
+    "ad.priv.host-network": _c("Host network", "label", "Shares this unit's network; its ports are not isolated."),
+    "ad.priv.privileged": _c("Privileged", "label", "Unrestricted access to hardware and kernel."), "ad.priv.cap": _c("Extra capability", "label", "An extra kernel capability for the container."),
+    "ad.install_t": _c("Install {name}", "title"), "ad.settings": _c("Settings"), "ad.privs": _c("Privileges"), "ad.devices": _c("Devices"), "ad.storage": _c("Storage"),
+    "ad.changes": _c("Changes to this unit"), "ad.accept": _c("I accept these privileges", "safety"), "ad.present": _c("Found"), "ad.absent": _c("Not found"),
+    "ad.absent_warn": _c("Not found: the app may not start.", "prose"), "ad.free": _c("free"), "ad.once": _c("Used on first install only.", "tip"),
+    "ad.secret_set": _c("Set; leave empty to keep it.", "tip"), "ad.needs": _c("Install {name} first.", "safety"), "ad.noweb": _c("No web page.", "prose"),
+    "ad.update_q": _c("Update {name}?", "title"), "ad.update_b": _c("Newer images are downloaded and the app restarts. Your data is kept.", "prose"),
+    "ad.remove_q": _c("Remove {name}?", "title"), "ad.remove_b": _c("Containers are removed. Data is kept unless you tick the box.", "prose"),
+    "ad.deldata": _c("Delete data", "label", "Erases the settings, configuration and stored files for good."),
+    "ad.logs_t": _c("Logs of {name}", "title"), "ad.job_t": _c("{name}: {action}", "title"), "ad.busy": _c("A job is running", "title"), "ad.done": _c("Done."),
+    "ad.problems": _c("Not loaded", "title"), "ad.note": _c("After install", "label"), "ad.ports": _c("Ports"), "ad.homepage": _c("Project page", "button"), "ad.empty": _c("No add-ons.", "prose"),
+    "ad.act.install": _c("installing"), "ad.act.update": _c("updating"), "ad.act.remove": _c("removing"), "ad.act.start": _c("starting"), "ad.act.stop": _c("stopping"), "ad.act.restart": _c("restarting"),
+})
 # keys that are visible on the default RAID screen (no dialog open): the prose among them must stay within the page budget
 # Every key whose text is visible by default on a page (dialogs, popovers, tooltips and closed menus are not). Values shown from the system itself
 # (host names, sizes, states of real devices) are data and not counted. The budget: shell + page <= 60 words (design/v2/UX-SPEC.md section 9).
-COPY_SHELL = ["shell.brand", "shell.role", "nav.dashboard", "nav.storage", "nav.raid", "nav.mounts", "nav.network", "nav.users", "nav.boot", "nav.system", "nav.help", "nav.about"]
+COPY_SHELL = ["shell.brand", "shell.role", "nav.dashboard", "nav.storage", "nav.raid", "nav.mounts", "nav.addons", "nav.network", "nav.users", "nav.boot", "nav.system", "nav.help", "nav.about"]
 COPY_SCREENS = {
     "login": ["login.title", "login.user", "login.password", "login.go", "login.cert", "nav.help"],
     "dashboard": ["nav.dashboard", "dash.health", "dash.storage", "dash.memory", "dash.load", "dash.cpu", "dash.kernel", "dash.microcode", "nav.network", "dash.disks", "act.smart",
@@ -4781,6 +5905,7 @@ COPY_SCREENS = {
     "raid": ["raid.title", "raid.create", "raid.arrays", "raid.hybrid", "raid.empty", "raid.members", "raid.size", "raid.usedby", "raid.monthly", "raid.actions",
              "state.clean", "state.degraded", "ms.active", "act.add_spare", "act.replace", "act.check", "shr.add", "shr.slice"],
     "mounts": ["nav.mounts", "mnt.mounted", "mnt.imported", "col.mount", "col.device", "col.type", "col.used", "mnt.fstab", "act.unmount"],
+    "addons": ["nav.addons", "ad.installed", "ad.available", "col.name", "col.state", "ad.install", "ad.open", "ad.retry", "ad.needs"],
     "network": ["nav.network", "net.ipv4", "net.mac", "act.edit"],
     "users": ["nav.users", "usr.new", "col.name", "col.groups", "col.keys", "col.state"],
     "boot": ["nav.boot", "boot.return_dsm", "boot.entries", "boot.default", "boot.failsafe", "boot.missing", "boot.set_default", "boot.reboot_go", "boot.flash", "boot.part1", "boot.part2", "boot.backup"],
@@ -4817,7 +5942,63 @@ HELP_TOPICS: list[dict] = [
      "body": "Network changes are applied for 90 seconds. If you can still reach this page at the new address, press Keep. Otherwise the previous settings return by themselves, so a wrong address never locks you out."},
     {"id": "boot", "title": "Boot manager", "keywords": "boot dsm debian fail-safe",
      "body": "On units that boot from an internal flash, you choose what starts next. DSM stays on the flash untouched, so Return to DSM always works. Setting another entry only changes the default."},
+    {"id": "addons", "title": "Add-ons", "keywords": "docker portainer container frigate plex app install plugin compose image",
+     "body": "Add-ons are apps that run in Docker on this unit. Docker comes first. Portainer then manages the containers in a web page.\n\nBefore an install, the dialog lists the privileges, devices and folders the app asks for. Large data such as recordings and media stays on the redundant data volume. An app that can reach the Docker socket controls everything on this unit, so install only what you trust.\n\nRemove keeps your data. Tick Delete data to erase it for good; you then type the name. Images come from the Internet, so installs and updates need a connection. Secrets such as camera addresses are stored privately and never shown again."},
 ]
+
+
+# ---- Updates page (management plane self-update) ----
+COPY.update({
+    "nav.updates": _c("Updates"),
+    "upd.installed": _c("Installed"), "upd.available": _c("Available"), "upd.channel": _c("Channel"), "upd.ref": _c("Branch or tag"),
+    "upd.stable": _c("Stable", "button", "The newest release of the management plane."),
+    "upd.main": _c("Main", "button", "The source folder of a branch or tag; it is for testing and never signed."),
+    "upd.check": _c("Check", "button", "Ask GitHub for the newest version."), "upd.now": _c("Update now", "button"),
+    "upd.rollback": _c("Roll back", "button", "Return to the version that was installed before."), "upd.notes": _c("Release notes", "button"),
+    "upd.history": _c("History"), "upd.when": _c("When"), "upd.from": _c("From"), "upd.to": _c("To"), "upd.source": _c("Source"), "upd.result": _c("Result"),
+    "upd.new": _c("New", "label", "A newer version is available."), "upd.uptodate": _c("Up to date"),
+    "upd.older": _c("Older", "label", "GitHub offers an older version than the installed one."),
+    "upd.same": _c("Same version", "label", "The source may still differ from what is installed."),
+    "upd.unsigned": _c("Not signed", "label", "Only the SHA-256 is checked, so a tampered release would not be noticed."),
+    "upd.signed": _c("Signed", "label", "The signature of this release was verified."),
+    "upd.consent": _c("I understand and want to update", "safety"),
+    "upd.why_consent": _c("Tick the box first.", "safety"), "upd.why_typed": _c("Type the commit first.", "safety"),
+    "upd.why_current": _c("Already up to date.", "safety"), "upd.why_reload": _c("Reload the page first.", "safety"), "upd.why_older": _c("Only an older version is offered.", "safety"),
+    "upd.src.app": _c("Desktop app"), "upd.src.manual": _c("Command line"), "upd.src.github-stable": _c("GitHub release"), "upd.src.github-main": _c("GitHub source"),
+    "upd.src.rollback": _c("Roll back"),
+    "upd.s.ok": _c("Updated"), "upd.s.refused": _c("Refused"), "upd.s.rolled_back": _c("Rolled back"), "upd.s.rollback_failed": _c("Rollback failed"),
+    "upd.s.failed": _c("Failed"), "upd.s.running": _c("Running"), "upd.s.queued": _c("Running"), "upd.s.current": _c("Up to date"),
+    "upd.step.lock": _c("Lock"), "upd.step.check": _c("Check"), "upd.step.download": _c("Download"), "upd.step.consent": _c("Consent"), "upd.step.verify": _c("Verify"),
+    "upd.step.stage": _c("Stage"), "upd.step.swap": _c("Swap"), "upd.step.restart": _c("Restart"), "upd.step.health": _c("Health"), "upd.step.rollback": _c("Roll back"),
+    "upd.step.result": _c("Done"),
+    "upd.confirm_q": _c("Update to {v}?", "title"), "upd.rb_q": _c("Roll back to {v}?", "title"),
+    "upd.restart_note": _c("The web UI restarts briefly and goes back if the update fails.", "prose"),
+    "upd.restarting": _c("Restarting. This page reconnects by itself.", "prose"), "upd.signin": _c("Sign in again", "button"), "upd.reload": _c("Reload", "button"),
+    "upd.done": _c("Updated to {v}.", "prose"), "upd.rolled": _c("Rolled back to {v}.", "prose"), "upd.refused": _c("Update refused.", "prose"),
+    "upd.failed": _c("Update failed.", "prose"), "upd.rbfail": _c("Rollback failed. Check the unit.", "prose"), "upd.busy": _c("Another job is running.", "prose"),
+    "upd.nocheck": _c("Check first.", "safety"), "upd.none": _c("No updates yet.", "prose"), "upd.unchecked": _c("Not checked", "label"),
+    "upd.plane": _c("Management plane"), "upd.force": _c("Update anyway", "button"), "upd.force_note": _c("The unit reports a problem.", "prose"),
+})
+COPY_SHELL.append("nav.updates")
+COPY_SCREENS["updates"] = ["nav.updates", "upd.plane", "upd.installed", "upd.available", "upd.channel", "upd.stable", "upd.main", "upd.check", "upd.now", "upd.rollback", "upd.history",
+                           "upd.when", "upd.from", "upd.to", "upd.source", "upd.result", "upd.nocheck"]
+HELP_TOPICS.append(
+    {"id": "updates", "title": "Updates", "keywords": "update upgrade version github release channel rollback signed unsigned sha-256 app push",
+     "body": "Stable installs the newest release of the management plane from GitHub. Main installs the source folder of a branch or tag: it is for testing and is never signed.\n\n"
+             "Releases are not signed yet. synofurb checks the SHA-256 listed in the same release, which catches a damaged download but not a tampered release, so you confirm once per update.\n\n"
+             "The web UI restarts for a few seconds. If the new version does not answer within 30 seconds, the previous one comes back by itself; Roll back returns to it later.\n\n"
+             "The desktop app can push an update without Internet; it appears in the history as Desktop app. Checks go to GitHub only, over https, with no account or token."})
+
+
+# ---- Certificates and Hostnames pages (synofurb_edge.py owns their copy, help topics and script; docs/CERTIFICATES.md) ----
+_EDGE_NAV = _EDGE_CSS = _EDGE_JS = ""
+if edge_mod is not None:
+    _ec, _es, _eshell, _eh = edge_mod.ui_copy(_c)
+    COPY.update(_ec)
+    COPY_SCREENS.update(_es)
+    COPY_SHELL.extend(_eshell)
+    HELP_TOPICS.extend(_eh)
+    _EDGE_NAV, _EDGE_CSS, _EDGE_JS = edge_mod.UI_NAV, edge_mod.UI_CSS, edge_mod.UI_JS
 
 
 _UI_TEMPLATE = r"""<!doctype html>
@@ -5007,9 +6188,10 @@ dialog.wide{width:min(840px,calc(100vw - 24px))}
 dialog::backdrop{background:rgb(0 0 0/.6)}
 .dh{display:flex;gap:12px;align-items:flex-start;padding:20px 20px 0}.dh h3{font-size:16px;line-height:21px;font-weight:600}.dh p{margin:2px 0 0;color:var(--fg-2);font-size:13px}
 .dh>.ic{width:22px;height:22px;margin-top:1px;color:var(--accent-fg)}.dh.bad>.ic{color:var(--err-solid)}
-.db{padding:16px 20px 4px}
+.db{padding:16px 20px 4px;overflow:auto;min-height:0}
+dialog[open]{display:flex;flex-direction:column;max-height:calc(100vh - 32px)}.dh,.df{flex:none}
 .df{display:flex;gap:8px;justify-content:flex-end;padding:14px 20px;background:var(--surface-2);border-top:1px solid var(--border);margin-top:12px;flex-wrap:wrap}
-.err{color:var(--err-fg);display:flex;gap:6px;margin:0 0 10px;font-size:13px;font-weight:600}
+div.err{color:var(--err-fg);display:flex;gap:6px;margin:0 0 10px;font-size:13px;font-weight:600}
 /* login */
 .lw{min-height:100vh;display:grid;place-items:center;padding:16px}
 .lw>div{width:min(400px,100%)}
@@ -5027,6 +6209,11 @@ dialog::backdrop{background:rgb(0 0 0/.6)}
 .sk{color:var(--fg-2);padding:24px 0}
 td .chk{white-space:nowrap;margin:0}
 details>summary{cursor:pointer}
+/* updates page */
+.us{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.us li{display:flex;gap:8px;align-items:center;color:var(--fg-2)}.us li.run{color:var(--fg);font-weight:600}.us li.ok{color:var(--ok-fg)}.us li.fail{color:var(--err-fg);font-weight:600}
+.us li small{margin-left:auto;font-weight:400;color:var(--fg-2);overflow-wrap:anywhere;text-align:right}
+.upd-ref{max-width:220px}
 /* wide: two-column grids collapse */
 @media (max-width:1000px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.cols{grid-template-columns:1fr}.steps div span{display:none}.steps .cur span{display:inline}}
 /* phone: bottom tab bar, 44 px controls, tables as cards, stacked banner with full-width buttons */
@@ -5064,6 +6251,7 @@ details>summary{cursor:pointer}
  table.st td::before{content:attr(data-l);color:var(--fg-2);font-size:12px;font-weight:600;text-align:left;flex:none}
  table.st td[data-l=""]::before{content:none}
  table.st td[data-l=""]{justify-content:flex-start;text-align:left}
+ .hres{align-items:flex-end;text-align:right}
  table.st tr.attn>td:first-child,table.st tr.bad>td:first-child{border-left:0}
  table.st tr.attn{border-left:3px solid var(--warn-solid)}table.st tr.bad{border-left:3px solid var(--err-solid)}
  table.st tbody tr:hover td{background:none}
@@ -5097,7 +6285,10 @@ details>summary{cursor:pointer}
 .helpsearch{max-width:420px;margin:0 0 16px}
 .helpbody p,.card .cb p{max-width:68ch}
 input[type=search]{width:100%}
-.btn[aria-disabled=true]{background:var(--surface-2);color:var(--fg-2);border:1px dashed var(--border-strong);cursor:not-allowed}
+.btn[aria-disabled=true],.btn[aria-disabled=true]:is(:hover,:active,.primary,.danger){background:var(--surface-2);color:var(--fg-2);border:1px dashed var(--border-strong);cursor:not-allowed;font-weight:600}
+/* a control that is off keeps its reason as visible text beside it (a disabled button swallows hover, focus and touch) */
+.why{display:flex;gap:6px;align-items:flex-start;font-size:12px;line-height:16px;color:var(--fg-2)}.why .ic{margin-top:1px}
+.df .why{flex:1 1 180px;margin-right:auto;align-self:center}
 /* themed scrollbars */
 *{scrollbar-width:thin;scrollbar-color:var(--border-strong) transparent}
 *::-webkit-scrollbar{width:12px;height:12px}*::-webkit-scrollbar-track{background:transparent}
@@ -5121,6 +6312,23 @@ ul.cred{list-style:none;margin:0;padding:0}ul.cred li{display:flex;align-items:c
 pre.lic{max-height:60vh;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:18px}
 .cb>.btn+h2{margin-top:14px}.card article p,.helpbody p{max-width:68ch}
 textarea.mono{width:100%}
+/* add-ons */
+.agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin:0 0 16px}
+.acard{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--e1);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.acard p{margin:0;color:var(--fg-2)}
+.acard .ft{margin-top:auto;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.aname{display:flex;gap:12px;align-items:center;min-width:0}.aname b{overflow-wrap:anywhere}.anm{display:flex;flex-direction:column;min-width:0}
+.adet{color:var(--fg-2);font-size:12px;line-height:16px;font-weight:400;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.aico{width:40px;height:40px;border-radius:8px;background:var(--accent-bg);color:var(--accent-fg);display:inline-flex;align-items:center;justify-content:center;flex:none}
+.sec{margin:20px 0 12px}
+.dsec{margin:0 0 16px}.dsec>h4{margin:0 0 8px;font:600 14px/20px var(--font-ui)}
+.dsec .row{margin-bottom:6px}
+/*__EDGE_CSS__*/
+pre.code.log2{max-height:50vh;min-height:120px}
+.chips .chip{white-space:normal;height:auto;min-height:24px;padding:4px 8px;max-width:100%;overflow-wrap:anywhere}
+#main:focus,#main:focus-visible{outline:none}
+.hres{display:flex;flex-direction:column;gap:4px;align-items:flex-start}.hres small{color:var(--fg-2);font-size:12px;line-height:16px;overflow-wrap:anywhere;max-width:40ch}
+dialog.wide progress{margin:0 0 10px}
 @media (max-width:1000px){.helpcols{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}.spin{animation:none}}
 @media (forced-colors:active){.btn,.badge,.card,.tile,.opt{border:1px solid ButtonText}.opt.sel{outline:2px solid Highlight}}
@@ -5342,16 +6550,26 @@ function brandSvg(key, cls) {
 const logo = (kind, label) => h('span', {class: 'logo ' + kind, role: 'img', 'aria-label': label || 'synofurb'}, brandSvg(kind === 'mark' ? 'mark' : 'logo', 'lg-l'), brandSvg(kind === 'mark' ? 'mark_dark' : 'logo_dark', 'lg-d'));
 /* popover (native popover attribute: Esc and click-outside close it) */
 let popN = 0;
-function popover(trigger, content, icon) {
+function popover(trigger, content, icon, label) {
   const id = 'pop' + (++popN);
   const p = h('div', {id, popover: 'auto', class: 'popover', role: 'dialog'}, content);
-  const b = h('button', {type: 'button', class: 'btn ghost sm', popovertarget: id}, icon ? ic(icon, 'sm') : null, trigger);
+  const b = h('button', {type: 'button', class: 'btn ghost sm', popovertarget: id, 'aria-label': label ? trigger + ': ' + label : null}, icon ? ic(icon, 'sm') : null, trigger);
   p.addEventListener('toggle', ev => {
     if (ev.newState !== 'open') return;
     const r = b.getBoundingClientRect(), w = p.offsetWidth;
     p.style.left = Math.max(12, Math.min(r.left, innerWidth - w - 12)) + 'px'; p.style.top = (r.bottom + 6) + 'px';
   });
   return h('span', {class: 'popwrap'}, b, p);
+}
+/* a control that is off for a reason: aria-disabled keeps it focusable, clicks are ignored, and the reason is visible text the control points to with aria-describedby
+   (a native disabled button swallows hover, focus and touch, so a tooltip on it is never seen) */
+let whyN = 0;
+const whyLine = () => h('small', {class: 'why', id: 'why' + (++whyN), role: 'status', hidden: true});
+function setOff(b, line, text, show) {
+  if (!b._off) { b._off = true; b.addEventListener('click', ev => { if (b.getAttribute('aria-disabled') === 'true') { ev.preventDefault(); ev.stopImmediatePropagation(); } }, true); }
+  if (text) { b.setAttribute('aria-disabled', 'true'); b.setAttribute('aria-describedby', line.id); } else { b.removeAttribute('aria-disabled'); b.removeAttribute('aria-describedby'); }
+  if (show !== false) { line.hidden = !text; line.replaceChildren(...(text ? [ic('info', 'sm'), text] : [])); }
+  return b;
 }
 /* ---------- login ---------- */
 /*PAGE:login*/
@@ -5381,7 +6599,7 @@ async function showLogin() {
 }
 /*ENDPAGE*/
 /* ---------- shell ---------- */
-const NAV = [['dashboard', 'gauge'], ['storage', 'database'], ['raid', 'layers'], ['mounts', 'package'], ['network', 'network'], ['users', 'users'], ['boot', 'panel-top'], ['system', 'settings'], ['help', 'life-buoy'], ['about', 'info']];
+const NAV = [['dashboard', 'gauge'], ['storage', 'database'], ['raid', 'layers'], ['mounts', 'package'], ['addons', 'container'], /*__EDGE_NAV__*/['network', 'network'], ['users', 'users'], ['boot', 'panel-top'], ['system', 'settings'], ['updates', 'download'], ['help', 'life-buoy'], ['about', 'info']];
 const TABBAR = ['dashboard', 'storage', 'raid', 'network', 'boot'];
 /*PAGE:shell*/
 /*copy: nav.dashboard nav.storage nav.raid nav.mounts nav.network nav.users nav.boot nav.system nav.help nav.about*/
@@ -5418,6 +6636,7 @@ async function start() {
   document.title = me.hostname + ' - synofurb';
   buildShell();
   setPending(me.net_pending);
+  if (typeof edgePending === 'function') edgePending(me.edge_pending);
   show(S.page);
 }
 async function show(page) {
@@ -5661,6 +6880,180 @@ PAGES.mounts = async () => {
   return h('div', {}, h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.mounts')), infoBtn('imports', T('nav.mounts')))), tabs, area);
 };
 /*ENDPAGE*/
+/* ---------- Add-ons ---------- */
+/*PAGE:addons*/
+/*copy: ad.st.running ad.st.stopped ad.st.starting ad.st.installing ad.st.updating ad.st.removing ad.st.unhealthy ad.st.error ad.st.needs-attention ad.st.not-installed*/
+const AD_KIND = {running: 'ok', stopped: 'neutral', starting: 'info', installing: 'info', updating: 'info', removing: 'info', unhealthy: 'warn', error: 'err', 'needs-attention': 'warn', 'not-installed': 'neutral'};
+const adIcon = n => ($('#i-' + n) ? n : 'package');
+const adTag = st => tip(badge(AD_KIND[st] || 'neutral', T('ad.st.' + st)), TIP('ad.st.' + st));
+const adUrl = a => (a.link ? a.link.scheme + '://' + location.host.replace(/:\d+$/, '') + ':' + a.link.port + a.link.path : null);
+const adHelp = (text, label) => popover(T('ad.help'), h('p', {}, text), 'info', label);
+const adPriv = p => tip(h('span', {class: 'chip'}, ic('triangle-alert', 'sm'), p.startsWith('cap:') ? T('ad.priv.cap') + ' ' + p.slice(4) : T('ad.priv.' + p)), p.startsWith('cap:') ? TIP('ad.priv.cap') : TIP('ad.priv.' + p));
+const adName = (a, note) => h('span', {class: 'aname'}, h('span', {class: 'aico'}, ic(adIcon(a.icon), 'lg')), h('span', {class: 'anm'}, h('b', {'data-d': ''}, a.name), note ? h('small', {class: 'adet', 'data-d': 'prose'}, note) : null));
+/* a job in a dialog: progress bar, current step, log; polls until the job ends */
+function adJob(first, name, action, done) {
+  const bar = h('progress', {max: 100, value: first.progress || 0, 'aria-label': T('ad.progress')}), msg = h('p', {'data-d': '', role: 'status'}, first.message || ''), log = h('pre', {class: 'code log2', 'aria-live': 'off'}, '');
+  let timer = null, hideB = null;
+  /* the primary button says Hide while the job runs (closing only hides it) and Close once it has ended */
+  const dlg = dialog(T('ad.job_t', {name, action: T('ad.act.' + action)}), {icon: 'refresh-cw', wide: true}, () => h('div', {}, bar, msg, log), close => [hideB = h('button', {type: 'button', class: 'btn primary', onclick: close}, T('ad.hide'))]);
+  const poll = async () => {
+    try {
+      const j = (await api('GET', '/api/jobs/' + first.id)).job;
+      bar.value = j.progress; msg.textContent = j.state === 'running' ? j.message : (j.ok ? T('ad.done') : j.error);
+      log.textContent = j.log.join('\n'); log.scrollTop = log.scrollHeight;
+      if (j.state !== 'running') {
+        clearInterval(timer); bar.className = j.ok ? 'ok' : 'err'; hideB.replaceChildren(T('btn.close'));
+        if (j.warnings.length) log.textContent += '\n' + j.warnings.join('\n');
+        toast(j.ok ? T('ad.done') : j.error, !j.ok); if (done) done();
+      }
+    } catch (e) { clearInterval(timer); msg.textContent = e.message; }
+  };
+  dlg.addEventListener('close', () => { clearInterval(timer); if (done) done(); });
+  timer = setInterval(poll, 1200); poll();
+}
+async function adAct(a, action, reload) {
+  const r = await api('POST', '/api/addons/' + a.id + '/' + action, {});
+  adJob(r.job, a.name, action, reload);
+}
+function adLogs(a) {
+  const pre = h('pre', {class: 'code log2'}, '');
+  const sel = h('select', {'aria-label': T('ad.lines'), onchange: () => load()}, [50, 200, 1000].map(n => h('option', {value: n, selected: n === 200}, String(n))));
+  async function load() {
+    try { const r = await api('GET', '/api/addons/' + a.id + '/logs?tail=' + sel.value); pre.textContent = r.logs || '-'; pre.scrollTop = pre.scrollHeight; }
+    catch (e) { pre.textContent = e.message; }
+  }
+  dialog(T('ad.logs_t', {name: a.name}), {icon: 'scroll-text', wide: true}, () => h('div', {}, h('div', {class: 'row'}, sel, btn(T('ad.refresh'), {icon: 'refresh-cw', size: 'sm', onclick: () => load()})), pre), close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))]);
+  load();
+}
+async function adDetails(a) {
+  const d = (await api('GET', '/api/addons/' + a.id)).addon, url = adUrl(d);
+  dialog(d.name, {icon: adIcon(d.icon), wide: true, sub: d.summary}, () => h('div', {},
+    h('div', {class: 'row dsec'}, chip(T('ad.rev'), d.installed_version || d.version), adTag(d.status), url ? h('a', {class: 'btn sm', href: url, target: '_blank', rel: 'noopener noreferrer'}, ic('external-link'), T('ad.open')) : h('span', {class: 'muted'}, T('ad.noweb')),
+      d.homepage ? h('a', {class: 'btn sm', href: d.homepage, target: '_blank', rel: 'noopener noreferrer'}, ic('external-link'), T('ad.homepage')) : null),
+    d.detail ? banner('warn', T('ad.st.' + d.status), d.detail) : null,
+    d.post_install ? h('div', {class: 'dsec'}, h('h4', {}, T('ad.note')), h('p', {'data-d': 'prose'}, d.post_install)) : null,
+    d.privileges.length ? h('div', {class: 'dsec'}, h('h4', {}, T('ad.privs')), h('div', {class: 'chips'}, d.privileges.map(p => adPriv(p.id)))) : null,
+    d.ports.length ? h('div', {class: 'dsec'}, h('h4', {}, T('ad.ports')), h('div', {class: 'chips'}, d.ports.map(p => chip(p.host + '/' + p.proto, p.label)))) : null,
+    d.storage_report.length ? h('div', {class: 'dsec'}, h('h4', {}, T('ad.storage')), d.storage_report.map(s => h('div', {class: 'row'}, h('b', {'data-d': ''}, s.label), h('span', {class: 'mono'}, s.path)))) : null),
+    close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))]);
+}
+async function adInstall(a, byId, reload) {
+  const d = (await api('GET', '/api/addons/' + a.id)).addon, get = {}, parts = [];
+  const priv = h('div', {class: 'chips'}), accept = h('input', {type: 'checkbox', id: 'ad-accept'});
+  const privSec = h('div', {class: 'dsec'}, h('h4', {}, T('ad.privs')), priv, h('label', {class: 'chk'}, accept, h('span', {}, T('ad.accept'))));
+  let ok = null;
+  const why = whyLine();
+  const cur = () => { const v = {}; for (const s of d.settings) v[s.key] = get[s.key](); return v; };
+  function redraw() {
+    const v = cur(), list = d.privileges.map(p => p.id);
+    for (const s of d.settings) if (s.type === 'choice') { const c = s.choices.find(x => x.value === v[s.key]); if (c) for (const p of c.privileges) if (!list.includes(p)) list.push(p); }
+    priv.replaceChildren(...list.map(adPriv)); privSec.hidden = !list.length;
+    if (ok) setOff(ok, why, list.length && !accept.checked ? T('ad.why_priv') : null);
+  }
+  accept.addEventListener('change', redraw);
+  if (d.changes.length) parts.push(h('div', {class: 'dsec'}, h('h4', {}, T('ad.changes')), h('ul', {}, d.changes.map(c => h('li', {'data-d': 'prose'}, c)))));
+  const miss = d.requires.filter(r => !(byId[r] && byId[r].installed));
+  if (miss.length) parts.push(banner('warn', T('ad.needs', {name: miss.map(r => (byId[r] ? byId[r].name : r)).join(', ')}), null));
+  if (d.settings.length) {
+    const rows = d.settings.map(s => {
+      const id = 'ad-' + s.key, once = s.first_install_only ? h('small', {class: 'help'}, T('ad.once')) : null;
+      let inp;
+      if (s.type === 'bool') { inp = h('input', {type: 'checkbox', id, checked: !!d.values[s.key]}); get[s.key] = () => inp.checked; return h('div', {class: 'row'}, h('label', {class: 'chk'}, inp, h('span', {'data-d': ''}, s.label)), s.help ? adHelp(s.help, s.label) : null); }
+      if (s.type === 'choice') { inp = h('select', {id, onchange: redraw}, s.choices.map(c => h('option', {value: c.value, selected: c.value === d.values[s.key]}, c.label))); get[s.key] = () => inp.value; }
+      else if (s.type === 'text') { inp = h('textarea', {id, rows: 4, class: 'mono'}, d.values[s.key] == null ? '' : d.values[s.key]); get[s.key] = () => inp.value; }
+      else {
+        const sec = s.type === 'secret';
+        inp = h('input', {id, type: sec ? 'password' : (s.type === 'int' ? 'number' : 'text'), class: sec ? '' : 'mono', autocomplete: sec ? 'new-password' : 'off', spellcheck: 'false', min: s.min, max: s.max,
+          value: sec ? '' : (d.values[s.key] == null ? '' : d.values[s.key]), placeholder: sec ? (d.values[s.key] && d.values[s.key].set ? T('ad.secret_set') : '') : ''});
+        get[s.key] = () => (s.type === 'int' && inp.value !== '' ? Number(inp.value) : inp.value);
+      }
+      return h('div', {class: 'f'}, h('div', {class: 'row'}, h('label', {class: 'lab', for: id, 'data-d': ''}, s.label + (s.required ? ' *' : '')), s.help ? adHelp(s.help, s.label) : null), inp, once);
+    });
+    parts.push(h('div', {class: 'dsec'}, h('h4', {}, T('ad.settings')), rows));
+  }
+  const devs = {};
+  if (d.device_states.length) parts.push(h('div', {class: 'dsec'}, h('h4', {}, T('ad.devices')), d.device_states.map(x => {
+    const cb = h('input', {type: 'checkbox', checked: x.present}); devs[x.id] = cb;
+    return h('div', {class: 'row'}, h('label', {class: 'chk'}, cb, h('span', {'data-d': ''}, x.label)), x.present ? badge('ok', T('ad.present')) : tip(badge('warn', T('ad.absent')), T('ad.absent_warn')));
+  })));
+  const stor = {};
+  if (d.storage_report.length) parts.push(h('div', {class: 'dsec'}, h('h4', {}, T('ad.storage')), d.storage_report.map(x => {
+    const i = h('input', {class: 'mono', value: x.path, 'aria-label': x.label}); stor[x.key] = i;
+    return h('div', {class: 'f'}, h('label', {class: 'lab', 'data-d': ''}, x.label), i, h('small', {class: 'help'}, (x.free_gib == null ? '' : x.free_gib + ' GiB ' + T('ad.free') + ' ') + (x.error || x.warning || '')));
+  })));
+  parts.push(privSec);
+  return dialog(T('ad.install_t', {name: d.name}), {icon: adIcon(d.icon), wide: true, sub: d.summary}, () => h('div', {}, parts), (close, setErr) => {
+    ok = h('button', {type: 'button', class: 'btn primary'}, ic('download'), a.status === 'needs-attention' ? T('ad.retry') : T('ad.install'));
+    ok.addEventListener('click', async () => {
+      if (ok.classList.contains('is-loading')) return;
+      busy(ok, true); setErr('');
+      try {
+        const body = {settings: cur(), storage: {}, devices: {}, accept: true};
+        for (const [k, i] of Object.entries(stor)) body.storage[k] = i.value.trim();
+        for (const [k, cb] of Object.entries(devs)) body.devices[k] = cb.checked;
+        const r = await api('POST', '/api/addons/' + a.id + '/install', body);
+        close(); adJob(r.job, d.name, 'install', reload);
+      } catch (e) { setErr(e.message); busy(ok, false); }
+    });
+    redraw();
+    return [why, h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
+  });
+}
+function adRemove(a, reload) {
+  const del = h('input', {type: 'checkbox'}), typed = h('input', {class: 'mono', autocomplete: 'off', spellcheck: 'false', 'aria-label': T('raid.type', {name: a.id})});
+  const typedF = field(T('raid.type', {name: a.id}), typed); typedF.hidden = true;
+  let ok = null;
+  const why = whyLine();
+  const sync = () => { typedF.hidden = !del.checked; if (ok) setOff(ok, why, del.checked && typed.value !== a.id ? T('ad.why_type') : null); };
+  del.addEventListener('change', sync); typed.addEventListener('input', sync);
+  dialog(T('ad.remove_q', {name: a.name}), {danger: true, sub: T('ad.remove_b')}, () => h('div', {}, tip(h('label', {class: 'chk'}, del, h('span', {}, T('ad.deldata'))), TIP('ad.deldata')), typedF), (close, setErr) => {
+    ok = h('button', {type: 'button', class: 'btn danger'}, ic('trash'), T('ad.remove'));
+    ok.addEventListener('click', async () => {
+      if (ok.classList.contains('is-loading')) return;
+      busy(ok, true); setErr('');
+      try { const r = await api('POST', '/api/addons/' + a.id + '/remove', {delete_data: del.checked, confirm: del.checked ? typed.value : ''}); close(); adJob(r.job, a.name, 'remove', reload); }
+      catch (e) { setErr(e.message); busy(ok, false); }
+    });
+    sync();
+    return [why, h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
+  });
+}
+PAGES.addons = async () => {
+  const r = await api('GET', '/api/addons'), reload = () => show('addons');
+  const byId = Object.fromEntries(r.addons.map(a => [a.id, a])), inst = r.addons.filter(a => a.installed);
+  const missing = a => a.requires.filter(id => !(byId[id] && byId[id].installed && byId[id].status !== 'needs-attention'));
+  const parts = [h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.addons')), infoBtn('addons', T('nav.addons'))))];
+  if (r.job) parts.push(banner('neutral', T('ad.busy'), r.job.message, btn(T('ad.view'), {size: 'sm', onclick: () => adJob(r.job, r.job.addon, r.job.kind, reload)})));
+  for (const p of r.problems) parts.push(banner('warn', T('ad.problems'), p.id + ': ' + p.error));
+  if (inst.length) {
+    const rows = inst.map(a => {
+      const url = a.status === 'running' || a.status === 'starting' ? adUrl(a) : null, up = a.status === 'running' || a.status === 'starting' || a.status === 'unhealthy' || a.status === 'error';
+      const miss = missing(a), att = a.status === 'needs-attention', why = whyLine();
+      const retry = att ? setOff(h('button', {type: 'button', class: 'btn primary sm', onclick: () => adInstall(a, byId, reload)}, ic('download'), T('ad.retry')), why, miss.length ? T('ad.needs', {name: miss.map(id => (byId[id] ? byId[id].name : id)).join(', ')}) : null) : null;
+      const acts = [retry, url ? h('a', {class: 'btn sm', href: url, target: '_blank', rel: 'noopener noreferrer'}, ic('external-link'), T('ad.open')) : null,
+        att ? null : up ? btnIcon('square', T('ad.stop'), () => adAct(a, 'stop', reload)) : btnIcon('play', T('ad.start'), () => adAct(a, 'start', reload)),
+        att ? null : btnIcon('refresh-cw', T('ad.restart'), () => adAct(a, 'restart', reload)),
+        att ? null : btnIcon('download', T('ad.update'), () => confirmAction({title: T('ad.update_q', {name: a.name}), danger: false, icon: 'download', label: T('ad.update'), body: T('ad.update_b'),
+          onConfirm: async () => { const j = await api('POST', '/api/addons/' + a.id + '/update', {}); adJob(j.job, a.name, 'update', reload); }}), a.update_available ? 'primary' : 'ghost'),
+        btnIcon('scroll-text', T('ad.logs'), () => adLogs(a)), btnIcon('info', T('ad.details'), () => adDetails(a)),
+        a.kind === 'system' ? null : btnIcon('trash', T('ad.remove'), () => adRemove(a, reload))];
+      /* the reason of a problem is on the row, not only in the details dialog */
+      return [adName(a, ['error', 'unhealthy', 'needs-attention'].includes(a.status) && a.detail ? a.detail : null), adTag(a.status), h('div', {class: 'row'}, acts, retry ? why : null)];
+    });
+    parts.push(cardFlush(T('ad.installed'), 'container', null, table(th('name', 'state', ''), rows)));
+  }
+  /* available: not installed yet. An add-on that needs attention is installed, so it is only listed above (with Retry) */
+  const cards = r.addons.filter(a => !a.installed).map(a => {
+    const miss = missing(a), why = whyLine();
+    const can = setOff(h('button', {type: 'button', class: 'btn primary sm', onclick: () => adInstall(a, byId, reload)}, ic('download'), T('ad.install')), why, miss.length ? T('ad.needs', {name: miss.map(id => (byId[id] ? byId[id].name : id)).join(', ')}) : null);
+    return h('section', {class: 'acard'}, adName(a), h('p', {'data-d': 'prose'}, a.summary), h('div', {class: 'ft'}, adTag(a.status), can), why);
+  });
+  if (cards.length) parts.push(h('h2', {class: 'sec'}, ic('plus', 'lg'), T('ad.available')), h('div', {class: 'agrid'}, cards));
+  else if (!inst.length) parts.push(h('div', {class: 'empty'}, ic('info'), T('ad.empty')));
+  return h('div', {}, parts);
+};
+/*ENDPAGE*/
+/*__EDGE_PAGES__*/
 /* ---------- Network ---------- */
 /*PAGE:network*/
 PAGES.network = async () => {
@@ -5773,6 +7166,136 @@ PAGES.system = async () => {
   parts.push(h('div', {class: 'cols'}, card(T('sys.services'), 'refresh-cw', null, tip(h('div', {class: 'row'}, rs), TIP('sys.services'))),
     card(T('sys.power'), 'power', null, h('div', {class: 'row'}, btn(T('sys.reboot'), {icon: 'refresh-cw', onclick: () => PAGES_ACTIONS.power('reboot')}), btn(T('sys.shutdown'), {kind: 'danger', icon: 'power', onclick: () => PAGES_ACTIONS.power('poweroff')})))));
   return h('div', {}, parts);
+};
+/*ENDPAGE*/
+/* ---------- Updates ---------- */
+const UPD_ICON = {fail: 'circle-x', ok: 'circle-check', start: 'refresh-cw', pending: 'circle-dashed'};
+const UPD_STEPS = ['check', 'download', 'verify', 'stage', 'swap', 'restart', 'health'];
+const UPD_STATE_KIND = {ok: 'ok', current: 'ok', refused: 'warn', rolled_back: 'warn', rollback_failed: 'err', failed: 'err', running: 'info', queued: 'info'};
+const fmtWhen = t => (t ? new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ') : '-');
+async function rawPost(path, body) {
+  const r = await fetch(path, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': S.csrf || ''}, body: JSON.stringify(body || {})});
+  let j = {};
+  try { j = await r.json(); } catch (e) { /* not JSON */ }
+  return {status: r.status, json: j};
+}
+/* follow a job: the page polls, survives the service restart (connection errors, then 401 because sessions live in memory) and ends on a result */
+function watchJob(jid, host, onEnd, retry) {
+  let lost = false;
+  let lastJ = null, lastEv = null;
+  const draw = (j, events, restarting) => {
+    if (j) { lastJ = j; lastEv = events; } else { j = lastJ; events = lastEv; }
+    const last = {};
+    for (const e of events || []) last[e.step] = e;
+    const steps = UPD_STEPS.concat(last.rollback ? ['rollback'] : []);
+    const ci = j && j.step ? UPD_STEPS.indexOf(j.step) : -1;
+    host.replaceChildren(...[h('ul', {class: 'us', 'aria-live': 'polite'}, steps.map(k => {
+      const e = last[k], i = UPD_STEPS.indexOf(k);
+      const st = e ? e.status : events ? 'pending' : (i < ci ? 'ok' : i === ci ? 'start' : 'pending');
+      const cls = st === 'fail' ? 'fail' : st === 'ok' ? 'ok' : st === 'start' ? 'run' : '';
+      const sp = st === 'start' ? 'spin' : '';
+      return h('li', {class: cls}, ic(UPD_ICON[st], sp), T('upd.step.' + k), e && e.message ? h('small', {}, e.message) : null);
+    })), restarting ? banner('info', T('upd.restarting'), '') : null].filter(Boolean));       // replaceChildren(null) would print the word "null"
+  };
+  const end = (j, events) => {
+    const fail = (events || []).filter(e => e.status === 'fail').pop();
+    const kind = j.state === 'ok' || j.state === 'current' ? 'ok' : j.state === 'refused' || j.state === 'rolled_back' ? 'warn' : 'err';
+    const text = j.state === 'ok' && j.kind === 'rollback' ? T('upd.rolled', {v: j.to || ''}) : j.state === 'ok' ? T('upd.done', {v: j.to || ''}) : j.state === 'current' ? T('upd.uptodate') : j.state === 'rolled_back' ? T('upd.rolled', {v: j.from || ''})
+      : j.state === 'refused' ? T('upd.refused') : j.state === 'rollback_failed' ? T('upd.rbfail') : T('upd.failed');
+    if (events) draw(j, events, false); else host.replaceChildren();          // after a restart the session is gone and no events are readable: a list of grey "pending" steps would say nothing true
+    const lastOf = {}; for (const e of events || []) lastOf[e.step] = e;
+    const shown = fail && lastOf[fail.step] === fail && (UPD_STEPS.includes(fail.step) || fail.step === 'rollback');        // the step list above already prints this message
+    host.append(banner(kind, text, fail && !shown ? fail.message : '', btn(lost ? T('upd.signin') : T('upd.reload'), {kind: 'primary', icon: 'refresh-cw', onclick: () => location.reload()}),
+      retry && fail && fail.step === 'health' ? btn(T('upd.force'), {icon: 'triangle-alert', onclick: retry}) : null));
+    onEnd && onEnd(j);
+  };
+  const tick = async () => {
+    if (S.page !== 'updates' || !host.isConnected) return;
+    let j = null, events = null;
+    try {
+      let r = lost ? null : await rawPost('/api/update/job', {job: jid});
+      if (r && r.status === 401) { lost = true; r = null; }
+      if (!r) r = await rawPost('/api/update/progress', {job: jid});
+      if (r.status === 200 && r.json.job) { j = r.json.job; events = r.json.events || null; }
+    } catch (e) { /* the service is restarting */ }
+    if (!j) { draw(null, null, true); return setTimeout(tick, 1500); }
+    if (!['running', 'queued'].includes(j.state)) return end(j, events);
+    draw(j, events, lost || (events || []).some(e => e.step === 'restart' && e.status === 'start'));
+    setTimeout(tick, 1200);
+  };
+  tick();
+}
+/*PAGE:updates*/
+PAGES.updates = async () => {
+  const st = await api('GET', '/api/update');
+  const F = {channel: st.channel, ref: st.ref, check: st.check};
+  const top = h('div', {}), live = h('div', {});
+  const mine = () => F.check && F.check.channel === F.channel && (F.channel === 'stable' || F.check.ref === F.ref);
+  const running = () => !!st.active || !!st.busy;
+  function draw() {
+    const c = mine() ? F.check : null;
+    const refIn = h('input', {class: 'mono upd-ref', value: F.ref, autocomplete: 'off', spellcheck: 'false', 'aria-label': T('upd.ref'), oninput: () => { F.ref = refIn.value.trim(); }});
+    const seg = h('div', {class: 'seg', role: 'group', 'aria-label': T('upd.channel')}, [['stable', 'upd.stable'], ['main', 'upd.main']].map(([k, key]) =>
+      tip(h('button', {type: 'button', 'aria-pressed': String(F.channel === k), onclick: () => { F.channel = k; draw(); }}, T(key)), TIP(key))));
+    const state = c ? (c.state === 'available' ? badge('accent', T('upd.new'), 'download') : c.state === 'current' ? badge('ok', T('upd.uptodate'), 'check') : c.state === 'older' ? badge('neutral', T('upd.older'), 'clock') : badge('info', T('upd.same'), 'info')) : null;
+    const trust = c ? (c.mode === 'signed' ? tip(badge('ok', T('upd.signed'), 'shield-check'), TIP('upd.signed')) : tip(badge('warn', T('upd.unsigned'), 'triangle-alert'), TIP('upd.unsigned'))) : null;
+    const chk = btn(T('upd.check'), {icon: 'refresh-cw', onclick: () => act(chk, async () => { const r = await api('POST', '/api/update/check', {channel: F.channel, ref: F.ref}); F.check = r.check; draw(); })});
+    const can = c && !running() && !st.stale && !c.blocked && (c.state === 'available' || c.state === 'same');
+    const why = whyLine(), go = btn(T('upd.now'), {kind: 'primary', icon: 'download', onclick: () => updateDialog(c)});
+    const goWhy = can ? null : !c ? T('upd.nocheck') : c.blocked ? c.blocked : running() ? T('upd.busy') : st.stale ? T('upd.why_reload') : c.state === 'older' ? T('upd.why_older') : T('upd.why_current');
+    const rb = st.previous ? btn(T('upd.rollback'), {icon: 'undo-2', onclick: () => rollbackDialog()}) : null;
+    const rbWhy = running() ? T('upd.busy') : st.stale ? T('upd.why_reload') : null;
+    setOff(go, why, goWhy); if (rb) setOff(rb, why, rbWhy, false);
+    if (!goWhy && rbWhy) { why.hidden = false; why.replaceChildren(ic('info', 'sm'), rbWhy); }
+    const notes = c && c.notes ? btn(T('upd.notes'), {size: 'sm', kind: 'ghost', icon: 'file-text', onclick: () => dialog(T('upd.notes'), {icon: 'file-text', wide: true, sub: (c.tag || c.commit.slice(0, 7)) + ' ' + (c.published || '')},
+      () => h('pre', {class: 'code'}, c.notes), close => [h('button', {type: 'button', class: 'btn primary', onclick: close}, T('btn.close'))])}) : null;
+    top.replaceChildren(card(T('upd.plane'), 'download', h('div', {class: 'row'}, state, trust),
+      h('dl', {class: 'kv'}, h('dt', {}, T('upd.installed')), h('dd', {class: 'mono'}, st.installed || '-'), h('dt', {}, T('upd.available')), h('dd', {class: 'mono'}, c ? c.version + (c.commit ? ' ' + c.commit.slice(0, 7) : '') : '-'),
+        h('dt', {}, T('upd.channel')), h('dd', {}, seg, F.channel === 'main' ? field(T('upd.ref'), refIn) : null)),
+      c && c.blocked ? banner('warn', c.blocked, '') : null,
+      h('div', {class: 'row'}, tip(chk, TIP('upd.check')), go, rb && !rbWhy ? tip(rb, TIP('upd.rollback')) : rb, notes), why));
+  }
+  function updateDialog(c, force) {
+    const need = c.mode === 'unsigned', typed = c.channel === 'main' ? c.commit.slice(0, 7) : '';
+    let box = null, inp = null, ok = null;
+    const why = whyLine();
+    const gate = () => setOff(ok, why, need && !box.checked ? T('upd.why_consent') : typed && inp.value !== typed ? T('upd.why_typed') : null);
+    return dialog(T('upd.confirm_q', {v: c.version}), {icon: 'download', sub: (st.installed || '-') + ' → ' + c.version + (c.commit ? ' (' + c.commit.slice(0, 7) + ')' : '')}, () => h('div', {},
+      h('p', {}, T('upd.restart_note')),
+      force ? banner('warn', T('upd.force_note'), '') : null,
+      need ? banner('warn', T('upd.unsigned'), TIP('upd.unsigned')) : null,
+      need ? h('label', {class: 'chk'}, box = h('input', {type: 'checkbox', onchange: gate}), h('span', {}, T('upd.consent'))) : null,
+      typed ? field(T('raid.type', {name: typed}), inp = h('input', {class: 'mono', autocomplete: 'off', spellcheck: 'false', oninput: gate})) : null), (close, setErr) => {
+      ok = h('button', {type: 'button', class: 'btn primary'}, ic('download'), T('upd.now'));
+      ok.addEventListener('click', async () => {
+        if (ok.classList.contains('is-loading')) return;
+        busy(ok, true); setErr('');
+        try { const r = await api('POST', '/api/update/start', {channel: c.channel, ref: c.ref || '', expect: c.channel === 'main' ? c.commit : c.version, accept_unsigned: !!(box && box.checked), force: !!force, confirm: typed}); close(); follow(r.job); }
+        catch (e) { setErr(e.message); busy(ok, false); }
+      });
+      gate();
+      return [why, h('button', {type: 'button', class: 'btn', onclick: close}, T('btn.cancel')), ok];
+    });
+  }
+  function rollbackDialog() {
+    confirmAction({title: T('upd.rb_q', {v: st.previous}), danger: false, icon: 'undo-2', label: T('upd.rollback'), body: h('p', {}, T('upd.restart_note')),
+      onConfirm: async () => { const r = await api('POST', '/api/update/rollback', {}); follow(r.job); }});
+  }
+  function follow(jid) {
+    st.active = jid; draw();
+    const body = h('div', {});
+    live.replaceChildren(card(T('upd.plane'), 'refresh-cw', null, body));
+    watchJob(jid, body, j => { st.active = null; st.stale = j.state === 'ok'; draw(); }, () => F.check && updateDialog(F.check, true));
+  }
+  draw();
+  const hist = cardFlush(T('upd.history'), 'clock', null, table(['upd.when', 'upd.from', 'upd.to', 'upd.source', 'upd.result'].map(k => T(k)),
+    st.jobs.map(j => [fmtWhen(j.started), h('span', {class: 'mono'}, j.from || '-'), h('span', {class: 'mono'}, j.to || '-'),
+      tip(h('span', {}, T('upd.src.' + j.source) + (j.by && j.by !== '-' ? ' · ' + j.by : '')), j.ref || j.commit ? (j.ref || '') + ' ' + (j.commit || '').slice(0, 7) : null),
+      h('div', {class: 'hres'}, badge(UPD_STATE_KIND[j.state] || 'neutral', T('upd.s.' + j.state)),
+        !['ok', 'current', 'running', 'queued'].includes(j.state) && j.message ? h('small', {}, j.message) : null)]), T('upd.none')));            // why it failed is text in the row, not a tooltip
+  const page = h('div', {}, h('div', {class: 'ph'}, h('div', {class: 'row'}, h('h1', {}, T('nav.updates')), infoBtn('updates', T('nav.updates')))), top, live, hist);
+  if (st.active) follow(st.active);
+  return page;
 };
 /*ENDPAGE*/
 /* ---------- About ---------- */
@@ -6121,6 +7644,7 @@ showLogin().then(async () => { try { await start(); } catch (e) { /* not signed 
 </script></body></html>
 """
 
+_UI_TEMPLATE = _UI_TEMPLATE.replace("/*__EDGE_NAV__*/", _EDGE_NAV).replace("/*__EDGE_CSS__*/", _EDGE_CSS).replace("/*__EDGE_PAGES__*/", _EDGE_JS)
 INDEX_HTML = _UI_TEMPLATE.replace("/*__COPY__*/null", json.dumps(COPY, separators=(",", ":")).replace("</", "<\\/")).replace("/*__HELP__*/null", json.dumps(HELP_TOPICS, separators=(",", ":")).replace("</", "<\\/")).replace("/*__TOKENS__*/", theme_css()).replace("<!--__SPRITE__-->", _ICON_SPRITE).replace("/*__FONTS__*/", _font_css()).replace("__FAVICON__", _FAVICON_B64).replace("/*__LIC__*/null", json.dumps(_LICENSES).replace("</", "<\\/"))
 
 

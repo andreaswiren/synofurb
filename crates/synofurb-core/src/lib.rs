@@ -1,4 +1,5 @@
 //! synofurb-core: discovery, inspection, planning and installer engine.
+pub mod addons;
 pub mod config;
 pub mod debian;
 pub mod discovery;

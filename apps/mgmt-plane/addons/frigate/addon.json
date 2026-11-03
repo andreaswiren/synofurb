@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "id": "frigate",
+  "name": "Frigate NVR",
+  "version": "1",
+  "summary": "Local AI camera recorder. Recordings and clips go to the redundant data volume.",
+  "category": "video",
+  "icon": "camera",
+  "homepage": "https://github.com/blakeblackshear/frigate",
+  "kind": "compose",
+  "requires": ["docker"],
+  "web": { "port": 8971, "scheme": "https", "path": "/", "hostname_hint": "frigate" },
+  "ports": [
+    { "host": 8971, "container": 8971, "proto": "tcp", "label": "Web UI (login, self-signed certificate)" },
+    { "host": 8554, "container": 8554, "proto": "tcp", "label": "RTSP restream" },
+    { "host": 8555, "container": 8555, "proto": "tcp", "label": "WebRTC" },
+    { "host": 8555, "container": 8555, "proto": "udp", "label": "WebRTC" }
+  ],
+  "settings": [
+    {
+      "key": "detector",
+      "label": "Object detector",
+      "type": "choice",
+      "default": "cpu",
+      "choices": [
+        {
+          "value": "cpu",
+          "label": "CPU (works everywhere, slowest)",
+          "vars": {
+            "DETECTOR_BLOCK": "detectors:\n  cpu1:\n    type: cpu\n    num_threads: 3\n",
+            "MODEL_BLOCK": ""
+          }
+        },
+        {
+          "value": "openvino_gpu",
+          "label": "OpenVINO on Intel graphics",
+          "vars": {
+            "DETECTOR_BLOCK": "detectors:\n  ov:\n    type: openvino\n    device: GPU\n",
+            "MODEL_BLOCK": "\nmodel:\n  width: 300\n  height: 300\n  input_tensor: nhwc\n  input_pixel_format: bgr\n  path: /openvino-model/ssdlite_mobilenet_v2.xml\n  labelmap_path: /openvino-model/coco_91cl_bkgr.txt\n"
+          }
+        },
+        {
+          "value": "openvino_cpu",
+          "label": "OpenVINO on the CPU",
+          "vars": {
+            "DETECTOR_BLOCK": "detectors:\n  ov:\n    type: openvino\n    device: CPU\n",
+            "MODEL_BLOCK": "\nmodel:\n  width: 300\n  height: 300\n  input_tensor: nhwc\n  input_pixel_format: bgr\n  path: /openvino-model/ssdlite_mobilenet_v2.xml\n  labelmap_path: /openvino-model/coco_91cl_bkgr.txt\n"
+          }
+        },
+        {
+          "value": "edgetpu_usb",
+          "label": "Coral USB accelerator",
+          "vars": {
+            "DETECTOR_BLOCK": "detectors:\n  coral:\n    type: edgetpu\n    device: usb\n",
+            "MODEL_BLOCK": ""
+          }
+        },
+        {
+          "value": "edgetpu_pci",
+          "label": "Coral PCIe/M.2 accelerator",
+          "vars": {
+            "DETECTOR_BLOCK": "detectors:\n  coral:\n    type: edgetpu\n    device: pci\n",
+            "MODEL_BLOCK": ""
+          }
+        }
+      ],
+      "help": "Only the chosen detector is written into the first configuration. Intel graphics and Coral also need the matching device switched on under Devices; without it Frigate reports a detector error and no objects are found (recording still works). The CPU detector is slow, OpenVINO on the CPU is usually faster. You can change the detector later in Frigate's own settings."
+    },
+    {
+      "key": "hwaccel",
+      "label": "Video decoding",
+      "type": "choice",
+      "default": "auto",
+      "choices": [{ "value": "auto", "label": "Automatic" }, { "value": "preset-vaapi", "label": "Intel graphics (VAAPI)" }],
+      "help": "auto lets Frigate decide. preset-vaapi uses the Intel graphics for decoding camera streams (switch on Intel graphics under Devices first). Intel generation 9 (Celeron J3455) uses Frigate's default iHD driver."
+    },
+    {
+      "key": "retain_days",
+      "label": "Keep all recordings (days)",
+      "type": "int",
+      "default": 7,
+      "min": 1,
+      "max": 365,
+      "help": "Continuous recording is kept this many days, then deleted. Roughly 40 GB per camera per day at 4 Mbit/s."
+    },
+    {
+      "key": "event_retain_days",
+      "label": "Keep alerts, detections and snapshots (days)",
+      "type": "int",
+      "default": 14,
+      "min": 1,
+      "max": 365,
+      "help": "Recordings around detected objects and their snapshots are kept this many days, even after the continuous recordings are gone."
+    },
+    {
+      "key": "shm_mb",
+      "label": "Shared memory (MB)",
+      "type": "int",
+      "default": 512,
+      "min": 64,
+      "max": 4096,
+      "help": "Frigate needs about 210 MB for two cameras at 720p. Raise it when the log shows Bus error with many or large cameras."
+    },
+    {
+      "key": "cache_mb",
+      "label": "Recording cache in RAM (MB)",
+      "type": "int",
+      "default": 1000,
+      "min": 256,
+      "max": 4000,
+      "help": "Memory-backed folder for recording segments before they are written to disk. Memory is only used while segments are in it."
+    },
+    { "key": "cam1_enabled", "label": "Camera 1 on", "type": "bool", "default": false },
+    {
+      "key": "cam1_url",
+      "label": "Camera 1 stream (RTSP)",
+      "type": "secret",
+      "default": "rtsp://127.0.0.1:554/rtsp",
+      "pattern": "^(rtsps?|rtmps?|https?)://[^\\s\"'\\\\{}$#]+$",
+      "help": "For example rtsp://user:password@192.168.1.20:554/stream1. Characters such as @ or : inside the password must be percent-encoded (@ becomes %40). Stored privately, never shown again."
+    },
+    { "key": "cam2_enabled", "label": "Camera 2 on", "type": "bool", "default": false },
+    {
+      "key": "cam2_url",
+      "label": "Camera 2 stream (RTSP)",
+      "type": "secret",
+      "default": "rtsp://127.0.0.1:554/rtsp",
+      "pattern": "^(rtsps?|rtmps?|https?)://[^\\s\"'\\\\{}$#]+$"
+    },
+    { "key": "cam3_enabled", "label": "Camera 3 on", "type": "bool", "default": false },
+    {
+      "key": "cam3_url",
+      "label": "Camera 3 stream (RTSP)",
+      "type": "secret",
+      "default": "rtsp://127.0.0.1:554/rtsp",
+      "pattern": "^(rtsps?|rtmps?|https?)://[^\\s\"'\\\\{}$#]+$"
+    },
+    { "key": "cam4_enabled", "label": "Camera 4 on", "type": "bool", "default": false },
+    {
+      "key": "cam4_url",
+      "label": "Camera 4 stream (RTSP)",
+      "type": "secret",
+      "default": "rtsp://127.0.0.1:554/rtsp",
+      "pattern": "^(rtsps?|rtmps?|https?)://[^\\s\"'\\\\{}$#]+$"
+    }
+  ],
+  "storage": [
+    { "key": "media", "label": "Recordings and clips", "path": "/srv/data/addons/frigate/media", "bulk": true, "min_free_gib": 50 }
+  ],
+  "devices": [
+    { "id": "dri", "label": "Intel graphics (hardware decoding, OpenVINO)", "host": "/dev/dri", "optional": true, "detect": "path:/dev/dri/renderD128" },
+    { "id": "coral_usb", "label": "Coral USB accelerator", "host": "/dev/bus/usb", "optional": true, "detect": "usb:1a6e:089a|18d1:9302" },
+    { "id": "coral_pcie", "label": "Coral PCIe/M.2 accelerator", "host": "/dev/apex_0", "optional": true, "detect": "path:/dev/apex_0" }
+  ],
+  "privileges": [],
+  "compose": "compose.yml.tmpl",
+  "files": [ { "template": "config.yml.tmpl", "dest": "config/config.yml", "once": true } ],
+  "healthcheck": { "type": "http", "url": "http://127.0.0.1:5000/api/version" },
+  "post_install": "Frigate creates an admin account on its first start and prints the password ONCE in its log. Open the add-on's Logs (or run: synofurb_mgmt.py addons logs frigate) and look for the lines with the user admin and its password, then sign in at https://<this NAS>:8971 (the browser warns about the self-signed certificate) and change the password under Settings > Users. If the line has scrolled away, set auth: reset_admin_password: true in /srv/addons/frigate/config/config.yml and restart the add-on to get a new one. No cameras are on yet: enter a stream address for Camera 1 in the add-on settings, switch it on and restart, or edit config.yml. The configuration is written only once; later changes to detector, recording days and cameras are made in Frigate's Settings or in that file, not here. Recordings are stored in /srv/data/addons/frigate/media on the redundant data volume. Images are downloaded from the Internet (about 2 GB)."
+}

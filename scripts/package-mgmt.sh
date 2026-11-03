@@ -3,7 +3,7 @@
 #
 #   scripts/package-mgmt.sh [--out dist/release]
 #
-# Flat archive (extract straight into /opt/synofurb-mgmt):  synofurb_mgmt.py  synofurb-mgmt.service  README.md  VERSION
+# Flat archive (extract straight into /opt/synofurb-mgmt):  synofurb_mgmt.py  synofurb-mgmt.service  README.md  VERSION  [synofurb_addons.py  addons.pack.json  synofurb_edge.py]
 # Refuses to build when VERSION disagrees with the built-in `DEFAULT_VERSION = "..."` (or literal `VERSION = "..."`) in
 # synofurb_mgmt.py, so a release cannot report a different version than the one it ships under.
 # Reproducible: fixed mtimes (SOURCE_DATE_EPOCH, default 0), root ownership.
@@ -41,10 +41,22 @@ import gzip, io, os, sys, tarfile
 dest, src = sys.argv[1:3]
 epoch = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
 files = [("synofurb_mgmt.py", 0o755), ("synofurb-mgmt.service", 0o644), ("README.md", 0o644), ("VERSION", 0o644)]
+# the add-on framework and the add-on definitions of addons/ as one JSON document: the same files `update --from-github` and
+# tools/make-update-bundle.py produce (the flat bundle cannot carry addons/<id>/*)
+if os.path.isfile(os.path.join(src, "synofurb_addons.py")):
+    files += [("synofurb_addons.py", 0o644), ("addons.pack.json", 0o644)]
+# certificates (lego) and the HAProxy front: one module, optional like the add-ons
+if os.path.isfile(os.path.join(src, "synofurb_edge.py")):
+    files += [("synofurb_edge.py", 0o644)]
+sys.path.insert(0, src)
 raw = io.BytesIO()
 with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tf:
     for name, mode in files:
-        data = open(os.path.join(src, name), "rb").read().replace(b"\r\n", b"\n")
+        if name == "addons.pack.json":
+            import synofurb_addons
+            data = synofurb_addons.build_pack(os.path.join(src, "addons")).encode("utf-8")
+        else:
+            data = open(os.path.join(src, name), "rb").read().replace(b"\r\n", b"\n")
         ti = tarfile.TarInfo(name)
         ti.size, ti.mode, ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = len(data), mode, epoch, 0, 0, "root", "root"
         tf.addfile(ti, io.BytesIO(data))

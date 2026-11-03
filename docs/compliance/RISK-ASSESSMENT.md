@@ -31,6 +31,8 @@ the wrong unit selected, skipping host-key checks (`--insecure-host-key`), leavi
         |--HTTPS--> deb.debian.org / security.debian.org / cdimage.debian.org (installer assets, hash chain)  (TB4)
  [NAS boot flash]  menu + kernels edited over SSH by synofurb-dom; read by the NAS firmware/bootloader       (TB5)
  [browser on the LAN] --HTTPS 8443--> management plane (root, password login)                               (TB6)
+ [browser] --HTTPS 443--> HAProxy front (optional, docs/CERTIFICATES.md) --loopback--> management plane / add-ons   (TB6)
+ management plane --HTTPS--> Let's Encrypt, challenges.addr.tools (certificate issue and renewal; lego as a child process)  (TB3)
  [GitHub Actions + crates.io + Debian archive] --> release artefacts --> GitHub Releases --> users          (TB7)
  [serial/VGA console, USB, the boot flash module itself] physical access                                    (TB8)
 ```
@@ -59,6 +61,7 @@ Categories: S spoofing, T tampering, R repudiation, I information disclosure, D 
 | R-16 | Licence or copyleft breach through bundled GPL components in the boot agent (legal) | A7 | M | Med | Components unmodified from Debian; SBOM lists them; THIRD-PARTY-LICENSES points to Debian sources | Medium | D-05 lawyer decision on the source-offer mechanism |
 | R-17 | Release assets unsigned for Windows/macOS: users run a tampered copy believed genuine (S, T) | TB3, A5 | M | Med | SHA256SUMS + minisign for the updater and installers; honest warnings in `docs/RELEASING.md` | Medium until Authenticode/notarisation exist | G-01 |
 | R-18 | Insecure recovery documentation leads users to overwrite the wrong device with `dd` (Safety) | A1 | L | High | Instructions say "check twice: the DOM is the 128 MB device"; `sha256sum -c` before writing; `lsblk` listing | Medium | Add a stronger warning/test; real-hardware walkthrough |
+| R-19 | Certificates and the optional HAProxy front: a wrong front configuration locks the administrator out; the challenge secret or a private key leaks; a hostile name or value reaches lego or the HAProxy configuration (D, I, E) | TB3, TB6 | M | Med | Default off; `haproxy -c` on a private copy before anything is written, snapshot and a revert timer unless confirmed, default backend is the management plane, `proxy disable` from the console; secret and keys 0600, scrubbed from logs and API answers; strict name validation, no shell, golden and injection tests. **Open:** never run against the real Let's Encrypt, lego or HAProxy; the front's loopback PROXY port (127.0.0.1:8444) can be reached by local users; add-on ports stay open on the LAN |
 
 ## 5. Not modelled (state of the art for later versions)
 

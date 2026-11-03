@@ -47,6 +47,31 @@ What `synofurb` writes there, and how safely ([boot/dom](../boot/dom/README.md))
   built with an explicit module list and `xz` (`MODULES=list`), and a kernel update that does not fit is refused, leaving the previous
   entry in place. Kernel updates are registered by a hook; the previous kernel is kept as `DEBIAN_OLD`.
 
+### What Debian costs on the flash (measured 2026-11-03)
+
+Debian trixie `minbase` plus the package list of `payload/chroot-setup.sh`, `MODULES=list`, `COMPRESS=xz`, `intel-microcode` for the host CPU only:
+
+| Kernel | `vmlinuz` | `initrd.img` | Total |
+|---|---:|---:|---:|
+| Linux 6.12.107 (Stable) | 12,142,528 B | 13,603,940 B | **24.6 MiB** |
+| Linux 7.2.11 (Newest, trixie-backports) | 14,329,792 B | 15,055,484 B | **28.0 MiB** |
+| boot agent (see [boot/agent](../boot/agent/README.md)) | | | 18.9 MiB (6.12) / 21.8 MiB (7.2) |
+
+`DEBIAN_OLD` doubles Debian's share. The biggest single items inside the initramfs are udev's `hwdb.bin` (13.5 MB raw, 1.7 MB compressed), `libcrypto`, `lvm` and `xfs.ko`;
+dropping `hwdb.bin` through an initramfs hook would save about 1.7 MB but is not done (not tried on hardware). Without `xz-utils` in the target `initramfs-tools` silently falls back to
+`gzip` (+2.8 MB); the installer installs it before the first kernel.
+
+Rules the tools follow, so that a flash that is too small is found **before** anything is destroyed and never leaves the unit without a boot entry:
+
+1. **Before the point of no return** the stage-2 script asks `synofurb-dom status --json` for the free bytes of the DSM partition (counting the `.old` fallback files as free) and
+   needs 32 MiB for Debian's kernel + initramfs (`DOM_DEBIAN_NEED_MIB`). If it is short it removes everything synofurb added (the boot agent is not needed once the installer runs),
+   re-checks, and stops the install with `@@FAIL preflight: the boot flash has only N MiB free ...` if it is still short. Nothing was changed; DSM stays the default.
+2. **`install-debian`** (called by the kernel hook) works on copies and writes only when everything fits: the current kernel is first rotated to `vmlinuz.old`/`initrd.img.old`,
+   the old fallback is deleted if there is no room, and if the new kernel still does not fit nothing is written. DSM's files are never touched.
+3. **The hook** (`synofurb-dom-update --hook`) turns a refusal into an error message on the console, in syslog and in `/var/lib/synofurb/dom-update.failed`, and exits 0: a failing
+   kernel hook would leave the `linux-image` package half-configured and block every later `apt` run. The unit keeps booting the kernel it booted before.
+4. The **default** boot entry is changed to Debian only by the last step of the install (`synofurb-dom default debian`); the hook never changes it.
+
 ### The time limits, in one place
 
 They are constants in `synofurb_core::timing` (the GUI and the CLI texts read them there; a test keeps the agent's built-in 20 in step with `boot/agent`):
@@ -89,6 +114,23 @@ Limits you should know: `kexec` starts **Linux kernels**. It cannot boot Windows
 can add an EFI application (for example iPXE or a UEFI shell) to the flash's FAT partition and a `chainloader` menu entry, which may work
 on units that boot in UEFI mode **but that has not been tested** and depends on the loader's GRUB build.
 
+## The DS918+ (Apollo Lake) as a test case
+
+The owner's DS918+ is the reference unit for this chain: booting through the internal flash (120 MiB), serial console `ttyS2` at 115200 (DSM's own `console=`, copied to the agent, the installer
+and the installed system; **the unit has no video output**), two SATA controllers (`sdc`/`sdd` on the SoC AHCI `0000:00:12.0`, `sda`/`sdb` on an add-in AHCI behind the bridge `0000:00:13.0`, which report
+`removable=1`), two Intel i211 ports. Which Debian kernel modules drive that hardware:
+
+| Hardware | Module | In the installed system's initramfs | In the installer / agent |
+|---|---|---|---|
+| SoC AHCI, add-in AHCI (Marvell 88SE9215/9230/9235 are in `ahci`'s PCI table; `sata_mv` is for older 88SX/88SE61xx parts) | `ahci` (+ `libahci`, `libata`) | yes (`ahci`, `sata_mv` and `sata_sil24` are listed) | `sata-modules` udeb / agent `STORAGE_MODULES` |
+| disks | `sd_mod` | yes | yes |
+| the boot flash (USB) | `xhci_pci`, `usb_storage`, `uas` | yes (the flash is not needed to boot, but a USB keyboard on a recovery console is) | `usb-modules`, `usb-storage-modules` / agent |
+| md / LVM / XFS | `raid1`, `raid456`, `dm_mod`, `xfs`, ... | yes | `md-modules`, `xfs-modules` / not needed |
+| NICs | `igb` (no firmware: the i211 keeps its NVM on the card) | no (loaded from the root file system by udev) | `nic-modules` udeb / agent `NIC_MODULES` |
+
+Whatever the list says, `chroot-setup.sh` walks the sysfs path of every system disk in the running installer (`disk_driver_modules`) and fails the install if the finished initramfs lacks a loadable driver on that path
+(`ensure_initrd_storage`), after adding it and rebuilding once. Hardware-only checks are in [HARDWARE-TEST-PLAN.md](HARDWARE-TEST-PLAN.md).
+
 ## Linux 7.x
 
 Debian 13 "trixie" ships Linux 6.12 LTS. The kernel option **Newest** installs `linux-image-<arch>` from `trixie-backports`, where Debian
@@ -115,5 +157,6 @@ bundled, this note and the licence question must be revisited first.
 ## What is verified
 
 `synofurb-dom` and the agent were exercised against **synthetic** boot-flash images and (for the agent) QEMU; see their READMEs for exact results.
-None of it has run on a real Synology yet. The DS923+ is the only model with an outside report (from synodeb) that this general technique works;
+The generated stage-2 script was also run live in QEMU on a DS918+-shaped machine (two AHCI controllers, a USB flash, old DSM arrays left assembled) and the resulting system booted
+to a login on the third serial port and answered SSH ([HARDWARE-TEST-PLAN.md](HARDWARE-TEST-PLAN.md)). None of it has run on a real Synology yet. The DS923+ is the only model with an outside report (from synodeb) that this general technique works;
 every other model is **Untested** in [compat/models.json](../compat/models.json).

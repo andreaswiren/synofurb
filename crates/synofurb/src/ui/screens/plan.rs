@@ -164,7 +164,7 @@ impl App {
                 Tone::Err,
                 role::DELETE,
                 &copy::PLAN_DESTROYED,
-                format!("{} \u{00b7} {}", plural(n_disks, "disk", "disks"), size_2dp(raw_total)),
+                format!("{} \u{00b7} {}", crate::ui::facts::DiskScope::of(&f).count_text(), size_2dp(raw_total)),
                 plan.destroyed.clone(),
             ))
             .child(summary_tag(
@@ -274,15 +274,27 @@ impl App {
 }
 
 impl App {
-    /// The Storage | System tabs of the Setup step (stock `TabBar`).
+    /// The Storage | System | Add-ons tabs of the Setup step (stock `TabBar`).
     pub(crate) fn setup_tabs(&self, cx: &mut Context<App>) -> impl IntoElement {
         use gpui_kit::component::tab::{Tab, TabBar};
         TabBar::new("setup-tabs")
             .underline()
-            .selected_index(usize::from(self.screen == Screen::System))
-            .children([Tab::new().label(copy::SETUP_STORAGE.short), Tab::new().label(copy::SETUP_SYSTEM.short)])
+            .selected_index(match self.screen {
+                Screen::System => 1,
+                Screen::Addons => 2,
+                _ => 0,
+            })
+            .children([
+                Tab::new().label(copy::SETUP_STORAGE.short),
+                Tab::new().label(copy::SETUP_SYSTEM.short),
+                Tab::new().label(copy::SETUP_ADDONS.short),
+            ])
             .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                let target = if *ix == 1 { Screen::System } else { Screen::Plan };
+                let target = match *ix {
+                    1 => Screen::System,
+                    2 => Screen::Addons,
+                    _ => Screen::Plan,
+                };
                 if this.screen != target {
                     this.go(target, window, cx);
                 }

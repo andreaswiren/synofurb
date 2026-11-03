@@ -8,6 +8,7 @@ use super::out::Out;
 use super::prompt::Prompter;
 use anyhow::{Context, Result, anyhow};
 use std::path::{Path, PathBuf};
+use synofurb_core::addons::AddonChoice;
 use synofurb_core::config::*;
 use synofurb_core::model::*;
 use synofurb_core::plan::Plan;
@@ -52,6 +53,8 @@ pub struct InstallSpec {
     pub mirror_host: String,
     pub mirror_dir: String,
     pub packages: Vec<String>,
+    /// Add-ons to install after the first boot (secret values already read from their environment variable or file).
+    pub addons: Vec<AddonChoice>,
     pub serial: Option<SerialConsole>,
     pub dtb: Option<String>,
     pub mgmt: bool,
@@ -80,6 +83,7 @@ impl InstallSpec {
             mirror_host: "deb.debian.org".into(),
             mirror_dir: "/debian".into(),
             packages: vec![],
+            addons: vec![],
             serial: None,
             dtb: None,
             mgmt: true,
@@ -115,6 +119,7 @@ impl InstallSpec {
             mirror_host: s.mirror.clone(),
             mirror_dir: s.mirror_dir.clone(),
             packages: s.packages.clone(),
+            addons: vec![],
             serial,
             dtb: s.dtb.clone(),
             mgmt: !s.no_mgmt,
@@ -281,6 +286,8 @@ pub fn build_material(spec: &InstallSpec, facts: &DeviceFacts, dry: bool, out: &
     cfg.enable_mgmt = spec.mgmt;
     cfg.kernel = spec.kernel;
     cfg.extra_packages = spec.packages.clone();
+    // a dry run never carries real secret values
+    cfg.addons = if dry { synofurb_core::addons::redact_secrets(&spec.addons) } else { spec.addons.clone() };
     cfg.serial = spec.serial.clone().unwrap_or_else(|| facts.serial_console());
     cfg.dtb = spec.dtb.clone().or_else(|| {
         synofurb_core::platform::mainline_dtb(&facts.model)

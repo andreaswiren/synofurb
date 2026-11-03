@@ -29,6 +29,8 @@ pub struct UiSettings {
     pub welcome_done: bool,
     /// Folder of the offline bundle chosen for Source: Offline.
     pub bundle_dir: Option<String>,
+    /// The networks the Find NAS scan covers (nothing chosen = the recommended ones).
+    pub scan_networks: super::netsel::NetSelection,
 }
 
 impl Default for UiSettings {
@@ -45,6 +47,7 @@ impl Default for UiSettings {
             send_results: false,
             welcome_done: false,
             bundle_dir: None,
+            scan_networks: Default::default(),
         }
     }
 }

@@ -1,0 +1,78 @@
+# Frigate configuration, rendered ONCE by synofurb-mgmt when the add-on is installed (never overwritten afterwards).
+# From here on this file belongs to you: edit it here or in Frigate's Settings. Reference:
+# https://docs.frigate.video/configuration/advanced/reference
+#
+# Cameras: camera_1 .. camera_4 are slots. A slot is off (enabled: False) until you give it a stream in the add-on settings
+# or edit it here. Streams go through go2rtc (restream), so every camera is read once and shared by detect, record and live view.
+
+mqtt:
+  enabled: False
+
+${DETECTOR_BLOCK}${MODEL_BLOCK}
+ffmpeg:
+  hwaccel_args: ${hwaccel}
+
+record:
+  enabled: True
+  continuous:
+    days: ${retain_days}
+  alerts:
+    retain:
+      days: ${event_retain_days}
+  detections:
+    retain:
+      days: ${event_retain_days}
+
+snapshots:
+  enabled: True
+  retain:
+    default: ${event_retain_days}
+
+go2rtc:
+  streams:
+    camera_1:
+      - "${cam1_url}"
+    camera_2:
+      - "${cam2_url}"
+    camera_3:
+      - "${cam3_url}"
+    camera_4:
+      - "${cam4_url}"
+
+cameras:
+  camera_1:
+    enabled: ${cam1_enabled}
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/camera_1
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+            - record
+  camera_2:
+    enabled: ${cam2_enabled}
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/camera_2
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+            - record
+  camera_3:
+    enabled: ${cam3_enabled}
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/camera_3
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+            - record
+  camera_4:
+    enabled: ${cam4_enabled}
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/camera_4
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+            - record

@@ -186,6 +186,9 @@ pub fn stage(job: &InstallJob, bind_ip: IpAddr, inspect_raw: &str, log: &Logger,
             for w in warnings {
                 log.warn(w);
             }
+            if !cfg.addons.is_empty() {
+                log.warn("add-ons chosen with an offline bundle: Docker and the container images are fetched from the Internet on the first boot (the bundle has no Docker packages)");
+            }
             if !bind_ip.is_ipv4() {
                 bail!(
                     "offline installs need an IPv4 address of this computer (the installer fetches packages from {bind_ip}); pick the LAN IPv4 address"
@@ -571,6 +574,11 @@ pub fn wait_for_new_system(job: &InstallJob, old_ip: Option<IpAddr>, cancel: &At
 /// Run the whole job. Blocks; call from a worker thread.
 pub fn run_install(job: &InstallJob, logger: &Logger, cancel: Arc<AtomicBool>, progress: &mut dyn FnMut(&str, f32)) -> Result<Outcome> {
     logger.add_secret(&job.display_password);
+    for c in &job.cfg.addons {
+        for v in c.secrets.values() {
+            logger.add_secret(v);
+        }
+    }
     if let Auth::Password(p) = &job.target.auth {
         logger.add_secret(p);
     }

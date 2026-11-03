@@ -5,6 +5,7 @@
 //! `dryrun`, `install` (inspect/plan/install), `scan`, `compat_cmd`, `boot`, `manage_cmd` (health and updates of the web UI on a converted unit), `logs_cmd`, `bundle`, `misc`, `prompt` and `wizard`.
 //! Both programs (`synofurb` and `synofurb-cli`) call [`dispatch`].
 
+pub mod addons_cmd;
 pub mod args;
 pub mod boot;
 pub mod bundle;
@@ -99,6 +100,7 @@ pub fn run(out: &Out, p: &Program, cmd: Cmd) -> CliResult<()> {
         Cmd::DiskBackup(a) => boot::disk_backup(out, a),
         Cmd::Logs { action } => logs_cmd::logs(out, action),
         Cmd::Manage { action } => manage_cmd::manage(out, action),
+        Cmd::Addons { action } => addons_cmd::addons(out, action),
         Cmd::Bundle { action } => bundle::bundle(out, action),
         Cmd::FetchInstaller(a) => boot::fetch_installer(out, a),
         Cmd::SelfUpdate(a) => {

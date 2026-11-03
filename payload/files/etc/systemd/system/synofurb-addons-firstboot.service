@@ -1,0 +1,18 @@
+[Unit]
+Description=synofurb: install the add-ons chosen in the installer (first boot)
+Documentation=file:///opt/synofurb-mgmt/README.md
+After=network-online.target docker.service synofurb-mgmt.service
+Wants=network-online.target
+ConditionPathExists=/etc/synofurb/addons.d/pending
+ConditionDirectoryNotEmpty=/etc/synofurb/addons.d/pending
+
+[Service]
+Type=oneshot
+# The script always exits 0: an add-on that cannot be installed (no Internet, image not found) must never fail the boot.
+# It shows up as "needs attention" in the web page, and the choices stay in the pending folder until they are applied.
+ExecStart=/usr/local/sbin/synofurb-addons-firstboot
+TimeoutStartSec=3h
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

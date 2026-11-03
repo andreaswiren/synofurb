@@ -90,6 +90,20 @@ pub fn info_note(id: impl Into<ElementId>, title: &'static str, body: String) ->
     })
 }
 
+/// An `(i)` button whose popover lists lines computed at run time, one per row (what a check found or why it failed).
+pub fn info_lines(id: impl Into<ElementId>, title: &'static str, lines: Vec<String>) -> impl IntoElement {
+    let label: SharedString = format!("{title}: {}", lines.join("; ")).into();
+    let trigger = Button::new("info").ghost().xsmall().icon(icons::icon(role::TIP)).accessibility_label(label);
+    Popover::new(id.into()).anchor(Anchor::TopLeft).trigger(trigger).content(move |_, _, _| {
+        v_flex()
+            .w(px(POPOVER_W + 60.0))
+            .gap(px(6.0))
+            .text_sm()
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+            .children(lines.iter().map(|l| div().child(SharedString::from(l.clone()))))
+    })
+}
+
 /// A modal with the item's title and paragraphs and a Close button; a Help link when the item has a topic.
 pub fn dialog(window: &mut Window, cx: &mut GpuiApp, item: &'static Item, app: &Entity<App>) {
     let app = app.clone();

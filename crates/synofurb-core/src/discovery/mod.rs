@@ -10,12 +10,22 @@
 //! * **SSDP/UPnP**: DSM answers M-SEARCH and its device description names the manufacturer and model.
 //! * **DSM Web API fingerprint**: an unauthenticated `SYNO.API.Info` query on port 5000 proves a DSM.
 //! * **MAC address (OUI)**: Synology's registered prefixes, read from the ARP cache where available.
-//! * **Subnet sweep**: connect to the DSM ports across the local /24(s) when multicast is blocked.
+//! * **Port sweep**: connect to the DSM port across the selected networks when multicast is blocked.
+//!
+//! A scan covers the networks you select ([`networks()`] lists them; the real LAN ones are the default) and reports its
+//! progress as [`ScanEvent`]s; see [`scan_with`] and `docs/DISCOVERY.md`.
 
 pub mod mdns;
+pub mod networks;
 pub mod probe;
+pub mod scan;
 pub mod ssdp;
 pub mod syno_udp;
+
+pub use networks::{
+    Ipv4Cidr, NetworkError, NetworkInfo, NetworkKind, ResolvedNetwork, ScanNetwork, classify, networks, parse_selector, resolve_networks,
+};
+pub use scan::{CancelToken, ScanEvent, ScanMethod, ScanMethods, ScanOptions, scan_with, scan_with_callback};
 
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -175,66 +185,46 @@ pub fn parse_arp(text: &str, ip: IpAddr) -> Option<String> {
     })
 }
 
-pub struct ScanOptions {
-    pub timeout: std::time::Duration,
-    pub sweep: bool,
+/// The recommended networks (real LAN only), resolved for scanning.
+pub(crate) fn recommended_resolved() -> Vec<ResolvedNetwork> {
+    let avail = networks::networks();
+    let own: Vec<std::net::Ipv4Addr> = networks::local_addrs().iter().map(|a| a.ip).collect();
+    let sel: Vec<ScanNetwork> = avail.iter().filter(|n| n.recommended).map(ScanNetwork::from_info).collect();
+    networks::resolve_networks(&sel, &avail, &own).unwrap_or_default()
 }
 
-impl Default for ScanOptions {
-    fn default() -> Self {
-        ScanOptions { timeout: std::time::Duration::from_secs(4), sweep: true }
+/// Run `f` for every network in parallel and add up the results. Fails only if every run failed.
+pub(crate) fn per_network(nets: &[ResolvedNetwork], f: impl Fn(&ResolvedNetwork) -> anyhow::Result<usize> + Sync) -> anyhow::Result<usize> {
+    let results: Vec<anyhow::Result<usize>> = std::thread::scope(|s| {
+        let hs: Vec<_> = nets.iter().map(|n| s.spawn(|| f(n))).collect();
+        hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("discovery thread panicked")))).collect()
+    });
+    let ok: usize = results.iter().filter_map(|r| r.as_ref().ok()).sum();
+    match results.into_iter().find_map(Result::err) {
+        Some(e) if ok == 0 => Err(e),
+        _ => Ok(ok),
     }
 }
 
-/// Run every discovery mechanism concurrently and merge the results.
+/// Run every discovery mechanism on the networks in `opts` (by default the real LAN networks) and merge the results.
+/// This is [`scan_with`] without progress events; failures of single methods are logged.
 pub fn scan(opts: &ScanOptions, log: &crate::logs::Logger) -> Inventory {
-    let (tx, rx) = std::sync::mpsc::channel::<Found>();
-    let mut handles = vec![];
-    macro_rules! spawn {
-        ($name:literal, $body:expr) => {{
-            let tx = tx.clone();
-            let log = log.clone();
-            handles.push(std::thread::spawn(move || match $body(&tx) {
-                Ok(n) => log.debug(format!("discovery {}: {} result(s)", $name, n)),
-                Err(e) => log.warn(format!("discovery {} failed: {e}", $name)),
-            }));
-        }};
-    }
-    let t = opts.timeout;
-    spawn!("synology-udp", move |tx: &std::sync::mpsc::Sender<Found>| syno_udp::scan(t, tx));
-    spawn!("mdns", move |tx: &std::sync::mpsc::Sender<Found>| mdns::scan(t, tx));
-    spawn!("ssdp", move |tx: &std::sync::mpsc::Sender<Found>| ssdp::scan(t, tx));
-    if opts.sweep {
-        spawn!("sweep", move |tx: &std::sync::mpsc::Sender<Found>| probe::sweep(tx));
-    }
-    drop(tx);
-    let mut inv = Inventory::default();
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    for mut f in rx {
-        f.last_seen = now.clone();
-        if f.mac.is_none()
-            && let Some(ip) = f.primary_ip()
-        {
-            f.mac = arp_lookup(ip);
+    let r = scan_with_callback(opts, &CancelToken::new(), |e| match e {
+        ScanEvent::MethodFinished { method, network, found, error: None } => {
+            log.debug(format!("discovery {} on {network}: {found} result(s)", method.id()));
         }
-        inv.merge(f);
-    }
-    for h in handles {
-        let _ = h.join();
-    }
-    // second pass: ARP is populated after traffic
-    for d in &mut inv.devices {
-        if d.mac.is_none()
-            && let Some(ip) = d.primary_ip()
-        {
-            d.mac = arp_lookup(ip);
-            if d.mac.as_deref().is_some_and(is_synology_mac) {
-                d.synology = true;
-                d.sources.push("oui".into());
-            }
+        ScanEvent::MethodFinished { method, network, error: Some(e), .. } => {
+            log.warn(format!("discovery {} on {network} failed: {e}", method.id()));
+        }
+        _ => {}
+    });
+    match r {
+        Ok(inv) => inv,
+        Err(e) => {
+            log.warn(format!("discovery not started: {e}"));
+            Inventory::default()
         }
     }
-    inv
 }
 
 #[cfg(test)]

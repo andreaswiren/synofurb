@@ -62,6 +62,12 @@ pub fn failure_handling_with_tool(plan: &Plan, installer_has_dom_tool: bool) -> 
     }
 }
 
+/// Room the Debian kernel + initramfs need on the boot flash's ext2 partition, in MiB. Measured 2026-11-03 on a minbase + the
+/// package list of `chroot-setup.sh` (`MODULES=list`, `COMPRESS=xz`, intel-microcode for the host CPU): Linux 6.12.107 is 12.1 MB +
+/// 13.6 MB = 24.6 MiB, Linux 7.2.11 (trixie-backports) is 14.3 MB + 15.1 MB = 28.0 MiB. Rounded up with headroom for the next point
+/// release; the DEBIAN_OLD fallback is dropped by `synofurb-dom` when there is no room for it, so it is not counted here.
+pub const DOM_DEBIAN_NEED_MIB: u64 = 32;
+
 /// Udebs the script loads before touching disks (kernel module udebs are virtual `*-modules`).
 pub const ANNA_PACKAGES: &[&str] = &[
     "debian-archive-keyring-udeb",
@@ -218,6 +224,54 @@ zero_range() { # DEVICE SEEK_MIB COUNT_MIB
   emit "WIPE  $1 range ${2}MiB +${3}MiB"
   [ "$DRY" = 1 ] && return 0
   dd if=/dev/zero of="$1" bs=1M seek="$2" count="$3" conv=notrunc >> "$LOG" 2>&1
+}
+
+# release_storage : stop everything that holds the disks' partitions. The installer's udev rules often assemble DSM's md arrays (and
+# activate its LVM volume group) as soon as the disks are seen; repartitioning a disk under a running array fails half-way, and
+# zeroing the members of a running array corrupts the array in memory. Rounds, because a volume group must go before its array.
+# Returns 1 if an md array or a device-mapper map is still there after the last round.
+md_left() { grep '^md[0-9]' "${SYNOFURB_MDSTAT:-/proc/mdstat}" 2>/dev/null | cut -d' ' -f1 | tr '\n' ' '; }
+dm_left() { ls "${SYNOFURB_SYSBLOCK:-/sys/block}" 2>/dev/null | grep '^dm-' | tr '\n' ' '; }
+release_storage() {
+  emit "INFO  releasing: md arrays [$(md_left)] device-mapper [$(dm_left)] volume groups [$(vgs --noheadings -o vg_name 2>/dev/null | tr -d ' ' | tr '\n' ' ')]"
+  _round=0
+  while [ $_round -lt 5 ]; do
+    _round=$((_round + 1))
+    command -v vgchange >/dev/null 2>&1 && vgchange -an --noudevsync >> "$LOG" 2>&1
+    command -v dmsetup >/dev/null 2>&1 && dmsetup remove_all >> "$LOG" 2>&1
+    if command -v mdadm >/dev/null 2>&1; then
+      mdadm --stop --scan >> "$LOG" 2>&1
+      for _a in $(md_left); do mdadm --stop "/dev/$_a" >> "$LOG" 2>&1; done
+    fi
+    if [ -z "$(md_left)$(dm_left)" ]; then emit "INFO  released after $_round round(s): nothing holds the disks any more"; return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+# dom_flash_check : the boot flash must have room for Debian's kernel + initramfs BEFORE any disk is wiped; finding out afterwards leaves a
+# unit that has neither DSM (its system partition is gone) nor Debian. Counts the fallback files (.old) as free: synofurb-dom drops them
+# first. If it is too full, everything synofurb added (the boot agent, 20 MB) is removed: the agent has done its job once the installer runs.
+json_p2_free() { printf '%s' "$1" | sed -n 's/.*"p2":{[^}]*"free_bytes":\([0-9][0-9]*\).*/\1/p'; }
+json_file_size() { printf '%s' "$1" | tr '{' '\n' | sed -n "s/^\"name\":\"$2\",\"size\":\([0-9][0-9]*\).*/\1/p" | head -n1; }
+dom_free_bytes() {
+  _st=$("$SFDOM" status --json 2>>"$LOG") || return 1
+  _f=$(json_p2_free "$_st")
+  [ -n "$_f" ] || return 1
+  _o1=$(json_file_size "$_st" 'vmlinuz\.old'); _o2=$(json_file_size "$_st" 'initrd\.img\.old')
+  echo $((_f + ${_o1:-0} + ${_o2:-0}))
+}
+dom_flash_check() { # NEED_MIB
+  _need=$(($1 * 1048576))
+  _free=$(dom_free_bytes) || fail "preflight: cannot read the boot flash with $SFDOM status --json; nothing was changed"
+  log "boot flash: $((_free / 1048576)) MiB free for Debian's kernel + initramfs on the DSM partition, about $1 MiB needed"
+  if [ "$_free" -lt "$_need" ]; then
+    warn "the boot flash is too full; removing everything synofurb added (boot agent, old Debian entries) to make room - DSM's own files are never touched"
+    "$SFDOM" remove --yes >> "$LOG" 2>&1 || fail "preflight: could not clean the boot flash; nothing else was changed"
+    _free=$(dom_free_bytes) || fail "preflight: cannot read the boot flash after cleaning it; nothing was changed"
+    log "boot flash: $((_free / 1048576)) MiB free after cleaning"
+    [ "$_free" -ge "$_need" ] || fail "preflight: the boot flash has only $((_free / 1048576)) MiB free next to DSM's files, Debian's kernel + initramfs need about $1 MiB. Nothing was changed; DSM stays the default"
+  fi
 }
 
 CLAIMED=" "
@@ -384,8 +438,18 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
         "[ -n \"$KEYRING\" ] || [ \"$DRY\" = 1 ] || fail \"Debian archive keyring not found in the installer; refusing to install unsigned packages\""
     )?;
 
+    if plan.dom_boot {
+        writeln!(w, "[ \"$DRY\" = 1 ] || dom_flash_check {DOM_DEBIAN_NEED_MIB}")?;
+    }
+
     // -- 3. point of no return ----------------------------------------------
     writeln!(w, "\nstep 3 \"POINT OF NO RETURN: releasing existing RAID/LVM and wiping reclaimed areas\"")?;
+    // Stopping DSM's arrays changes nothing on the disks, so a failure here is still "nothing was changed".
+    writeln!(w, "emit \"CMD   release_storage (stop old RAID arrays and LVM volume groups)\"")?;
+    writeln!(
+        w,
+        "[ \"$DRY\" = 1 ] || release_storage || fail \"cannot stop the existing RAID arrays/LVM volumes (still active: $(md_left)$(dm_left)); nothing was changed\""
+    )?;
     writeln!(w, "emit \"@@POINT_OF_NO_RETURN\"")?;
     writeln!(w, "PONR=1")?;
     for d in &plan.destroyed {
@@ -518,7 +582,7 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
         writeln!(w, "run mkdir -p /target/boot/efi")?;
         writeln!(w, "run mount \"$DEV_ESP\" /target/boot/efi")?;
     }
-    let has_data_lv = plan.vgs.iter().any(|v| v.name == "vg_data" && !v.lvs.is_empty());
+    let has_data_lv = plan.has_data_volume();
     if has_data_lv {
         writeln!(w, "run mkdir -p /target/srv/data")?;
         writeln!(w, "run mount /dev/mapper/vg_data-data /target/srv/data")?;
@@ -655,6 +719,9 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
         "for m in /target/dev/pts /target/dev /target/proc /target/sys /target/srv/data /target/boot/efi /target/boot /target; do try umount $m; done"
     )?;
     writeln!(w, "try vgchange -an --noudevsync")?;
+    // Stop the arrays so the superblocks are written clean and a resync still running (a new RAID5 needs many hours) records where it
+    // stands; `reboot -f` would leave them dirty and the new system would start over from the last checkpoint.
+    writeln!(w, "try mdadm --stop --scan")?;
     writeln!(w, "emit \"@@DONE install completed\"")?;
     writeln!(w, "try cp \"$LOG\" /var/log/synofurb-install.final.log")?;
     writeln!(w, "sync; [ \"$DRY\" = 1 ] || sleep 8")?;
@@ -1247,5 +1314,237 @@ mod tests {
         assert!(text.contains("@@DONE"), "{text}");
         assert!(text.contains("CMD   mdadm --create /dev/md/boot"));
         assert!(!text.contains("@@FAIL"), "{text}");
+    }
+
+    // ---------------------------------------------------------------------------- the owner's real DS918+ (4 x 8 TB, DOM, ttyS2)
+
+    fn ds918_facts() -> DeviceFacts {
+        parse_inspect(&fixtures::ds918_two_volumes()).unwrap()
+    }
+
+    fn ds918_script(raid: DataRaid, copies: Option<usize>) -> (String, Plan) {
+        let facts = ds918_facts();
+        let plan = build_plan(&facts, &PlanRequest { data_raid: raid, system_copies: copies, ..Default::default() });
+        assert!(plan.is_ok(), "{:?}", plan.errors);
+        let mut cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        cfg.serial = facts.serial_console();
+        (render_stage2(&params(&plan, &facts, &cfg)).unwrap(), plan)
+    }
+
+    #[test]
+    fn the_real_ds918_installs_through_the_boot_flash_on_all_four_disks_including_the_removable_flagged_ones() {
+        let (s, plan) = ds918_script(DataRaid::Shr1, Some(4));
+        sh_syntax_ok(&s);
+        assert!(plan.dom_boot && plan.boot.is_none() && plan.esp.is_none(), "DOM unit: no GRUB, no /boot or ESP on the disks");
+        assert!(s.contains("DOM_BOOT=1") && !s.contains("bios_grub") && !s.contains("sf-esp"));
+        // sda/sdb sit behind the add-in controller and say removable=1: they are wiped, partitioned and in every array like sdc/sdd
+        for d in ["sda", "sdb", "sdc", "sdd"] {
+            assert!(s.contains(&format!("resolve_disk D_{d} ")), "{d} located");
+            assert!(s.contains(&format!("run parted -s \"/dev/$D_{d}\" mklabel gpt")), "{d} gets a new table");
+            assert!(s.contains(&format!("zero_ends \"/dev/$D_{d}\"")), "{d} whole-disk metadata wiped");
+            for old in [1, 2, 5, 6] {
+                assert!(
+                    s.contains(&format!("try mdadm --zero-superblock --force \"/dev/$(pdev \"$D_{d}\" {old})\"")),
+                    "{d}{old} superblock zeroed"
+                );
+            }
+        }
+        let sys = s.lines().find(|l| l.contains("mdadm --create /dev/md/system")).unwrap();
+        assert!(sys.contains("--level=1 --raid-devices=4 --metadata=1.2"), "{sys}");
+        let data = s.lines().find(|l| l.contains("mdadm --create /dev/md/data1")).unwrap();
+        assert!(
+            data.contains("--level=5 --raid-devices=4") && data.contains("--bitmap=internal") && !data.contains("assume-clean"),
+            "{data}"
+        );
+        // new arrays carry the new host name, never DSM's `awss01:2` / `awss01:3`
+        assert!(sys.contains("--homehost='nas'") && !s.contains("awss01"));
+        // the log lists what is destroyed, naming the old arrays
+        assert!(s.contains("DESTROYING: Data volume: md2") && s.contains("DESTROYING: Data volume: md3"));
+        assert!(s.contains("emit \"@@BEGIN run=$RUN_ID arch=amd64 firmware=Dom"));
+    }
+
+    #[test]
+    fn the_console_of_the_real_unit_is_the_third_serial_port_everywhere() {
+        let facts = ds918_facts();
+        assert_eq!(facts.serial_console().kernel_arg(), "console=ttyS2,115200n8", "DSM's own cmdline");
+        let plan = build_plan(&facts, &PlanRequest::default());
+        let mut cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        cfg.serial = facts.serial_console();
+        // installer (d-i): VGA first, serial LAST so it is /dev/console
+        let ic = crate::debian::installer_cmdline(&cfg.serial, "192.0.2.10", 18082, false, None);
+        assert!(ic.contains("console=tty0 console=ttyS2,115200n8"), "{ic}");
+        // the installed system: env.sh feeds chroot-setup.sh (getty + dom.conf kernel arguments)
+        let env = crate::payload::render_env(&cfg, &plan, &facts);
+        assert!(
+            env.contains("SERIAL_TTY='ttyS2'")
+                && env.contains("SERIAL_ARG='console=ttyS2,115200n8'")
+                && env.contains("SERIAL_SPEED='115200'"),
+            "{env}"
+        );
+        assert!(env.contains("FIRMWARE='Dom'") && env.contains("DOM_BOOT='1'"), "{env}");
+        assert!(env.contains("MICROCODE_PKG='intel-microcode'"), "{env}");
+        let setup = include_str!("../../../payload/chroot-setup.sh");
+        assert!(setup.contains("serial-getty@$SERIAL_TTY.service"), "named port: explicit getty");
+        assert!(setup.contains("SERIAL_ARG=\"$SERIAL_ARG\""), "dom.conf carries the kernel argument for the boot flash entry");
+        let update = include_str!("../../../payload/files/usr/local/sbin/synofurb-dom-update");
+        assert!(update.contains("console=tty0 ${SERIAL_ARG:-}"), "serial argument last: it becomes /dev/console");
+        // GRUB (BIOS/UEFI units only): serial unit 2 = COM3 = ttyS2
+        assert!(setup.contains("UNIT=${SERIAL_TTY#ttyS}") && setup.contains("--unit=$UNIT"));
+    }
+
+    /// Run the preamble's functions (only) followed by `tail` with stub tools first on PATH.
+    fn preamble_run(tag: &str, tail: &str, stubs: &[(&str, &str)], env: &[(&str, std::path::PathBuf)]) -> (i32, String, String) {
+        let facts = ds918_facts();
+        let plan = build_plan(&facts, &PlanRequest::default());
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let mut p = params(&plan, &facts, &cfg);
+        p.dry_run = false;
+        let script = render_stage2(&p).unwrap();
+        let head = &script[..script.find("\nRUN_ID=").unwrap()];
+        let dir = std::env::temp_dir().join(format!("sf-pre-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("stubs")).unwrap();
+        for (name, body) in stubs {
+            let f = dir.join("stubs").join(name);
+            std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        let f = dir.join("h.sh");
+        std::fs::write(&f, format!("{head}\n{tail}\n")).unwrap();
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg(&f)
+            .env_clear()
+            .env("PATH", format!("{}:/usr/bin:/bin", dir.join("stubs").display()))
+            .env("SYNOFURB_LOG", dir.join("log"))
+            .env("SYNOFURB_LOCK", dir.join("lock"))
+            .env("SYNOFURB_DRY", "0")
+            .env("SYNOFURB_DOM_DIRS", dir.join("stubs"));
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.env("DIR", &dir);
+        let out = cmd.output().unwrap();
+        let log = std::fs::read_to_string(dir.join("log")).unwrap_or_default();
+        let calls = std::fs::read_to_string(dir.join("calls")).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        (out.status.code().unwrap_or(-1), format!("{log}{}", String::from_utf8_lossy(&out.stderr)), calls)
+    }
+
+    const DOM_STATUS: &str = r#"{"tool":"synofurb-dom","device":"/dev/sde","p1":{"dev":"/dev/sde1","bytes":50331648,"free_bytes":30000000,"fat_volume_id":"10EE-589C"},"p2":{"dev":"/dev/sde2","bytes":96468992,"free_bytes":FREE,"uuid":"45e5b07d"},"entries":[],"files":[{"name":"agent.vmlinuz","size":14329792,"sha256":"x","installed":"d"},{"name":"vmlinuz.old","size":OLDK,"sha256":"y","installed":"d"},{"name":"initrd.img.old","size":OLDI,"sha256":"z","installed":"d"}]}"#;
+
+    /// A stand-in `synofurb-dom`: `status --json` prints the first of status.before/status.after that is not consumed; `remove` switches to "after".
+    fn dom_stub(before: &str, after: &str) -> String {
+        format!(
+            "cd \"$DIR\"\necho \"synofurb-dom $*\" >> calls\ncase \"$1\" in\n status) if [ -e removed ]; then cat <<'EOF'\n{after}\nEOF\nelse cat <<'EOF'\n{before}\nEOF\nfi ;;\n remove) : > removed ;;\n *) ;;\nesac"
+        )
+    }
+
+    #[test]
+    fn the_flash_check_passes_when_debian_fits_and_touches_nothing() {
+        let st = DOM_STATUS.replace("FREE", "40000000").replace("OLDK", "0").replace("OLDI", "0");
+        let (code, log, calls) = preamble_run(
+            "fit",
+            "SFDOM=\"$DIR/stubs/synofurb-dom\"\ndom_flash_check 32\nemit DONE-OK",
+            &[("synofurb-dom", &dom_stub(&st, &st))],
+            &[],
+        );
+        assert_eq!(code, 0, "{log}");
+        assert!(log.contains("38 MiB free") && log.contains("DONE-OK") && !log.contains("too full"), "{log}");
+        assert_eq!(calls.lines().collect::<Vec<_>>(), ["synofurb-dom status --json"], "read-only: {calls}");
+    }
+
+    #[test]
+    fn the_flash_check_counts_the_fallback_kernel_as_free_because_synofurb_dom_drops_it_first() {
+        // 5 MB free + 13 MB + 14 MB of .old files = 32 MB: enough for 28 MiB
+        let st = DOM_STATUS.replace("FREE", "5000000").replace("OLDK", "13000000").replace("OLDI", "14000000");
+        let (code, log, calls) = preamble_run(
+            "old",
+            "SFDOM=\"$DIR/stubs/synofurb-dom\"\ndom_flash_check 28\nemit DONE-OK",
+            &[("synofurb-dom", &dom_stub(&st, &st))],
+            &[],
+        );
+        assert_eq!(code, 0, "{log}");
+        assert!(!calls.contains("remove"), "{calls}");
+    }
+
+    #[test]
+    fn a_full_flash_is_cleaned_of_the_agent_before_the_point_of_no_return_and_a_still_full_one_stops_the_install() {
+        let full = DOM_STATUS.replace("FREE", "2000000").replace("OLDK", "0").replace("OLDI", "0");
+        let roomy = DOM_STATUS.replace("FREE", "40000000").replace("OLDK", "0").replace("OLDI", "0");
+        // the agent (21 MB) is the thing in the way: removing it makes room
+        let (code, log, calls) = preamble_run(
+            "clean",
+            "SFDOM=\"$DIR/stubs/synofurb-dom\"\ndom_flash_check 32\nemit DONE-OK",
+            &[("synofurb-dom", &dom_stub(&full, &roomy))],
+            &[],
+        );
+        assert_eq!(code, 0, "{log}");
+        assert!(
+            calls.lines().any(|l| l == "synofurb-dom remove --yes") && log.contains("too full") && log.contains("DONE-OK"),
+            "{log}\n{calls}"
+        );
+        // even a clean flash is too small: refuse; nothing was written, and the failure path (PONR=0) points the default at DSM again
+        let (code, log, calls) = preamble_run(
+            "tiny",
+            "SFDOM=\"$DIR/stubs/synofurb-dom\"\nSYNOFURB_DRY=0\nDRY=1\ndom_flash_check 32\nemit NOT-REACHED",
+            &[("synofurb-dom", &dom_stub(&full, &full))],
+            &[],
+        );
+        assert_eq!(code, 1, "{log}\n{calls}");
+        assert!(log.contains("@@FAIL preflight: the boot flash has only 1 MiB free") && !log.contains("NOT-REACHED"), "{log}");
+        assert!(log.contains("DSM stays the default"), "{log}");
+        // an unreadable flash is also a stop
+        let (code, log, _) = preamble_run(
+            "broken",
+            "SFDOM=\"$DIR/stubs/synofurb-dom\"\nDRY=1\ndom_flash_check 32\nemit NOT-REACHED",
+            &[("synofurb-dom", "exit 3")],
+            &[],
+        );
+        assert_eq!(code, 1);
+        assert!(log.contains("@@FAIL preflight: cannot read the boot flash"), "{log}");
+    }
+
+    #[test]
+    fn the_rendered_script_checks_the_flash_and_releases_old_arrays_before_the_point_of_no_return() {
+        let (s, _) = ds918_script(DataRaid::Shr1, Some(4));
+        let ponr = s.find("emit \"@@POINT_OF_NO_RETURN\"").unwrap();
+        let flash = s.find("dom_flash_check 32").unwrap();
+        let release = s.find("release_storage ||").unwrap();
+        assert!(flash < release && release < ponr, "flash check, then release, then the point of no return");
+        assert!(s.find("expect_part").unwrap() < flash, "the layout is verified first");
+        assert!(s.find("wget -q -O /dev/null").unwrap() < flash || s.find("Release").unwrap() < flash);
+        // the zeroing and partitioning start only after the release
+        assert!(release < s.find("mdadm --zero-superblock").unwrap());
+        // arrays are stopped cleanly before the reboot, after the file systems are unmounted
+        let stop = s.rfind("try mdadm --stop --scan").unwrap();
+        assert!(s.rfind("try umount").unwrap_or(0) < stop && stop < s.find("@@DONE").unwrap());
+        // no other firmware gets the flash check
+        assert!(!render(StorageMode::WipeAll).0.contains("dom_flash_check 32"));
+        assert_eq!(DOM_DEBIAN_NEED_MIB, 32, "the measured 28 MiB (Linux 7.2.11) plus headroom; update the doc comment when it changes");
+    }
+
+    #[test]
+    fn release_storage_stops_old_arrays_until_none_is_left_and_fails_when_one_cannot_be_stopped() {
+        // a DSM array that the installer assembled: every `mdadm --stop` of it removes it from the stand-in mdstat
+        let mdadm = "cd \"$DIR\"\necho \"mdadm $*\" >> calls\ncase \"$1\" in\n --stop) shift; for a in \"$@\"; do case \"$a\" in --scan) : > mdstat ;; /dev/md*) : > mdstat ;; esac; done ;;\nesac";
+        let setup = "printf 'Personalities : [raid1] [raid6] [raid5]\\nmd2 : active raid5 sda5[0] sdb5[1]\\n      11692677888 blocks\\nmd0 : active raid1 sda1[0]\\n' > \"$DIR/mdstat\"";
+        let tail = format!("{setup}\nrelease_storage && emit RELEASED || emit STILL-ACTIVE");
+        // the stand-in /proc/mdstat and /sys/block live in the temp dir; the helper passes DIR
+        let tail = format!("SYNOFURB_MDSTAT=\"$DIR/mdstat\"\nSYNOFURB_SYSBLOCK=\"$DIR/sysblock\"\n{tail}");
+        let (code, log, calls) =
+            preamble_run("rel-ok", &tail, &[("mdadm", mdadm), ("vgchange", "cd \"$DIR\"; echo \"vgchange $*\" >> calls")], &[]);
+        assert_eq!(code, 0, "{log}");
+        assert!(log.contains("RELEASED") && !log.contains("STILL-ACTIVE"), "{log}");
+        assert!(calls.contains("vgchange -an") && calls.contains("mdadm --stop --scan"), "VG first, then the arrays: {calls}");
+        assert!(calls.find("vgchange").unwrap() < calls.find("mdadm").unwrap());
+        // an array that refuses to stop (busy): five rounds, then the script says so
+        let busy = "cd \"$DIR\"\necho \"mdadm $*\" >> calls\nexit 1";
+        let (_, log, calls) = preamble_run("rel-busy", &tail, &[("mdadm", busy)], &[]);
+        assert!(log.contains("STILL-ACTIVE"), "{log}");
+        assert!(calls.matches("mdadm --stop --scan").count() >= 5, "retried: {calls}");
     }
 }

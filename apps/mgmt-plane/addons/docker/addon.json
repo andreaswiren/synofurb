@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "id": "docker",
+  "name": "Docker",
+  "version": "1",
+  "summary": "Docker Engine and the compose plugin from Debian. The base for every container add-on.",
+  "category": "system",
+  "icon": "container",
+  "homepage": "https://docs.docker.com/engine/",
+  "kind": "system",
+  "handler": "docker",
+  "requires": [],
+  "changes": [
+    "Installs the Debian packages docker.io, docker-cli and docker-compose.",
+    "Starts the docker service now and at every boot.",
+    "Adds the administrators to the docker group, which is the same as root on this unit.",
+    "Keeps container logs small (10 MB, 3 files per container) unless /etc/docker/daemon.json exists."
+  ],
+  "post_install": "Docker is ready. Install Portainer to manage containers in a web page, or any other container add-on. Log out and in again before using the docker command as an administrator."
+}

@@ -60,7 +60,7 @@ impl Backend for RealBackend {
 
     fn scan(&mut self, out: &Out) -> Vec<Found> {
         out.say("Scanning (a few seconds) ...");
-        let opts = ScanOptions { timeout: Duration::from_secs(4), sweep: true };
+        let opts = ScanOptions::default().with_timeout(Duration::from_secs(4));
         let inv = scan_stream(&opts, Inventory::default(), |_| {}, |_| {});
         let path = inventory_path();
         let mut merged = Inventory::load(&path);

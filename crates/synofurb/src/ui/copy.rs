@@ -181,11 +181,63 @@ mod strings {
         INV_MANAGE: Button, "Manage", "Open this unit's page.", "", "";
         INV_CONNECT: Button, "Connect", "Select a unit first.", "", "";
         INV_TWIN: Label, "Twin", "Another unit of this model is on the network; check serials.", "first-install", "";
-        INV_EMPTY: Title, "No NAS found", "", "troubleshooting", "";
+        INV_EMPTY: Label, "No NAS found", "", "troubleshooting", "";
         INV_SCAN_AGAIN: Button, "Scan again", "", "", "";
         INV_ADD_TITLE: Dialog, "Add NAS", "", "", "Enter the address of a unit that discovery did not find.";
         INV_ADD_ADDR: Label, "Address", "", "", "";
         INV_ADD_BTN: Button, "Add", "", "", "";
+        INV_ADD_HINT: Label, "IP or host name", "", "", "";
+        INV_ADD_CHECKING: Label, "Checking {}", "", "", "";
+        ADD_ERR_EMPTY: Prose, "Enter an IP address or a host name.", "", "", "";
+        ADD_ERR_CHARS: Prose, "Use one address, without spaces or other characters.", "", "", "";
+        ADD_ERR_IP: Prose, "That is not a valid IPv4 or IPv6 address.", "", "", "";
+        ADD_ERR_PORT: Prose, "The port must be a number from 1 to 65535.", "", "", "";
+        ADD_ERR_NAME: Prose, "That is not a valid host name.", "", "", "";
+        ADD_ERR_NOT_HOST: Prose, "No NAS can have that address.", "", "", "";
+        ADD_ERR_THIS: Prose, "That is this computer, not a NAS.", "", "", "";
+        INV_ADDED: Label, "Added by you", "", "", "";
+        INV_UNKNOWN: Label, "Unknown device", "Something answered at this address, but nothing says it is a Synology unit.", "", "";
+        INV_UNKNOWN_TAG: Label, "Not recognised", "", "", "";
+        INV_UNREACH: Label, "Unreachable", "Nothing answered at this address.", "", "";
+        INV_UNREACH_TAG: Label, "No answer", "", "", "";
+        INV_CHECK_AGAIN: Button, "Check again", "Look at this address again.", "", "";
+        INV_REMOVE: Button, "Remove", "Remove this address from the list.", "", "";
+        INV_CHECKED: Label, "What was checked", "", "", "";
+        INV_UNKNOWN_WARN: Prose, "Not recognised as a Synology NAS. Check the address first.", "", "", "";
+        INV_UNREACH_WHY: Prose, "Nothing answered at this address. Use Check again, or remove it.", "", "", "";
+        NET_CHIP: Button, "Networks: {} of {}", "Choose which networks the scan covers.", "", "";
+        NET_TITLE: Dialog, "Networks to scan", "", "", "Scan the networks your NAS is on. VPN and virtual networks are off unless you select them.";
+        NET_RECOMMENDED: Label, "Recommended", "", "", "";
+        NET_SEL_REC: Button, "Select recommended", "", "", "";
+        NET_SEL_ALL: Button, "Select all", "", "", "";
+        NET_ADD_LABEL: Label, "Add a network", "", "", "";
+        NET_ADD_HINT: Label, "e.g. 192.168.1.0/24", "", "", "";
+        NET_ADD_BTN: Button, "Add", "", "", "";
+        NET_GONE: Prose, "A chosen network is gone. The recommended ones stand in.", "", "", "";
+        SCAN_STOPPING: Label, "Stopping", "", "", "";
+        NET_NONE: Prose, "Select at least one network.", "", "", "";
+        NET_DONE: Button, "Done", "", "", "";
+        NET_CUSTOM: Label, "Custom", "", "", "";
+        SCAN_NOT_STARTED: Label, "Scan not started", "", "", "";
+        SCAN_WHY: Label, "Why", "", "", "";
+        SCAN_PROGRESS: Label, "Scan progress", "", "", "";
+        SCAN_WHAT_RAN: Label, "What ran", "", "", "";
+        SCAN_STOP: Button, "Stop", "Stop scanning now.", "", "";
+        SCAN_WAITING: Label, "Waiting", "", "", "";
+        SCAN_RUNNING: Label, "Running", "", "", "";
+        SCAN_DONE: Label, "Done", "", "", "";
+        SCAN_FAILED: Label, "Failed", "", "", "";
+        SCAN_SKIPPED: Label, "Skipped", "", "", "";
+        SCAN_STOPPED: Label, "Stopped", "", "", "";
+        SCAN_CHOOSE: Button, "Choose networks", "", "", "";
+        SCAN_HEADLINE_WORDS: Prose, "Scanning of hosts found", "", "", "";
+        SCAN_EMPTY_WORDS: Prose, "Scanned with methods in", "", "", "";
+        HELP_LINK: Label, "Help", "", "", "";
+        SCAN_NONE_SELECTED: Prose, "No network is selected. Choose at least one.", "", "", "";
+        INV_EMPTY_WHY: Prose, "The NAS may be on another network, asleep or firewalled.", "", "", "";
+        NET_VPN_WARN: Prose, "VPN and virtual networks scan slowly; a NAS is rarely there.", "", "", "";
+        NET_RESCAN: Prose, "Done scans again.", "", "", "";
+        SCAN_NO_NETWORK: Prose, "This computer is on no network. Connect it, or add a network.", "", "", "";
 
         // ===================================================================== D1b welcome guide (first launch, Help, menu)
         WELCOME_MENU: Label, "Welcome guide", "Replay the short intro.", "", "";
@@ -258,7 +310,18 @@ mod strings {
         INSPECT_COL_SERIAL: Label, "Serial", "", "", "";
         INSPECT_COL_SIZE: Label, "Size", "", "", "";
         INSPECT_COL_USE: Label, "Use", "", "", "";
-        INSPECT_VOLUMES: Label, "DSM volumes", "DSM's RAID arrays and what they hold.", "", "";
+        INSPECT_VOLUMES: Label, "DSM volumes", "The volumes DSM shows, and the disks behind them.", "", "";
+        INSPECT_ARRAYS: Label, "RAID arrays", "DSM's RAID arrays and what they hold.", "", "";
+        INSPECT_NO_VOLUMES: Label, "No volumes found", "", "", "";
+        INSPECT_COL_VOLUME: Label, "Volume", "", "", "";
+        INSPECT_COL_FS: Label, "Filesystem", "", "", "";
+        INSPECT_COL_USED: Label, "Used", "", "", "";
+        INSPECT_COL_BACKED: Label, "Backed by", "", "", "";
+        INSPECT_COL_STATUS: Label, "Status", "", "", "";
+        INSPECT_USE_TARGET: Label, "Install target", "", "", "";
+        INSPECT_USE_NOT: Label, "Not used: {}", "", "", "";
+        INSPECT_ERASE_NOTE: Prose, "Install targets are erased in Wipe mode.", "", "", "";
+        INSPECT_NOT_CHECKED: Label, "Not checked", "", "", "";
         INSPECT_LAYOUT: Label, "Current layout", "DSM's partitions on each disk.", "", "";
         INSPECT_CHOOSE: Button, "Choose goal", "", "", "";
         INSPECT_BLOCKED: Label, "Cannot be converted", "Debian 13 cannot run on this hardware.", "compat-status", "";
@@ -295,6 +358,41 @@ mod strings {
         // ===================================================================== D5 plan
         SETUP_STORAGE: Label, "Storage", "", "", "";
         SETUP_SYSTEM: Label, "System", "", "", "";
+
+        // ===================================================================== Setup: Add-ons (installer integration, docs/ADDONS.md)
+        SETUP_ADDONS: Label, "Add-ons", "", "", "";
+        ADDONS_SUB: Subtitle, "Optional apps, installed after the first boot.", "", "", "";
+        ADDONS_INTRO: Prose, "Tick what to install with the system.", "", "", "";
+        ADDON_NEEDS_DOCKER: Label, "Needs Docker", "Docker is installed with it, nothing to do.", "", "";
+        ADDON_NEEDS_NET: Label, "Needs Internet", "The container images are downloaded when the NAS first starts.", "", "";
+        ADDON_REQUIRED: Label, "Required by {names}", "", "", "";
+        ADDON_PRIV_SOCKET: Label, "Controls Docker", "It can start and stop every container, which is as good as administrator rights on the NAS.", "", "";
+        ADDON_PRIV_HOSTNET: Label, "Uses NAS network", "It shares the NAS's own network address instead of an isolated one.", "", "";
+        ADDON_PRIV_FULL: Label, "Full access", "It runs with almost unrestricted access to the NAS.", "", "";
+        ADDON_PRIV_OTHER: Label, "Extra rights", "It asks for more rights than an ordinary container.", "", "";
+        ADDON_RETAIN: Label, "Keep recordings (days)", "Older recordings are deleted.", "", "Cameras and the detector are set up later, in Frigate's own web page.";
+        ADDON_PLEX_CLAIM: Label, "Claim token (leave empty)", "Ties the server to your Plex account.",
+            "", "Get a token at plex.tv/claim. It is valid for only 4 minutes and the first boot comes much later, so normally leave this empty and claim the server in its web page.";
+        ADDON_DEFAULT: Label, "Default: {value}", "", "", "";
+        ADDON_PLEX_HINT: Prose, "Valid 4 minutes, the first boot comes later. Leave it empty.", "", "", "";
+        ADDON_UNTESTED: Label, "Untested", "Add-ons have only run against simulated Docker so far.", "",
+            "These add-ons have been tested only against simulated Docker, never on a real NAS. The first boot is their first real run. If one fails it shows \"needs attention\" in the web interface; the system is unaffected.";
+        ADDON_ABOUT: Label, "About this add-on", "", "", "";
+        ADDON_NEEDS_DATA: Prose, "Needs the data volume, which Keep mode does not create.", "", "", "";
+        ADDON_KEEP_BLOCK: Prose, "Needs a data volume: {names}. Keep mode does not create one.", "", "", "";
+        ADDON_QUICK_ACCEPT: Prose, "You accept this on the next screen.", "", "", "";
+        ADDON_QUICK: Label, "Add-ons", "Optional apps, installed after the first boot.", "", "";
+        ADDON_QUICK_NONE: Label, "None", "", "", "";
+        ADDON_NEEDS_WEB: Prose, "Add-ons need the web interface: switch it on in System.", "", "", "";
+        SYS_NEXT_ADDONS: Button, "Next: Add-ons", "", "", "";
+        CONF_ADDONS: Prose, "After first boot:", "", "", "";
+        CONF_ADDONS_NET: Prose, "The first boot needs Internet to pull the container images.", "", "", "";
+        CONF_ADDONS_OFFLINE: Prose, "Without Internet at first boot, Docker and the add-ons are not installed.", "", "", "";
+        CONF_ADDON_ACK: Label, "Accept privileges", "", "", "";
+        CONF_WARNINGS: Label, "Warnings", "", "", "";
+        CONF_ADDON_DETAILS: Label, "Add-ons", "", "", "";
+        DONE_ADDONS: Label, "Installing after first boot", "What the first boot does.", "",
+            "Without Internet at the first boot nothing is downloaded and the add-ons show \"needs attention\". Connect the NAS, then press Retry on the Add-ons page of the web interface.";
         PLAN_TITLE: Title, "Storage plan", "", "", "";
         PLAN_SUB: Subtitle, "Nothing is written yet.", "", "", "";
         PLAN_MODE: Label, "Mode", "Wipe erases all {n} disks.", "backups", "";
@@ -366,7 +464,7 @@ mod strings {
         CONF_SUB: Subtitle, "Last step before changes.", "", "", "";
         CONF_DESTROYED: Label, "Destroyed", "", "", "";
         CONF_CHANGED: Label, "Changed", "", "", "";
-        CONF_PRESERVED: Label, "Preserved", "Wipe mode preserves nothing on the disks.", "backups", "";
+        CONF_PRESERVED: Label, "Preserved", "In Wipe mode only disks the install does not touch are kept.", "backups", "";
         CONF_NOTHING_PRESERVED: Label, "Nothing on the disks", "", "", "";
         CONF_DISK_WARNING: Label, "Disk warning", "{what}; consider replacing it first.", "troubleshooting", "";
         CONF_UNTESTED: Label, "Untested", "No one has reported this model; your install is the test.", "compat-status", "";
@@ -803,6 +901,20 @@ pub static SHORTCUTS: &[(&str, &str)] = &[
     ("escape", "Close popovers and dialogs"),
 ];
 
+/// The inline sentence for an address that cannot be used.
+pub fn add_error(e: super::addhost::AddError) -> &'static str {
+    use super::addhost::AddError::*;
+    match e {
+        Empty => ADD_ERR_EMPTY.short,
+        BadChars => ADD_ERR_CHARS.short,
+        BadIp => ADD_ERR_IP.short,
+        BadPort => ADD_ERR_PORT.short,
+        BadName => ADD_ERR_NAME.short,
+        NotHost => ADD_ERR_NOT_HOST.short,
+        ThisComputer => ADD_ERR_THIS.short,
+    }
+}
+
 /// The shell around every wizard screen: stepper (six steps), risk tag, way back, wordmark (11 words).
 pub static SHELL: &[&Item] =
     &[&APP_NAME, &STEP_FIND, &STEP_CONNECT, &STEP_GOAL, &STEP_SETUP, &STEP_CONFIRM, &STEP_INSTALL, &RISK_FLASH_CHANGED, &WAY_BACK];
@@ -817,6 +929,7 @@ pub static SCREENS: &[ScreenCopy] = &[
             &INV_FILTER,
             &INV_RESCAN,
             &INV_ADD,
+            &NET_CHIP,
             &INV_COL_MODEL,
             &INV_COL_ADDR,
             &INV_COL_DSM,
@@ -824,6 +937,48 @@ pub static SCREENS: &[ScreenCopy] = &[
             &INV_COL_STATUS,
             &INV_RUNNING,
             &INV_MANAGE,
+            &INV_CONNECT,
+        ],
+    },
+    // the scan panel is on screen with the table (headline words, a line's state, Stop)
+    ScreenCopy {
+        name: "inventory-scanning",
+        visible: &[
+            &INV_TITLE,
+            &INV_SUB,
+            &INV_FILTER,
+            &INV_RESCAN,
+            &INV_ADD,
+            &NET_CHIP,
+            &INV_COL_MODEL,
+            &INV_COL_ADDR,
+            &INV_COL_DSM,
+            &INV_COL_FOUND,
+            &INV_COL_STATUS,
+            &INV_CONNECT,
+            &SCAN_HEADLINE_WORDS,
+            &SCAN_RUNNING,
+            &SCAN_WAITING,
+            &SCAN_DONE,
+            &SCAN_STOP,
+        ],
+    },
+    // nothing found: the empty state instead of the table
+    ScreenCopy {
+        name: "inventory-empty",
+        visible: &[
+            &INV_TITLE,
+            &INV_SUB,
+            &INV_FILTER,
+            &INV_RESCAN,
+            &INV_ADD,
+            &NET_CHIP,
+            &INV_EMPTY,
+            &INV_EMPTY_WHY,
+            &SCAN_EMPTY_WORDS,
+            &SCAN_CHOOSE,
+            &INV_SCAN_AGAIN,
+            &HELP_LINK,
             &INV_CONNECT,
         ],
     },
@@ -865,6 +1020,17 @@ pub static SCREENS: &[ScreenCopy] = &[
             &INSPECT_COL_SIZE,
             &INSPECT_COL_USE,
             &INSPECT_VOLUMES,
+            &INSPECT_ARRAYS,
+            &INSPECT_NO_VOLUMES,
+            &INSPECT_COL_VOLUME,
+            &INSPECT_COL_FS,
+            &INSPECT_COL_USED,
+            &INSPECT_COL_BACKED,
+            &INSPECT_COL_STATUS,
+            &INSPECT_USE_TARGET,
+            &INSPECT_USE_NOT,
+            &INSPECT_ERASE_NOTE,
+            &INSPECT_NOT_CHECKED,
             &INSPECT_LAYOUT,
             &INSPECT_CHOOSE,
             &BTN_BACK,
@@ -933,15 +1099,18 @@ pub static SCREENS: &[ScreenCopy] = &[
             &SYS_OFFLINE,
             &SYS_BOOT_VIA,
             &SYS_VIA_FLASH,
-            &SYS_NEXT,
+            &SYS_NEXT_ADDONS,
             &BTN_BACK,
         ],
+    },
+    ScreenCopy {
+        name: "addons",
+        visible: &[&SETUP_ADDONS, &ADDONS_SUB, &ADDONS_INTRO, &ADDON_UNTESTED, &ADDON_REQUIRED, &ADDON_NEEDS_DATA, &SYS_NEXT, &BTN_BACK],
     },
     ScreenCopy {
         name: "confirm",
         visible: &[
             &CONF_TITLE,
-            &CONF_SUB,
             &CONF_DESTROYED,
             &CONF_CHANGED,
             &CONF_PRESERVED,
@@ -953,9 +1122,14 @@ pub static SCREENS: &[ScreenCopy] = &[
             &CONF_BACKUP,
             &CONF_LOSS,
             &CONF_UNIT,
-            &CONF_ADD_SERIAL,
             &CONF_ERASE,
             &BTN_BACK,
+            // with add-ons ticked (Quick setup included): the card, its caveat, the fourth confirmation, the engine's lines fold into Details
+            &CONF_WARNINGS,
+            &CONF_ADDONS,
+            &ADDON_UNTESTED,
+            &CONF_ADDON_ACK,
+            &CONF_ADDON_DETAILS,
         ],
     },
     ScreenCopy {
@@ -1010,6 +1184,8 @@ pub static SCREENS: &[ScreenCopy] = &[
             &DONE_FINISH,
             &DONE_REPORT,
             &DONE_NEXT_STEPS,
+            // with add-ons ticked: what the first boot installs
+            &DONE_ADDONS,
         ],
     },
     ScreenCopy {
@@ -1284,6 +1460,7 @@ mod tests {
             "goal",
             "plan",
             "system",
+            "addons",
             "confirm",
             "install",
             "failed",

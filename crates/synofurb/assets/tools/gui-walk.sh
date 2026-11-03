@@ -10,21 +10,27 @@
 #     disabled-reason Popover.
 #
 #   crates/synofurb/assets/tools/gui-walk.sh [--text default|large|largest] [--theme light|dark] [--size 960x640]
-#                                             [--keep DIR] [--no-scroll] [--no-extra] [screen...]
+#                                             [--keep DIR] [--no-scroll] [--no-extra] [--selftest-clip] [screen...]
+#
+# Cell clipping (UI review 0.2.3 B1): the Find table is walked with a layout hook (`SYNOFURB_LAYOUT_DUMP`, the app writes the table's
+# screen box and its column widths). For every column edge the capture is searched for ink in the last 3 px of a cell: a cell pads
+# itself 8 px, so ink there is a glyph or a tag border cut off by the column. Vertical rules (header separators, the selection border)
+# are tall and straight and are ignored; text and tags are not. `--selftest-clip` proves the check on two synthetic captures.
 #
 # Needs: Xvfb, ImageMagick (import, convert), python3 with Pillow, bc, a built binary at $SYNOFURB_BIN (default
 # $CARGO_TARGET_DIR/debug/synofurb) and a Vulkan ICD (lavapipe: VK_ICD_FILENAMES). Never writes into the repository.
 # The 2 px black strip at the left edge of every capture is the X root window (no window manager), not the app.
-TEXT=default; THEME=light; SIZE=960x640; KEEP=""; SCROLL=1; EXTRA=1
+TEXT=default; THEME=light; SIZE=960x640; KEEP=""; SCROLL=1; EXTRA=1; SELFTEST=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --text) TEXT=$2; shift 2;; --theme) THEME=$2; shift 2;; --size) SIZE=$2; shift 2;; --keep) KEEP=$2; shift 2;;
-    --no-scroll) SCROLL=0; shift;; --no-extra) EXTRA=0; shift;;
+    --no-scroll) SCROLL=0; shift;; --no-extra) EXTRA=0; shift;; --selftest-clip) SELFTEST=1; shift;;
     *) break;;
   esac
 done
 BIN=${SYNOFURB_BIN:-${CARGO_TARGET_DIR:-target}/debug/synofurb}
 ICD=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/lvp_icd.x86_64.json}
+[ "$SELFTEST" = 1 ] || [ -x "$BIN" ] || { echo "gui-walk: no executable at $BIN (build it, or set SYNOFURB_BIN); a missing binary would make every screen look clean" >&2; exit 2; }
 W=${SIZE%x*}; H=${SIZE#*x}
 OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
 SCREENS=${*:-$("$BIN" gui --demo --screen list 2>&1 | sed -n 's/.*Choose one of: \(.*\) (the old.*/\1/p' | tr -d ',')}
@@ -92,6 +98,80 @@ PY
   return 0
 }
 
+# cell-clipping check for one capture: $1 png, $2 layout dump file. Prints CLIPPED lines (column, x, y range), nothing when clean.
+cat > "$OUT/clip.py" <<'PY'
+import sys
+from PIL import Image
+
+def clipped(png, dump, strip=3, tall=24):
+    im = Image.open(png).convert("RGB"); w, h = im.size; px = im.load()
+    lines = dict(l.split(None, 1) for l in open(dump).read().splitlines() if l.strip())
+    tx, ty, tw, th = [int(float(v)) for v in lines["table"].split()]
+    cols = [int(float(v)) for v in lines["cols"].split()]
+    # the window sits 2 px right of its origin without a window manager (the black root strip)
+    off = 0
+    while off < 8 and all(px[off, y] == (0, 0, 0) for y in range(h // 2, h // 2 + 6)):
+        off += 1
+    x = tx + 1 + off
+    out = []
+    ys = range(max(ty + 1, 0), min(ty + th - 1, h - 110))   # above the action bar
+    # every column except the last one (the row actions: icon buttons with their own padding) and every data column's right edge
+    for i, cw in enumerate(cols[:-1] if len(cols) == 6 else cols):
+        x += cw
+        if x + 4 >= w:
+            continue
+        run = []
+        def flush():
+            if 3 <= len(run) <= tall - 1:
+                out.append((i, x, run[0], run[-1]))
+        for y in ys:
+            ref = px[x + 3, y]
+            ink = any(max(abs(a - b) for a, b in zip(px[x - k, y], ref)) > 48 for k in range(1, strip + 1))
+            if ink:
+                run.append(y)
+            else:
+                flush(); run = []
+        flush()
+    return out
+
+def selftest():
+    import os, tempfile
+    d = tempfile.mkdtemp()
+    for name, ink_x in (("clean", 90), ("cut", 99)):
+        im = Image.new("RGB", (400, 300), (255, 255, 255))
+        px = im.load()
+        for y in range(140, 154):          # a line of text 14 px tall that ends at ink_x; the column edge is at x = 100
+            for x in range(60, ink_x + 1):
+                if (x // 3 + y // 2) % 2 == 0: px[x, y] = (20, 20, 20)
+        for y in range(101, 133):
+            for xx in (98, 99, 100): px[xx, y] = (200, 200, 200)   # a header separator at the edge, above the text: ignored (straight, no text on it)
+        im.save(os.path.join(d, name + ".png"))
+        open(os.path.join(d, name + ".txt"), "w").write("table 40 100 200 100\ncols 60 100\n")
+    clean = clipped(os.path.join(d, "clean.png"), os.path.join(d, "clean.txt"))
+    cut = clipped(os.path.join(d, "cut.png"), os.path.join(d, "cut.txt"))
+    ok = not clean and bool(cut)
+    print("selftest clip:", "ok (a glyph cut at the edge is found, padding and a rule are not)" if ok else f"FAILED clean={clean} cut={cut}")
+    sys.exit(0 if ok else 1)
+
+if sys.argv[1] == "--selftest":
+    selftest()
+for i, x, a, b in clipped(sys.argv[1], sys.argv[2]):
+    print(f"column {i} edge at x={x}: ink in the last 3 px of the cell at y={a}-{b}")
+PY
+[ "$SELFTEST" = 1 ] && { python3 -I "$OUT/clip.py" --selftest; exit $?; }
+clipcheck() { # $1 png  $2 label  $3 layout dump  $4 screen
+  [ -f "$3" ] || return 0
+  # a dialog, the Help sheet or the Welcome guide covers the table: their own edges are not cell edges
+  case "$4" in dlg-*|help*|welcome*|update*|first-launch) return 0;; esac
+  bad=$(python3 -I "$OUT/clip.py" "$1" "$3")
+  if [ -n "$bad" ]; then
+    echo "CLIPPED $2: $bad"
+    [ -n "$KEEP" ] && mkdir -p "$KEEP" && cp "$1" "$KEEP/clip-$2-$TEXT-$THEME.png"
+    return 1
+  fi
+  return 0
+}
+
 n=0; fail=0
 # run <label> <screen> <env> <xk args...>: one app run, one capture per entry of $SHOTS ("" = first viewport, then scroll steps)
 run() {
@@ -99,7 +179,8 @@ run() {
   D=$((300 + n % 90)); n=$((n + 1))
   Xvfb :$D -screen 0 ${W}x${H}x24 >/dev/null 2>&1 & XV=$!
   sleep 1
-  env $envs DISPLAY=:$D HOME=$OUT VK_ICD_FILENAMES=$ICD WAYLAND_DISPLAY= SYNOFURB_WINDOW=$SIZE SYNOFURB_THEME=$THEME SYNOFURB_TEXT=$TEXT \
+  rm -f "$OUT/layout-$label.txt"
+  env $envs SYNOFURB_LAYOUT_DUMP="$OUT/layout-$label.txt" DISPLAY=:$D HOME=$OUT VK_ICD_FILENAMES=$ICD WAYLAND_DISPLAY= SYNOFURB_WINDOW=$SIZE SYNOFURB_THEME=$THEME SYNOFURB_TEXT=$TEXT \
     timeout 90 "$BIN" gui --demo --screen "$screen" >/dev/null 2>&1 & APP=$!
   sleep 8
   [ $# -gt 0 ] && { DISPLAY=:$D python3 -I "$OUT/xk.py" "$@"; sleep 1; }
@@ -107,6 +188,7 @@ run() {
   while :; do
     DISPLAY=:$D import -window root "$OUT/$label-$v.png" 2>/dev/null
     analyse "$OUT/$label-$v.png" "$label@$v" "$screen" || res=1
+    clipcheck "$OUT/$label-$v.png" "$label@$v" "$OUT/layout-$label.txt" "$screen" || res=1
     v=$((v + 1))
     [ "$SCROLL" = 1 ] && [ $v -le 2 ] || break
     DISPLAY=:$D python3 -I "$OUT/xk.py" move:$((W / 2)),$((H / 2)) scroll:14
@@ -117,6 +199,9 @@ run() {
 
 for sc in $SCREENS; do run "$sc" "$sc" ""; done
 if [ "$EXTRA" = 1 ] && [ -z "$*" ]; then
+  # Find with added addresses in a tall window: at 640 px the table runs below the fold and its horizontal scrollbar (the first sign of columns
+  # that do not fit) cannot be seen, so this one is captured whole
+  ( SIZE=${W}x900; H=900; run find-tall inventory-added ""; exit $fail ) || fail=1
   run log-viewer install-after-ponr "SYNOFURB_DEMO_LOG=1"
   run command-dialog confirm-ready "" combo:Control_L+Shift_L+c wait:2
   run cancel-install install "" click:$((W - 55)),$((H - 63)) wait:2

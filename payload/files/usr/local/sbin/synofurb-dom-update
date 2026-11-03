@@ -1,15 +1,39 @@
 #!/bin/sh
 # synofurb-dom-update: register the newest installed Debian kernel + initrd on the unit's internal boot flash
 # (DOM) so the unit can boot it. The previous kernel is kept as DEBIAN_OLD by `synofurb-dom install-debian`.
-# Called by the kernel/initramfs hooks installed by synofurb, or by hand. It never changes the DEFAULT entry
+# Called by the kernel/initramfs hooks installed by synofurb (with --hook), or by hand. It never changes the DEFAULT entry
 # (that is a deliberate act: `synofurb-dom default debian`), so a failure here can never make the unit unbootable.
-set -eu
-CONF=/etc/synofurb/dom.conf
+#
+# Refusals (the new kernel + initrd do not fit next to DSM's files, the flash fails its check, ...) leave the flash exactly as it was,
+# so the unit keeps booting the kernel it booted before. Run from a package hook (--hook) the failure is reported loudly (stderr,
+# syslog, /var/lib/synofurb/dom-update.failed) but the exit status is 0: a failing kernel
+# hook would leave the linux-image package half-configured and block every later apt run, which is worse than a stale kernel.
+set -u
+HOOK=0
+[ "${1:-}" = "--hook" ] && HOOK=1
+# (The SF_* variables exist for the tests; on a unit they are never set.)
+CONF=${SF_DOM_CONF:-/etc/synofurb/dom.conf}
+STATE=${SF_DOM_STATE:-/var/lib/synofurb/dom-update.failed}
+BOOT=${SF_BOOT_DIR:-/boot}
+TOOL=${SF_DOM_TOOL:-/usr/local/sbin/synofurb-dom}
 [ -r "$CONF" ] || { echo "synofurb-dom-update: $CONF missing" >&2; exit 0; }
 # shellcheck disable=SC1090
 . "$CONF"    # ROOT_UUID, SERIAL_ARG, EXTRA_ARGS
-KVER=$(for f in /boot/vmlinuz-*; do [ -e "$f" ] && echo "${f#/boot/vmlinuz-}"; done | sort -V | tail -n1)
-[ -n "$KVER" ] || { echo "synofurb-dom-update: no kernel in /boot" >&2; exit 0; }
-[ -f "/boot/initrd.img-$KVER" ] || { echo "synofurb-dom-update: initrd for $KVER not built yet" >&2; exit 0; }
+KVER=$(for f in "$BOOT"/vmlinuz-*; do [ -e "$f" ] && echo "${f#"$BOOT"/vmlinuz-}"; done | sort -V | tail -n1)
+[ -n "$KVER" ] || { echo "synofurb-dom-update: no kernel in $BOOT" >&2; exit 0; }
+[ -f "$BOOT/initrd.img-$KVER" ] || { echo "synofurb-dom-update: initrd for $KVER not built yet" >&2; exit 0; }
 CMDLINE="root=UUID=$ROOT_UUID ${EXTRA_ARGS:-ro} console=tty0 ${SERIAL_ARG:-}"
-exec /usr/local/sbin/synofurb-dom install-debian "/boot/vmlinuz-$KVER" "/boot/initrd.img-$KVER" --cmdline "$CMDLINE" --yes
+OUT=$("$TOOL" install-debian "$BOOT/vmlinuz-$KVER" "$BOOT/initrd.img-$KVER" --cmdline "$CMDLINE" --yes 2>&1)
+RC=$?
+printf '%s\n' "$OUT"
+if [ "$RC" -eq 0 ]; then
+  rm -f "$STATE" 2>/dev/null
+  exit 0
+fi
+MSG="synofurb-dom-update: kernel $KVER was NOT registered on the boot flash (synofurb-dom exit $RC); the unit keeps booting the previous kernel. Free space on the flash or run 'synofurb-dom status', then 'synofurb-dom-update'."
+echo "$MSG" >&2
+logger -p user.err -t synofurb-dom-update "$MSG" 2>/dev/null
+mkdir -p "$(dirname "$STATE")" 2>/dev/null
+{ date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; echo "$MSG"; printf '%s\n' "$OUT" | tail -n 12; } > "$STATE" 2>/dev/null
+[ "$HOOK" = 1 ] && exit 0
+exit "$RC"

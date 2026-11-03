@@ -95,6 +95,7 @@ fn help_lists_every_command_and_exits_zero() {
         "manage",
         "logs",
         "bundle",
+        "addons",
         "fetch-installer",
         "self-update",
         "config",
@@ -979,4 +980,243 @@ fn unsigned_self_update_is_an_explicit_opt_in_and_never_satisfied_by_yes_alone()
     assert!(h.stdout.contains("--allow-unsigned") && h.stdout.contains("SHA-256"), "{}", h.stdout);
     // the shipped build still has the placeholder key, so the flag is accepted by the argument checks
     assert!(synofurb_core::updater::unsigned_allowed());
+}
+
+// ---------------------------------------------------------------------------------------------- scan networks
+
+#[test]
+fn scan_list_networks_json_and_text() {
+    let s = Sandbox::new("nets");
+    let r = s.run(&["scan", "--list-networks", "--json"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let nets = r.json()["networks"].as_array().unwrap().clone();
+    let mut seen_non_recommended = false;
+    for n in &nets {
+        has_keys(n, &["id", "interface", "ip", "prefix", "cidr", "broadcast", "kind", "recommended", "sweep_hosts"]);
+        assert!(!n["ip"].as_str().unwrap().starts_with("127."), "loopback is not listed");
+        let id = format!("{}|{}/{}", n["interface"].as_str().unwrap(), n["ip"].as_str().unwrap(), n["prefix"]);
+        assert_eq!(n["id"], id.as_str());
+        assert!(["lan", "vpn", "virtual", "link_local", "other"].contains(&n["kind"].as_str().unwrap()));
+        assert_eq!(n["recommended"].as_bool().unwrap(), n["kind"] == "lan", "only LAN networks are the default");
+        // recommended ones come first
+        assert!(!(seen_non_recommended && n["recommended"].as_bool().unwrap()));
+        seen_non_recommended |= !n["recommended"].as_bool().unwrap();
+    }
+    let t = s.run(&["scan", "--list-networks"]);
+    assert_eq!(t.code, 0, "{}", t.stderr);
+    if !nets.is_empty() {
+        assert!(t.stdout.contains("INTERFACE") && t.stdout.contains("KIND"), "{}", t.stdout);
+        assert!(t.stdout.contains(nets[0]["id"].as_str().unwrap()));
+    }
+    // nothing is scanned or saved when listing
+    assert!(!s.path("data/synofurb/inventory.json").exists());
+}
+
+#[test]
+fn scan_network_selection_errors_are_usage_errors() {
+    let s = Sandbox::new("netsel");
+    let r = s.run(&["scan", "--network", "10.0.0.0/16"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("too large") && r.stderr.contains("/20"), "{}", r.stderr);
+    let r = s.run(&["scan", "--network", "no-such-adapter0"]);
+    assert_eq!(r.code, 2);
+    assert!(r.stderr.contains("--list-networks"), "{}", r.stderr);
+    let r = s.run(&["scan", "--network", "1.2.3/24"]);
+    assert_eq!(r.code, 2);
+    assert_eq!(s.run(&["scan", "--network", "10.0.0.0/24", "--all-networks"]).code, 2, "mutually exclusive");
+}
+
+/// Scan a custom network on the loopback range: no NAS, no network access needed. Every `--ndjson` line is an event.
+#[test]
+fn scan_ndjson_reports_progress_per_method_and_network() {
+    let s = Sandbox::new("netprog");
+    let r = s.run(&["scan", "--network", "127.0.0.0/29", "--timeout", "1", "--ndjson", "--no-save"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let ev: Vec<Value> = r.stdout.lines().map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON ({e}): {l}"))).collect();
+    let kind = |i: usize| ev[i]["event"].as_str().unwrap().to_string();
+    assert_eq!(kind(0), "started");
+    assert_eq!(kind(ev.len() - 1), "finished");
+    assert_eq!(ev[0]["networks"][0]["key"], "127.0.0.0/29");
+    assert_eq!(ev[0]["networks"][0]["cidr"], "127.0.0.0/29");
+    // 127.0.0.2 .. 127.0.0.6 are swept (127.0.0.1 is this computer)
+    assert_eq!(ev[0]["total_hosts"], 5);
+    let methods: Vec<&str> = ev[0]["methods"].as_array().unwrap().iter().map(|m| m.as_str().unwrap()).collect();
+    assert_eq!(methods, ["synology_udp", "mdns", "ssdp", "probe_sweep"]);
+    let finished: Vec<&Value> = ev.iter().filter(|e| e["event"] == "method_finished").collect();
+    for m in ["synology_udp", "probe_sweep"] {
+        let f = finished.iter().find(|e| e["method"] == m).unwrap_or_else(|| panic!("no method_finished for {m}: {}", r.stdout));
+        assert_eq!(f["network"], "127.0.0.0/29");
+        assert!(f["error"].is_null(), "{f}");
+    }
+    for m in ["mdns", "ssdp"] {
+        assert!(
+            ev.iter().any(|e| e["event"] == "skipped" && e["method"] == m && e["reason"].as_str().unwrap().contains("multicast")),
+            "{m} must be skipped for a network this computer is not on"
+        );
+    }
+    let last_sweep = ev.iter().rev().find(|e| e["event"] == "method_progress" && e["method"] == "probe_sweep").expect("sweep progress");
+    assert_eq!((last_sweep["done"].as_u64(), last_sweep["total"].as_u64()), (Some(5), Some(5)));
+    assert!(ev.last().unwrap()["elapsed_ms"].is_u64());
+}
+
+#[test]
+fn scan_json_lists_what_was_scanned() {
+    let s = Sandbox::new("netjson");
+    let r = s.run(&["scan", "--network", "127.0.0.0/30", "--no-sweep", "--timeout", "1", "--json", "--no-save"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let v = r.json();
+    assert_eq!(v["devices"].as_array().unwrap().len(), 0);
+    assert_eq!(v["networks"][0]["key"], "127.0.0.0/30");
+    assert!(v["errors"].as_array().unwrap().is_empty());
+    // the text mode says what it is scanning, on stderr
+    assert!(r.stderr.contains("Scanning 1 network(s)") && r.stderr.contains("127.0.0.0/30"), "{}", r.stderr);
+}
+
+// ---------------------------------------------------------------------------------------------- add-ons
+
+#[test]
+fn addons_list_text_and_json() {
+    let s = Sandbox::new("addons-list");
+    let r = s.run(&["addons", "list"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    for need in ["docker", "portainer", "frigate", "plex", "retain_days", "plex_claim", "@env:VARIABLE"] {
+        assert!(r.stdout.contains(need), "{need}\n{}", r.stdout);
+    }
+    let v = s.run(&["addons", "list", "--json"]).json();
+    has_keys(&v, &["schema", "addons", "presets", "secret_syntax", "flag"]);
+    let ids: Vec<&str> = v["addons"].as_array().unwrap().iter().map(|a| a["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["docker", "portainer", "frigate", "plex"]);
+    has_keys(
+        &v["addons"][2],
+        &["id", "name", "summary", "kind", "requires", "privileges", "needs_internet", "approx_size_mib", "data_gib", "settings"],
+    );
+    assert_eq!(v["addons"][1]["privileges"][0], "docker-socket");
+    assert_eq!(v["addons"][1]["requires"][0], "docker");
+    assert!(s.run(&["help"]).stdout.contains("addons") || s.run(&["--help"]).stdout.contains("addons"));
+}
+
+#[test]
+fn plan_with_addons_adds_docker_and_reports_it_in_text_and_json() {
+    let s = Sandbox::new("addons-plan");
+    let r = s.run(&["plan", "--facts", "demo", "--addon", "frigate:retain_days=14", "--addon", "portainer"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("Add-ons: Docker (required by Frigate NVR, Portainer), Portainer, Frigate NVR"), "{}", r.stdout);
+    assert!(r.stdout.contains("Internet") && r.stdout.contains("docker-socket"), "{}", r.stdout);
+    let v = s.run(&["plan", "--facts", "demo", "--addon", "frigate:retain_days=14", "--addon", "portainer", "--json"]).json();
+    let sel = v["addons"]["selected"].as_array().unwrap();
+    assert_eq!(sel.iter().map(|a| a["id"].as_str().unwrap()).collect::<Vec<_>>(), ["docker", "portainer", "frigate"]);
+    assert_eq!(sel[0]["auto"], true);
+    assert_eq!(sel[2]["settings"]["retain_days"], "14");
+    assert!(!v["addons"]["warnings"].as_array().unwrap().is_empty());
+    // no add-on: the document says so
+    let v = s.run(&["plan", "--facts", "demo", "--json"]).json();
+    assert_eq!(v["addons"]["selected"].as_array().unwrap().len(), 0);
+    assert!(!s.run(&["plan", "--facts", "demo"]).stdout.contains("Add-ons:"));
+}
+
+#[test]
+fn bad_addon_arguments_are_usage_errors() {
+    let s = Sandbox::new("addons-bad");
+    for bad in ["nope", "frigate:retain_days=0", "frigate:detector=x", "docker:x=1", "frigate:", ":x=1", "frigate:retain_days"] {
+        let r = s.run(&["plan", "--facts", "demo", "--addon", bad]);
+        assert_eq!(r.code, 2, "{bad}: {}", r.stderr);
+    }
+    let r = s.run(&["plan", "--facts", "demo", "--addon", "docker", "--addon", "docker"]);
+    assert_eq!(r.code, 2);
+    assert!(r.stderr.contains("twice"), "{}", r.stderr);
+    // add-ons need the management plane
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--no-mgmt", "--addon", "docker"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("management plane"), "{}", r.stderr);
+}
+
+#[test]
+fn addon_secrets_come_from_env_or_file_never_from_the_command_line() {
+    let s = Sandbox::new("addons-secret");
+    let secret = "claim-SuperSecret12345";
+    // inline: refused, and the value is not echoed
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--addon", &format!("plex:plex_claim={secret}")]);
+    assert_eq!(r.code, 2);
+    assert!(r.stderr.contains("@env:") && !r.stderr.contains(secret) && !r.stdout.contains(secret), "{}", r.stderr);
+    // unset variable
+    assert_eq!(s.run(&["install", "--facts", "demo", "--dry-run", "--addon", "plex:plex_claim=@env:NOPE_UNSET"]).code, 2);
+    // env: accepted, dry run shows a placeholder
+    let out = s.path("review");
+    let r = s.run_env(
+        &["install", "--facts", "demo", "--dry-run", "--out", out.to_str().unwrap(), "--addon", "plex:plex_claim=@env:PLEX_CLAIM"],
+        &[("PLEX_CLAIM", secret)],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains(secret) && !r.stderr.contains(secret));
+    let sec = std::fs::read_to_string(out.join("payload/addons/secrets/plex.json")).unwrap();
+    assert!(sec.contains("DRYRUN-SECRET") && !sec.contains(secret), "{sec}");
+    // nothing in the review tree has the real value
+    fn walk(d: &std::path::Path, secret: &str) {
+        for e in std::fs::read_dir(d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, secret);
+            } else if p.extension().is_none_or(|x| x != "gz") {
+                let t = std::fs::read_to_string(&p).unwrap_or_default();
+                assert!(!t.contains(secret), "{} contains the secret", p.display());
+            }
+        }
+    }
+    walk(&out, secret);
+    // file: first line
+    let f = s.path("claim.txt");
+    std::fs::write(&f, format!("{secret}\n")).unwrap();
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--json", "--addon", &format!("plex:plex_claim=@file:{}", f.display())]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains(secret));
+    let v = r.json();
+    assert_eq!(v["addons"]["selected"][1]["secrets"][0], "plex_claim");
+    assert!(v["payload"]["files"].as_array().unwrap().iter().any(|f| f["path"] == "addons/secrets/plex.json"));
+}
+
+#[test]
+fn dry_run_with_addons_renders_the_pending_files_and_the_first_boot_unit() {
+    let s = Sandbox::new("addons-dry");
+    let out = s.path("review");
+    let r = s.run(&[
+        "install",
+        "--facts",
+        "demo",
+        "--dry-run",
+        "--out",
+        out.to_str().unwrap(),
+        "--addon",
+        "frigate:retain_days=14",
+        "--addon",
+        "portainer",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let env = std::fs::read_to_string(out.join("payload/env.sh")).unwrap();
+    assert!(
+        env.contains("ADDONS='docker portainer frigate'") && env.contains("ADDON_DOCKER_PACKAGES='docker.io docker-cli docker-compose'"),
+        "{env}"
+    );
+    for id in ["docker", "portainer", "frigate"] {
+        let j: Value = serde_json::from_str(&std::fs::read_to_string(out.join(format!("payload/addons/{id}.json"))).unwrap()).unwrap();
+        assert_eq!(j["id"], id);
+    }
+    let j: Value = serde_json::from_str(&std::fs::read_to_string(out.join("payload/addons/frigate.json")).unwrap()).unwrap();
+    assert_eq!(j["settings"]["retain_days"], "14");
+    assert!(!out.join("payload/addons/secrets").exists(), "no secret, no secret file");
+    assert!(out.join("payload/files/etc/systemd/system/synofurb-addons-firstboot.service").is_file());
+    let cfg: Value = serde_json::from_str(&std::fs::read_to_string(out.join("install-config.json")).unwrap()).unwrap();
+    assert_eq!(cfg["addons"][0]["id"], "frigate");
+    // the stage-2 script is valid sh and, as always, untouched by add-ons
+    let stage2 = std::fs::read_to_string(out.join("stage2.sh")).unwrap();
+    let dash = Command::new("sh").arg("-n").arg(out.join("stage2.sh")).output().unwrap();
+    assert!(dash.status.success(), "{}", String::from_utf8_lossy(&dash.stderr));
+    assert!(stage2.contains("chroot-setup.sh"));
+    // text form lists them
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--addon", "plex"]);
+    assert!(r.stdout.contains("Add-ons: Docker (required by Plex Media Server), Plex Media Server"), "{}", r.stdout);
+    assert!(r.stdout.contains("addons/docker.json"), "payload manifest lists the pending files");
+    // without add-ons nothing of this appears
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--json"]);
+    assert_eq!(r.json()["addons"]["selected"].as_array().unwrap().len(), 0);
+    assert!(!r.json()["payload"]["files"].as_array().unwrap().iter().any(|f| f["path"].as_str().unwrap().starts_with("addons/")));
 }

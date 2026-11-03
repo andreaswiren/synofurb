@@ -271,7 +271,7 @@ def record(key: str) -> dict:
         if sub == "is-enabled":
             return m.CompletedResult(0, "enabled\n")
         if sub == "is-active":
-            return m.CompletedResult(0, "active\n" if argv[-1] == "ssh" else "inactive\n", "")
+            return m.CompletedResult(0, "active\n" if argv[-1] in ("ssh", "docker.service") else "inactive\n", "")
         if sub == "list-units":
             return m.CompletedResult(0, "serial-getty@ttyS0.service loaded active running Serial Getty on ttyS0\n")
         return m.CompletedResult(0, "")
@@ -288,7 +288,7 @@ def record(key: str) -> dict:
 
     def get(path, method="GET", body=None):
         req = m.Request(app, method, path, body or {}, sess, "127.0.0.1")
-        res = m.ROUTES[(method, path)].fn(req)
+        res = m.find_route(method, path).fn(req)
         return res[1] if isinstance(res, tuple) else res
 
     with patched(u):
@@ -296,8 +296,29 @@ def record(key: str) -> dict:
                                        ("volumes", "/api/volumes"), ("mounts", "/api/mounts"), ("services", "/api/services"), ("boot", "/api/boot"),
                                        ("tls", "/api/tls-fingerprint"), ("me", "/api/me"), ("raid", "/api/raid"))}
         data["activate"] = get("/api/mounts/activate", "POST")
+        data["addons"] = record_addons(cfg, app, key, get)
     data["meta"] = {"key": key, "label": u["label"], "host": u["host"], "iface_names": u["ip_ifs"], "uptime": u["uptime"], "per_disk_temp": u["per_disk_temp"]}
     return data
+
+
+def record_addons(cfg, app, key: str, get) -> dict:
+    """Add-ons page data from the real handlers: Docker and Portainer installed and running (fake Docker), Frigate and Plex available."""
+    mgr = m.addons_manager(app)                                   # --dry-run config: FakeDocker, probes answer
+    mgr.env.dev_root, mgr.env.sys_root = cfg.p("/dev"), cfg.p("/sys")
+    if key == "ds918":                                            # the Intel unit has graphics for hardware decoding
+        write(cfg, "/dev/dri/renderD128", "")
+    for aid in ("docker", "portainer"):
+        mgr.store.update(aid, status="installed", version="1", settings={}, secret_keys=[], storage={}, devices={}, privileges=["docker-socket"] if aid == "portainer" else [],
+                         installed=1.0, updated=1.0, started=1.0)
+    write(cfg, "/srv/addons/portainer/compose.yml", "services: {}\n")
+    mgr.docker.projects["synofurb-portainer"] = {"state": "running", "file": "", "services": ["portainer"]}
+    out = {"list": get("/api/addons"), "detail": {}}
+    for a in out["list"]["addons"]:
+        d = get("/api/addons/" + a["id"])["addon"]
+        for r in d["storage_report"]:                             # the sandbox's statvfs is the root filesystem's: show the data volume's numbers
+            r["free_gib"], r["warning"] = (5120.0 if key == "ds1621" else 2380.0), ""
+        out["detail"][a["id"]] = d
+    return out
 
 
 def build() -> str:
@@ -305,6 +326,8 @@ def build() -> str:
     blob = json.dumps(data, separators=(",", ":")).replace("</", "<\\/").replace("<!--", "<\\!--")
     with open(os.path.join(HERE, "demo-mock.js"), encoding="utf-8") as fh:
         mock = fh.read().replace("/*__DATA__*/null", blob)
+    with open(os.path.join(HERE, "demo-mock-edge.js"), encoding="utf-8") as fh:          # certificates and the HAProxy front (tools/demo-mock-edge.js)
+        mock = mock.replace("/*__EDGE_MOCK__*/", fh.read())
     with open(os.path.join(HERE, "demo-mock.css"), encoding="utf-8") as fh:
         css = fh.read()
     html = m.INDEX_HTML.replace("__NONCE__", "demo").replace("__VERSION__", m.VERSION)

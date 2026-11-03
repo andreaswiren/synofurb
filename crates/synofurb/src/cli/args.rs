@@ -74,7 +74,7 @@ pub enum LogFormat {
 pub enum Cmd {
     /// Find Synology NAS units on the network (and remember them)
     #[command(
-        after_help = "EXAMPLES\n  synofurb-cli scan\n  synofurb-cli scan --timeout 8 --json > units.json\n  synofurb-cli scan --no-sweep --ndjson"
+        after_help = "EXAMPLES\n  synofurb-cli scan\n  synofurb-cli scan --list-networks\n  synofurb-cli scan --network 192.168.69.0/24 --network 10.0.5.0/24\n  synofurb-cli scan --network eth0 --timeout 8 --json > units.json\n  synofurb-cli scan --all-networks --no-sweep --ndjson"
     )]
     Scan(ScanArgs),
     /// List, add or forget the units remembered from earlier scans
@@ -137,6 +137,11 @@ pub enum Cmd {
     Logs {
         #[command(subcommand)]
         action: LogsCmd,
+    },
+    /// Add-ons (Docker apps such as Portainer, Frigate NVR, Plex) that `install --addon` can set up after the first boot
+    Addons {
+        #[command(subcommand)]
+        action: AddonsCmd,
     },
     /// Offline bundles: everything an install needs, for units or networks without Internet
     Bundle {
@@ -456,9 +461,19 @@ pub struct ScanArgs {
     /// how long each discovery method listens
     #[arg(long, default_value_t = 4, value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(1..=120))]
     pub timeout: u64,
-    /// skip the /24 port sweep (multicast/broadcast methods only)
+    /// skip the port sweep (multicast/broadcast methods only)
     #[arg(long)]
     pub no_sweep: bool,
+    /// network to scan: a CIDR (192.168.1.0/24, at most /20), an interface name, one of this computer's addresses or a network id
+    /// from --list-networks; repeat for several. Default: the real LAN networks (see --list-networks)
+    #[arg(long = "network", value_name = "CIDR|INTERFACE|ID", conflicts_with = "all_networks")]
+    pub network: Vec<String>,
+    /// scan every network of this computer, including VPN, virtual and link-local ones
+    #[arg(long)]
+    pub all_networks: bool,
+    /// list this computer's IPv4 networks (id, interface, kind, whether scanned by default) and exit; scans nothing
+    #[arg(long, conflicts_with_all = ["ndjson", "no_save", "all"])]
+    pub list_networks: bool,
     /// print the final result as one JSON document: {"devices":[...]}
     #[arg(long, conflicts_with = "ndjson")]
     pub json: bool,
@@ -540,9 +555,35 @@ pub struct PlanArgs {
     /// which Linux kernel the new system would get (does not change the storage layout; shown so the whole plan reads in one place)
     #[arg(long, value_enum, default_value = "newest")]
     pub kernel: KernelArg,
+    #[command(flatten)]
+    pub addon: AddonOpts,
     /// the whole plan as JSON
     #[arg(long)]
     pub json: bool,
+}
+
+// ---------------------------------------------------------------------------------------------- add-ons
+
+/// Add-ons to install after the first boot (`addons list` shows what exists).
+#[derive(Args, Debug, Clone, Default)]
+pub struct AddonOpts {
+    /// install an add-on after the first boot; repeatable. `ID` or `ID:KEY=VALUE,KEY=VALUE`. What an add-on needs is added by itself
+    /// (Docker for everything else). A secret setting takes `KEY=@env:VAR` or `KEY=@file:PATH`, never its value. Run `addons list`
+    #[arg(long = "addon", value_name = "ID[:KEY=VALUE,...]")]
+    pub addons: Vec<String>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AddonsCmd {
+    /// List the add-ons the installer can set up, what each needs and its install-time settings
+    #[command(
+        after_help = "EXAMPLES\n  synofurb-cli addons list\n  synofurb-cli addons list --json\n  synofurb-cli plan --host 192.168.1.20 --addon portainer --addon frigate:retain_days=14\n  PLEX_CLAIM=claim-xxxxxxxxxxxx synofurb-cli install ... --addon plex:plex_claim=@env:PLEX_CLAIM"
+    )]
+    List {
+        /// one JSON document: the catalog, the quick-setup presets and the secret-input syntax
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------------------------- install
@@ -663,6 +704,8 @@ pub struct InstallArgs {
     pub boot: BootOpts,
     #[command(flatten)]
     pub source: SourceOpts,
+    #[command(flatten)]
+    pub addon: AddonOpts,
     #[command(flatten)]
     pub gate: GateOpts,
     /// do everything up to rendering and print (or write with --out) the generated stage-2 script, payload manifest, plan and
@@ -966,6 +1009,7 @@ mod tests {
             "manage",
             "logs",
             "bundle",
+            "addons",
             "fetch-installer",
             "self-update",
             "config",
@@ -1360,5 +1404,19 @@ mod tests {
         assert_eq!(e.exit_code(), 2);
         assert_eq!(parse(&["--help"]).err().unwrap().exit_code(), 0);
         assert_eq!(parse(&["bogus"]).err().unwrap().exit_code(), 2);
+    }
+
+    #[test]
+    fn addon_flag_repeats_on_plan_and_install_and_the_list_command_parses() {
+        let Cmd::Plan(p) = ok(&["plan", "--facts", "demo", "--addon", "portainer", "--addon", "frigate:retain_days=14"]).cmd else {
+            panic!()
+        };
+        assert_eq!(p.addon.addons, ["portainer", "frigate:retain_days=14"]);
+        let Cmd::Install(i) = ok(&["install", "--facts", "demo", "--dry-run", "--addon", "docker"]).cmd else { panic!() };
+        assert_eq!(i.addon.addons, ["docker"]);
+        let Cmd::Install(i) = ok(&["install", "--facts", "demo", "--dry-run"]).cmd else { panic!() };
+        assert!(i.addon.addons.is_empty());
+        assert!(matches!(ok(&["addons", "list", "--json"]).cmd, Cmd::Addons { action: AddonsCmd::List { json: true } }));
+        assert!(err(&["addons"]).contains("Usage") || err(&["addons"]).contains("subcommand"));
     }
 }

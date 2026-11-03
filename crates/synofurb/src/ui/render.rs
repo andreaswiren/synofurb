@@ -118,6 +118,7 @@ impl App {
             Screen::Goal => self.page_goal(window, cx),
             Screen::Plan => self.page_plan(window, cx),
             Screen::System => self.page_system(window, cx),
+            Screen::Addons => self.page_addons(window, cx),
             Screen::Confirm => self.page_confirm(window, cx),
             Screen::Install => self.page_install(window, cx),
             Screen::Failed => self.page_failed(window, cx),
@@ -138,7 +139,8 @@ impl App {
             Screen::Goal => Screen::Inspect,
             Screen::Plan | Screen::BootMgr | Screen::Recover => Screen::Goal,
             Screen::System => Screen::Plan,
-            Screen::Confirm => Screen::System,
+            Screen::Addons => Screen::System,
+            Screen::Confirm => Screen::Addons,
             Screen::Settings | Screen::About | Screen::Manage => self.return_to,
             _ => return None,
         })
@@ -179,7 +181,7 @@ impl App {
         match self.screen {
             Screen::Settings | Screen::About => Where::Neutral,
             Screen::Manage => Where::Manage(super::mgmt::risk_health(self.manage_report.as_ref(), self.svc_fixed), self.svc_fixed),
-            Screen::Plan | Screen::System | Screen::Confirm => Where::Planning,
+            Screen::Plan | Screen::System | Screen::Addons | Screen::Confirm => Where::Planning,
             _ => Where::Wizard,
         }
     }
@@ -325,11 +327,10 @@ impl App {
         let twin = self.twin_of_selected(cx);
         let (disks, cpu, ram, dsm) = match self.facts.as_ref().filter(|_| !self.manage_bound()) {
             Some(f) => (
-                format!(
-                    "{} disks \u{00b7} {}",
-                    f.candidate_disks().len(),
-                    super::format::size_2dp(f.candidate_disks().iter().map(|d| d.size_bytes()).sum())
-                ),
+                {
+                    let scope = super::facts::DiskScope::of(f);
+                    format!("{} \u{00b7} {}", scope.count_text(), super::format::size_2dp(scope.used_bytes))
+                },
                 super::format::short_cpu(&f.cpu),
                 format!("{:.0} GiB", f.mem_gib()),
                 f.dsm_version.clone(),
@@ -621,7 +622,8 @@ impl App {
                     self.go(Screen::System, window, cx)
                 }
             }
-            Screen::System if self.system_form_errors(cx).is_empty() => self.go(Screen::Confirm, window, cx),
+            Screen::System if self.system_form_errors(cx).is_empty() => self.go(Screen::Addons, window, cx),
+            Screen::Addons if self.addons_blocker(cx).is_none() => self.go(Screen::Confirm, window, cx),
             _ => {}
         }
     }

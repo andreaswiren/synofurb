@@ -1,0 +1,29 @@
+# Frigate NVR (add-on "frigate", rendered by synofurb-mgmt). Do not edit by hand: it is rewritten on install and update.
+# Official image and layout: https://docs.frigate.video/frigate/installation (checked 2026-11-03, Frigate 0.18.2).
+services:
+  frigate:
+    container_name: synofurb-frigate
+    image: ghcr.io/blakeblackshear/frigate:stable
+    restart: unless-stopped
+    stop_grace_period: 30s
+    shm_size: "${shm_mb}mb"
+    environment:
+      TZ: "${TZ}"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ${DATA_DIR}/config:/config
+      - ${STORAGE_MEDIA}:/media/frigate
+    tmpfs:
+      - /tmp/cache:size=${cache_mb}m
+    ports:
+      - "8971:8971"
+      - "127.0.0.1:5000:5000"
+      - "8554:8554"
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+${DEVICES_BLOCK}

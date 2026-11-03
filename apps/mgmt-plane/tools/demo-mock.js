@@ -615,13 +615,187 @@
   });
   R['POST /api/raid/after-grow'] = b => { const a = arrByName(b.array); need(a, 'extending the volume'); needConfirm(b, a.name); return {ok: true, results: [{desc: 'Grow the physical volume on ' + a.name, cmd: 'pvresize ' + a.device, rc: 0, out: '', err: ''}].concat(a.lvs.map(l => ({desc: 'Extend ' + l, cmd: 'lvextend -l +100%FREE /dev/' + l, rc: 0, out: '', err: ''})))}; };
 
+
+  /* ---------- updates of the management plane itself (?update=available|current|offline|rollback|busy|unhealthy) ---------- */
+  const UM = qs.get('update') || 'available';
+  const NEWV = (v => v[0] + '.' + (Number(v[1]) + 1) + '.0')(String(DATA.version).split('.'));
+  const SHA = '3f9c2a71b8e4d05a6c7e1f20944b8d3ac51e7f60';
+  const nowS = () => Date.now() / 1000;
+  const upd = {installed: DATA.version, previous: '0.4.0', channel: 'stable', ref: 'main', check: null, down: 0,
+    jobs: [{id: 'a1b2c3d4e5f60718', kind: 'update', source: 'app', ref: '', commit: '', by: 'andreas', via: 'cli', from: '0.4.0', to: DATA.version, state: 'ok', exit: 0, started: nowS() - 3 * 86400, finished: nowS() - 3 * 86400 + 38, unsigned: false, step: 'result', message: 'updated 0.4.0 -> ' + DATA.version},
+           {id: '0f1e2d3c4b5a6978', kind: 'update', source: 'github-stable', ref: '', commit: '', by: 'admin', via: 'web', from: '0.3.1', to: '0.4.0', state: 'rolled_back', exit: 3, started: nowS() - 9 * 86400, finished: nowS() - 9 * 86400 + 61, unsigned: true, step: 'result', message: 'update to 0.4.0 failed; rolled back'}]};
+  if (UM === 'busy') upd.busy = 'addon';
+  function updCmp(c) { const a = c.version.split('.').map(Number), b = upd.installed.split('.').map(Number); for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i] ? 'available' : 'older'; return c.channel === 'main' ? 'same' : 'current'; }
+  function updState() {
+    const c = upd.check ? Object.assign({}, upd.check, {installed: upd.installed, state: updCmp(upd.check)}) : null;
+    const act = upd.jobs.find(j => j.state === 'running');
+    return {ok: true, installed: upd.installed, sha256: 'demo', previous: upd.previous, channel: upd.channel, ref: upd.ref, check: c, active: act ? act.id : null, busy: upd.busy || null, jobs: clone(upd.jobs), signed: false, repo: 'andreaswiren/synofurb'};
+  }
+  R['GET /api/update'] = () => updState();
+  R['POST /api/update/check'] = b => {
+    if (UM === 'offline') throw bad(502, 'Cannot reach GitHub (gaierror)');
+    if (!['stable', 'main'].includes(b.channel)) throw bad(400, 'channel must be stable or main');
+    upd.channel = b.channel; upd.ref = b.ref || upd.ref;
+    const main = b.channel === 'main', v = UM === 'current' && !main ? upd.installed : NEWV;
+    upd.check = {channel: b.channel, version: v, tag: main ? '' : 'v0.3.0', asset: main ? '' : 'synofurb-mgmt-' + v + '.tar.gz', ref: main ? (b.ref || 'main') : '', commit: main ? SHA : '', published: '2026-05-12', mode: 'unsigned', blocked: null,
+      notes: main ? '• 3f9c2a7 Updates page: check, update and roll back from the web UI (2026-05-12)\n• 81d0c4e Keep the previous version after an update (2026-05-09)' : 'Management plane ' + v + '\n• Update from GitHub inside the web UI\n• Version history shows who updated and how',
+      checked_at: Math.floor(nowS()), repo: 'andreaswiren/synofurb'};
+    return {ok: true, check: updState().check};
+  };
+  function updJob(id) { const j = upd.jobs.find(x => x.id === id); if (!j) throw bad(404, 'no such job'); return j; }
+  function updRun(j, rollbackJob, force) {
+    const to = j.to, fail = UM === 'rollback' && !rollbackJob, refuse = UM === 'unhealthy' && !rollbackJob && !force;
+    const plan = refuse ? [['check', 'start', 'asking GitHub'], ['check', 'ok', 'release ' + to + ', available (installed ' + j.from + ')'], ['health', 'fail', 'the unit is in a critical state (array md1 degraded); an update needs force']]
+      : rollbackJob ? [['rollback', 'start', 'restoring /opt/synofurb-mgmt.prev'], ['restart', 'start', 'restarting synofurb-mgmt.service'], ['rollback', 'ok', 'version ' + to + ' is running'], ['result', 'ok', 'rolled back to ' + to]]
+      : [['check', 'start', 'asking GitHub'], ['check', 'ok', 'release ' + to + ', available (installed ' + j.from + ')'], ['download', 'start', 'downloading'],
+         ['download', 'ok', 'synofurb-mgmt-' + to + '.tar.gz 212 KiB, SHA-256 9f2c1a7b4e0d... matches SHA256SUMS (unsigned)'], ['verify', 'start', 'checking'], ['verify', 'ok', 'manifest verified, version ' + to],
+         ['stage', 'start', 'copying'], ['stage', 'ok', '4 files staged'], ['swap', 'start', 'swapping'], ['swap', 'ok', 'previous version kept'], ['restart', 'start', 'restarting synofurb-mgmt.service'],
+         ['restart', 'ok', 'service restarted'], ['health', 'start', 'waiting up to 30 s for the new version']]
+      .concat(fail ? [['health', 'fail', 'health check failed (no valid answer)'], ['rollback', 'start', 'restoring the previous version'], ['rollback', 'ok', 'previous version ' + j.from + ' is running again'], ['result', 'fail', 'update to ' + to + ' failed; rolled back']]
+                   : [['health', 'ok', 'version ' + to + ' answers'], ['result', 'ok', 'updated ' + j.from + ' -> ' + to]]);
+    j.events = []; j.state = 'running';
+    plan.forEach(([step, status, message], i) => setTimeout(() => {
+      j.events.push({t: Math.floor(nowS()), step, status, message}); j.step = step; j.message = message;
+      if (step === 'restart' && status === 'start') upd.down = Date.now() + 3200;
+      if (refuse && step === 'health') { j.state = 'refused'; j.exit = 2; j.finished = nowS(); }
+      if (step === 'result') {
+        j.state = rollbackJob ? 'ok' : fail ? 'rolled_back' : 'ok'; j.exit = j.state === 'ok' ? 0 : 3; j.finished = nowS();
+        if (j.state === 'ok') { if (!rollbackJob) upd.previous = upd.installed; else upd.previous = upd.installed; upd.installed = to; }
+      }
+    }, 700 * (i + 1) + (step === 'restart' && status === 'ok' ? 2400 : 0)));
+  }
+  function updStart(src, to, extra) {
+    if (upd.busy || upd.jobs.some(j => j.state === 'running')) throw bad(409, 'another job is running (' + (upd.busy || 'update') + '): wait for it to finish');
+    const j = Object.assign({id: Array.from({length: 16}, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join(''), kind: 'update', source: src, ref: '', commit: '', by: st.user, via: 'web', from: upd.installed, to, state: 'queued', exit: null,
+      started: nowS(), finished: null, unsigned: true, step: null, message: null, events: []}, extra || {});
+    upd.jobs.unshift(j);
+    return j;
+  }
+  R['POST /api/update/start'] = b => {
+    if (!['stable', 'main'].includes(b.channel)) throw bad(400, 'channel must be stable or main');
+    if (typeof b.expect !== 'string' || !b.expect) throw bad(400, 'expect must be the version or commit that was shown');
+    if (b.channel === 'main') needConfirm(b, b.expect.slice(0, 7));
+    const j = updStart('github-' + b.channel, upd.check ? upd.check.version : NEWV, b.channel === 'main' ? {ref: b.ref || 'main', commit: b.expect} : {});
+    updRun(j, false, b.force === true);
+    return {ok: true, job: j.id};
+  };
+  R['POST /api/update/rollback'] = () => {
+    if (!upd.previous) throw bad(409, 'no previous version is kept');
+    const j = updStart('rollback', upd.previous, {kind: 'rollback', unsigned: false});
+    updRun(j, true);
+    return {ok: true, job: j.id};
+  };
+  R['POST /api/update/job'] = b => {
+    if (Date.now() < upd.down) throw bad(401, 'authentication required');
+    const j = updJob(b.job), o = clone(j); delete o.events;
+    return {ok: true, job: o, events: clone(j.events || [])};
+  };
+  R['POST /api/update/progress'] = b => {
+    const j = updJob(b.job);
+    return {ok: true, job: {id: j.id, kind: j.kind, state: j.state, step: j.step, from: j.from, to: j.to, finished: j.finished}};
+  };
+  PUBLIC.add('POST /api/update/progress');
+
+  /* ---------- add-ons: the list and details come from the real handlers; jobs are simulated with timers ---------- */
+  const AD = U.addons, ADJ = {};
+  const adRow = id => AD.list.addons.find(x => x.id === id);
+  const adDet = id => AD.detail[id];
+  function adSync(id) {
+    const r = adRow(id), d = adDet(id);
+    for (const o of [r, d]) { o.installed = st.ad[id].installed; o.status = st.ad[id].status; o.installed_version = st.ad[id].installed ? '1' : ''; o.update_available = false; o.detail = st.ad[id].detail || ''; o.link = o.installed && o.web ? {scheme: o.web.scheme, port: o.web.port, path: o.web.path, hint: o.web.hostname_hint} : null; }
+    d.values = st.ad[id].values || d.values;
+  }
+  st.ad = {};
+  AD.list.addons.forEach(a => { st.ad[a.id] = {installed: a.installed, status: a.status, detail: '', values: null}; });
+  /* ?addons=states|problems|nodocker: other states of the page (default: Docker and Portainer running, Frigate and Plex available) */
+  const ADS = qs.get('addons') || '';
+  const adPreset = {
+    states: {docker: ['running'], portainer: ['stopped'], plex: ['needs-attention', 'No space left on device while downloading the images. Free some space and retry.'], frigate: ['updating']},
+    problems: {docker: ['running'], portainer: ['unhealthy', 'The health check at https://nas:9443 does not answer.'], plex: ['error', 'The container plex keeps stopping; the last log line says: permission denied on /data.'], frigate: ['starting']},
+    nodocker: {docker: ['not-installed'], portainer: ['not-installed'], plex: ['not-installed'], frigate: ['not-installed']},
+  }[ADS];
+  if (adPreset) for (const [id, [status, detail]] of Object.entries(adPreset)) { st.ad[id] = {installed: status !== 'not-installed', status, detail: detail || '', values: null}; }
+  function adEffPrivs(d, settings) {
+    const out = d.privileges.map(p => p.id);
+    d.settings.filter(s => s.type === 'choice').forEach(s => { const c = s.choices.find(x => x.value === (settings[s.key] || d.values[s.key])); if (c) c.privileges.forEach(p => { if (!out.includes(p)) out.push(p); }); });
+    return out;
+  }
+  function adJobView(j, full) {
+    const el = (Date.now() - j.t0) / 1000, n = j.steps.length, per = j.dur / n, idx = Math.min(n - 1, Math.floor(el / per)), done = el >= j.dur;
+    if (done && j.state === 'running') {
+      j.state = 'done'; j.ok = true; st.ad[j.addon].status = j.final.status; st.ad[j.addon].installed = j.final.installed; st.ad[j.addon].detail = '';
+      if (j.final.values) st.ad[j.addon].values = j.final.values;
+      adSync(j.addon);
+    }
+    const v = {id: j.id, kind: j.kind, addon: j.addon, state: j.state, step: j.steps[idx], steps: j.steps, progress: done ? 100 : Math.round(100 * el / j.dur), message: done ? '' : j.msgs[idx], ok: j.ok, error: '', started: j.t0 / 1000, finished: done ? Date.now() / 1000 : null, warnings: []};
+    if (full) v.log = j.msgs.slice(0, done ? n : idx + 1).map(x => '== ' + x).concat(done ? ['Done'] : []);
+    return v;
+  }
+  function adStart(id, kind, final, steps, msgs) {
+    const act = Object.values(ADJ).find(j => j.state === 'running');
+    if (act) throw bad(409, 'Another job is running (' + act.kind + ' ' + act.addon + '). Wait until it ends.');
+    const jid = 'j' + Math.random().toString(16).slice(2, 14).padEnd(12, '0');
+    ADJ[jid] = {id: jid, kind, addon: id, state: 'running', ok: null, t0: Date.now(), dur: kind === 'install' || kind === 'update' ? 5 : 2.4, steps, msgs, final};
+    st.ad[id].status = {install: 'installing', update: 'updating', remove: 'removing'}[kind] || st.ad[id].status; adSync(id);
+    return {ok: true, job: adJobView(ADJ[jid], false)};
+  }
+  function adAction(id, action, b) {
+    const d = adDet(id), s = st.ad[id];
+    if (!d) throw bad(404, "unknown add-on '" + id + "'");
+    if (action === 'install') {
+      if (s.installed && s.status !== 'needs-attention') throw bad(400, d.name + ' is already installed.');
+      const miss = d.requires.filter(r => !st.ad[r].installed);
+      if (miss.length) throw bad(400, d.name + ' needs ' + miss.map(r => adDet(r).name).join(', ') + ' to be installed first.');
+      const set = b.settings || {};
+      for (const k of Object.keys(set)) if (!d.settings.some(x => x.key === k)) throw bad(400, "unknown setting '" + k + "'");
+      for (const x of d.settings) {
+        const v = set[x.key];
+        if (x.required && (v === '' || (v == null && !d.values[x.key]))) throw bad(400, x.label + ' is required');
+        if (x.type === 'int' && v !== '' && v != null && (!Number.isInteger(Number(v)) || Number(v) < x.min || Number(v) > x.max)) throw bad(400, x.label + ' must be between ' + x.min + ' and ' + x.max);
+      }
+      const privs = adEffPrivs(d, set);
+      if (privs.length && b.accept !== true) throw bad(400, d.name + ' needs these privileges: ' + privs.join(', ') + '. Confirm them to continue.');
+      const vals = Object.assign({}, d.values);
+      d.settings.forEach(x => { if (x.type === 'secret') vals[x.key] = {set: !!set[x.key] || (vals[x.key] && vals[x.key].set)}; else if (set[x.key] != null) vals[x.key] = set[x.key]; });
+      return adStart(id, 'install', {status: 'running', installed: true, values: vals}, ['check', 'render', 'pull', 'start', 'health'],
+        ['Checking Docker', 'Writing the configuration', 'Downloading images (needs Internet)', 'Starting', 'Waiting for ' + d.name + ' to answer']);
+    }
+    if (!s.installed) throw bad(400, d.name + ' is not installed.');
+    if (action === 'update') return adStart(id, 'update', {status: 'running', installed: true}, ['check', 'render', 'pull', 'start', 'health'], ['Checking Docker', 'Writing the configuration', 'Downloading images (needs Internet)', 'Starting', 'Waiting for ' + d.name + ' to answer']);
+    if (action === 'remove') {
+      if (d.kind === 'system') throw bad(400, d.name + ' was installed with apt and stays on this unit.');
+      const users = AD.list.addons.filter(x => x.requires.includes(id) && st.ad[x.id].installed);
+      if (users.length) throw bad(400, d.name + ' is used by ' + users.map(x => x.id).join(', ') + '. Remove those first.');
+      if (b.delete_data === true && b.confirm !== id) throw bad(400, 'to delete the data, type the add-on name ' + JSON.stringify(id).replace(/"/g, "'") + ' to confirm');
+      return adStart(id, 'remove', {status: 'not-installed', installed: false}, ['stop', 'files', 'forget'], ['Stopping and removing containers', b.delete_data ? 'Deleting data' : 'Removing the compose file', 'Forgetting the settings']);
+    }
+    if (action === 'stop' && d.kind === 'system' && AD.list.addons.some(x => x.requires.includes(id) && st.ad[x.id].installed)) throw bad(400, d.name + ' is used by other add-ons. Remove or stop those first.');
+    return adStart(id, action, {status: action === 'stop' ? 'stopped' : 'running', installed: true}, [action], [{start: 'Starting', stop: 'Stopping', restart: 'Restarting'}[action]]);
+  }
+  R['GET /api/addons'] = () => { const o = clone(AD.list); const act = Object.values(ADJ).find(j => j.state === 'running'); o.job = act ? adJobView(act, false) : null; return o; };
+  R['GET /api/jobs'] = () => ({ok: true, jobs: Object.values(ADJ).map(j => adJobView(j, false))});
+  const DYN = [
+    [/^GET \/api\/addons\/([a-z0-9-]+)$/, m => { const d = adDet(m[1]); if (!d) throw bad(404, "unknown add-on '" + m[1] + "'"); return {ok: true, addon: clone(d)}; }],
+    [/^GET \/api\/addons\/([a-z0-9-]+)\/logs$/, m => ({ok: true, logs: '2026-11-03T08:00:01Z ' + m[1] + ' | starting\n2026-11-03T08:00:03Z ' + m[1] + ' | listening\n2026-11-03T08:00:09Z ' + m[1] + ' | ready\n'})],
+    [/^GET \/api\/jobs\/(j[0-9a-f]{12})$/, m => { const j = ADJ[m[1]]; if (!j) throw bad(404, 'no such job'); return {ok: true, job: adJobView(j, true)}; }],
+    [/^POST \/api\/addons\/([a-z0-9-]+)\/(install|start|stop|restart|update|remove)$/, (m, b) => adAction(m[1], m[2], b)],
+  ];
+  function dynRoute(route) { for (const [rx, fn] of DYN) { const m = rx.exec(route); if (m) return b => fn(m, b); } return null; }
+  AD.list.addons.forEach(a => adSync(a.id));
+  if (ADS === 'states') {                                           // Frigate is being updated: a job that outlasts the screenshot
+    const jid = 'jabcdef012345';
+    ADJ[jid] = {id: jid, kind: 'update', addon: 'frigate', state: 'running', ok: null, t0: Date.now() - 2200000, dur: 3600, steps: ['check', 'render', 'pull', 'start', 'health'],
+      msgs: ['Checking Docker', 'Writing the configuration', 'Downloading images (needs Internet)', 'Starting', 'Waiting for Frigate NVR to answer'], final: {status: 'running', installed: true}};
+  }
+
+/*__EDGE_MOCK__*/
   window.fetch = async function (url, opt) {
     const u = new URL(typeof url === 'string' ? url : url.url, location.href);
     if (!/\/api\//.test(u.pathname)) return origFetch ? origFetch(url, opt) : Promise.reject(new Error('offline demo'));
     const method = ((opt && opt.method) || 'GET').toUpperCase();
     const route = method + ' ' + u.pathname.slice(u.pathname.indexOf('/api/'));
     await sleep(route.includes('volumes/create') ? 900 : 90 + Math.random() * 90);
-    const fn = R[route];
+    const fn = R[route] || dynRoute(route);
     if (!fn) return E(404, 'not found');
     if (!PUBLIC.has(route) && !st.login) return E(401, 'authentication required');
     let body = {};

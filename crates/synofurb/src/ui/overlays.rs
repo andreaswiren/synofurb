@@ -11,7 +11,6 @@ use super::state::{BootChoice, KeyMode, Screen};
 use super::theme::layout;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
-use gpui_kit::component::input::Input;
 use gpui_kit::component::{WindowExt, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{AppContext, ClipboardItem, Context, IntoElement, Window, px};
@@ -41,7 +40,7 @@ impl App {
             Screen::Confirm | Screen::Install | Screen::Failed | Screen::Recover => "recovery",
             Screen::BootMgr => "boot-manager",
             Screen::Inventory | Screen::Connect => "first-install",
-            Screen::System => "first-install",
+            Screen::System | Screen::Addons => "first-install",
             Screen::Done => "first-install",
             _ => return None,
         })
@@ -126,35 +125,6 @@ impl App {
         cx.defer_in(window, move |_, window, cx| window.focus(&focus, cx));
     }
 
-    /// "Add NAS": probe an address that discovery did not find.
-    pub fn open_add_dialog(&mut self, window: &mut Window, cx: &mut Context<App>) {
-        let app = cx.entity();
-        let input = self.inp.add_ip.clone();
-        window.open_dialog(cx, move |d, _, cx| {
-            let (app, input2) = (app.clone(), input.clone());
-            d.bg(gpui_kit::component::ActiveTheme::theme(&*cx).popover)
-                .title(copy::INV_ADD_TITLE.short)
-                .w(px(layout::DIALOG_W))
-                .child(v_flex().gap(px(8.0)).child(copy::INV_ADD_TITLE.body).child(Input::new(&input).cleanable(true)))
-                .footer(
-                    DialogFooter::new()
-                        .child(
-                            Button::new("add-cancel")
-                                .outline()
-                                .label(copy::BTN_CANCEL.short)
-                                .on_click(|_, window, cx| window.close_dialog(cx)),
-                        )
-                        .child(Button::new("add-ok").primary().label(copy::INV_ADD_BTN.short).on_click(move |_, window, cx| {
-                            let ip = input2.read(cx).value().trim().to_string();
-                            if !ip.is_empty() {
-                                window.close_dialog(cx);
-                                app.update(cx, |a, cx| a.select_host(&ip, window, cx));
-                            }
-                        })),
-                )
-        });
-    }
-
     /// The command line for the current choices (None until a unit has been inspected).
     pub fn cli_spec(&self, cx: &gpui_kit::App) -> Option<CliCommand> {
         let f = self.facts.as_ref()?;
@@ -196,6 +166,10 @@ impl App {
             bundle: self.source_offline.then(|| self.input_value(&self.inp.bundle, cx).trim().to_string()).filter(|s| !s.is_empty()),
             no_firmware: !self.sys.with_firmware,
             no_verbose: !self.sys.verbose,
+            addons: {
+                let (picks, secrets) = self.addon_state(cx);
+                picks.cli_specs(&secrets)
+            },
         })
     }
 
@@ -209,7 +183,7 @@ impl App {
             Screen::Confirm => {
                 let typed = self.input_value(&self.inp.typed, cx);
                 let phrase = self.phrase(cx);
-                if self.gate(&typed, &phrase).is_open() { spec.install_command(Some(&phrase)) } else { spec.plan_command() }
+                if self.gate(&typed, &phrase, cx).is_open() { spec.install_command(Some(&phrase)) } else { spec.plan_command() }
             }
             _ => spec.install_command(None),
         })
@@ -217,14 +191,14 @@ impl App {
 
     /// Ctrl+Shift+C and the "Copy command" button: the dialog with the command, editable, and the computed tag.
     pub fn copy_cli_command(&mut self, window: &mut Window, cx: &mut Context<App>) {
-        if !matches!(self.screen, Screen::Plan | Screen::System | Screen::Confirm) {
+        if !matches!(self.screen, Screen::Plan | Screen::System | Screen::Addons | Screen::Confirm) {
             return;
         }
         let Some(spec) = self.cli_spec(cx) else { return };
         // the confirmation flags are in the command only after the gate is satisfied
         let typed = self.input_value(&self.inp.typed, cx);
         let phrase = self.phrase(cx);
-        let confirm = (self.screen == Screen::Confirm && self.gate(&typed, &phrase).is_open()).then_some(phrase);
+        let confirm = (self.screen == Screen::Confirm && self.gate(&typed, &phrase, cx).is_open()).then_some(phrase);
         let plan_only = self.screen == Screen::Plan || (self.screen == Screen::Confirm && confirm.is_none());
         let text = if plan_only { spec.plan_command() } else { spec.install_command(confirm.as_deref()) };
         let view = cx.new(|cx| CommandView::new(spec, confirm, plan_only, text, window, cx));
@@ -400,6 +374,9 @@ pub struct QuickView {
     pub sel: Option<usize>,
     /// `(label, value)` rows: Storage (one layout only), System, Boot.
     rows: Vec<(&'static str, String)>,
+    /// Add-ons preset: 0 = none, n = `addons::PRESETS[n - 1]`.
+    pub addons_sel: usize,
+    app: gpui_kit::Entity<App>,
 }
 
 impl gpui_kit::Render for QuickView {
@@ -407,7 +384,8 @@ impl gpui_kit::Render for QuickView {
         use gpui_kit::component::ActiveTheme;
         use gpui_kit::component::alert::Alert;
         use gpui_kit::component::radio::{Radio, RadioGroup};
-        let mut col = v_flex().gap(px(12.0)).child(div().text_sm().child(copy::QUICK_INTRO.short));
+        // right padding: the dialog scrolls at big text sizes, and its scrollbar must not sit on the end of a line
+        let mut col = v_flex().gap(px(12.0)).pr(px(12.0)).child(div().text_sm().child(copy::QUICK_INTRO.short));
         if self.opts.len() > 1 {
             col = col
                 .child(
@@ -425,10 +403,52 @@ impl gpui_kit::Render for QuickView {
         col = col.child(v_flex().gap(px(4.0)).children(self.rows.iter().map(|(k, v)| {
             gpui_kit::component::h_flex()
                 .gap(px(12.0))
-                .items_baseline()
+                .items_start()
                 .child(div().w(px(72.0)).flex_none().text_sm().text_color(muted).child(*k))
-                .child(div().flex_1().min_w_0().text_sm().child(v.clone()))
+                .child(div().flex_1().min_w_0().text_sm().child(super::format::keep_units(v)))
         })));
+        // Every preset says everything it installs (the Plex preset also installs Portainer), and a preset that carries a privilege says
+        // what it may do; the person accepts it on Confirm. The caveat that add-ons never ran on a real NAS sits in the group header.
+        use super::theme::Themed;
+        let p = cx.pal();
+        let chosen = self.addons_sel.checked_sub(1).and_then(|i| synofurb_core::addons::PRESETS.get(i));
+        let priv_line = chosen.and_then(super::addons::preset_privilege_line);
+        col = col.child(
+            v_flex()
+                .gap(px(4.0))
+                .child(
+                    gpui_kit::component::h_flex()
+                        .gap(px(8.0))
+                        .items_center()
+                        .child(div().text_sm().text_color(muted).child(copy::ADDON_QUICK.short))
+                        .child(super::kit::untested(&p, "quick-untested", &self.app)),
+                )
+                .child(
+                    RadioGroup::vertical("quick-addons")
+                        .selected_index(Some(self.addons_sel))
+                        .children(
+                            std::iter::once(copy::ADDON_QUICK_NONE.short.to_string())
+                                .chain(synofurb_core::addons::PRESETS.iter().map(super::addons::preset_label))
+                                .enumerate()
+                                .map(|(i, l)| Radio::new(("qa", i)).label(l)),
+                        )
+                        .on_click(cx.listener(|v, ix: &usize, _, cx| {
+                            v.addons_sel = *ix;
+                            cx.notify();
+                        })),
+                )
+                .when_some(priv_line, |d, l| {
+                    d.child(
+                        gpui_kit::component::h_flex()
+                            .gap(px(6.0))
+                            .items_start()
+                            .text_sm()
+                            .text_color(p.warn_fg)
+                            .child(super::icons::icon_sized(role::WARN, 14.0, p.warn_fg))
+                            .child(div().flex_1().min_w_0().child(format!("{l}. {}", copy::ADDON_QUICK_ACCEPT.short))),
+                    )
+                }),
+        );
         col.child(div().text_sm().text_color(muted).child(copy::QUICK_NOTES.body))
     }
 }
@@ -463,15 +483,30 @@ impl App {
         };
         let mut rows: Vec<(&'static str, String)> = vec![];
         if !q.mixed {
-            rows.push(("Storage", format!("Wipe all {} disks \u{00b7} {}", f.candidate_disks().len(), opts[0].1)));
+            rows.push(("Storage", {
+                let scope = super::facts::DiskScope::of(&f);
+                let n = if scope.big_excluded == 0 { format!("all {} disks", scope.used) } else { scope.count_text() };
+                let left = scope.not_touched().map(|t| format!(" \u{00b7} {}", synofurb_core::model::lower_first(&t))).unwrap_or_default();
+                format!("Wipe {n} \u{00b7} {}{left}", opts[0].1)
+            }));
         }
         rows.push(("System", format!("{} GiB \u{00d7} {} copies \u{00b7} {hostname} \u{00b7} {user}", q.system_gib, q.copies)));
         rows.push(("Boot", format!("Newest kernel \u{00b7} {} \u{00b7} {boot}", if self.source_offline { "Offline" } else { "Online" })));
         let raids: Vec<DataRaid> = opts.iter().map(|o| o.0).collect();
         let single = opts.len() == 1;
         let n_opts = opts.len();
-        let view = cx.new(|_| QuickView { opts: if single { vec![] } else { opts }, sel: single.then_some(0), rows });
+        let addons_sel = self.addons.picks.matching_preset().map_or(0, |i| i + 1);
+        // demo runs: `SYNOFURB_DEMO_PRESET=3` opens the dialog with the third preset chosen (the privilege line shows)
+        let addons_sel =
+            std::env::var("SYNOFURB_DEMO_PRESET").ok().and_then(|v| v.parse().ok()).filter(|_| self.demo.is_some()).unwrap_or(addons_sel);
         let app = cx.entity();
+        let view = cx.new(|_| QuickView {
+            opts: if single { vec![] } else { opts },
+            sel: single.then_some(0),
+            rows,
+            addons_sel,
+            app: app.clone(),
+        });
         window.open_dialog(cx, move |d, _, cx| {
             let (app, view2, raids) = (app.clone(), view.clone(), raids.clone());
             let unchosen = !super::facts::quick_ready(view.read(cx).sel, n_opts);
@@ -492,8 +527,16 @@ impl App {
                             Button::new("q-use").primary().label(copy::QUICK_USE.short).on_click(move |_, window, cx| {
                                 let Some(sel) = view2.read(cx).sel else { return };
                                 let raid = raids[sel.min(raids.len() - 1)];
+                                let preset = view2.read(cx).addons_sel;
                                 window.close_dialog(cx);
-                                app.update(cx, |a, cx| a.apply_quick(raid, q.system_gib, q.copies, q.free_percent, window, cx));
+                                app.update(cx, |a, cx| {
+                                    // an add-ons choice in Quick setup replaces the ticks of the Add-ons tab; "None" clears them
+                                    match preset.checked_sub(1).and_then(|i| synofurb_core::addons::PRESETS.get(i)) {
+                                        Some(p) => a.addons.picks.apply_preset(p),
+                                        None => a.addons.picks.picked.clear(),
+                                    }
+                                    a.apply_quick(raid, q.system_gib, q.copies, q.free_percent, window, cx)
+                                });
                             }),
                             unchosen.then(|| copy::QUICK_CHOOSE.tip.to_string()),
                         )),

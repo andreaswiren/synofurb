@@ -140,12 +140,18 @@ else
 fi
 {
   echo "# Managed by synofurb: early USB keyboards, SATA/NVMe/SAS disks, md RAID, device-mapper, filesystems"
-  for m in xhci_pci xhci_hcd ehci_pci ohci_pci uhci_hcd usbhid hid_generic atkbd i8042 \
-           libata ahci libahci ata_piix ata_generic sd_mod scsi_mod nvme nvme_core mpt3sas megaraid_sas \
+  # ahci drives the SoC controller AND add-in AHCI controllers such as Marvell 88SE92xx (PCI 1b4b:9215/9230/9235 are in ahci's table, not
+  # sata_mv's; sata_mv is for the older non-AHCI 88SX/88SE61xx parts). The list is not "most", so every controller family a unit may carry
+  # is named here; ensure_initrd_storage() below adds whatever the installer actually saw the system disks on.
+  for m in xhci_pci xhci_hcd ehci_pci ohci_pci uhci_hcd usbhid hid_generic atkbd i8042 usb_storage uas \
+           libata ahci libahci ata_piix ata_generic sata_mv sata_sil24 sd_mod scsi_mod nvme nvme_core mpt3sas megaraid_sas \
            raid0 raid1 raid10 raid456 md_mod dm_mod dm_mirror dm_snapshot dm_thin_pool \
            xfs ext4 vfat crc32c_generic; do echo "$m"; done
 } >> /etc/initramfs-tools/modules
-apt_install initramfs-tools
+# xz-utils is not in debootstrap's minbase: without it initramfs-tools says "No xz ..., using gzip" and the initramfs grows by a third.
+# busybox: with --no-install-recommends the initramfs falls back to klibc's tiny tool set, and the mdadm boot scripts then fail with
+# "rm: not found" (seen in a QEMU boot); a normal Debian install has busybox, so the initramfs is built the way Debian tests it.
+apt_install initramfs-tools xz-utils busybox
 
 say "installing the kernel ($KERNEL_CHANNEL)"
 if [ "$KERNEL_CHANNEL" = newest ]; then
@@ -173,12 +179,14 @@ EXTRA=""
 [ "$ARCH" = armhf ] && EXTRA="haveged"      # low-entropy ARM boards can hang sshd at boot (Debian wiki)
 
 say "installing kernel, storage stack, filesystems, tools"
+# systemd-sysv provides /sbin/init and is NOT part of debootstrap's minbase (nor pulled in by anything below): without it the kernel
+# finds no init and the new system never boots. libpam-systemd gives ssh and console logins a logind session.
 # shellcheck disable=SC2086
 apt_install $BOOTPKG $MICROCODE_PKG lm-sensors \
   mdadm lvm2 xfsprogs btrfs-progs e2fsprogs dosfstools exfatprogs ntfs-3g parted gdisk \
   smartmontools nvme-cli hdparm \
   sudo openssh-server openssh-client \
-  systemd-resolved systemd-timesyncd avahi-daemon libnss-mdns \
+  systemd-sysv libpam-systemd systemd-resolved systemd-timesyncd avahi-daemon libnss-mdns \
   python3 openssl ca-certificates curl wget \
   console-setup kbd gpm usbutils pciutils ethtool iproute2 iputils-ping \
   less nano htop rsync bash-completion unattended-upgrades \
@@ -252,13 +260,92 @@ if [ "$ENABLE_MGMT" = 1 ]; then
   # VERSION next to the script: `synofurb_mgmt.py health --json` and `synofurb manage health|update` read it (without it the unit
   # would report the script's built-in default version and `manage update` could not tell an old copy from the current one).
   install -m 644 "$P/mgmt/VERSION" /opt/synofurb-mgmt/VERSION
+  [ -f "$P/mgmt/synofurb_addons.py" ] && install -m 644 "$P/mgmt/synofurb_addons.py" /opt/synofurb-mgmt/synofurb_addons.py
+  [ -f "$P/mgmt/addons.pack.json" ] && install -m 644 "$P/mgmt/addons.pack.json" /opt/synofurb-mgmt/addons.pack.json
+  [ -f "$P/mgmt/synofurb_edge.py" ] && install -m 644 "$P/mgmt/synofurb_edge.py" /opt/synofurb-mgmt/synofurb_edge.py
   install -m 644 "$P/mgmt/synofurb-mgmt.service" /etc/systemd/system/synofurb-mgmt.service
   systemctl enable synofurb-mgmt.service || true
 fi
 systemctl enable synofurb-firstboot.service || true
 
+# --- add-ons (BEGIN synofurb-addons: docs/ADDONS.md, "Installer integration") -------------------------------------------------
+# ADDONS (ids in install order) and ADDON_DOCKER_PACKAGES come from env.sh and exist only when add-ons were chosen. The choices go
+# to the pending folder; the first-boot unit hands them to the management plane. Secret settings are copied 0600 and never printed.
+if [ -n "${ADDONS:-}" ]; then
+  say "add-ons chosen: $ADDONS"
+  install -d -m 700 /etc/synofurb/addons.d /etc/synofurb/addons.d/pending /etc/synofurb/addons.d/pending-secrets
+  for _a in $ADDONS; do
+    install -m 600 "$P/addons/$_a.json" "/etc/synofurb/addons.d/pending/$_a.json"
+    if [ -f "$P/addons/secrets/$_a.json" ]; then
+      install -m 600 "$P/addons/secrets/$_a.json" "/etc/synofurb/addons.d/pending-secrets/$_a.json"
+      say "add-on $_a: secret settings stored (not shown)"
+    fi
+  done
+  echo "$ADDON_DOCKER_PACKAGES" > /etc/synofurb/addons.d/docker.packages
+  if [ "$OFFLINE" = 1 ]; then
+    # The bundle has no Docker packages: the first-boot unit installs them from the official mirrors (Internet needed there).
+    say "OFFLINE install: Docker ($ADDON_DOCKER_PACKAGES) is installed on the first boot instead"
+  else
+    # shellcheck disable=SC2086
+    if ! apt_install $ADDON_DOCKER_PACKAGES; then say "WARNING: Docker could not be installed now; the first boot tries again"; fi
+  fi
+  systemctl enable synofurb-addons-firstboot.service || true
+fi
+# --- add-ons (END synofurb-addons) ------------------------------------------------------------------------------------------------
+
 # --- bootloader ------------------------------------------------------------------------------------------------------------------
 say "bootloader ($FIRMWARE)"
+# The kernel modules that drive DISK, found by walking up its sysfs device path (sd, the AHCI/SAS/NVMe/USB controller, the USB host ...).
+# SYSFS is overridable for the tests. Built-in drivers have no loadable module and are skipped by the caller.
+# (SYSFS, BOOT_DIR and IRFS_MODULES are overridden only by the tests.)
+SYSFS=${SYSFS:-/sys}
+BOOT_DIR=${BOOT_DIR:-/boot}
+IRFS_MODULES=${IRFS_MODULES:-/etc/initramfs-tools/modules}
+disk_driver_modules() {
+  _n=${1##*/}
+  _p=$(readlink -f "$SYSFS/block/$_n/device" 2>/dev/null) || return 0
+  while [ -n "$_p" ] && [ "$_p" != / ] && [ "$_p" != "$SYSFS" ] && [ "$_p" != "$SYSFS/devices" ]; do
+    if [ -L "$_p/driver" ] && [ -L "$_p/driver/module" ]; then basename "$(readlink -f "$_p/driver/module")"; fi
+    _p=$(dirname "$_p")
+  done
+}
+# The newest installed kernel's version and initramfs.
+newest_kernel() {
+  for _f in "$BOOT_DIR"/vmlinuz-*; do [ -e "$_f" ] && echo "${_f#"$BOOT_DIR"/vmlinuz-}"; done | sort -V | tail -n1
+}
+# After the initramfs is built: every loadable driver the SYSTEM DISKS sit on in this very machine must be inside it, or the new system
+# cannot find its root. The static list above covers the usual controllers; this catches the rest (an add-in SATA/SAS card, a USB bridge).
+# Adds what is missing and rebuilds; fails (nothing has booted yet) if it is still missing.
+ensure_initrd_storage() {
+  _kv=$(newest_kernel); [ -n "$_kv" ] || { say "WARNING: no kernel found to check the initramfs against"; return 0; }
+  _need=""
+  for _d in $SYSTEM_DISKS; do
+    for _m in $(disk_driver_modules "$_d"); do
+      _fn=$(modinfo -k "$_kv" -F filename "$_m" 2>/dev/null | head -n1)
+      case "$_fn" in ''|'(builtin)') continue ;; esac
+      case " $_need " in *" $_m "*) ;; *) _need="$_need $_m" ;; esac
+    done
+  done
+  _missing=""
+  for _pass in 1 2; do
+    _missing=""
+    _list=$(lsinitramfs "$BOOT_DIR/initrd.img-$_kv" 2>/dev/null)
+    for _m in $_need; do
+      _re=$(printf '%s' "$_m" | sed 's/[-_]/[-_]/g')
+      printf '%s\n' "$_list" | grep -Eq "/${_re}\.ko" || _missing="$_missing $_m"
+    done
+    [ -n "$_missing" ] || break
+    [ "$_pass" = 1 ] || break
+    say "initramfs lacks driver(s) of the system disks:$_missing; adding them and rebuilding"
+    for _m in $_missing; do echo "$_m" >> "$IRFS_MODULES"; done
+    update-initramfs -u -k "$_kv"
+  done
+  if [ -n "$_missing" ]; then
+    say "ERROR: the initramfs of $_kv still lacks the storage driver(s)$_missing; this system would not find its root filesystem"
+    exit 1
+  fi
+  say "initramfs of $_kv carries the storage drivers of the system disks:${_need:- (all built into the kernel)}"
+}
 stable_name() { # DEVICE -> a /dev/disk/by-id name if one exists, else the device itself
   _real=$(readlink -f "$1")
   for _l in /dev/disk/by-id/wwn-* /dev/disk/by-id/nvme-eui.* /dev/disk/by-id/ata-* /dev/disk/by-id/scsi-*; do
@@ -296,6 +383,7 @@ case "$FIRMWARE" in
     echo "grub-pc grub-pc/install_devices multiselect ${DEVS#,}" | debconf-set-selections
     echo "grub-pc grub-pc/install_devices_empty boolean false" | debconf-set-selections
     update-initramfs -u -k all
+    ensure_initrd_storage
     update-grub
     for d in $SYSTEM_DISKS; do
       say "grub-install $d"
@@ -305,12 +393,14 @@ case "$FIRMWARE" in
   Uefi)
     write_grub_cfg
     update-initramfs -u -k all
+    ensure_initrd_storage
     update-grub
     # --removable puts the loader at EFI/BOOT/BOOT*.EFI on the (mirrored) ESP, which every firmware finds.
     grub-install --target="$GRUB_EFI_TARGET" --efi-directory=/boot/efi --removable --no-nvram
     ;;
   Dom)
     update-initramfs -u -k all
+    ensure_initrd_storage
     install -d /etc/synofurb /etc/kernel/postinst.d /etc/initramfs/post-update.d
     cat > /etc/synofurb/dom.conf <<EOF
 ROOT_UUID="$ROOT_UUID"
@@ -318,7 +408,8 @@ SERIAL_ARG="$SERIAL_ARG"
 EXTRA_ARGS="ro rootdelay=5 panic=60"
 EOF
     for hook in /etc/kernel/postinst.d/zz-synofurb-dom /etc/initramfs/post-update.d/zz-synofurb-dom; do
-      printf '#!/bin/sh\nexec /usr/local/sbin/synofurb-dom-update\n' > "$hook"
+      # --hook: a refusal (flash too small) is reported loudly but must not fail the kernel package's configure step
+      printf '#!/bin/sh\nexec /usr/local/sbin/synofurb-dom-update --hook\n' > "$hook"
       chmod 755 "$hook"
     done
     # Register kernel + initrd on the boot flash. Stage 2 switches the DEFAULT entry only after everything

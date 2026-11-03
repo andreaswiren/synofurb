@@ -519,16 +519,21 @@ def extra_components(repo: str, product_version: str, manifests: list, require_m
     mg_py = os.path.join(mg, "synofurb_mgmt.py")
     if mg_ver and os.path.exists(mg_py):
         import ast
-        src = read_text(mg_py)
+        # every module the management plane ships (synofurb_mgmt.py plus its sibling synofurb_*.py modules) is scanned; the
+        # siblings are the project's own code, so importing one of them is not a third-party dependency
+        own = sorted(f for f in os.listdir(mg) if f.startswith("synofurb_") and f.endswith(".py"))
+        own_modules = {f[:-3] for f in own}
         imports = set()
-        try:
-            for n in ast.walk(ast.parse(src)):
-                if isinstance(n, ast.Import):
-                    imports |= {a.name.split(".")[0] for a in n.names}
-                elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
-                    imports.add(n.module.split(".")[0])
-        except SyntaxError:
-            imports = set()
+        for fname in own:
+            try:
+                for n in ast.walk(ast.parse(read_text(os.path.join(mg, fname)) or "")):
+                    if isinstance(n, ast.Import):
+                        imports |= {a.name.split(".")[0] for a in n.names}
+                    elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                        imports.add(n.module.split(".")[0])
+            except SyntaxError:
+                notes.append("apps/mgmt-plane/%s could not be parsed; its imports are not listed" % fname)
+        imports -= own_modules
         std = getattr(sys, "stdlib_module_names", None)
         third = sorted(i for i in imports if std is not None and i not in std)
         c = Component(ref="synofurb-mgmt@" + mg_ver, type="application", name="synofurb-mgmt", version=mg_ver, licence="MIT",

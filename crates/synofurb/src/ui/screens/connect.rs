@@ -86,6 +86,15 @@ impl App {
         ));
 
         let mut body = v_flex().w_full().max_w(px(560.0)).gap(px(16.0));
+        // An address the user added that answered but was not recognised: said again here, before anything is sent to it.
+        let unknown = self
+            .selected_ip
+            .as_deref()
+            .and_then(|k| self.added.get(k))
+            .is_some_and(|h| h.outcome() == crate::ui::addhost::Outcome::Unknown);
+        if unknown {
+            body = body.child(Alert::warning("unknown-device", copy::INV_UNKNOWN_WARN.short).icon(icons::icon(role::WARN)));
+        }
         if let Some(e) = &self.error {
             let off = e.to_lowercase().contains("refused") || e.to_lowercase().contains("timed out");
             let item = if off { &copy::CONN_SSH_OFF } else { &copy::CONN_LOGIN_FAILED };
@@ -137,6 +146,9 @@ impl App {
             );
         }
         let ip = self.selected_ip.clone().unwrap_or_default();
+        if let Some(f) = self.added.get(&ip).and_then(|h| h.report.found.as_ref()) {
+            return (if f.model.is_empty() { "Synology".into() } else { f.model.clone() }, f.serial.clone(), self.compat_for_found(f).0);
+        }
         match self.inv.devices.iter().find(|d| d.primary_ip().map(|i| i.to_string()) == Some(ip.clone())) {
             Some(d) => (if d.model.is_empty() { "Synology".into() } else { d.model.clone() }, d.serial.clone(), self.compat_for_found(d).0),
             None => ("NAS".into(), String::new(), synofurb_core::compat::Status::Untested),

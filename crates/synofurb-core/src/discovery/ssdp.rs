@@ -1,8 +1,9 @@
 //! SSDP/UPnP: DSM answers `M-SEARCH`; the device description XML names manufacturer and model.
 
 use super::Found;
+use super::scan::CancelToken;
 use anyhow::Result;
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
@@ -42,31 +43,58 @@ pub fn from_description(xml: &str, ip: IpAddr) -> Option<Found> {
     })
 }
 
-pub fn scan(timeout: Duration, tx: &Sender<Found>) -> Result<usize> {
-    let sock = UdpSocket::bind("0.0.0.0:0")?;
+/// M-SEARCH out of the adapter that has `local` only, for `timeout`, or until `cancel`. `progress` gets `(elapsed_ms, timeout_ms)`.
+pub fn scan_network(
+    local: Ipv4Addr,
+    timeout: Duration,
+    emit: &dyn Fn(Found),
+    cancel: &CancelToken,
+    progress: &dyn Fn(u32, u32),
+) -> Result<usize> {
+    let sock = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+    sock.bind(&SocketAddr::new(IpAddr::V4(local), 0).into())?;
+    sock.set_multicast_if_v4(&local)?; // the multicast query leaves by the selected adapter, not by the default route
+    sock.set_multicast_ttl_v4(2)?;
+    let sock: UdpSocket = sock.into();
     sock.set_read_timeout(Some(Duration::from_millis(300)))?;
     let dst: SocketAddr = "239.255.255.250:1900".parse()?;
     sock.send_to(MSEARCH.as_bytes(), dst)?;
     let (start, mut buf) = (Instant::now(), [0u8; 4096]);
     let mut seen = std::collections::HashSet::new();
-    let mut n = 0;
-    while start.elapsed() < timeout {
+    let (mut n, mut last) = (0, Duration::ZERO);
+    let total_ms = timeout.as_millis().min(u128::from(u32::MAX)) as u32;
+    while start.elapsed() < timeout && !cancel.is_cancelled() {
+        if start.elapsed() >= last + Duration::from_millis(250) {
+            last = start.elapsed();
+            progress(last.as_millis() as u32, total_ms);
+        }
         let Ok((len, src)) = sock.recv_from(&mut buf) else { continue };
         let resp = String::from_utf8_lossy(&buf[..len]).to_string();
         let Some(loc) = header(&resp, "location") else { continue };
         if !seen.insert(loc.to_string()) || !loc.starts_with("http://") {
             continue;
         }
-        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(2)).build();
+        let agent = ureq::AgentBuilder::new().timeout(Duration::from_millis(1500)).build();
         if let Ok(r) = agent.get(loc).call()
             && let Ok(xml) = r.into_string()
             && let Some(f) = from_description(&xml, src.ip())
         {
             n += 1;
-            let _ = tx.send(f);
+            emit(f);
         }
     }
+    progress(start.elapsed().as_millis().min(u128::from(total_ms)) as u32, total_ms);
     Ok(n)
+}
+
+/// All recommended networks (real LAN only). Prefer [`crate::discovery::scan_with`].
+pub fn scan(timeout: Duration, tx: &Sender<Found>) -> Result<usize> {
+    let cancel = CancelToken::new();
+    let nets = super::recommended_resolved();
+    super::per_network(&nets, |n| match n.local_ip {
+        Some(ip) => scan_network(ip, timeout, &|f| drop(tx.send(f)), &cancel, &|_, _| {}),
+        None => Ok(0),
+    })
 }
 
 #[cfg(test)]

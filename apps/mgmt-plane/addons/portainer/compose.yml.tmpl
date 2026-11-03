@@ -1,0 +1,19 @@
+# Portainer CE (add-on "portainer", rendered by synofurb-mgmt). Do not edit by hand: it is rewritten on install and update.
+# Image: portainer/portainer-ce:lts (the long-term-support release line).
+services:
+  portainer:
+    container_name: synofurb-portainer
+    image: portainer/portainer-ce:lts
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ}"
+    ports:
+      - "9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DATA_DIR}/data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
