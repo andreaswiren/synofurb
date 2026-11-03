@@ -74,7 +74,7 @@ pub enum LogFormat {
 pub enum Cmd {
     /// Find Synology NAS units on the network (and remember them)
     #[command(
-        after_help = "EXAMPLES\n  synofurb-cli scan\n  synofurb-cli scan --timeout 8 --json > units.json\n  synofurb-cli scan --no-sweep --ndjson"
+        after_help = "EXAMPLES\n  synofurb-cli scan\n  synofurb-cli scan --list-networks\n  synofurb-cli scan --network 192.168.69.0/24 --network 10.0.5.0/24\n  synofurb-cli scan --network eth0 --timeout 8 --json > units.json\n  synofurb-cli scan --all-networks --no-sweep --ndjson"
     )]
     Scan(ScanArgs),
     /// List, add or forget the units remembered from earlier scans
@@ -456,9 +456,19 @@ pub struct ScanArgs {
     /// how long each discovery method listens
     #[arg(long, default_value_t = 4, value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(1..=120))]
     pub timeout: u64,
-    /// skip the /24 port sweep (multicast/broadcast methods only)
+    /// skip the port sweep (multicast/broadcast methods only)
     #[arg(long)]
     pub no_sweep: bool,
+    /// network to scan: a CIDR (192.168.1.0/24, at most /20), an interface name, one of this computer's addresses or a network id
+    /// from --list-networks; repeat for several. Default: the real LAN networks (see --list-networks)
+    #[arg(long = "network", value_name = "CIDR|INTERFACE|ID", conflicts_with = "all_networks")]
+    pub network: Vec<String>,
+    /// scan every network of this computer, including VPN, virtual and link-local ones
+    #[arg(long)]
+    pub all_networks: bool,
+    /// list this computer's IPv4 networks (id, interface, kind, whether scanned by default) and exit; scans nothing
+    #[arg(long, conflicts_with_all = ["ndjson", "no_save", "all"])]
+    pub list_networks: bool,
     /// print the final result as one JSON document: {"devices":[...]}
     #[arg(long, conflicts_with = "ndjson")]
     pub json: bool,

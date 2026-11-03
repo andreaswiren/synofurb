@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 (unreleased)
+
+### Added (discovery, CLI)
+- **Choose what Find NAS scans.** `discovery::networks()` lists this computer's IPv4 networks (id `<interface>|<ip>/<prefix>`, CIDR, broadcast, `kind` = `lan` / `vpn` / `virtual` / `link_local` / `other`, `recommended`). Only real LAN networks are recommended and scanned by default: Tailscale (100.64.0.0/10), WSL, Hyper-V, Docker, VMware, VirtualBox and similar adapters are listed but not scanned unless selected. `ScanOptions { networks, methods, timeout }` with `scan_with(&options, &events, &cancel)` runs the methods on the selected networks only (broadcast to their broadcast addresses, mDNS/SSDP on their adapters, port sweep inside them, never our own address) and reports `ScanEvent`s (`Started`, `MethodStarted`, `MethodProgress`, `MethodFinished` with the error, `Skipped`, `Found`, `Finished`); `CancelToken` stops the sweep in about a second. Custom CIDR networks larger than /20 are refused with a clear message. The old `scan()` and the per-method `scan` functions now use the recommended networks.
+- CLI: `scan --list-networks [--json]`, `scan --network <CIDR|interface|id>` (repeatable), `scan --all-networks`; progress per method and network on stderr, and in `--ndjson` (every line has an `event` tag; device lines keep their fields); `--json` adds `networks` and `errors`.
+
 ## 0.2.2
 
 ### Fixed (desktop app, updates)

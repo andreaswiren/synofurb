@@ -7,17 +7,17 @@ use super::out::Out;
 use serde_json::{Value, json};
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
 use std::time::Duration;
-use synofurb_core::discovery::{self, Found, Inventory, ScanOptions, mdns, probe, ssdp, syno_udp};
+use synofurb_core::discovery::{self, CancelToken, Found, Inventory, NetworkInfo, ScanEvent, ScanMethod, ScanNetwork, ScanOptions, probe};
 
 pub fn inventory_path() -> PathBuf {
     config_dir().join("inventory.json")
 }
 
-/// Outcome of one discovery method, for `-v`.
+/// Outcome of one discovery method on one network, for `-v`.
 pub struct MethodResult {
     pub name: &'static str,
+    pub network: String,
     pub result: Result<usize, String>,
 }
 
@@ -25,77 +25,24 @@ fn now_stamp() -> String {
     chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-/// Run every discovery method on its own thread and stream the merged inventory. (The core's `discovery::scan` only returns at the
-/// end; this is the same orchestration with a hook per sighting, like the app's.) `on_update` gets the merged device after each sighting.
+/// Run the scan and stream the merged inventory (a thin layer over [`discovery::scan_with_callback`], kept for the wizard).
+/// `on_update` gets the merged device after each sighting.
 pub fn scan_stream(
     opts: &ScanOptions,
     known: Inventory,
     mut on_update: impl FnMut(&Found),
     mut on_method: impl FnMut(MethodResult),
 ) -> Inventory {
-    let (ftx, frx) = channel::<Found>();
-    let (mtx, mrx) = channel::<MethodResult>();
-    let t = opts.timeout;
-    let mut handles = vec![];
-    macro_rules! method {
-        ($name:literal, $f:expr) => {{
-            let (ftx, mtx) = (ftx.clone(), mtx.clone());
-            handles.push(std::thread::spawn(move || {
-                let r = $f(&ftx).map_err(|e| format!("{e:#}"));
-                let _ = mtx.send(MethodResult { name: $name, result: r });
-            }));
-        }};
-    }
-    method!("Synology Assistant broadcast", move |s: &Sender<Found>| syno_udp::scan(t, s));
-    method!("Bonjour/mDNS", move |s: &Sender<Found>| mdns::scan(t, s));
-    method!("UPnP/SSDP", move |s: &Sender<Found>| ssdp::scan(t, s));
-    if opts.sweep {
-        method!("Subnet sweep (DSM ports)", |s: &Sender<Found>| probe::sweep(s));
-    }
-    drop(ftx);
-    drop(mtx);
+    let r = discovery::scan_with_callback(opts, &CancelToken::new(), |e| match e {
+        ScanEvent::Found(d) => on_update(&d),
+        ScanEvent::MethodFinished { method, network, found, error } => {
+            on_method(MethodResult { name: method.label(), network, result: error.map_or(Ok(found), Err) });
+        }
+        _ => {}
+    });
     let mut inv = known;
-    let now = now_stamp();
-    loop {
-        for m in mrx.try_iter() {
-            on_method(m);
-        }
-        match frx.recv_timeout(Duration::from_millis(100)) {
-            Ok(mut f) => {
-                f.last_seen = now.clone();
-                if f.mac.is_none()
-                    && let Some(ip) = f.primary_ip()
-                {
-                    f.mac = discovery::arp_lookup(ip);
-                }
-                let ips = f.ips.clone();
-                let mac = f.mac.clone();
-                inv.merge(f);
-                if let Some(d) = inv.devices.iter().find(|d| d.ips.iter().any(|i| ips.contains(i)) || (mac.is_some() && d.mac == mac)) {
-                    on_update(d);
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    for h in handles {
-        let _ = h.join();
-    }
-    for m in mrx.try_iter() {
-        on_method(m);
-    }
-    // ARP is populated after the traffic: a second chance to recognise units by their Synology MAC prefix
-    for d in &mut inv.devices {
-        if d.mac.is_none()
-            && let Some(ip) = d.primary_ip()
-        {
-            d.mac = discovery::arp_lookup(ip);
-            if d.mac.as_deref().is_some_and(discovery::is_synology_mac) {
-                d.synology = true;
-                d.sources.push("oui".into());
-            }
-        }
+    for d in r.map(|i| i.devices).unwrap_or_default() {
+        inv.merge(d);
     }
     inv
 }
@@ -119,44 +66,168 @@ pub fn inventory_json(devs: &[&Found]) -> Value {
     json!({"devices": devs})
 }
 
+/// `Ethernet 192.168.69.0/24 [LAN]` for the "scanning" lines.
+fn net_line(n: &discovery::ResolvedNetwork) -> String {
+    format!("{} [{}]", n.label, n.kind.map_or("not attached to this computer", |k| k.label()))
+}
+
+fn network_row(n: &NetworkInfo) -> String {
+    format!(
+        "{} {:<28} {:<18} {:<19} {:<10} {}",
+        if n.recommended { "[x]" } else { "[ ]" },
+        n.interface,
+        format!("{}/{}", n.ip, n.prefix),
+        n.cidr,
+        n.kind.label(),
+        n.id
+    )
+}
+
+pub fn networks_json(nets: &[NetworkInfo]) -> Value {
+    json!({"networks": nets})
+}
+
+fn list_networks(out: &Out, json: bool) -> CliResult<()> {
+    let nets = discovery::networks();
+    if json {
+        out.json_doc(&networks_json(&nets));
+        return Ok(());
+    }
+    if nets.is_empty() {
+        out.data("no IPv4 network found on this computer");
+        return Ok(());
+    }
+    out.data(&format!("{:<3} {:<28} {:<18} {:<19} {:<10} {}", "", "INTERFACE", "ADDRESS", "NETWORK", "KIND", "ID"));
+    for n in &nets {
+        out.data(&network_row(n));
+    }
+    out.say(
+        "[x] = scanned by default (real LAN networks). Pick others with --network <CIDR|interface|id> (repeatable) or use --all-networks.",
+    );
+    Ok(())
+}
+
+/// The networks `scan` will cover: `--network` entries, or `--all-networks`, or the recommended ones.
+fn selection(a: &ScanArgs, avail: &[NetworkInfo]) -> CliResult<Vec<ScanNetwork>> {
+    let mut sel: Vec<ScanNetwork> = vec![];
+    if !a.network.is_empty() {
+        for t in &a.network {
+            for n in discovery::parse_selector(t, avail).map_err(|e| CliError::usage(e.to_string()))? {
+                if !sel.contains(&n) {
+                    sel.push(n);
+                }
+            }
+        }
+    } else {
+        sel = avail.iter().filter(|n| a.all_networks || n.recommended).map(ScanNetwork::from_info).collect();
+    }
+    if sel.is_empty() {
+        let hint = if avail.is_empty() {
+            "this computer has no IPv4 network"
+        } else {
+            "none of this computer's networks is a real LAN (see `scan --list-networks`); name one with --network or use --all-networks"
+        };
+        return Err(CliError::usage(format!("no network to scan: {hint}")));
+    }
+    Ok(sel)
+}
+
 pub fn scan(out: &Out, a: ScanArgs) -> CliResult<()> {
-    let opts = ScanOptions { timeout: Duration::from_secs(a.timeout), sweep: !a.no_sweep };
+    if a.list_networks {
+        return list_networks(out, a.json);
+    }
+    let avail = discovery::networks();
+    let sel = selection(&a, &avail)?;
+    let mut opts =
+        ScanOptions { networks: sel, methods: discovery::ScanMethods::default(), timeout: Duration::from_secs(a.timeout), sweep: true };
+    opts.methods.probe_sweep = !a.no_sweep;
     let path = inventory_path();
     let known = Inventory::load(&path);
-    out.info(&format!("Scanning for Synology units ({} s per method{}) ...", a.timeout, if a.no_sweep { ", no port sweep" } else { "" }));
     let live = out.tty_err && !out.quiet && !a.ndjson;
     let mut seen_live: Vec<IpAddr> = vec![];
-    let all = a.all;
-    let ndjson = a.ndjson;
-    let mut methods: Vec<MethodResult> = vec![];
-    let found = scan_stream(
-        &opts,
-        Inventory::default(),
-        |d| {
-            if !is_listed(d, all) {
-                return;
+    let (all, ndjson) = (a.all, a.ndjson);
+    let mut scanned: Vec<discovery::ResolvedNetwork> = vec![];
+    let mut method_errors: Vec<Value> = vec![];
+    let mut method_ok = 0usize;
+    let mut sweep_step: std::collections::HashMap<String, u32> = Default::default();
+    let label_of =
+        |nets: &[discovery::ResolvedNetwork], key: &str| nets.iter().find(|n| n.key == key).map_or(key.to_string(), |n| n.label.clone());
+    let found = discovery::scan_with_callback(&opts, &CancelToken::new(), |e| {
+        if ndjson {
+            let skip = matches!(&e, ScanEvent::Found(d) if !is_listed(d, all));
+            if !skip {
+                out.data(&serde_json::to_string(&e).unwrap_or_default());
             }
-            if ndjson {
-                out.data(&serde_json::to_string(d).unwrap_or_default());
-            } else if live
-                && let Some(ip) = d.primary_ip()
-                && !seen_live.contains(&ip)
-            {
-                seen_live.push(ip);
-                out.say(&format!("  + {}", device_line(d)));
+        }
+        match &e {
+            ScanEvent::Started { networks, methods, total_hosts } => {
+                scanned = networks.clone();
+                let names: Vec<&str> = methods.iter().map(|m| m.label()).collect();
+                out.info(&format!(
+                    "Scanning {} network(s) with {} ({} s per listening method{}):",
+                    networks.len(),
+                    names.join(", "),
+                    a.timeout,
+                    if methods.contains(&ScanMethod::ProbeSweep) {
+                        format!(", {total_hosts} addresses to probe")
+                    } else {
+                        ", no port sweep".into()
+                    }
+                ));
+                for n in networks {
+                    out.info(&format!("  {}", net_line(n)));
+                }
+                let left: Vec<String> = avail
+                    .iter()
+                    .filter(|n| !networks.iter().any(|r| r.key == n.id))
+                    .map(|n| format!("{} {} [{}]", n.interface, n.cidr, n.kind.label()))
+                    .collect();
+                if !left.is_empty() {
+                    out.info(&format!("Not scanned: {} (use --network or --all-networks to include)", left.join("; ")));
+                }
             }
-        },
-        |m| {
-            if let Err(e) = &m.result {
-                out.detail(&format!("discovery method '{}' failed: {e}", m.name));
-            } else if let Ok(n) = &m.result {
-                out.detail(&format!("discovery method '{}': {n} result(s)", m.name));
+            ScanEvent::MethodStarted { method, network } => {
+                out.detail(&format!("  [{}] {}: started", method.label(), label_of(&scanned, network)));
             }
-            methods.push(m);
-        },
-    );
-    if !methods.is_empty() && methods.iter().all(|m| m.result.is_err()) {
-        out.warn("every discovery method failed (no network?); run with -v for the reasons");
+            ScanEvent::MethodProgress { method: ScanMethod::ProbeSweep, network, done, total } if *total > 0 => {
+                let step = done * 4 / total; // 25 %, 50 %, 75 %, 100 %
+                if step > 0 && sweep_step.get(network) != Some(&step) {
+                    sweep_step.insert(network.clone(), step);
+                    out.info(&format!("  [{}] {}: {done}/{total} addresses", ScanMethod::ProbeSweep.label(), label_of(&scanned, network)));
+                }
+            }
+            ScanEvent::MethodFinished { method, network, found, error } => {
+                let label = label_of(&scanned, network);
+                match error {
+                    Some(err) => {
+                        out.warn(&format!("[{}] {label} failed: {err}", method.label()));
+                        method_errors.push(json!({"method": method.id(), "network": network, "error": err}));
+                    }
+                    None => {
+                        method_ok += 1;
+                        out.detail(&format!("  [{}] {label}: {found} result(s)", method.label()));
+                    }
+                }
+            }
+            ScanEvent::Skipped { method, network, reason } => {
+                out.info(&format!("  [{}] {}: skipped, {reason}", method.label(), label_of(&scanned, network)));
+            }
+            ScanEvent::Found(d) => {
+                if live
+                    && is_listed(d, all)
+                    && let Some(ip) = d.primary_ip()
+                    && !seen_live.contains(&ip)
+                {
+                    seen_live.push(ip);
+                    out.say(&format!("  + {}", device_line(d)));
+                }
+            }
+            ScanEvent::MethodProgress { .. } | ScanEvent::Finished { .. } => {}
+        }
+    })
+    .map_err(|e| CliError::usage(e.to_string()))?;
+    if method_ok == 0 && !method_errors.is_empty() {
+        out.warn("every discovery method failed (no network?); the reasons are above");
     }
     let listed: Vec<&Found> = found.devices.iter().filter(|d| is_listed(d, a.all)).collect();
     if !a.no_save {
@@ -169,7 +240,10 @@ pub fn scan(out: &Out, a: ScanArgs) -> CliResult<()> {
         }
     }
     if a.json {
-        out.json_doc(&inventory_json(&listed));
+        let mut doc = inventory_json(&listed);
+        doc["networks"] = json!(scanned);
+        doc["errors"] = json!(method_errors);
+        out.json_doc(&doc);
     } else if !a.ndjson {
         let n = found.synology_devices().count();
         out.data(&format!("{n} Synology device(s) found"));

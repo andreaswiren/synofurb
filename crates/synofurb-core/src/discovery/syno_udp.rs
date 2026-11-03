@@ -6,6 +6,8 @@
 //! against hardware by this project, so this source is best-effort; mDNS, SSDP and the Web API probe
 //! are the primary mechanisms.
 
+use super::networks;
+use super::scan::CancelToken;
 use super::{Found, normalize_mac};
 use anyhow::Result;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
@@ -98,61 +100,74 @@ pub fn parse_response(data: &[u8], src: IpAddr) -> Option<Found> {
     Some(f)
 }
 
-fn broadcast_targets() -> Vec<Ipv4Addr> {
-    let mut v = vec![Ipv4Addr::BROADCAST];
-    if let Ok(ifs) = if_addrs::get_if_addrs() {
-        for i in ifs {
-            if let if_addrs::IfAddr::V4(a) = i.addr
-                && !a.ip.is_loopback()
-                && let Some(b) = a.broadcast
-            {
-                v.push(b);
-            }
-        }
-    }
-    v.sort();
-    v.dedup();
-    v
-}
-
-/// The IPv4 addresses of this computer's own network adapters.
-fn local_addrs() -> Vec<IpAddr> {
-    if_addrs::get_if_addrs().map(|v| v.into_iter().map(|i| i.ip()).collect()).unwrap_or_default()
-}
-
 /// True for our own broadcast coming back to us (same bytes as the query, or sent from one of our own addresses): never a NAS.
 fn is_own_packet(data: &[u8], src: IpAddr, query: &[u8], own: &[IpAddr]) -> bool {
     data == query || own.contains(&src)
 }
 
-pub fn scan(timeout: Duration, tx: &Sender<Found>) -> Result<usize> {
+/// Ask one network. The query leaves from `local` (our address on the network, when we have one) to each of `targets`
+/// (normally the network's broadcast address) and the socket listens for replies for `timeout`, or until `cancel`.
+/// `progress` gets `(elapsed_ms, timeout_ms)` about four times a second. Returns the number of replies.
+pub fn scan_network(
+    local: Option<Ipv4Addr>,
+    targets: &[Ipv4Addr],
+    own: &[IpAddr],
+    timeout: Duration,
+    emit: &dyn Fn(Found),
+    cancel: &CancelToken,
+    progress: &dyn Fn(u32, u32),
+) -> Result<usize> {
     // Replies come back to the source port; some units reply to 9999, so try to bind it but fall back.
-    let sock = UdpSocket::bind("0.0.0.0:9999").or_else(|_| UdpSocket::bind("0.0.0.0:0"))?;
+    let sock = match local {
+        Some(ip) => UdpSocket::bind((ip, PORT)).or_else(|_| UdpSocket::bind((ip, 0)))?,
+        None => UdpSocket::bind("0.0.0.0:9999").or_else(|_| UdpSocket::bind("0.0.0.0:0"))?,
+    };
     sock.set_broadcast(true)?;
     sock.set_read_timeout(Some(Duration::from_millis(300)))?;
     let q = build_query();
-    let own = local_addrs();
-    for t in broadcast_targets() {
-        let _ = sock.send_to(&q, SocketAddr::new(IpAddr::V4(t), PORT));
-    }
+    let send_all = || {
+        for t in targets {
+            let _ = sock.send_to(&q, SocketAddr::new(IpAddr::V4(*t), PORT));
+        }
+    };
+    send_all();
     let (start, mut n, mut buf) = (Instant::now(), 0, [0u8; 2048]);
-    let mut resent = false;
-    while start.elapsed() < timeout {
+    let (mut resent, mut last_progress) = (false, Duration::ZERO);
+    let total_ms = timeout.as_millis().min(u128::from(u32::MAX)) as u32;
+    while start.elapsed() < timeout && !cancel.is_cancelled() {
         if !resent && start.elapsed() > timeout / 2 {
-            for t in broadcast_targets() {
-                let _ = sock.send_to(&q, SocketAddr::new(IpAddr::V4(t), PORT));
-            }
+            send_all();
             resent = true;
         }
+        if start.elapsed() >= last_progress + Duration::from_millis(250) {
+            last_progress = start.elapsed();
+            progress(last_progress.as_millis() as u32, total_ms);
+        }
         if let Ok((len, src)) = sock.recv_from(&mut buf)
-            && !is_own_packet(&buf[..len], src.ip(), &q, &own)
+            && !is_own_packet(&buf[..len], src.ip(), &q, own)
             && let Some(f) = parse_response(&buf[..len], src.ip())
         {
             n += 1;
-            let _ = tx.send(f);
+            emit(f);
         }
     }
+    progress(start.elapsed().as_millis().min(u128::from(total_ms)) as u32, total_ms);
     Ok(n)
+}
+
+/// All recommended networks (real LAN only), one after the other in parallel threads. Prefer [`crate::discovery::scan_with`].
+pub fn scan(timeout: Duration, tx: &Sender<Found>) -> Result<usize> {
+    let cancel = CancelToken::new();
+    let nets = super::recommended_resolved();
+    let own: Vec<IpAddr> = networks::local_addrs().into_iter().map(|a| IpAddr::V4(a.ip)).collect();
+    let own_v4: Vec<Ipv4Addr> = networks::local_addrs().into_iter().map(|a| a.ip).collect();
+    super::per_network(&nets, |n| {
+        let targets = super::scan::udp_targets(n, &own_v4);
+        if targets.is_empty() {
+            return Ok(0);
+        }
+        scan_network(n.local_ip, &targets, &own, timeout, &|f| drop(tx.send(f)), &cancel, &|_, _| {})
+    })
 }
 
 #[cfg(test)]
