@@ -89,7 +89,7 @@ pub enum UpdateState {
     Unknown,
     Checking,
     UpToDate,
-    CheckFailed(String),
+    CheckFailed(super::updates::CheckFailure),
     Available(Box<UpdateInfo>),
     Downloading(Box<UpdateInfo>, Progress),
     Verified(Box<UpdateInfo>, Box<VerifiedDownload>),
@@ -229,6 +229,10 @@ pub struct App {
     pub rec_result: Option<crate::ui::screens::recover::RecResult>,
     pub bootmgr: Job<()>,
     pub update: UpdateState,
+    /// The running check was asked for by the user (a skipped or snoozed version is then shown anyway).
+    pub update_manual: bool,
+    /// Demo runs: what a click on "Check for updates" ends in, and whether the demo build counts as unsigned.
+    pub demo_update: super::state::DemoUpdate,
     pub page_scroll: gpui_kit::ScrollHandle,
     pub help_view: Option<gpui_kit::WeakEntity<crate::ui::screens::help::HelpView>>,
     pub manage_tab: usize,
@@ -472,6 +476,8 @@ impl App {
             rec_result: None,
             bootmgr: Job::Idle,
             update: UpdateState::Unknown,
+            update_manual: false,
+            demo_update: super::state::DemoUpdate::default(),
             page_scroll: gpui_kit::ScrollHandle::new(),
             help_view: None,
             manage_tab: 0,
@@ -942,17 +948,21 @@ impl App {
                 self.compat = r.db;
                 self.compat_note = Some((r.summary, r.ok));
             }
-            Msg::UpdateChecked(r) => match r {
-                Ok(info) if info.update_available => {
-                    if self.settings.should_announce(&info.latest, now_unix()) {
-                        self.update = UpdateState::Available(info);
-                    } else {
-                        self.update = UpdateState::UpToDate;
+            Msg::UpdateChecked(r) => {
+                let manual = std::mem::take(&mut self.update_manual);
+                match r {
+                    Ok(info) if info.update_available => {
+                        // a manual check always shows what it found; the automatic one respects "Skip version" and "Later"
+                        if manual || self.settings.should_announce(&info.latest, now_unix()) {
+                            self.update = UpdateState::Available(info);
+                        } else {
+                            self.update = UpdateState::UpToDate;
+                        }
                     }
+                    Ok(_) => self.update = UpdateState::UpToDate,
+                    Err(f) => self.update = UpdateState::CheckFailed(f),
                 }
-                Ok(_) => self.update = UpdateState::UpToDate,
-                Err(e) => self.update = UpdateState::CheckFailed(e),
-            },
+            }
             Msg::UpdateProgress(p) => {
                 if let UpdateState::Downloading(info, _) = &self.update {
                     self.update = UpdateState::Downloading(info.clone(), p);
@@ -1651,18 +1661,32 @@ impl App {
     pub fn maybe_check_updates(&mut self) {
         if self.settings.check_updates && !matches!(self.update, UpdateState::Checking) {
             self.update = UpdateState::Checking;
+            self.update_manual = false;
             worker::spawn_update_check(self.tx.clone(), version(), self.channel(), self.cfg_dir.join("updates"));
         }
     }
 
+    /// "Check for updates": always ends in a visible state (checking, current, available or the reason it failed).
     pub fn check_updates_now(&mut self, cx: &mut Context<App>) {
+        if matches!(self.update, UpdateState::Checking) {
+            return;
+        }
+        self.update = UpdateState::Checking;
+        self.update_manual = true;
         if self.demo.is_some() {
-            self.update = UpdateState::Available(Box::new(demo::update_info()));
+            worker::spawn_demo_update_check(self.tx.clone(), self.demo_update);
         } else {
-            self.update = UpdateState::Checking;
             worker::spawn_update_check(self.tx.clone(), version(), self.channel(), self.cfg_dir.join("updates"));
         }
         cx.notify();
+    }
+
+    /// Is the running build unable to verify a signature (placeholder key)? Demo runs show either case.
+    pub fn update_unsigned(&self) -> bool {
+        match self.demo {
+            Some(_) => self.demo_update.unsigned(),
+            None => updater::signing_key_is_placeholder(updater::UPDATE_PUBLIC_KEY),
+        }
     }
 
     pub fn update_info(&self) -> Option<&UpdateInfo> {

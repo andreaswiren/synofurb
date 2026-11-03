@@ -149,7 +149,7 @@ mod strings {
         MENU_HELP: Label, "Help", "Help for this screen.", "", "";
         MENU_SETTINGS: Label, "Settings", "Theme, text size, updates, data.", "", "";
         MENU_ABOUT: Label, "About", "Version, credits, diagnostics.", "", "";
-        MENU_UPDATES: Label, "Check updates", "Looks for a newer synofurb.", "", "";
+        MENU_UPDATES: Label, "Check for updates", "Looks for a newer synofurb.", "", "";
 
         // ===================================================================== common
         BTN_BACK: Button, "Back", "", "", "";
@@ -488,6 +488,25 @@ mod strings {
         UPD_SKIP: Button, "Skip version", "", "", "";
         UPD_SIGNATURE: Label, "Signature", "Checked with the project key and SHA-256 before use.", "troubleshooting", "";
         UPD_DISCARDED: Label, "Update discarded", "", "", "";
+        UPD_CHECK: Button, "Check for updates", "", "", "";
+        UPD_CHECK_AGAIN: Button, "Check again", "", "", "";
+        UPD_OPEN_PAGE: Button, "Open release page", "", "", "";
+        UPD_ST_NONE: Prose, "Not checked yet", "", "", "";
+        UPD_ST_CHECKING: Prose, "Checking for updates", "", "", "";
+        UPD_ST_CURRENT: Prose, "{v} is current", "", "", "";
+        UPD_ST_AVAILABLE: Prose, "{v} available", "", "", "";
+        UPD_ST_UNSIGNED: Prose, "This release is not signed, so synofurb will not install it.", "", "", "";
+        UPD_ST_FAILED: Prose, "Couldn't check: {reason}", "", "", "";
+        UPD_FAIL_OFFLINE: Label, "No Internet connection", "", "", "synofurb could not reach GitHub. Check the Internet connection and try again.";
+        UPD_FAIL_NOTFOUND: Label, "Releases not found", "", "", "GitHub did not find the releases. If the repository is private, the update check cannot see them.";
+        UPD_FAIL_RATE: Label, "GitHub rate limit", "", "", "";
+        UPD_FAIL_NORELEASE: Label, "No release found", "", "", "No release found for this system.";
+        UPD_FAIL_SERVER: Label, "GitHub error", "", "", "";
+        UPD_FAIL_PARSE: Label, "Unreadable answer", "", "", "";
+        UPD_FAIL_OTHER: Label, "Check failed", "", "", "";
+        ABOUT_BUILD_RELEASE: Label, "release", "", "", "";
+        ABOUT_BUILD_DEV: Label, "dev", "", "", "";
+        ABOUT_BUILD_LOCAL: Label, "local build", "", "", "";
 
         // ===================================================================== D12 settings
         SET_TITLE: Title, "Settings", "", "", "";
@@ -1013,6 +1032,11 @@ pub static SCREENS: &[ScreenCopy] = &[
             &SET_LOG_FOLDER,
             &SET_OPEN,
             &SET_SEND_RESULTS,
+            // the update row, worst state (an unsigned update): status, note, two buttons
+            &UPD_ST_AVAILABLE,
+            &UPD_ST_UNSIGNED,
+            &UPD_OPEN_PAGE,
+            &UPD_CHECK_AGAIN,
         ],
     },
     ScreenCopy {
@@ -1102,7 +1126,20 @@ pub static SCREENS: &[ScreenCopy] = &[
     ScreenCopy { name: "help", visible: &[&HELP_TITLE, &HELP_SEARCH, &HELP_TOPICS, &HELP_SHORTCUTS, &HELP_DOCS, &BTN_BACK, &WELCOME_MENU] },
     ScreenCopy {
         name: "about",
-        visible: &[&ABOUT_TITLE, &ABOUT_TAGLINE, &ABOUT_COPY_DIAG, &ABOUT_DOCS, &ABOUT_SOURCE, &ABOUT_REPORT, &ABOUT_CREDITS],
+        visible: &[
+            &ABOUT_TITLE,
+            &ABOUT_TAGLINE,
+            &ABOUT_COPY_DIAG,
+            &ABOUT_DOCS,
+            &ABOUT_SOURCE,
+            &ABOUT_REPORT,
+            &ABOUT_CREDITS,
+            // the update line, worst state (an unsigned update): status, note, two buttons
+            &UPD_ST_AVAILABLE,
+            &UPD_ST_UNSIGNED,
+            &UPD_OPEN_PAGE,
+            &UPD_CHECK_AGAIN,
+        ],
     },
 ];
 
