@@ -1,6 +1,7 @@
 //! One module per screen; each adds `App::page_<name>` (see `render.rs` for how a [`Page`](super::render::Page) is laid out).
 
 pub mod about;
+pub mod addons;
 pub mod bootmgr;
 pub mod confirm;
 pub mod connect;

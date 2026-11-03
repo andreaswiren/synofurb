@@ -289,8 +289,8 @@ impl App {
                 Button::new("next")
                     .primary()
                     .icon(icons::icon(role::NEXT))
-                    .label(copy::SYS_NEXT.short)
-                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Confirm, window, cx))),
+                    .label(copy::SYS_NEXT_ADDONS.short)
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Addons, window, cx))),
                 (!valid).then(|| errors.iter().map(|(_, m)| m.clone()).collect::<Vec<_>>().join(" ")),
             )])
     }

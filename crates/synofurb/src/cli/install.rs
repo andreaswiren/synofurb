@@ -149,7 +149,8 @@ pub fn execute(out: &Out, job: InstallJob, mat: &Material, method_name: &str, sa
         "Starting the install of {} ({}) with method {method_name}. Ctrl-C cancels until the point of no return.",
         job.facts.model, job.target.host
     ));
-    let secrets = [job.display_password.clone()];
+    let mut secrets = vec![job.display_password.clone()];
+    secrets.extend(job.cfg.addons.iter().flat_map(|c| c.secrets.values().cloned()));
     let (serial, key_path, key_fp) = (job.cfg.serial.clone(), mat.key_path.clone(), mat.key_fingerprint.clone());
     let (password, generated, username) = (mat.password.clone(), mat.password_generated, job.cfg.username.clone());
     let rep = run_job(out, &secrets, move |lg, cancel| {

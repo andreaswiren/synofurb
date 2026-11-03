@@ -389,7 +389,7 @@ The wording of step 4 follows `docs/RECOVERY.md`, `docs/BOOT.md` and the "How re
 | 18 | Offline | ToggleGroup option | 1 |
 | 19 | Data layout | Field + Tag (read-only) {RAID 5 · 10.82 TiB} with link back to Plan | 2 |
 | 20 | Boot via | Field + Tag (read-only) "Boot flash" or "Installer kit" | 2 |
-| 21 | Next: Confirm | Button (primary) | 2 |
+| 21 | Next: Add-ons | Button (primary) | 2 |
 | 22 | Back | Button (ghost) | 1 |
 | 23 | Bundle | Field + Select + Button "Download" when Offline | cond. |
 | 24 | Command | Button (ghost, terminal icon + the one word Command; copies the equivalent synofurb command) | 1 |
@@ -411,11 +411,53 @@ The wording of step 4 follows `docs/RECOVERY.md`, `docs/BOOT.md` and the "How re
 | Data layout | Tooltip | Data layout | Chosen in Plan; click to change it. | help: raid-levels |
 | Copy command | Tooltip | Copy command | Copies the equivalent synofurb command. | help: cli |
 
-**Primary:** Next: Confirm. **Secondary:** Back, Copy command.
+**Primary:** Next: Add-ons. **Secondary:** Back, Copy command.
 
 **Keyboard:** `Tab` order = reading order; `Space` toggles Switch/Checkbox; `Enter` Next; `Tab`/`Shift+Tab` move; `F1` Help; `Ctrl+,` Settings; `Esc` closes popovers and dialogs (never cancels an install)
 
 **States:** *empty*: Defaults filled; Password generated on entry; *error*: Field-level: danger border + Tooltip on focus; console auto-detect failed -> Input becomes editable; *loading*: n/a.
+
+### D6b Add-ons (Setup, third tab)
+
+**Purpose:** Choose Docker apps that the first boot installs (docs/ADDONS.md, "Installer integration"). The tab sits next to Storage and System; skipping it installs nothing.
+
+| # | Visible element (reading order) | Widget | Words |
+|---|---|---|---|
+| 1 | Setup | Label (title) | 1 |
+| 2 | Optional apps, installed after the first boot. | Label (subtitle) | 7 |
+| 3 | Storage / System / Add-ons | TabBar (underline), Add-ons selected | 1 |
+| 4 | Tick what to install with the system. | Label (prose) | 7 |
+| 5 | {Name} per catalog entry, with {one-line summary} | Checkbox + caption, one bordered row each | data |
+| 6 | Required by {names} | Tag (info tone, link icon) on the Docker row while a ticked add-on needs it; its Checkbox is on and disabled | 2 + data |
+| 7 | Needs Docker | Tag (neutral) | 2 |
+| 8 | Needs Internet | Tag (neutral, network icon) + info icon (Tooltip, Enter opens it) | 2 |
+| 9 | {Controls Docker / Uses NAS network / Full access} | Tag (warning, triangle icon) + info icon, one per privilege the add-on asks for | data |
+| 10 | {setting label}, for example Keep recordings (days), Claim token (optional) | Field + Input (secret: `mask_toggle`), under a ticked row only; its explanation behind the info icon | data |
+| 11 | Next: Confirm | Button (primary) | 2 |
+| 12 | Back | Button (ghost) | 1 |
+| 13 | Command | Button (ghost, terminal icon; copies the equivalent command, `--addon` flags included) | 1 |
+
+**Word budget:** screen 24 + shell 11 = **35** of 60. Not counted: names, summaries, privileges and settings (data from the catalog).
+
+**Disclosures:**
+
+| Element | Pattern | short (visible) | tip (one sentence) | body |
+|---|---|---|---|---|
+| Needs Internet (i) | Tooltip | Needs Internet | The container images are downloaded when the NAS first starts. | none |
+| Controls Docker (i) | Tooltip | Controls Docker | It can start and stop every container, which is as good as administrator rights on the NAS. | none |
+| Uses NAS network (i) | Tooltip | Uses NAS network | It shares the NAS's own network address instead of an isolated one. | none |
+| Keep recordings (days) (i) | Tooltip | Keep recordings (days) | Older recordings are deleted. | Cameras and the detector are set up later, in Frigate's own web page. |
+| Claim token (optional) (i) | Popover | Claim token (optional) | Ties the server to your Plex account. | Valid for only 4 minutes, so normally leave it empty and claim the server in its web page. The value is a secret: it is stored 0600 on the NAS and never appears in a command, a log or the copied command. |
+
+**Rules:** Docker is never asked for; it is on, locked and labelled "Required by ..." while something ticked needs it, and disappears again when nothing does (ticking Docker itself keeps it). The reason is visible text, not a tooltip. Typed values and secrets of an unticked row are kept until the window closes but ignored. Quick setup offers presets (None, Docker + Portainer, Frigate NVR, Plex, Frigate + Plex; each includes Docker and Portainer as the base) and replaces the ticks; Confirm lists what will be installed and the Internet need under the After line. Copy command writes `--addon id:key=value` per ticked add-on and a secret as `key=@env:KEY`, never its value; "Matches plan" compares repeated flags one by one.
+
+**Primary:** Next: Confirm (disabled with a reason while the web interface is off in System or a value is invalid). **Secondary:** Back, Copy command.
+
+**Keyboard:** `Tab` order = reading order; `Space` toggles a Checkbox; `Enter` outside a field = Next; `F1` Help.
+
+**States:** *empty*: nothing ticked, nothing is installed; *error*: the field's message under it in the error colour, Next disabled with the same reason; *web interface off*: warning Alert, Next disabled; *offline source*: warning Alert (Docker's packages are downloaded on the first boot); *loading*: n/a.
+
+Demo screens: `addons`, `addons-chosen`, `confirm-addons`; screenshots `design/screenshots/v2-app-addons-chosen-{light,dark}.png`, `v2-app-confirm-addons-light.png`, `v2-app-dlg-quick-addons-light.png`.
 
 ### D7 Confirm
 

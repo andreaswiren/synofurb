@@ -41,7 +41,7 @@ impl App {
             Screen::Confirm | Screen::Install | Screen::Failed | Screen::Recover => "recovery",
             Screen::BootMgr => "boot-manager",
             Screen::Inventory | Screen::Connect => "first-install",
-            Screen::System => "first-install",
+            Screen::System | Screen::Addons => "first-install",
             Screen::Done => "first-install",
             _ => return None,
         })
@@ -196,6 +196,10 @@ impl App {
             bundle: self.source_offline.then(|| self.input_value(&self.inp.bundle, cx).trim().to_string()).filter(|s| !s.is_empty()),
             no_firmware: !self.sys.with_firmware,
             no_verbose: !self.sys.verbose,
+            addons: {
+                let (picks, secrets) = self.addon_state(cx);
+                picks.cli_specs(&secrets)
+            },
         })
     }
 
@@ -217,7 +221,7 @@ impl App {
 
     /// Ctrl+Shift+C and the "Copy command" button: the dialog with the command, editable, and the computed tag.
     pub fn copy_cli_command(&mut self, window: &mut Window, cx: &mut Context<App>) {
-        if !matches!(self.screen, Screen::Plan | Screen::System | Screen::Confirm) {
+        if !matches!(self.screen, Screen::Plan | Screen::System | Screen::Addons | Screen::Confirm) {
             return;
         }
         let Some(spec) = self.cli_spec(cx) else { return };
@@ -400,6 +404,8 @@ pub struct QuickView {
     pub sel: Option<usize>,
     /// `(label, value)` rows: Storage (one layout only), System, Boot.
     rows: Vec<(&'static str, String)>,
+    /// Add-ons preset: 0 = none, n = `addons::PRESETS[n - 1]`.
+    pub addons_sel: usize,
 }
 
 impl gpui_kit::Render for QuickView {
@@ -429,6 +435,22 @@ impl gpui_kit::Render for QuickView {
                 .child(div().w(px(72.0)).flex_none().text_sm().text_color(muted).child(*k))
                 .child(div().flex_1().min_w_0().text_sm().child(v.clone()))
         })));
+        col = col.child(
+            v_flex().gap(px(4.0)).child(div().text_sm().text_color(muted).child(copy::ADDON_QUICK.short)).child(
+                RadioGroup::vertical("quick-addons")
+                    .selected_index(Some(self.addons_sel))
+                    .children(
+                        std::iter::once(copy::ADDON_QUICK_NONE.short)
+                            .chain(synofurb_core::addons::PRESETS.iter().map(|p| p.label))
+                            .enumerate()
+                            .map(|(i, l)| Radio::new(("qa", i)).label(l)),
+                    )
+                    .on_click(cx.listener(|v, ix: &usize, _, cx| {
+                        v.addons_sel = *ix;
+                        cx.notify();
+                    })),
+            ),
+        );
         col.child(div().text_sm().text_color(muted).child(copy::QUICK_NOTES.body))
     }
 }
@@ -475,7 +497,8 @@ impl App {
         let raids: Vec<DataRaid> = opts.iter().map(|o| o.0).collect();
         let single = opts.len() == 1;
         let n_opts = opts.len();
-        let view = cx.new(|_| QuickView { opts: if single { vec![] } else { opts }, sel: single.then_some(0), rows });
+        let addons_sel = self.addons.picks.matching_preset().map_or(0, |i| i + 1);
+        let view = cx.new(|_| QuickView { opts: if single { vec![] } else { opts }, sel: single.then_some(0), rows, addons_sel });
         let app = cx.entity();
         window.open_dialog(cx, move |d, _, cx| {
             let (app, view2, raids) = (app.clone(), view.clone(), raids.clone());
@@ -497,8 +520,16 @@ impl App {
                             Button::new("q-use").primary().label(copy::QUICK_USE.short).on_click(move |_, window, cx| {
                                 let Some(sel) = view2.read(cx).sel else { return };
                                 let raid = raids[sel.min(raids.len() - 1)];
+                                let preset = view2.read(cx).addons_sel;
                                 window.close_dialog(cx);
-                                app.update(cx, |a, cx| a.apply_quick(raid, q.system_gib, q.copies, q.free_percent, window, cx));
+                                app.update(cx, |a, cx| {
+                                    // an add-ons choice in Quick setup replaces the ticks of the Add-ons tab; "None" clears them
+                                    match preset.checked_sub(1).and_then(|i| synofurb_core::addons::PRESETS.get(i)) {
+                                        Some(p) => a.addons.picks.apply_preset(p),
+                                        None => a.addons.picks.picked.clear(),
+                                    }
+                                    a.apply_quick(raid, q.system_gib, q.copies, q.free_percent, window, cx)
+                                });
                             }),
                             unchosen.then(|| copy::QUICK_CHOOSE.tip.to_string()),
                         )),

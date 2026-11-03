@@ -305,6 +305,29 @@ mod strings {
         // ===================================================================== D5 plan
         SETUP_STORAGE: Label, "Storage", "", "", "";
         SETUP_SYSTEM: Label, "System", "", "", "";
+
+        // ===================================================================== Setup: Add-ons (installer integration, docs/ADDONS.md)
+        SETUP_ADDONS: Label, "Add-ons", "", "", "";
+        ADDONS_SUB: Subtitle, "Optional apps, installed after the first boot.", "", "", "";
+        ADDONS_INTRO: Prose, "Tick what to install with the system.", "", "", "";
+        ADDON_NEEDS_DOCKER: Label, "Needs Docker", "Docker is installed with it, nothing to do.", "", "";
+        ADDON_NEEDS_NET: Label, "Needs Internet", "The container images are downloaded when the NAS first starts.", "", "";
+        ADDON_REQUIRED: Label, "Required by {names}", "", "", "";
+        ADDON_PRIV_SOCKET: Label, "Controls Docker", "It can start and stop every container, which is as good as administrator rights on the NAS.", "", "";
+        ADDON_PRIV_HOSTNET: Label, "Uses NAS network", "It shares the NAS's own network address instead of an isolated one.", "", "";
+        ADDON_PRIV_FULL: Label, "Full access", "It runs with almost unrestricted access to the NAS.", "", "";
+        ADDON_PRIV_OTHER: Label, "Extra rights", "It asks for more rights than an ordinary container.", "", "";
+        ADDON_RETAIN: Label, "Keep recordings (days)", "Older recordings are deleted.", "", "Cameras and the detector are set up later, in Frigate's own web page.";
+        ADDON_PLEX_CLAIM: Label, "Claim token (optional)", "Ties the server to your Plex account.",
+            "", "Get a token at plex.tv/claim. It is valid for only 4 minutes and the first boot comes much later, so normally leave this empty and claim the server in its web page.";
+        ADDON_DEFAULT: Label, "Default: {value}", "", "", "";
+        ADDON_QUICK: Label, "Add-ons", "Optional apps, installed after the first boot.", "", "";
+        ADDON_QUICK_NONE: Label, "None", "", "", "";
+        ADDON_NEEDS_WEB: Prose, "Add-ons need the web interface: switch it on in System.", "", "", "";
+        SYS_NEXT_ADDONS: Button, "Next: Add-ons", "", "", "";
+        CONF_ADDONS: Prose, "Will be installed after first boot:", "", "", "";
+        CONF_ADDONS_NET: Prose, "The first boot needs Internet to pull the container images.", "", "", "";
+        CONF_ADDONS_OFFLINE: Prose, "The offline bundle has no Docker: its packages download at first boot.", "", "", "";
         PLAN_TITLE: Title, "Storage plan", "", "", "";
         PLAN_SUB: Subtitle, "Nothing is written yet.", "", "", "";
         PLAN_MODE: Label, "Mode", "Wipe erases all {n} disks.", "backups", "";
@@ -953,9 +976,13 @@ pub static SCREENS: &[ScreenCopy] = &[
             &SYS_OFFLINE,
             &SYS_BOOT_VIA,
             &SYS_VIA_FLASH,
-            &SYS_NEXT,
+            &SYS_NEXT_ADDONS,
             &BTN_BACK,
         ],
+    },
+    ScreenCopy {
+        name: "addons",
+        visible: &[&SETUP_ADDONS, &ADDONS_SUB, &ADDONS_INTRO, &ADDON_NEEDS_DOCKER, &ADDON_NEEDS_NET, &ADDON_REQUIRED, &SYS_NEXT, &BTN_BACK],
     },
     ScreenCopy {
         name: "confirm",
@@ -1304,6 +1331,7 @@ mod tests {
             "goal",
             "plan",
             "system",
+            "addons",
             "confirm",
             "install",
             "failed",

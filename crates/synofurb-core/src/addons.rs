@@ -187,6 +187,7 @@ pub const PRESETS: &[Preset] = &[
     Preset { id: "docker-portainer", label: "Docker + Portainer", addons: &["docker", "portainer"] },
     Preset { id: "frigate", label: "Frigate NVR", addons: &["docker", "portainer", "frigate"] },
     Preset { id: "plex", label: "Plex", addons: &["docker", "portainer", "plex"] },
+    Preset { id: "frigate-plex", label: "Frigate + Plex", addons: &["docker", "portainer", "frigate", "plex"] },
 ];
 
 /// One add-on picked for the install: its id and the settings typed for it.
@@ -268,6 +269,20 @@ fn check_value(spec: &SettingSpec, v: &str) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Check one typed value of an install-time setting (the GUI checks fields as they are typed). An empty value is "not set" and fine
+/// unless the setting is required.
+pub fn check_setting(id: &str, key: &str, value: &str) -> Result<()> {
+    let Some(e) = entry(id) else { bail!("unknown add-on '{id}'") };
+    let Some(spec) = e.settings.iter().find(|s| s.key == key) else { bail!("add-on '{id}' has no install-time setting '{key}'") };
+    if value.trim().is_empty() {
+        if spec.required {
+            bail!("{} is required", spec.label);
+        }
+        return Ok(());
+    }
+    check_value(spec, value.trim())
 }
 
 /// Check the choices: known ids, no duplicates, known settings with valid values. Does not add dependencies.
@@ -631,6 +646,16 @@ mod tests {
         let red = redact_secrets(&[p]);
         assert_eq!(red[0].secrets["plex_claim"], format!("claim-{SECRET_PLACEHOLDER}"));
         validate(&red).unwrap();
+    }
+
+    #[test]
+    fn single_values_can_be_checked_as_they_are_typed() {
+        check_setting("frigate", "retain_days", "").unwrap();
+        check_setting("frigate", "retain_days", " 30 ").unwrap();
+        assert!(check_setting("frigate", "retain_days", "0").is_err());
+        check_setting("plex", "plex_claim", "claim-abcdefgh12345").unwrap();
+        assert!(check_setting("plex", "plex_claim", "abc").is_err());
+        assert!(check_setting("plex", "nope", "x").is_err() && check_setting("nope", "x", "y").is_err());
     }
 
     #[test]

@@ -574,6 +574,11 @@ pub fn wait_for_new_system(job: &InstallJob, old_ip: Option<IpAddr>, cancel: &At
 /// Run the whole job. Blocks; call from a worker thread.
 pub fn run_install(job: &InstallJob, logger: &Logger, cancel: Arc<AtomicBool>, progress: &mut dyn FnMut(&str, f32)) -> Result<Outcome> {
     logger.add_secret(&job.display_password);
+    for c in &job.cfg.addons {
+        for v in c.secrets.values() {
+            logger.add_secret(v);
+        }
+    }
     if let Auth::Password(p) = &job.target.auth {
         logger.add_secret(p);
     }

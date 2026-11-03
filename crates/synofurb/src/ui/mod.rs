@@ -20,6 +20,9 @@
 // screens await the owner's mockup approval), so some helpers and copy items are not wired in yet.
 #![allow(dead_code)]
 
+pub mod addhost;
+mod addip;
+pub mod addons;
 pub mod app;
 pub mod assets;
 pub mod brand;

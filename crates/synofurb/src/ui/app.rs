@@ -181,6 +181,8 @@ pub struct App {
     pub goal: Goal,
     pub form: PlanForm,
     pub sys: SysForm,
+    /// Setup > Add-ons.
+    pub addons: super::addons::AddonsForm,
     pub ack_backup: bool,
     pub ack_loss: bool,
     pub ack_unit: bool,
@@ -443,6 +445,7 @@ impl App {
                 boot: BootChoice::Auto,
                 generated_key: None,
             },
+            addons: Default::default(),
             ack_backup: false,
             ack_loss: false,
             ack_unit: false,
@@ -612,6 +615,13 @@ impl App {
         if t.keep {
             self.form.req.mode = StorageMode::KeepVolumes;
             self.rebuild_plan();
+        }
+        if t.addons {
+            self.addons.picks.apply_preset(synofurb_core::addons::PRESETS.last().expect("presets"));
+            self.ensure_addon_inputs(window, cx);
+            if let Some(st) = self.addons.inputs.get(&("frigate", "retain_days")).cloned() {
+                self.set_input(&st, "14", window, cx);
+            }
         }
         if t.screen == Screen::Failed {
             // the state the dialogs read exists before the first frame (the replayed events only add to it)
@@ -803,6 +813,7 @@ impl App {
             Msg::RecoveryDone(o) => o.level != worker::RecLevel::Done && o.level != worker::RecLevel::Info,
             Msg::DsmWaitDone(w) => w.timed_out,
             _ => false,
+            Msg::ScanPartial(inv) => self.inv = inv,
         };
         if failed {
             for w in self.open_trust.drain(..) {
@@ -813,7 +824,6 @@ impl App {
             Msg::ScanMethod { name, result } => {
                 self.scan.methods.push((name, result));
             }
-            Msg::ScanPartial(inv) => self.inv = inv,
             Msg::ScanDone(inv) => {
                 if self.demo.is_none() {
                     let _ = inv.save(&self.cfg_dir.join("inventory.json"));
@@ -1361,6 +1371,7 @@ impl App {
         cfg.timezone = self.input_value(&self.inp.timezone, cx).trim().to_string();
         cfg.mirror_host = self.input_value(&self.inp.mirror, cx).trim().to_string();
         cfg.enable_mgmt = self.sys.enable_mgmt;
+        cfg.addons = self.addon_choices(cx);
         cfg.kernel = self.form.kernel;
         cfg.serial = serial_from_input(&self.input_value(&self.inp.serial_text, cx), &self.input_value(&self.inp.serial_speed, cx))
             .ok_or("The serial console setting is not valid (for example ttyS0 and 115200).")?;

@@ -77,9 +77,16 @@ the badge is not added otherwise). The update dialog follows `UpdateInfo::instal
 blocked (the reason as the one warning). About shows `release` / `dev <commit>` / `local build` from `SYNOFURB_GIT_DESCRIBE_BUILD`.
 On About, a waiting update takes the page's primary (Details) and Copy diagnostics becomes an outline button.
 
-**Six steps.** Find, Connect (with Inspect), Goal (with Quick setup), Setup (Storage and System tabs), Confirm, Install
+**Six steps.** Find, Connect (with Inspect), Goal (with Quick setup), Setup (Storage, System and Add-ons tabs), Confirm, Install
 (with Done). Settings, About, Help, Manage, Boot manager and Recovery are side screens. The Stepper is the widget from
 GPUI Kit; the unit header under it always shows the unit and a risk Tag.
+
+**Add-ons** (`screens/addons.rs`, `addons.rs`, docs/ADDONS.md). The third Setup tab lists the engine's catalog (`synofurb_core::addons`): a Checkbox per add-on, its summary, Tags
+(Needs Docker, Needs Internet, privileges with an info icon) and, under a ticked row, the few install-time settings (Frigate: days to keep recordings; Plex: an optional claim token as a
+masked secret input, its explanation behind the info icon). Docker is on and locked with a visible "Required by ..." Tag while something ticked needs it. The state is `addons::AddonPicks`
+(pure, unit-tested: dependency display, per-field checks, presets, the `--addon` words of Copy command); the typed text stays in the `Input`s and a secret only there and in the job, never in the command
+(it names an environment variable). Quick setup has an Add-ons preset group, Confirm lists "Will be installed after first boot: ..." with the Internet need, and "Copy command" repeats `--addon`
+(`cli_cmd::parse_flags` keeps repeated flags, so "Matches plan" compares each one). Demo: `--screen addons|addons-chosen|confirm-addons`.
 
 **Risk Tag and Way back** are pure functions of the unit facts (`facts::risk`, `Risk::way_back`): the same state always
 shows the same Tag and the same way back; the status bar repeats it. **Recovery** rows come from `facts::recovery_rows`;

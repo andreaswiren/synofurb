@@ -42,7 +42,7 @@ impl App {
                 Button::new("back")
                     .ghost()
                     .label(copy::BTN_BACK.short)
-                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::System, window, cx)))
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Addons, window, cx)))
                     .into_any_element(),
             ]);
         };
@@ -157,6 +157,31 @@ impl App {
             .border_color(cx.theme().border)
             .child(icons::icon(role::LAYERS))
             .child(div().text_sm().flex_1().min_w_0().child(after_text));
+        // Add-ons chosen in Setup: what is installed after the first boot, and what that needs.
+        let addon_choices = self.addon_choices(cx);
+        let addon_lines: Vec<String> = {
+            let (picks, _) = self.addon_state(cx);
+            picks
+                .confirm_line()
+                .into_iter()
+                .chain(crate::ui::addons::confirm_notes(
+                    &addon_choices,
+                    &synofurb_core::addons::AddonContext { offline: self.source_offline, root_mib: None },
+                ))
+                .collect()
+        };
+        let addons_card = (!addon_lines.is_empty()).then(|| {
+            h_flex()
+                .gap(px(8.0))
+                .items_start()
+                .px(px(12.0))
+                .py(px(8.0))
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().border)
+                .child(icons::icon(role::PACKAGE))
+                .child(v_flex().gap(px(2.0)).flex_1().min_w_0().children(addon_lines.into_iter().map(|l| div().text_sm().child(l))))
+        });
         // The disks that change, by name and size, always visible (B4): not behind "Details".
         let cand = f.candidate_disks();
         let shown = cand.len().min(crate::ui::facts::DESTROYED_LINES_MAX);
@@ -218,6 +243,7 @@ impl App {
             )
             .child(disk_list)
             .child(after)
+            .children(addons_card)
             .child(acc);
 
         // ---- right: the danger card
@@ -299,7 +325,7 @@ impl App {
                     .ghost()
                     .icon(icons::icon(role::BACK))
                     .label(copy::BTN_BACK.short)
-                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::System, window, cx)))
+                    .on_click(cx.listener(|this, _, window, cx| this.go(Screen::Addons, window, cx)))
                     .into_any_element(),
                 self.copy_command_button(cx),
             ])

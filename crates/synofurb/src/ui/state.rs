@@ -15,6 +15,8 @@ pub enum Screen {
     Goal,
     Plan,
     System,
+    /// Setup > Add-ons: Docker apps to install after the first boot.
+    Addons,
     Confirm,
     Install,
     Failed,
@@ -29,7 +31,10 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 67] = [
+pub const DEMO_SCREEN_NAMES: [&str; 70] = [
+    "addons",
+    "addons-chosen",
+    "confirm-addons",
     "failed-agent",
     "manage-rebuild",
     "manage-faildisk",
@@ -179,6 +184,8 @@ pub struct DemoTarget {
     pub no_units: Option<bool>,
     /// The update state the demo starts in (About, Settings and the update dialog show it).
     pub update: DemoUpdate,
+    /// Add-ons are ticked (Docker, Portainer, Frigate NVR and Plex).
+    pub addons: bool,
 }
 
 /// What a demo run pretends to know about the unit (drives the risk Tag and the Recovery rows).
@@ -211,6 +218,7 @@ impl DemoTarget {
             ready: false,
             no_units: None,
             update: DemoUpdate::None,
+            addons: false,
         }
     }
 
@@ -229,6 +237,9 @@ impl DemoTarget {
             "plan-keep" => DemoTarget { keep: true, ..DemoTarget::at(Screen::Plan) },
             "system" | "account" => DemoTarget::at(Screen::System),
             "system-offline" => DemoTarget { offline: true, ..DemoTarget::at(Screen::System) },
+            "addons" => DemoTarget::at(Screen::Addons),
+            "addons-chosen" => DemoTarget { addons: true, ..DemoTarget::at(Screen::Addons) },
+            "confirm-addons" => DemoTarget { addons: true, ..DemoTarget::at(Screen::Confirm) },
             "confirm" => DemoTarget::at(Screen::Confirm),
             "confirm-ready" => DemoTarget { ready: true, ..DemoTarget::at(Screen::Confirm) },
             "confirm-keep" => DemoTarget { keep: true, ..DemoTarget::at(Screen::Confirm) },
@@ -332,7 +343,7 @@ impl Screen {
             Screen::Inventory => Step::Find,
             Screen::Connect | Screen::Inspect => Step::Connect,
             Screen::Goal | Screen::BootMgr | Screen::Recover => Step::Goal,
-            Screen::Plan | Screen::System => Step::Setup,
+            Screen::Plan | Screen::System | Screen::Addons => Step::Setup,
             Screen::Confirm => Step::Confirm,
             Screen::Install | Screen::Failed | Screen::Done => Step::Install,
             Screen::Settings | Screen::About | Screen::Manage => return None,
@@ -805,6 +816,7 @@ mod tests {
         assert_eq!(Screen::Done.step(), Some(Step::Install));
         assert_eq!(Screen::Inspect.step(), Some(Step::Connect));
         assert_eq!(Screen::System.step(), Some(Step::Setup));
+        assert_eq!(Screen::Addons.step(), Some(Step::Setup));
     }
 
     fn gate<'a>(typed: &'a str, b: bool, l: bool, ok: bool) -> ConfirmGate<'a> {

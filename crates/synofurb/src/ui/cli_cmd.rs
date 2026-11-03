@@ -37,6 +37,8 @@ pub struct CliCommand {
     pub bundle: Option<String>,
     pub no_firmware: bool,
     pub no_verbose: bool,
+    /// `--addon` values (`id` or `id:key=value,...`); a secret is written as `key=@env:NAME`, never its value.
+    pub addons: Vec<String>,
 }
 
 /// Quote one shell word (POSIX): bare when it only has safe characters, else single-quoted.
@@ -89,6 +91,12 @@ impl CliCommand {
         }
     }
 
+    fn addon_flags(&self, out: &mut Vec<String>) {
+        for a in &self.addons {
+            out.push(format!("--addon {}", quote(a)));
+        }
+    }
+
     fn kernel_arg(&self) -> &'static str {
         match self.kernel {
             KernelChannel::Stable => "stable",
@@ -102,6 +110,7 @@ impl CliCommand {
         self.conn(&mut a);
         self.plan_opts(&mut a);
         a.push(format!("--kernel {}", self.kernel_arg()));
+        self.addon_flags(&mut a);
         wrap_command(&a)
     }
 
@@ -112,6 +121,7 @@ impl CliCommand {
         self.conn(&mut a);
         self.plan_opts(&mut a);
         a.push(format!("--kernel {}", self.kernel_arg()));
+        self.addon_flags(&mut a);
         a.push(format!("--hostname {}", quote(&self.hostname)));
         a.push(format!("--username {}", quote(&self.username)));
         a.push(format!("--authorize-key {}", quote(&self.authorize_key)));
@@ -232,7 +242,14 @@ pub fn parse_flags(s: &str) -> (Vec<String>, std::collections::BTreeMap<String, 
                 }
                 _ => String::new(),
             };
-            flags.insert(name.to_string(), val);
+            // a repeatable flag (`--addon`) keeps every value, in order
+            flags
+                .entry(name.to_string())
+                .and_modify(|v: &mut String| {
+                    v.push('\u{1f}');
+                    v.push_str(&val);
+                })
+                .or_insert(val);
         } else if flags.is_empty() {
             head.push(words[i].clone());
         }
@@ -280,6 +297,7 @@ mod tests {
             bundle: None,
             no_firmware: false,
             no_verbose: false,
+            addons: vec![],
         }
     }
 
@@ -365,6 +383,34 @@ mod tests {
             };
             assert!(!c.matches(&stripped.join(" "), None), "dropping --{flag} must break the match");
         }
+    }
+
+    #[test]
+    fn add_ons_are_repeated_flags_in_both_commands_and_never_carry_a_secret() {
+        let mut c = sample();
+        c.addons = vec!["portainer".into(), "frigate:retain_days=14".into(), "plex:plex_claim=@env:PLEX_CLAIM".into()];
+        for text in [c.plan_command(), c.install_command(None), c.install_command(Some("ERASE DS918+"))] {
+            assert_eq!(text.matches("--addon ").count(), 3, "{text}");
+            assert!(text.contains("--addon plex:plex_claim=@env:PLEX_CLAIM") && text.contains("--addon frigate:retain_days=14"), "{text}");
+        }
+        // repeated flags keep every value, so the computed tag notices a missing or changed add-on
+        let text = c.install_command(None);
+        assert!(c.matches(&text, None));
+        assert!(!c.matches(&text.replace(" \\\n  --addon portainer", ""), None), "dropping one --addon must break the match");
+        assert!(!c.matches(&text.replace("retain_days=14", "retain_days=30"), None));
+        assert!(!c.matches(&text.replace("--addon frigate:retain_days=14", "--addon frigate:retain_days=14 --addon docker"), None));
+        // no add-ons: no flag
+        assert!(!sample().install_command(None).contains("--addon"));
+        // the real command-line parser accepts exactly what the app writes
+        use clap::Parser;
+        let words = shell_words(&text);
+        let cli = synofurb_app::cli::Cli::try_parse_from(&words).unwrap_or_else(|e| panic!("{e}\n{text}"));
+        let synofurb_app::cli::Cmd::Install(i) = cli.cmd else { panic!("not an install command") };
+        assert_eq!(i.addon.addons, c.addons);
+        let words = shell_words(&c.plan_command());
+        let cli = synofurb_app::cli::Cli::try_parse_from(&words).unwrap_or_else(|e| panic!("{e}"));
+        let synofurb_app::cli::Cmd::Plan(p) = cli.cmd else { panic!("not a plan command") };
+        assert_eq!(p.addon.addons, c.addons);
     }
 
     #[test]
