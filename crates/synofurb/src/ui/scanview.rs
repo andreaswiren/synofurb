@@ -242,7 +242,11 @@ impl ScanView {
         match self.finished {
             Some(_) if self.all_failed() => {
                 let n = self.methods.len();
-                format!("Nothing could be scanned: {} failed on {}.", if n == 1 { "the method".to_string() } else { format!("all {n} methods") }, self.networks_text())
+                format!(
+                    "Nothing could be scanned: {} failed on {}.",
+                    if n == 1 { "the method".to_string() } else { format!("all {n} methods") },
+                    self.networks_text()
+                )
             }
             Some((_, e)) if self.was_stopped => format!("Stopped after {} on {}.", secs_text(e), self.networks_text()),
             Some((_, e)) if self.total_hosts == 0 => {

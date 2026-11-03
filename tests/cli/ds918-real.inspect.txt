@@ -48,8 +48,8 @@ LV|vg1|syno_vg_reserved_area|12582912
 LV|vg1|volume_1|17581000000000
 LV|vg1|volume_2|6410000000000
 MNT|/dev/md0|/|ext4|2385000|1500000
-MNT|/dev/mapper/cachedev_0|/volume1|ext4|16990000000|9100000000
-MNT|/dev/mapper/cachedev_1|/volume2|btrfs|6100000000|2500000000
-MNT|/dev/mapper/cachedev_1|/volume2/@docker|btrfs|6100000000|2500000000
+MNT|/dev/mapper/cachedev_0|/volume1|ext4|17170000000|9300000000
+MNT|/dev/mapper/cachedev_1|/volume2|btrfs|6260000000|2500000000
+MNT|/dev/mapper/cachedev_1|/volume2/@docker|btrfs|6260000000|2500000000
 MNT|synodedup-fused|/volume2/ActiveBackupforBusiness/ActiveBackupData|fuse.synodedup-fused|0|0
 END|ok

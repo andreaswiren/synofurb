@@ -159,8 +159,10 @@ for i, x, a, b in clipped(sys.argv[1], sys.argv[2]):
     print(f"column {i} edge at x={x}: ink in the last 3 px of the cell at y={a}-{b}")
 PY
 [ "$SELFTEST" = 1 ] && { python3 -I "$OUT/clip.py" --selftest; exit $?; }
-clipcheck() { # $1 png  $2 label  $3 layout dump
+clipcheck() { # $1 png  $2 label  $3 layout dump  $4 screen
   [ -f "$3" ] || return 0
+  # a dialog, the Help sheet or the Welcome guide covers the table: their own edges are not cell edges
+  case "$4" in dlg-*|help*|welcome*|update*|first-launch) return 0;; esac
   bad=$(python3 -I "$OUT/clip.py" "$1" "$3")
   if [ -n "$bad" ]; then
     echo "CLIPPED $2: $bad"
@@ -186,7 +188,7 @@ run() {
   while :; do
     DISPLAY=:$D import -window root "$OUT/$label-$v.png" 2>/dev/null
     analyse "$OUT/$label-$v.png" "$label@$v" "$screen" || res=1
-    clipcheck "$OUT/$label-$v.png" "$label@$v" "$OUT/layout-$label.txt" || res=1
+    clipcheck "$OUT/$label-$v.png" "$label@$v" "$OUT/layout-$label.txt" "$screen" || res=1
     v=$((v + 1))
     [ "$SCROLL" = 1 ] && [ $v -le 2 ] || break
     DISPLAY=:$D python3 -I "$OUT/xk.py" move:$((W / 2)),$((H / 2)) scroll:14
