@@ -15,10 +15,17 @@ issues, stores, renews and publishes **several certificates** (one per hostname 
 | **HTTP-01** | the name resolves to this box, port 80 reachable from the Internet | HAProxy forwards `/.well-known/acme-challenge/` to a tiny local responder in the management plane (webroot style) |
 | **TLS-ALPN-01** | the name resolves to this box, port 443 reachable | HAProxy sends connections with ALPN `acme-tls/1` to a local responder that serves the validation certificate |
 
-**Tool choice (owner: "certbot is good").** certbot (Debian package, with `openssl`) handles DNS-01 (manual auth hook) and HTTP-01 (webroot). **certbot does not implement TLS-ALPN-01**
-(its authenticators cover http-01 and dns-01 only; its tls-sni-01 was removed). TLS-ALPN-01 therefore needs another client or our own responder: the proposal is `lego`
-(Debian package `lego`, supports http-01, dns-01 and tls-alpn-01 with a custom responder port) for TLS-ALPN-01 only, or `lego` for everything. **Owner decision pending**; until then the UI offers DNS-01 and HTTP-01 and marks TLS-ALPN-01 "planned".
-The management plane stays standard-library Python and only drives these tools through `subprocess` with fixed argv (no shell).
+**Tool choice (owner decision 2026-11-03: "use lego for everything").** One ACME client, `lego` (Debian trixie package `lego` 4.9.1-2 for amd64, arm64 and armhf; verified on packages.debian.org, installed by
+the management plane with apt when the user enables certificates), handles all three challenges: DNS-01 (through its `exec` provider, see below), HTTP-01 (its built-in HTTP provider on a local port that HAProxy forwards
+`/.well-known/acme-challenge/` to) and TLS-ALPN-01 (its built-in TLS provider on a local port that HAProxy sends `acme-tls/1` ALPN connections to). certbot is not used (it cannot do TLS-ALPN-01).
+The management plane stays standard-library Python and drives `lego` and `haproxy` only through `subprocess` with fixed argv (no shell). Facts to re-verify on a unit with `lego --help` (4.9.1): flag names for the
+HTTP/TLS provider ports, the DNS resolver and propagation options, `renew --days`, and the CNAME behaviour below.
+
+**Does lego support challenges.addr.tools?** Not as a named provider (checked against lego's documented provider mechanism 2026-11-03). Two generic providers exist: `httpreq` (it POSTs JSON `{fqdn, value}`: does not match addr.tools'
+`secret` + `txt` form fields) and `exec` (it runs a program: `present <FQDN> <value>` and `cleanup <FQDN> <value>`, default mode; exit code != 0 aborts; env `EXEC_PATH`, `EXEC_PROPAGATION_TIMEOUT` (default 60 s),
+`EXEC_POLLING_INTERVAL` (3 s), `EXEC_SEQUENCE_INTERVAL` (60 s)). So the management plane ships a tiny adapter (`/usr/local/sbin/synofurb-acme-addr-tools`, generated, 0700, root) used as `EXEC_PATH`: on `present` it POSTs
+`secret` and `txt=<value>` to `https://challenges.addr.tools` and succeeds on HTTP 201 `OK`; `cleanup` does nothing (records are temporary). The secret is passed to the adapter through a root-only file, never argv or the environment of
+other processes. lego's propagation check queries the TXT record after following the `_acme-challenge` CNAME (lego follows CNAME delegation by default; re-verify the exact option name on the unit) into the addr.tools zone.
 
 ## DNS-01 through challenges.addr.tools (from https://challenges.addr.tools, read 2026-11-03)
 
@@ -28,7 +35,7 @@ The management plane stays standard-library Python and only drives these tools t
   `<sha224>.challenges.addr.tools`; success is HTTP 201 with body `OK`. A request with only `secret` returns the subdomain name and changes nothing (use it to show the user the exact CNAME target).
 * The secret is the only credential: the hash is public in DNS, so the secret must be strong (generate 32+ random characters by default); URL-encode it; never log it; store it 0600; show it once.
 * The service documents no lifetime, rate limits or error bodies: the client must wait/poll for the TXT to be visible (`dig`/resolver check against the authoritative path) before telling the ACME server, retry with backoff, and treat anything other than 201 as a failure with the response text shown.
-* certbot hook (what the app generates): `--manual --preferred-challenges dns --manual-auth-hook <script>`; the script POSTs `secret` and `$CERTBOT_VALIDATION`; no cleanup hook is needed (records are temporary).
+* lego command (what the app runs): `lego --server <LE url> --email <e> --accept-tos --path /etc/synofurb/lego --dns exec --domains <name> [--domains '*.name'] run|renew` with `EXEC_PATH=/usr/local/sbin/synofurb-acme-addr-tools`; one lego account per Let's Encrypt environment (production, staging).
 
 The settings page asks for the secret (or generates one), shows the derived CNAME target per name with a Copy button and a "Check DNS" button that resolves `_acme-challenge.<name>` and reports whether it points at the right target.
 
