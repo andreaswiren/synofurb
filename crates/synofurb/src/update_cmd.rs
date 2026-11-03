@@ -63,7 +63,7 @@ pub fn extract_cli_binary(archive: &Path, bin_name: &str, out: &Path) -> Result<
 
 /// Entry point. `check_only` stops after printing what is available; `channel` is `stable` (default) or `prerelease`; `gui`: this is
 /// the desktop program.
-pub fn run(out: &Out, check_only: bool, channel: Option<String>, json: bool, gui: bool) -> Result<()> {
+pub fn run(out: &Out, check_only: bool, channel: Option<String>, json: bool, gui: bool, allow_unsigned: bool) -> Result<()> {
     let channel = match channel.as_deref() {
         None => Channel::Stable,
         Some(c) => c.parse::<Channel>().map_err(|e| anyhow!(e))?,
@@ -90,6 +90,16 @@ pub fn run(out: &Out, check_only: bool, channel: Option<String>, json: bool, gui
         v["schema"] = json!(1);
         v["program"] = json!(if gui { "synofurb" } else { "synofurb-cli" });
         v["installable"] = json!(info.installable() && key_ok);
+        // what a front end needs to label the install: signed / unsigned_with_consent / blocked
+        let mode = info.install_mode();
+        v["install_mode"] = json!(mode.name());
+        v["install_blocked_reason"] = match &mode {
+            updater::InstallMode::Blocked(why) => json!(why),
+            _ => serde_json::Value::Null,
+        };
+        v["signature_asset"] = json!(info.has_signature_asset());
+        v["unsigned_allowed"] = json!(updater::unsigned_allowed());
+        v["notes_plain"] = json!(info.notes_plain());
         out.json_doc(&v);
         return Ok(());
     }
@@ -107,14 +117,32 @@ pub fn run(out: &Out, check_only: bool, channel: Option<String>, json: bool, gui
             if gui { "synofurb" } else { "synofurb-cli" }
         ));
         if !key_ok {
-            out.warn("installing is currently disabled because the release signing key has not been set up (placeholder key)");
+            out.warn("installing is disabled by default because the release signing key has not been set up (placeholder key). To install anyway, checking only the SHA-256 in SHA256SUMS of the same GitHub release, run `self-update --allow-unsigned` (read its warning first)");
         }
         return Ok(());
     }
 
-    // Refuse before downloading anything: never skip verification.
-    updater::ensure_can_verify(updater::UPDATE_PUBLIC_KEY)?;
-    if !info.installable() {
+    // Refuse before downloading anything: never skip verification, unless the person explicitly opted in to the unsigned path.
+    if allow_unsigned {
+        if let updater::InstallMode::Blocked(why) = info.install_mode() {
+            bail!("this release cannot be installed automatically: {why}\n  - {}", info.problems.join("\n  - "));
+        }
+        out.warn(&format!("UNSIGNED UPDATE: {}", updater::UNSIGNED_WARNING));
+        out.warn("Only the SHA-256 listed in SHA256SUMS of the same GitHub release is checked; a tampered release would not be detected.");
+        if !out.yes {
+            let mut prompt = crate::cli::prompt::StdPrompter;
+            let q = format!("Install {} {} without a signature check?", if gui { "synofurb" } else { "synofurb-cli" }, info.latest);
+            if !crate::cli::prompt::Prompter::confirm(&mut prompt, &q, false)? {
+                return Err(anyhow::Error::new(crate::cli::exit::CliError::refused("declined; nothing was changed.")));
+            }
+        }
+    } else if let Err(e) = updater::ensure_can_verify(updater::UPDATE_PUBLIC_KEY) {
+        bail!(
+            "{e}.\nTo install anyway, checking only the SHA-256 in SHA256SUMS of the same GitHub release (no signature; a tampered release would not be detected), run: {} self-update --allow-unsigned{}",
+            if gui { "synofurb" } else { "synofurb-cli" },
+            if out.interactive { "" } else { " --yes" }
+        );
+    } else if !info.installable() {
         bail!("this release cannot be installed automatically:\n  - {}", info.problems.join("\n  - "));
     }
 
@@ -127,7 +155,12 @@ pub fn run(out: &Out, check_only: bool, channel: Option<String>, json: bool, gui
         if size > 0 { format!(" ({})", human_bytes(size)) } else { String::new() }
     ));
     let mut bar = Bar::new(!out.quiet);
-    let verified = match updater::download_verified(&info, &dir, &mut |p| bar.update(p)) {
+    let download = if allow_unsigned {
+        updater::download_unchecked_signature(&info, &dir, updater::UnsignedConsent::acknowledged(), &mut |p| bar.update(p))
+    } else {
+        updater::download_verified(&info, &dir, &mut |p| bar.update(p))
+    };
+    let verified = match download {
         Ok(v) => v,
         Err(e @ UpdateError::ChecksumMissing(_)) if !gui => {
             bar.finish();
@@ -142,7 +175,15 @@ pub fn run(out: &Out, check_only: bool, channel: Option<String>, json: bool, gui
         }
     };
     bar.finish();
-    out.info(&format!("Verified: signature of SHA256SUMS is valid and SHA-256 matches ({}).", verified.sha256));
+    match verified.integrity {
+        updater::Integrity::Signed => {
+            out.info(&format!("Verified: signature of SHA256SUMS is valid and SHA-256 matches ({}).", verified.sha256))
+        }
+        updater::Integrity::ChecksumOnly => out.warn(&format!(
+            "NOT SIGNATURE-CHECKED: the SHA-256 matches the one in SHA256SUMS of this release ({}), nothing more.",
+            verified.sha256
+        )),
+    }
 
     if gui { apply_gui(out, &verified.path, &info) } else { apply_cli(out, &verified.path, &info) }
 }

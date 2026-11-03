@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 (unreleased)
+
+### Added
+- **Opt-in unsigned update path** while the update signing key is still the placeholder (`updater::unsigned_allowed()`): `download_unchecked_signature(info, dest, UnsignedConsent::acknowledged(), progress)` downloads with the same host policy and size limits and checks the SHA-256 against the `SHA256SUMS` of the same release (the `.minisig` is not needed). It is refused (`UpdateError::UnsignedNotAllowed`) as soon as a real key is embedded, so signatures become mandatory automatically. `VerifiedDownload` now says `signed` / `integrity: Signed | ChecksumOnly`; `UpdateInfo::install_mode()` reports `Signed | UnsignedWithConsent | Blocked(reason)`; `updater::UNSIGNED_WARNING` is the shared warning text. CLI: `self-update --allow-unsigned` (needs `--yes` without a terminal; `--yes` alone never enables it); `self-update --check --json` adds `install_mode`, `install_blocked_reason`, `signature_asset`, `unsigned_allowed`, `notes_plain`. The refusal text now says how to opt in.
+- `updater::plain_release_notes(md)` and `UpdateInfo::notes_plain()`: release notes as readable plain text instead of raw Markdown.
+
 ## 0.2.1
 
 ### Added

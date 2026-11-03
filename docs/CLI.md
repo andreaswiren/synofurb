@@ -309,7 +309,7 @@ synofurb-cli fetch-installer amd64|arm64|armhf [--suite trixie] [--firmware] [--
 synofurb-cli bundle create [--arch amd64[,arm64,armhf]|all] --out DIR [--suite trixie] [--kernel newest|stable] [--no-firmware] [--package PKG] [--no-agent]
 synofurb-cli bundle verify DIR
 synofurb-cli bundle info DIR [--json]
-synofurb-cli self-update [--check [--json]] [--channel stable|prerelease]
+synofurb-cli self-update [--check [--json]] [--channel stable|prerelease] [--allow-unsigned]
 ```
 
 `fetch-installer` downloads the Debian installer kernel and initrd and verifies them along the Release -> SHA256SUMS -> file hash chain. `bundle` is described under [Offline use](#offline-use) (sizes: amd64 about 440 MiB, plus about 470 MiB of installer firmware shared by all architectures).
@@ -334,7 +334,7 @@ serial, hostname, arch, mem_kib, cpu, firmware, kexec, cpu_vendor, dom{...}|null
 
 **`install --dry-run --json`**: `{"schema":1,"dry_run":true,"model","confirm_phrase","method","placeholders":[],"plan":{},"install_config":{},"installer_cmdline","offline_bundle":null|"DIR","payload":{"sha256","bytes","files":[{path,mode,size,sha256}]},"preseed","stage2"}`
 
-**`self-update --check --json`**: the updater's `UpdateInfo` (`current, latest, tag, update_available, channel, prerelease, asset{name,url,size}, checksums, signature, problems[], notes`) plus `program` and `installable`.
+**`self-update --check --json`**: the updater's `UpdateInfo` (`current, latest, tag, update_available, channel, prerelease, asset{name,url,size}, checksums, signature, problems[], notes`) plus `program`, `installable`, `install_mode`, `install_blocked_reason`, `signature_asset`, `unsigned_allowed` and `notes_plain`.
 
 ## Event stream (`--log-format json`)
 
@@ -440,7 +440,10 @@ synofurb-cli install --host 192.168.1.20 --source offline --bundle /srv/synofurb
 
 `synofurb-cli self-update --check` asks GitHub for the newest release on the channel (`--channel stable|prerelease`), `self-update` downloads **`synofurb-cli-<version>-<os>-<arch>.tar.gz`** (the desktop program updates
 from its own asset), verifies the minisign signature of `SHA256SUMS` and then the SHA-256, keeps the old binary as `synofurb-cli.old` until the new one has started once, and replaces itself. It refuses to install anything
-while the project's signing key is still the placeholder. On Windows it stops after verification and tells you where the archive is (a running `.exe` cannot replace itself). A package-managed copy must be updated by its package manager.
+while the project's signing key is still the placeholder, and the message says how to opt in: **`self-update --allow-unsigned`** installs a release that has no signature, checking only the SHA-256 listed
+in `SHA256SUMS` of the same GitHub release (a damaged download is caught, a tampered release is **not**). It prints that warning loudly, asks on a terminal, and needs `--yes` too when there is none (exit 3 otherwise,
+before any network traffic); `--yes` alone never enables it, and it is rejected with exit 2 once a build embeds a real signing key or together with `--check`. `self-update --check --json` adds `install_mode`
+(`signed|unsigned_with_consent|blocked`), `install_blocked_reason`, `signature_asset`, `unsigned_allowed` and `notes_plain`. Details: [UPDATES.md](UPDATES.md#the-unsigned-path-opt-in-placeholder-key-only). On Windows it stops after verification and tells you where the archive is (a running `.exe` cannot replace itself). A package-managed copy must be updated by its package manager.
 
 ## GUI parity
 

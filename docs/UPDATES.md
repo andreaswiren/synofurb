@@ -3,8 +3,33 @@
 The desktop app can update itself (`synofurb self-update`, or the update button in the app once it is wired up). It does
 this only for releases that are **signed by the project key**, and it never installs anything it could not verify.
 
-**Status: the signing key is still a placeholder. Until the maintainer sets it up (below), `check` works but every
-install is refused with an explanation.** Nothing is silently skipped.
+**Status: the signing key is still a placeholder. Until the maintainer sets it up (below), `check` works and an install
+is refused with an explanation, unless you explicitly opt in to the [unsigned path](#the-unsigned-path-opt-in-placeholder-key-only)
+(SHA-256 only, clearly labelled).** Nothing is silently skipped.
+
+## The unsigned path (opt-in, placeholder key only)
+
+The project has not set up a signing key yet, and its releases carry `SHA256SUMS` but no `SHA256SUMS.minisig`. So that updates can work
+anyway, there is one deliberate, narrow exception:
+
+* `updater::unsigned_allowed()` is true **exactly while** `UPDATE_PUBLIC_KEY` is the placeholder. The moment a build embeds a real key,
+  `updater::download_unchecked_signature` refuses with `UpdateError::UnsignedNotAllowed`, `UpdateInfo::install_mode()` stops saying
+  `UnsignedWithConsent`, and signatures are mandatory with no other change (no downgrade).
+* Nothing happens without the person's consent: `download_unchecked_signature(info, dest, UnsignedConsent::acknowledged(), progress)` needs the
+  token, which a front end creates only after showing `updater::UNSIGNED_WARNING` and getting an explicit yes. CLI: `synofurb self-update
+  --allow-unsigned` (`--yes` as well when there is no terminal; `--yes` alone never enables it).
+* What is checked: same host policy (https, `github.com` / `githubusercontent.com` only, every redirect hop), same size limits, the
+  `SHA256SUMS` asset **of the same release** must exist, and the asset's SHA-256 is streamed and compared with its line there; a mismatch
+  deletes the partial file. What is **not** checked: any signature. This catches a damaged download. It does **not** catch a tampered
+  release or a hijacked GitHub account, because whoever can change the asset can change `SHA256SUMS` too.
+* The result says so: `VerifiedDownload { signed: false, integrity: Integrity::ChecksumOnly, .. }` (the signed path gives `signed: true`,
+  `Integrity::Signed`). Show that wherever the install is shown. Nothing is installed by the download; `apply` is a separate step.
+* `UpdateInfo::install_mode()` tells a front end what is possible for a release: `Signed`, `UnsignedWithConsent` (placeholder key, asset
+  and `SHA256SUMS` present) or `Blocked(reason)` (no asset for this system, no `SHA256SUMS`, or a real key and no `.minisig`).
+  `self-update --check --json` reports it as `install_mode` / `install_blocked_reason`, plus `signature_asset`, `unsigned_allowed` and
+  `notes_plain`.
+* Release notes: `UpdateInfo.notes` is the Markdown body (64 KiB at most); `UpdateInfo::notes_plain()` / `updater::plain_release_notes(md)`
+  turn it into readable text (headings, bold, code, `-` bullets to a bullet sign, links as `text (url)`).
 
 ## How an update works
 
@@ -138,4 +163,5 @@ What it does not protect against:
 * `.zip` is never installed automatically.
 * Linux package installs need `pkexec` (polkit) for the privilege prompt; without it you get the command to run.
 * On Windows the installer replaces the app after it exits; if the installer is cancelled, nothing changes.
-* The `check` call works with a placeholder key, but any install is refused until the real key is in place.
+* The `check` call works with a placeholder key, but a signed install is refused until the real key is in place; the only way to install
+  before that is the explicit unsigned path above.

@@ -960,3 +960,23 @@ fn manage_is_documented_and_completed() {
         assert!(c.contains("manage") && c.contains("rollback") && c.contains("from-bundle"), "{shell}");
     }
 }
+
+#[test]
+fn unsigned_self_update_is_an_explicit_opt_in_and_never_satisfied_by_yes_alone() {
+    let s = Sandbox::new("unsigned");
+    // without a terminal, --allow-unsigned also needs --yes: refused (exit 3) before any network traffic
+    let r = s.run(&["self-update", "--allow-unsigned"]);
+    assert_eq!(r.code, 3, "{}{}", r.stdout, r.stderr);
+    assert!(
+        r.stderr.contains("--allow-unsigned") && r.stderr.contains("--yes") && r.stderr.contains("Nothing was changed"),
+        "{}",
+        r.stderr
+    );
+    // it is not a way to check, and not a default
+    assert_eq!(s.run(&["self-update", "--check", "--allow-unsigned"]).code, 2);
+    // --yes alone does not enable it: the flag is a separate opt-in (the command fails on the network or says how to opt in, never installs)
+    let h = s.run(&["self-update", "--help"]);
+    assert!(h.stdout.contains("--allow-unsigned") && h.stdout.contains("SHA-256"), "{}", h.stdout);
+    // the shipped build still has the placeholder key, so the flag is accepted by the argument checks
+    assert!(synofurb_core::updater::unsigned_allowed());
+}

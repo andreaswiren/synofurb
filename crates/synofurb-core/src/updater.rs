@@ -1936,6 +1936,7 @@ mod tests {
         assert_eq!(std::fs::read(&v.path).unwrap(), data);
         assert_eq!(v.sha256, hex::encode(Sha256::digest(&data)));
         assert_eq!(v.path.file_name().unwrap(), "synofurb-0.2.0-linux-x86_64.AppImage");
+        assert!(v.signed && v.integrity == Integrity::Signed);
         assert!(!tmp.path().join("synofurb-0.2.0-linux-x86_64.AppImage.part").exists());
         assert_eq!(progress.first().unwrap().downloaded, 0);
         let last = progress.last().unwrap();
@@ -2024,6 +2025,197 @@ mod tests {
         let mut called = false;
         let e = download_verified(&rel.info, tmp.path(), &mut |_| called = true).unwrap_err();
         assert!(matches!(e, UpdateError::NoSigningKey) && !called);
+    }
+
+    // ---- the opt-in unsigned path (placeholder key only)
+
+    fn dl_unsigned(rel: &Release, dir: &Path, key: &str) -> (Result<VerifiedDownload>, Vec<Progress>) {
+        let mut seen = vec![];
+        let r =
+            download_unchecked_signature_with(&rel.info, dir, key, UnsignedConsent::acknowledged(), HostPolicy::LOOPBACK_TEST, &mut |p| {
+                seen.push(p)
+            });
+        (r, seen)
+    }
+
+    /// A release as the project publishes it today: SHA256SUMS, but no `.minisig`.
+    fn unsigned_release(data: &[u8], served: Vec<u8>) -> (Keys, Release) {
+        let k = keys();
+        let mut rel = make_release(&k, data, served, None, None);
+        rel.info.signature = None;
+        (k, rel)
+    }
+
+    #[test]
+    fn unsigned_path_works_only_with_the_placeholder_key_and_is_labelled() {
+        let data = payload();
+        let (_k, rel) = unsigned_release(&data, data.clone());
+        let tmp = TempDir::new("upd-uns");
+        let (r, progress) = dl_unsigned(&rel, tmp.path(), UPDATE_PUBLIC_KEY_PLACEHOLDER);
+        let v = r.unwrap();
+        assert_eq!(std::fs::read(&v.path).unwrap(), data);
+        assert!(!v.signed && v.integrity == Integrity::ChecksumOnly);
+        assert_eq!(v.sha256, hex::encode(Sha256::digest(&data)));
+        assert!(progress.len() > 2);
+        let hits = rel.hits.lock().unwrap().clone();
+        assert!(hits.contains(&"/SHA256SUMS".to_string()) && hits.contains(&"/asset".to_string()), "{hits:?}");
+        assert!(!hits.iter().any(|h| h.contains("minisig")), "the signature is not needed or fetched: {hits:?}");
+        assert!(!tmp.path().join("synofurb-0.2.0-linux-x86_64.AppImage.part").exists());
+        // the same release is not installable signed, and says what it is
+        assert!(!rel.info.installable());
+        assert_eq!(rel.info.install_mode_for(UPDATE_PUBLIC_KEY_PLACEHOLDER), InstallMode::UnsignedWithConsent);
+    }
+
+    #[test]
+    fn a_real_key_makes_the_unsigned_path_impossible() {
+        let data = payload();
+        let (k, rel) = unsigned_release(&data, data.clone());
+        let tmp = TempDir::new("upd-uns-real");
+        let (r, progress) = dl_unsigned(&rel, tmp.path(), &k.pk);
+        assert!(matches!(r.unwrap_err(), UpdateError::UnsignedNotAllowed));
+        assert!(rel.hits.lock().unwrap().is_empty(), "nothing is requested");
+        assert!(progress.is_empty() && std::fs::read_dir(tmp.path()).unwrap().count() == 0);
+        // and the release without a signature is blocked, never offered unsigned
+        match rel.info.install_mode_for(&k.pk) {
+            InstallMode::Blocked(why) => assert!(why.contains("SHA256SUMS.minisig") && why.contains("signed"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        // a signed release with the real key is still signed
+        let signed = make_release(&k, &data, data.clone(), None, None);
+        assert_eq!(signed.info.install_mode_for(&k.pk), InstallMode::Signed);
+        let v = dl(&signed, tmp.path(), &k.pk).0.unwrap();
+        assert!(v.signed && v.integrity == Integrity::Signed);
+        // the shipped build: the constant decides
+        assert_eq!(unsigned_allowed(), signing_key_is_placeholder(UPDATE_PUBLIC_KEY));
+    }
+
+    #[test]
+    fn unsigned_path_still_checks_the_checksum_and_leaves_nothing_behind() {
+        let data = payload();
+        let mut evil = data.clone();
+        evil[500] ^= 1;
+        let (_k, rel) = unsigned_release(&data, evil);
+        let tmp = TempDir::new("upd-uns-bad");
+        let e = dl_unsigned(&rel, tmp.path(), UPDATE_PUBLIC_KEY_PLACEHOLDER).0.unwrap_err();
+        assert!(matches!(e, UpdateError::ChecksumMismatch { .. }), "{e:?}");
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0, "no .part and no final file");
+
+        // no entry for the file, a malformed or hostile entry, a missing SHA256SUMS
+        let k = keys();
+        for (sums, want) in [
+            (format!("{}  some-other-file.zip\n", "1".repeat(64)), "missing"),
+            (format!("{}  ../../etc/passwd\n", "1".repeat(64)), "bad"),
+            ("not a checksum line\n".to_string(), "bad"),
+            (
+                format!(
+                    "{h}  synofurb-0.2.0-linux-x86_64.AppImage\n{g}  synofurb-0.2.0-linux-x86_64.AppImage\n",
+                    h = "a".repeat(64),
+                    g = "b".repeat(64)
+                ),
+                "bad",
+            ),
+        ] {
+            let mut r = make_release(&k, &data, data.clone(), Some(sums), None);
+            r.info.signature = None;
+            let e = dl_unsigned(&r, tmp.path(), UPDATE_PUBLIC_KEY_PLACEHOLDER).0.unwrap_err();
+            match want {
+                "missing" => assert!(matches!(e, UpdateError::ChecksumMissing(_)), "{e:?}"),
+                _ => assert!(matches!(e, UpdateError::BadChecksumFile(_)), "{e:?}"),
+            }
+            assert!(!r.hits.lock().unwrap().iter().any(|h| h == "/asset"), "the asset is not fetched when SHA256SUMS is bad");
+        }
+        let mut r = make_release(&k, &data, data.clone(), None, None);
+        r.info.signature = None;
+        r.info.checksums = None;
+        assert!(matches!(dl_unsigned(&r, tmp.path(), UPDATE_PUBLIC_KEY_PLACEHOLDER).0.unwrap_err(), UpdateError::MissingAsset(SUMS_ASSET)));
+        assert!(r.hits.lock().unwrap().is_empty());
+        assert_eq!(r.info.install_mode_for(UPDATE_PUBLIC_KEY_PLACEHOLDER).name(), "blocked");
+        // the file may not be larger than the release says
+        let mut r = make_release(&k, &data, data.clone(), None, None);
+        r.info.signature = None;
+        r.info.asset.as_mut().unwrap().size = 1000;
+        assert!(matches!(dl_unsigned(&r, tmp.path(), UPDATE_PUBLIC_KEY_PLACEHOLDER).0.unwrap_err(), UpdateError::TooLarge { .. }));
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn unsigned_path_keeps_the_host_policy_and_the_name_rules() {
+        let data = payload();
+        let (_k, rel) = unsigned_release(&data, data.clone());
+        let tmp = TempDir::new("upd-uns-host");
+        // production policy: plain http to the local server is refused before any request
+        let r = download_unchecked_signature_with(
+            &rel.info,
+            tmp.path(),
+            UPDATE_PUBLIC_KEY_PLACEHOLDER,
+            UnsignedConsent::acknowledged(),
+            HostPolicy::DOWNLOAD,
+            &mut |_| {},
+        );
+        assert!(matches!(r.unwrap_err(), UpdateError::NotHttps(_)));
+        assert!(rel.hits.lock().unwrap().is_empty());
+        // other hosts, for the checksum file as well as for the asset
+        for (which, url) in [("asset", "https://evil.example.com/a"), ("sums", "https://github.com.evil.com/SHA256SUMS")] {
+            let (_k2, mut r) = unsigned_release(&data, data.clone());
+            let a = if which == "asset" { r.info.asset.as_mut().unwrap() } else { r.info.checksums.as_mut().unwrap() };
+            a.url = url.into();
+            let e = download_unchecked_signature_with(
+                &r.info,
+                tmp.path(),
+                UPDATE_PUBLIC_KEY_PLACEHOLDER,
+                UnsignedConsent::acknowledged(),
+                HostPolicy::DOWNLOAD,
+                &mut |_| {},
+            )
+            .unwrap_err();
+            assert!(matches!(e, UpdateError::NotHttps(_) | UpdateError::UnsupportedHost(_)), "{which}: {e:?}");
+            assert!(r.hits.lock().unwrap().is_empty());
+        }
+        for bad in ["../evil", "a/b", ".hidden", ""] {
+            let (_k3, mut r) = unsigned_release(&data, data.clone());
+            r.info.asset.as_mut().unwrap().name = bad.into();
+            let e = dl_unsigned(&r, tmp.path(), UPDATE_PUBLIC_KEY_PLACEHOLDER).0.unwrap_err();
+            assert!(matches!(e, UpdateError::BadAssetName(_)), "{bad:?}: {e:?}");
+        }
+        // the public entry point with the shipped key and production policy never reaches the local server either
+        let e = download_unchecked_signature(&rel.info, tmp.path(), UnsignedConsent::acknowledged(), &mut |_| {}).unwrap_err();
+        assert!(matches!(e, UpdateError::NotHttps(_) | UpdateError::UnsignedNotAllowed), "{e:?}");
+    }
+
+    #[test]
+    fn release_notes_become_plain_text() {
+        let md = "## What's new\r\n\r\n**Read this first.** This build is *not* signed yet; see `SHA256SUMS`.\r\n\r\n- Fixed the `recover` command\r\n- Added [the guide](https://example.com/guide) and ![logo](x.png)\r\n  - nested **bold** item\r\n* star bullet with snake_case_name\r\n\r\n\r\n\r\n> quoted line\r\n---\r\n```sh\r\nsynofurb-cli self-update\r\n```\r\nSee <https://github.com/andreaswiren/synofurb/releases> and <b>html</b>.<br>Done \\*escaped\\*.";
+        let t = plain_release_notes(md);
+        let want = [
+            "What's new",
+            "",
+            "Read this first. This build is not signed yet; see SHA256SUMS.",
+            "",
+            "\u{2022} Fixed the recover command",
+            "\u{2022} Added the guide (https://example.com/guide) and logo",
+            "  \u{2022} nested bold item",
+            "\u{2022} star bullet with snake_case_name",
+            "",
+            "  quoted line",
+            "    synofurb-cli self-update",
+            "See https://github.com/andreaswiren/synofurb/releases and html. Done *escaped*.",
+        ]
+        .join("\n");
+        assert_eq!(t, want);
+        assert!(!t.contains("**") && !t.contains('`') && !t.contains("]("));
+        assert_eq!(plain_release_notes(""), "");
+        assert_eq!(plain_release_notes("a < b and 2 * 3 * 4"), "a < b and 2 * 3 * 4");
+        assert_eq!(plain_release_notes("[https://x.org](https://x.org)"), "https://x.org");
+    }
+
+    #[test]
+    fn consent_cannot_be_forged_and_the_warning_is_the_agreed_one() {
+        // the only constructor is `acknowledged()`; the warning says what is and is not checked
+        let _c = UnsignedConsent::acknowledged();
+        assert!(UNSIGNED_WARNING.contains("SHA-256 listed in SHA256SUMS of the same GitHub release"));
+        assert!(UNSIGNED_WARNING.contains("tampered release"));
+        assert_eq!(InstallMode::Signed.name(), "signed");
+        assert!(InstallMode::Blocked("x".into()).is_blocked());
     }
 
     #[test]
