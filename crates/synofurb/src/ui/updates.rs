@@ -7,7 +7,7 @@
 //! to the API host be opened?) instead of reading the message text; see `worker::github_reachable`.
 
 use super::copy::{self, Item};
-use synofurb_core::updater::{UpdateError, UpdateInfo};
+use synofurb_core::updater::{InstallMode, UpdateError, UpdateInfo};
 
 /// What kind of failure a check ended in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,10 +82,33 @@ impl CheckFailure {
     }
 }
 
-/// Can the app install this update itself? Not while the build cannot verify signatures (placeholder key), and not
-/// when the release lacks the files a verified install needs.
-pub fn can_install(info: &UpdateInfo, key_is_placeholder: bool) -> bool {
-    !key_is_placeholder && info.installable()
+/// What a click on the dialog's primary button may do. The unsigned download needs the person's explicit yes (the
+/// checkbox); without it, and for a blocked release, nothing happens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DownloadPlan {
+    /// Signature and SHA-256 are checked.
+    Signed,
+    /// Only the SHA-256 is checked, and the person agreed.
+    Unsigned,
+    Refuse,
+}
+
+pub fn download_plan(mode: &InstallMode, consent: bool) -> DownloadPlan {
+    match mode {
+        InstallMode::Signed => DownloadPlan::Signed,
+        InstallMode::UnsignedWithConsent if consent => DownloadPlan::Unsigned,
+        _ => DownloadPlan::Refuse,
+    }
+}
+
+/// Why the primary button is disabled, if it is (the disabled-reason pattern): the box is not ticked, or the release
+/// cannot be installed.
+pub fn download_blocker(mode: &InstallMode, consent: bool) -> Option<String> {
+    match mode {
+        InstallMode::Signed => None,
+        InstallMode::UnsignedWithConsent => (!consent).then(|| copy::UPD_CONSENT_WHY.tip.to_string()),
+        InstallMode::Blocked(why) => Some(why.clone()),
+    }
 }
 
 /// The page to open for a release: GitHub's own link when it is an https github.com URL, else built from the tag.
@@ -201,13 +224,27 @@ mod tests {
     }
 
     #[test]
-    fn an_unsigned_build_never_installs_by_itself() {
-        let i = info();
-        assert!(can_install(&i, false));
-        assert!(!can_install(&i, true), "placeholder key: no automatic install");
-        let mut no_sig = info();
-        no_sig.signature = None;
-        assert!(!can_install(&no_sig, false), "a release without a signature file cannot be verified");
+    fn the_unsigned_download_needs_the_tick_and_a_blocked_release_never_downloads() {
+        use DownloadPlan::*;
+        assert_eq!(download_plan(&InstallMode::Signed, false), Signed, "a signed release needs no tick");
+        assert_eq!(download_plan(&InstallMode::UnsignedWithConsent, false), Refuse, "unsigned without the tick: nothing happens");
+        assert_eq!(download_plan(&InstallMode::UnsignedWithConsent, true), Unsigned);
+        assert_eq!(download_plan(&InstallMode::Blocked("no build".into()), true), Refuse, "even a ticked box cannot unblock a release");
+        assert_eq!(download_blocker(&InstallMode::Signed, false), None);
+        assert_eq!(download_blocker(&InstallMode::UnsignedWithConsent, true), None);
+        assert!(download_blocker(&InstallMode::UnsignedWithConsent, false).unwrap().contains("understand the risk"));
+        assert_eq!(
+            download_blocker(&InstallMode::Blocked("no build for this system".into()), true).as_deref(),
+            Some("no build for this system")
+        );
+    }
+
+    #[test]
+    fn the_unsigned_wording_is_one_calm_line_and_the_risk_is_in_plain_words() {
+        assert_eq!(copy::UPD_ST_UNSIGNED.short, "This release is not signed. synofurb checks its SHA-256 only.");
+        assert!(copy::UPD_CONSENT_INFO.tip.contains("tampered release would not be detected"));
+        assert_eq!(copy::UPD_CONSENT.short, "I understand and want to install it");
+        assert_eq!(copy::UPD_VERIFIED_UNSIGNED.short, "Unsigned, checksum verified");
     }
 
     #[test]
@@ -216,7 +253,11 @@ mod tests {
         assert_eq!(release_url(&info(), repo), "https://github.com/andreaswiren/synofurb/releases/tag/v0.2.1");
         let mut i = info();
         i.html_url = Some("https://evil.example/x".into());
-        assert_eq!(release_url(&i, repo), "https://github.com/andreaswiren/synofurb/releases/tag/v0.2.1", "only github.com links are opened");
+        assert_eq!(
+            release_url(&i, repo),
+            "https://github.com/andreaswiren/synofurb/releases/tag/v0.2.1",
+            "only github.com links are opened"
+        );
         i.html_url = None;
         i.tag.clear();
         assert_eq!(release_url(&i, repo), "https://github.com/andreaswiren/synofurb/releases/tag/v0.2.1");

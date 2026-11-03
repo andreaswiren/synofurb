@@ -704,13 +704,8 @@ impl App {
         }
         // Dialogs and the Help sheet open once the first frame exists.
         self.pending_overlay = t.overlay;
-        match t.overlay {
-            Overlay::Update => {
-                self.update = UpdateState::Available(Box::new(demo::update_info()));
-            }
-            Overlay::None => {}
-            _ => {}
-        }
+        self.demo_update = t.update;
+        self.update = demo::update_state(t.update);
         if t.overlay != Overlay::None {
             cx.defer_in(window, |this, window, cx| this.open_pending_overlay(window, cx));
         }
@@ -1685,7 +1680,7 @@ impl App {
     pub fn update_unsigned(&self) -> bool {
         match self.demo {
             Some(_) => self.demo_update.unsigned(),
-            None => updater::signing_key_is_placeholder(updater::UPDATE_PUBLIC_KEY),
+            None => synofurb_core::updater::signing_key_is_placeholder(synofurb_core::updater::UPDATE_PUBLIC_KEY),
         }
     }
 
@@ -1696,19 +1691,55 @@ impl App {
         }
     }
 
-    pub fn start_update_download(&mut self, cx: &mut Context<App>) {
+    /// How the release can be installed by this build: signed, unsigned with the person's consent, or not at all.
+    /// Demo runs show either build (`demo_update`).
+    pub fn install_mode(&self, info: &UpdateInfo) -> synofurb_core::updater::InstallMode {
+        use synofurb_core::updater as u;
+        match self.demo {
+            Some(_) => {
+                info.install_mode_for(if self.demo_update.unsigned() { u::UPDATE_PUBLIC_KEY_PLACEHOLDER } else { "RWQdemo-key-not-used" })
+            }
+            None => info.install_mode(),
+        }
+    }
+
+    /// The dialog's primary button. `consent` is the state of "I understand and want to install it"; the plan
+    /// (`updates::download_plan`) refuses an unsigned download without it and any download of a blocked release.
+    pub fn start_update_download(&mut self, consent: bool, cx: &mut Context<App>) {
         let Some(info) = self.update_info().cloned() else { return };
+        let plan = super::updates::download_plan(&self.install_mode(&info), consent);
+        if plan == super::updates::DownloadPlan::Refuse {
+            return;
+        }
         if self.demo.is_some() {
-            self.update = UpdateState::Failed(
-                Box::new(info),
-                "Demo mode: nothing is downloaded. In a real run the file is checked against the project's signature and SHA-256 before it can be installed.".into(),
-            );
+            // nothing is downloaded in a demo: show the state a real download ends in
+            let signed = plan == super::updates::DownloadPlan::Signed;
+            if let Some(asset) = info.asset.clone() {
+                let vd = VerifiedDownload {
+                    path: PathBuf::from("demo"),
+                    sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
+                    asset,
+                    version: info.latest.clone(),
+                    signed,
+                    integrity: if signed {
+                        synofurb_core::updater::Integrity::Signed
+                    } else {
+                        synofurb_core::updater::Integrity::ChecksumOnly
+                    },
+                };
+                self.update = UpdateState::Verified(Box::new(info), Box::new(vd));
+            }
             cx.notify();
             return;
         }
         self.update =
             UpdateState::Downloading(Box::new(info.clone()), Progress { downloaded: 0, total: info.asset.as_ref().map(|a| a.size) });
-        worker::spawn_update_download(self.tx.clone(), info.clone(), self.cfg_dir.join("updates").join("downloads").join(&info.latest));
+        worker::spawn_update_download(
+            self.tx.clone(),
+            info.clone(),
+            self.cfg_dir.join("updates").join("downloads").join(&info.latest),
+            plan == super::updates::DownloadPlan::Unsigned,
+        );
         cx.notify();
     }
 
@@ -1734,6 +1765,11 @@ impl App {
             return;
         }
         let UpdateState::Verified(info, vd) = &self.update else { return };
+        if self.demo.is_some() {
+            self.compat_note = Some(("Demo mode: nothing is installed.".into(), true));
+            cx.notify();
+            return;
+        }
         match synofurb_core::updater::apply(&vd.path) {
             Ok(synofurb_core::updater::ApplyOutcome::InstallerLaunched) => cx.quit(),
             Ok(o) => {

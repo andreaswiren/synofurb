@@ -191,7 +191,7 @@ impl App {
 
     fn render_title_bar(&self, cx: &mut Context<App>) -> AnyElement {
         let app = cx.entity();
-        let dot = matches!(self.update, UpdateState::Available(_));
+        let dot = super::screens::update_status::update_pending(&self.update);
         let right = h_flex()
             .gap(px(4.0))
             .items_center()

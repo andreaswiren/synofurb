@@ -270,7 +270,8 @@ impl App {
 
     /// The app (not the NAS) could not reach the Internet.
     pub fn offline_app(&self) -> bool {
-        self.app_offline || matches!(self.update, super::app::UpdateState::CheckFailed(_))
+        // only a transport failure of the update check counts; a 404, a rate limit or a parse error means GitHub answered
+        self.app_offline || matches!(&self.update, super::app::UpdateState::CheckFailed(f) if f.offline())
     }
 
     pub fn set_storage_mode(&mut self, mode: StorageMode, cx: &mut Context<App>) {

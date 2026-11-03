@@ -29,7 +29,7 @@ pub enum Screen {
 
 /// Names accepted by `synofurb gui --demo --screen <name>`. The Help centre is a sheet over the current screen, so
 /// `help` and `help-topic` are demo targets with an overlay, not screens.
-pub const DEMO_SCREEN_NAMES: [&str; 59] = [
+pub const DEMO_SCREEN_NAMES: [&str; 67] = [
     "failed-agent",
     "manage-rebuild",
     "manage-faildisk",
@@ -89,7 +89,40 @@ pub const DEMO_SCREEN_NAMES: [&str; 59] = [
     "welcome-3",
     "welcome-4",
     "welcome-5",
+    "update-unsigned",
+    "updates-checking",
+    "updates-current",
+    "updates-available",
+    "updates-failed-notfound",
+    "updates-failed-offline",
+    "updates-unsigned",
+    "settings-updates",
 ];
+
+/// The update state a demo run starts in (and what a click on "Check for updates" ends in).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DemoUpdate {
+    /// Nothing known; a click finds an update.
+    #[default]
+    None,
+    Checking,
+    Current,
+    /// An update, signed (the demo build pretends to have a real key).
+    Available,
+    /// GitHub did not find the releases (a private repository).
+    NotFound,
+    /// This computer cannot reach GitHub.
+    Offline,
+    /// An update the build cannot verify (placeholder key).
+    Unsigned,
+}
+
+impl DemoUpdate {
+    /// Does the demo build count as unsigned (placeholder key)?
+    pub fn unsigned(self) -> bool {
+        self == DemoUpdate::Unsigned
+    }
+}
 
 /// What a demo run opens on top of its screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -144,6 +177,8 @@ pub struct DemoTarget {
     pub ready: bool,
     /// Find with no units: `Some(false)` empty and done, `Some(true)` still scanning.
     pub no_units: Option<bool>,
+    /// The update state the demo starts in (About, Settings and the update dialog show it).
+    pub update: DemoUpdate,
 }
 
 /// What a demo run pretends to know about the unit (drives the risk Tag and the Recovery rows).
@@ -175,6 +210,7 @@ impl DemoTarget {
             twin: false,
             ready: false,
             no_units: None,
+            update: DemoUpdate::None,
         }
     }
 
@@ -203,7 +239,15 @@ impl DemoTarget {
             "failed-agent" => DemoTarget { fixture: Fixture::Agent, ..DemoTarget::at(Screen::Failed) },
             "failed-post" | "failed-keep" => DemoTarget { past_no_return: true, ..DemoTarget::at(Screen::Failed) },
             "done" => DemoTarget::at(Screen::Done),
-            "update" => DemoTarget { overlay: Overlay::Update, ..DemoTarget::at(Screen::Inventory) },
+            "update" => DemoTarget { overlay: Overlay::Update, update: DemoUpdate::Available, ..DemoTarget::at(Screen::Inventory) },
+            "update-unsigned" => DemoTarget { overlay: Overlay::Update, update: DemoUpdate::Unsigned, ..DemoTarget::at(Screen::Inventory) },
+            "updates-checking" => DemoTarget { update: DemoUpdate::Checking, ..DemoTarget::at(Screen::About) },
+            "updates-current" => DemoTarget { update: DemoUpdate::Current, ..DemoTarget::at(Screen::About) },
+            "updates-available" => DemoTarget { update: DemoUpdate::Available, ..DemoTarget::at(Screen::About) },
+            "updates-failed-notfound" => DemoTarget { update: DemoUpdate::NotFound, ..DemoTarget::at(Screen::About) },
+            "updates-failed-offline" => DemoTarget { update: DemoUpdate::Offline, offline: true, ..DemoTarget::at(Screen::About) },
+            "updates-unsigned" => DemoTarget { update: DemoUpdate::Unsigned, ..DemoTarget::at(Screen::About) },
+            "settings-updates" => DemoTarget { update: DemoUpdate::NotFound, ..DemoTarget::at(Screen::Settings) },
             "settings" => DemoTarget::at(Screen::Settings),
             "about" => DemoTarget::at(Screen::About),
             "bootmgr" | "boot-manager" => DemoTarget::at(Screen::BootMgr),

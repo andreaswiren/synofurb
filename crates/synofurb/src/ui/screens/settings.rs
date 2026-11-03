@@ -1,7 +1,7 @@
 //! D12 Settings: the stock `Settings` widget (pages General, Updates, Data, Logs, Privacy). Changes apply at once.
 //! Rows are `SettingItem::render` rows so every label can carry its info icon instead of a paragraph of help.
 
-use crate::ui::app::{App, UpdateState, version};
+use crate::ui::app::App;
 use crate::ui::copy::{self, Item};
 use crate::ui::icons::{self, role};
 use crate::ui::kit;
@@ -53,13 +53,6 @@ impl App {
         };
         let refreshing = self.compat_refreshing;
         let offline = self.offline_app();
-        let (upd_text, upd_available) = match &self.update {
-            UpdateState::Available(i) => (format!("{} available", i.latest), true),
-            UpdateState::UpToDate => (format!("{} is current", version()), false),
-            UpdateState::Checking => ("checking".into(), false),
-            UpdateState::CheckFailed(_) => ("not checked".into(), false),
-            _ => (version().to_string(), false),
-        };
         let logs = self.cfg_dir.join("logs");
         let logs_s = logs.display().to_string();
         let bundle_input = self.inp.bundle.clone();
@@ -166,25 +159,8 @@ impl App {
                 }))
                 .item(SettingItem::render({
                     let app = app.clone();
-                    let text = upd_text.clone();
-                    move |_, _, cx| {
-                        let app2 = app.clone();
-                        h_flex()
-                            .w_full()
-                            .justify_between()
-                            .items_center()
-                            .child(kit::muted(cx, text.clone()))
-                            .child(
-                                Button::new("check-now")
-                                    .outline()
-                                    .small()
-                                    .icon(icons::icon(role::REFRESH))
-                                    .label(copy::MENU_UPDATES.short)
-                                    .on_click(move |_, _, cx| app2.update(cx, |a, cx| a.check_updates_now(cx)))
-                                    .when(upd_available, |b| b.primary()),
-                            )
-                            .into_any_element()
-                    }
+                    // one line for every state: checking, current, available, or why the check failed
+                    move |_, _, cx| crate::ui::screens::update_status::status_row(&app, "s-upd", cx)
                 })),
         );
         let _ = check;

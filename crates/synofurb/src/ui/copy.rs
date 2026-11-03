@@ -495,7 +495,13 @@ mod strings {
         UPD_ST_CHECKING: Prose, "Checking for updates", "", "", "";
         UPD_ST_CURRENT: Prose, "{v} is current", "", "", "";
         UPD_ST_AVAILABLE: Prose, "{v} available", "", "", "";
-        UPD_ST_UNSIGNED: Prose, "This release is not signed, so synofurb will not install it.", "", "", "";
+        UPD_ST_UNSIGNED: Prose, "This release is not signed. synofurb checks its SHA-256 only.", "", "", "";
+        UPD_CONSENT: Prose, "I understand and want to install it", "", "", "";
+        UPD_CONSENT_INFO: Dialog, "Unsigned install", "A tampered release would not be detected.", "troubleshooting",
+            "synofurb compares the download with the SHA-256 listed on the same GitHub release. That catches a damaged file.\n\nIt cannot tell whether the release itself was changed by someone else, because there is no signature to check. Install only if you trust the release page.";
+        UPD_CONSENT_WHY: Label, "Why unavailable", "Confirm that you understand the risk first.", "", "";
+        UPD_DOWNLOAD_INSTALL: Button, "Download and install", "", "", "";
+        UPD_VERIFIED_UNSIGNED: Label, "Unsigned, checksum verified", "Only the SHA-256 was checked; there is no signature.", "", "";
         UPD_ST_FAILED: Prose, "Couldn't check: {reason}", "", "", "";
         UPD_FAIL_OFFLINE: Label, "No Internet connection", "", "", "synofurb could not reach GitHub. Check the Internet connection and try again.";
         UPD_FAIL_NOTFOUND: Label, "Releases not found", "", "", "GitHub did not find the releases. If the repository is private, the update check cannot see them.";
@@ -1005,7 +1011,11 @@ pub static SCREENS: &[ScreenCopy] = &[
             &DONE_NEXT_STEPS,
         ],
     },
-    ScreenCopy { name: "update", visible: &[&UPD_BANNER, &UPD_DETAILS, &UPD_LATER, &UPD_DOWNLOAD, &UPD_RESTART, &UPD_SKIP] },
+    ScreenCopy {
+        name: "update",
+        // the dialog of an unsigned release before the download: banner, one warning, the consent box, Skip, Later, Download and install
+        visible: &[&UPD_BANNER, &UPD_DETAILS, &UPD_LATER, &UPD_ST_UNSIGNED, &UPD_CONSENT, &UPD_DOWNLOAD_INSTALL, &UPD_SKIP],
+    },
     ScreenCopy {
         name: "settings",
         visible: &[
@@ -1032,11 +1042,10 @@ pub static SCREENS: &[ScreenCopy] = &[
             &SET_LOG_FOLDER,
             &SET_OPEN,
             &SET_SEND_RESULTS,
-            // the update row, worst state (an unsigned update): status, note, two buttons
+            // the update row, worst state (an unsigned update): status, note, button
             &UPD_ST_AVAILABLE,
             &UPD_ST_UNSIGNED,
-            &UPD_OPEN_PAGE,
-            &UPD_CHECK_AGAIN,
+            &UPD_DETAILS,
         ],
     },
     ScreenCopy {
@@ -1134,11 +1143,10 @@ pub static SCREENS: &[ScreenCopy] = &[
             &ABOUT_SOURCE,
             &ABOUT_REPORT,
             &ABOUT_CREDITS,
-            // the update line, worst state (an unsigned update): status, note, two buttons
+            // the update line, worst state (an unsigned update): status, note, button
             &UPD_ST_AVAILABLE,
             &UPD_ST_UNSIGNED,
-            &UPD_OPEN_PAGE,
-            &UPD_CHECK_AGAIN,
+            &UPD_DETAILS,
         ],
     },
 ];

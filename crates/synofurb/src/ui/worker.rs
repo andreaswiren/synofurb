@@ -72,7 +72,7 @@ pub enum Msg {
     /// A management-plane update or rollback finished (the engine's own report), or could not be driven at all.
     MgmtDone(Result<MgmtDone, String>),
     CompatRefreshed(Box<CompatRefresh>),
-    UpdateChecked(Result<Box<UpdateInfo>, String>),
+    UpdateChecked(Result<Box<UpdateInfo>, super::updates::CheckFailure>),
     UpdateProgress(Progress),
     UpdateDownloaded(Result<Box<VerifiedDownload>, String>),
 }
@@ -546,18 +546,44 @@ pub fn spawn_compat_refresh(tx: Tx, cache_dir: PathBuf) {
 pub fn spawn_update_check(tx: Tx, current: &'static str, channel: Channel, cache_dir: PathBuf) {
     std::thread::spawn(move || {
         let cache = ReleaseCache::on_disk(&cache_dir.join("releases"));
-        let r = updater::check_with_cache(current, updater::DEFAULT_REPO, channel, &cache).map(Box::new).map_err(|e| e.to_string());
+        let r = updater::check_with_cache(current, updater::DEFAULT_REPO, channel, &cache)
+            .map(Box::new)
+            .map_err(|e| super::updates::classify(&e, github_reachable));
         send(&tx, Msg::UpdateChecked(r));
     });
 }
 
-pub fn spawn_update_download(tx: Tx, info: UpdateInfo, dest: PathBuf) {
+/// A demo run's "Check for updates": the same message as a real check, after a short pause so the state is visible.
+pub fn spawn_demo_update_check(tx: Tx, demo: super::state::DemoUpdate) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        send(&tx, Msg::UpdateChecked(super::demo::update_check_result(demo)));
+    });
+}
+
+/// Can a TCP connection to GitHub's API host be opened? The typed answer to "is this a transport failure?" for the
+/// engine's ambiguous `Http` error: a failure to connect is "offline", anything else means GitHub was reached.
+pub fn github_reachable() -> bool {
+    use std::net::ToSocketAddrs;
+    let Ok(addrs) = ("api.github.com", 443).to_socket_addrs() else { return false };
+    addrs.into_iter().any(|a| std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_secs(4)).is_ok())
+}
+
+/// Download an update. `unsigned` is true only after the person ticked "I understand and want to install it" (the
+/// engine needs that proof as an `UnsignedConsent` and refuses it itself once a real signing key is embedded).
+pub fn spawn_update_download(tx: Tx, info: UpdateInfo, dest: PathBuf, unsigned: bool) {
     std::thread::spawn(move || {
         let r = (|| -> Result<VerifiedDownload, String> {
-            updater::ensure_can_verify(updater::UPDATE_PUBLIC_KEY).map_err(|e| e.to_string())?;
             std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
             let tx2 = tx.clone();
-            updater::download_verified(&info, &dest, &mut |p| send(&tx2, Msg::UpdateProgress(p))).map_err(|e| e.to_string())
+            let mut progress = |p| send(&tx2, Msg::UpdateProgress(p));
+            if unsigned {
+                updater::download_unchecked_signature(&info, &dest, updater::UnsignedConsent::acknowledged(), &mut progress)
+            } else {
+                updater::ensure_can_verify(updater::UPDATE_PUBLIC_KEY).map_err(|e| e.to_string())?;
+                updater::download_verified(&info, &dest, &mut progress)
+            }
+            .map_err(|e| e.to_string())
         })();
         send(&tx, Msg::UpdateDownloaded(r.map(Box::new)));
     });

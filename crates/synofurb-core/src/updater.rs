@@ -13,6 +13,14 @@
 //! Nothing is ever installed unverified, and while [`UPDATE_PUBLIC_KEY`] is still the placeholder,
 //! [`download_verified`] refuses with [`UpdateError::NoSigningKey`] instead of skipping the check.
 //!
+//! **The unsigned path.** While (and only while) the embedded key is the placeholder, a person can opt in to
+//! [`download_unchecked_signature`]: the same host policy, size limits and streaming SHA-256 check against the
+//! `SHA256SUMS` of the same GitHub release, but no signature. That protects against a corrupted download, not against
+//! a tampered release. It needs an [`UnsignedConsent`] token, is refused with [`UpdateError::UnsignedNotAllowed`] as
+//! soon as a real key is embedded (signatures become mandatory automatically), and the result is labelled
+//! ([`Integrity::ChecksumOnly`], `signed: false`) so the UI can say so. [`UpdateInfo::install_mode`] summarises what
+//! is possible for a release.
+//!
 //! The network layer is thin and every decision (version comparison, release selection, asset choice, URL policy,
 //! checksum parsing, apply planning) is a pure function with unit tests.
 
@@ -86,6 +94,10 @@ pub enum UpdateError {
          The maintainer must generate a key with `minisign -G` and set UPDATE_PUBLIC_KEY (see docs/UPDATES.md)"
     )]
     NoSigningKey,
+    #[error(
+        "this build contains a real update signing key, so releases must be signed; installing without a signature is not possible here"
+    )]
+    UnsignedNotAllowed,
     #[error("the update signing key is not a valid minisign public key: {0}")]
     BadSigningKey(String),
     #[error("the release has no {0} asset; cannot verify the download")]
@@ -259,6 +271,70 @@ impl UpdateInfo {
     /// True if everything needed for a verified install is attached to the release.
     pub fn installable(&self) -> bool {
         self.asset.is_some() && self.checksums.is_some() && self.signature.is_some()
+    }
+
+    /// Does the release carry `SHA256SUMS.minisig`?
+    pub fn has_signature_asset(&self) -> bool {
+        self.signature.is_some()
+    }
+
+    /// The release notes as readable plain text (see [`plain_release_notes`]).
+    pub fn notes_plain(&self) -> String {
+        plain_release_notes(&self.notes)
+    }
+
+    /// How this release can be installed with the key embedded in this build.
+    pub fn install_mode(&self) -> InstallMode {
+        self.install_mode_for(UPDATE_PUBLIC_KEY)
+    }
+
+    /// [`UpdateInfo::install_mode`] for an explicit key (tests).
+    ///
+    /// * a real key: [`InstallMode::Signed`] when asset, `SHA256SUMS` and `SHA256SUMS.minisig` exist, else `Blocked` (never unsigned);
+    /// * the placeholder: [`InstallMode::UnsignedWithConsent`] when asset and `SHA256SUMS` exist (the signature, if any, cannot be checked).
+    pub fn install_mode_for(&self, public_key: &str) -> InstallMode {
+        if self.asset.is_none() {
+            return InstallMode::Blocked(
+                self.problems.first().cloned().unwrap_or_else(|| "the release has no build for this system".into()),
+            );
+        }
+        if self.checksums.is_none() {
+            return InstallMode::Blocked(format!("the release has no {SUMS_ASSET} asset, so the download cannot be checked"));
+        }
+        if signing_key_is_placeholder(public_key) {
+            return InstallMode::UnsignedWithConsent;
+        }
+        if self.signature.is_none() {
+            return InstallMode::Blocked(format!(
+                "the release has no {SIGNATURE_ASSET} asset and this build only installs signed releases"
+            ));
+        }
+        InstallMode::Signed
+    }
+}
+
+/// What can be done with a release. `Blocked` carries the reason in plain words.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", content = "reason", rename_all = "snake_case")]
+pub enum InstallMode {
+    /// Signature of `SHA256SUMS` and the file's SHA-256 will both be checked ([`download_verified`]).
+    Signed,
+    /// The embedded key is the placeholder: only the explicit, opt-in [`download_unchecked_signature`] is possible (SHA-256 only).
+    UnsignedWithConsent,
+    Blocked(String),
+}
+
+impl InstallMode {
+    pub fn is_blocked(&self) -> bool {
+        matches!(self, InstallMode::Blocked(_))
+    }
+    /// Stable word for JSON and logs: `signed`, `unsigned_with_consent`, `blocked`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            InstallMode::Signed => "signed",
+            InstallMode::UnsignedWithConsent => "unsigned_with_consent",
+            InstallMode::Blocked(_) => "blocked",
+        }
     }
 }
 
@@ -688,13 +764,49 @@ pub struct Progress {
     pub total: Option<u64>,
 }
 
-/// A downloaded file that passed both checks.
+/// How a download was checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Integrity {
+    /// The minisign signature of `SHA256SUMS` verified and the file's SHA-256 matched.
+    Signed,
+    /// Only the file's SHA-256 against the `SHA256SUMS` of the same release (no signature): protects against a damaged download, **not**
+    /// against a tampered release. Label it as such wherever it is shown.
+    ChecksumOnly,
+}
+
+/// A downloaded file that passed its checks (see `integrity`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedDownload {
     pub path: PathBuf,
     pub sha256: String,
     pub asset: AssetInfo,
     pub version: String,
+    /// True only when the signature was verified (`integrity == Signed`).
+    pub signed: bool,
+    pub integrity: Integrity,
+}
+
+/// Proof that a person agreed to install **without a signature**. It can only be made with [`UnsignedConsent::acknowledged`], which a
+/// front end calls after showing the warning and getting an explicit yes; it is consumed by [`download_unchecked_signature`].
+#[derive(Debug)]
+pub struct UnsignedConsent(());
+
+impl UnsignedConsent {
+    /// Call this only after the person has been told that only the SHA-256 listed in `SHA256SUMS` of the same GitHub release is checked,
+    /// and that a tampered release would not be detected.
+    pub fn acknowledged() -> UnsignedConsent {
+        UnsignedConsent(())
+    }
+}
+
+/// The warning to show before asking for consent (CLI and GUI use the same words).
+pub const UNSIGNED_WARNING: &str = "This release is not signed, so it cannot be verified. Only the SHA-256 listed in SHA256SUMS of the same GitHub release is checked: it catches a damaged download, but a tampered release (or a hijacked GitHub account) would not be detected. Install it only if you trust the release page.";
+
+/// May the unsigned path be used? True exactly while [`UPDATE_PUBLIC_KEY`] is the placeholder. When a real key is embedded this is
+/// false and [`download_unchecked_signature`] refuses, so signatures become mandatory without any other change.
+pub fn unsigned_allowed() -> bool {
+    signing_key_is_placeholder(UPDATE_PUBLIC_KEY)
 }
 
 /// Refuse early (before any network traffic) when updates cannot be verified.
@@ -749,6 +861,82 @@ pub fn download_verified_with(
     let expected = table.get(&asset.name).ok_or_else(|| UpdateError::ChecksumMissing(asset.name.clone()))?.clone();
 
     // 3. stream the asset while hashing
+    let (final_path, actual) = stream_asset(asset, &expected, dest_dir, policy, progress)?;
+    Ok(VerifiedDownload {
+        path: final_path,
+        sha256: actual,
+        asset: asset.clone(),
+        version: info.latest.clone(),
+        signed: true,
+        integrity: Integrity::Signed,
+    })
+}
+
+/// Download the asset of `info` **without checking a signature**: only its SHA-256 against the `SHA256SUMS` of the same release (which
+/// must exist; `SHA256SUMS.minisig` need not). Needs the person's [`UnsignedConsent`] and is refused with
+/// [`UpdateError::UnsignedNotAllowed`] while a real signing key is embedded (see the module docs). Same host policy, size limits and
+/// streaming hash as [`download_verified`]; a partial or mismatching file is deleted; nothing is installed here.
+pub fn download_unchecked_signature(
+    info: &UpdateInfo,
+    dest_dir: &Path,
+    consent: UnsignedConsent,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<VerifiedDownload> {
+    download_unchecked_signature_with(info, dest_dir, UPDATE_PUBLIC_KEY, consent, HostPolicy::DOWNLOAD, progress)
+}
+
+/// [`download_unchecked_signature`] with an explicit key and host policy (tests inject their own).
+pub fn download_unchecked_signature_with(
+    info: &UpdateInfo,
+    dest_dir: &Path,
+    public_key: &str,
+    consent: UnsignedConsent,
+    policy: HostPolicy,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<VerifiedDownload> {
+    let UnsignedConsent(()) = consent;
+    if !signing_key_is_placeholder(public_key) {
+        return Err(UpdateError::UnsignedNotAllowed);
+    }
+    let asset = info
+        .asset
+        .as_ref()
+        .ok_or_else(|| UpdateError::NoAssetForTarget(info.problems.first().cloned().unwrap_or_else(|| "unknown".into())))?;
+    let sums = info.checksums.as_ref().ok_or(UpdateError::MissingAsset(SUMS_ASSET))?;
+    for a in [asset, sums] {
+        if !is_plain_filename(&a.name) {
+            return Err(UpdateError::BadAssetName(a.name.clone()));
+        }
+        policy.check(&a.url)?;
+    }
+    let ag = agent(Duration::from_secs(30), Some(Duration::from_secs(60)));
+    let r = get(&ag, policy, &sums.url, &[("Accept", "application/octet-stream")])?;
+    if r.status() != 200 {
+        return Err(UpdateError::Http(format!("{} answered HTTP {}", sums.name, r.status())));
+    }
+    let sums_text = String::from_utf8(read_limited(r, MAX_SUMS_BYTES)?).map_err(|_| UpdateError::BadChecksumFile("not UTF-8".into()))?;
+    let table = parse_sha256sums(&sums_text)?;
+    let expected = table.get(&asset.name).ok_or_else(|| UpdateError::ChecksumMissing(asset.name.clone()))?.clone();
+    let (final_path, actual) = stream_asset(asset, &expected, dest_dir, policy, progress)?;
+    Ok(VerifiedDownload {
+        path: final_path,
+        sha256: actual,
+        asset: asset.clone(),
+        version: info.latest.clone(),
+        signed: false,
+        integrity: Integrity::ChecksumOnly,
+    })
+}
+
+/// Stream `asset` into `<dest_dir>/<name>.part` while hashing, enforce the size limits, compare with `expected` and only then move it to its
+/// final name. Any failure removes the partial file. Returns the final path and the digest.
+fn stream_asset(
+    asset: &AssetInfo,
+    expected: &str,
+    dest_dir: &Path,
+    policy: HostPolicy,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<(PathBuf, String)> {
     std::fs::create_dir_all(dest_dir)?;
     let final_path = dest_dir.join(&asset.name);
     let part_path = dest_dir.join(format!("{}.part", asset.name));
@@ -796,11 +984,199 @@ pub fn download_verified_with(
     }
     if actual != expected {
         let _ = std::fs::remove_file(&part_path);
-        return Err(UpdateError::ChecksumMismatch { name: asset.name.clone(), expected, actual });
+        return Err(UpdateError::ChecksumMismatch { name: asset.name.clone(), expected: expected.to_string(), actual });
     }
     let _ = std::fs::remove_file(&final_path);
     std::fs::rename(&part_path, &final_path)?;
-    Ok(VerifiedDownload { path: final_path, sha256: actual, asset: asset.clone(), version: info.latest.clone() })
+    Ok((final_path, actual))
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Release notes as plain text
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Turn GitHub-flavoured Markdown release notes into readable plain text: headings lose their `#`, `**bold**`, `*italic*`
+/// and `` `code` `` lose their marks, `- item` / `* item` become `• item` (nesting kept as indentation), `[text](url)` becomes
+/// `text (url)`, images become their alt text, block quotes and code fences lose their markers, rules and HTML tags are dropped,
+/// and runs of blank lines collapse. It is meant for display only and never executes or fetches anything.
+pub fn plain_release_notes(md: &str) -> String {
+    let mut out: Vec<String> = vec![];
+    let mut in_fence = false;
+    for raw in md.replace("\r\n", "\n").replace('\r', "\n").lines() {
+        let line = raw.trim_end();
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            out.push(format!("    {line}"));
+            continue;
+        }
+        if t.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        // horizontal rules
+        let compact: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+        if compact.len() >= 3
+            && (compact.chars().all(|c| c == '-') || compact.chars().all(|c| c == '*') || compact.chars().all(|c| c == '_'))
+        {
+            continue;
+        }
+        let indent = line.len() - t.len();
+        // headings
+        let hashes = t.chars().take_while(|c| *c == '#').count();
+        if (1..=6).contains(&hashes) && t[hashes..].starts_with(' ') {
+            out.push(plain_inline(t[hashes..].trim().trim_end_matches('#').trim()));
+            continue;
+        }
+        // block quotes
+        let (t, quoted) = match t.strip_prefix('>') {
+            Some(r) => (r.trim_start(), true),
+            None => (t, false),
+        };
+        // bullets
+        let bullet = ["- ", "* ", "+ "].iter().find_map(|m| t.strip_prefix(m));
+        let text = if let Some(rest) = bullet {
+            let level = indent / 2;
+            format!("{}\u{2022} {}", "  ".repeat(level), plain_inline(rest.trim()))
+        } else {
+            let body = plain_inline(t);
+            if quoted { format!("  {body}") } else { body }
+        };
+        out.push(text);
+    }
+    // collapse blank runs, trim the ends
+    let mut res = String::new();
+    let mut blanks = 0;
+    for l in out {
+        if l.trim().is_empty() {
+            blanks += 1;
+            continue;
+        }
+        if !res.is_empty() {
+            res.push('\n');
+            if blanks > 0 {
+                res.push('\n');
+            }
+        }
+        blanks = 0;
+        res.push_str(&l);
+    }
+    res
+}
+
+/// Inline Markdown to text: links, images, code spans, bold, italic, autolinks, HTML tags.
+fn plain_inline(s: &str) -> String {
+    let c: Vec<char> = s.chars().collect();
+    let mut o = String::new();
+    let mut i = 0;
+    while i < c.len() {
+        match c[i] {
+            '\\' if i + 1 < c.len() && c[i + 1].is_ascii_punctuation() => {
+                o.push(c[i + 1]);
+                i += 2;
+            }
+            '`' => {
+                let n = c[i..].iter().take_while(|x| **x == '`').count();
+                let fence: String = "`".repeat(n);
+                let rest: String = c[i + n..].iter().collect();
+                match rest.find(&fence) {
+                    Some(end) => {
+                        o.push_str(rest[..end].trim());
+                        i += n + rest[..end].chars().count() + n;
+                    }
+                    None => {
+                        o.push_str(&fence);
+                        i += n;
+                    }
+                }
+            }
+            '!' | '[' => {
+                let img = c[i] == '!' && c.get(i + 1) == Some(&'[');
+                let open = if img { i + 1 } else { i };
+                if c[open] == '['
+                    && let Some((text, url, next)) = md_link(&c, open)
+                {
+                    let text = plain_inline(&text);
+                    if img {
+                        o.push_str(&text);
+                    } else if text.is_empty() || text == url {
+                        o.push_str(&url);
+                    } else {
+                        o.push_str(&format!("{text} ({url})"));
+                    }
+                    i = next;
+                } else {
+                    o.push(c[i]);
+                    i += 1;
+                }
+            }
+            '*' | '_' => {
+                let n = c[i..].iter().take_while(|x| **x == c[i]).count();
+                let prev = if i > 0 { c[i - 1] } else { ' ' };
+                let next = c.get(i + n).copied().unwrap_or(' ');
+                // `**` and `__` are marks; a single `*` is a mark unless it stands alone between spaces; a single `_` is a mark
+                // unless it is inside a word (snake_case)
+                let mark = n >= 2
+                    || (c[i] == '*' && !(prev.is_whitespace() && next.is_whitespace()))
+                    || (c[i] == '_' && !(prev.is_alphanumeric() && next.is_alphanumeric()));
+                if !mark {
+                    o.extend(std::iter::repeat_n(c[i], n));
+                }
+                i += n;
+            }
+            '<' => match c[i..].iter().position(|x| *x == '>') {
+                Some(end) if end > 1 && c[i + 1].is_ascii_alphabetic() || c.get(i + 1) == Some(&'/') => {
+                    let end = c[i..].iter().position(|x| *x == '>').unwrap_or(0);
+                    let inner: String = c[i + 1..i + end].iter().collect();
+                    if inner.starts_with("http://") || inner.starts_with("https://") {
+                        o.push_str(&inner);
+                    } else if inner.trim_end_matches(['/', ' ']).eq_ignore_ascii_case("br") {
+                        o.push(' ');
+                    }
+                    i += end + 1;
+                }
+                _ => {
+                    o.push('<');
+                    i += 1;
+                }
+            },
+            ch => {
+                o.push(ch);
+                i += 1;
+            }
+        }
+    }
+    o.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `[text](url "title")` starting at `c[open] == '['`: (text, url, index after the closing paren).
+fn md_link(c: &[char], open: usize) -> Option<(String, String, usize)> {
+    let mut depth = 0;
+    let mut close = None;
+    for (k, ch) in c.iter().enumerate().skip(open) {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(k);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
+    if c.get(close + 1) != Some(&'(') {
+        return None;
+    }
+    let end = c[close + 2..].iter().position(|x| *x == ')')? + close + 2;
+    let inside: String = c[close + 2..end].iter().collect();
+    let url = inside.split_whitespace().next().unwrap_or("").trim_matches(['<', '>']).to_string();
+    Some((c[open + 1..close].iter().collect(), url, end + 1))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
