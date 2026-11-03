@@ -65,7 +65,7 @@ names the flag to use. Prompts are line based and work on a serial console or `T
 **Secrets are never arguments.** There is no `--password VALUE` anywhere. The NAS login password comes from `$SYNOFURB_PASSWORD` (name changeable with
 `--ssh-password-env`), `--ssh-password-file FILE` (first line) or a prompt; with `--key FILE` an unencrypted OpenSSH private key is used instead. The sudo password
 defaults to the SSH password, or `$SYNOFURB_SUDO_PASSWORD`. The password of the *new* account is `--password-file`, `--password-env VAR`, `--prompt-password` or generated
-(default). Every secret is registered with the logger and replaced by `***` in the log file and on screen. The generated password is shown once at the end of an install (and
+(default). A secret setting of an add-on is `KEY=@env:VARIABLE` or `KEY=@file:PATH` inside `--addon`, never a literal value. Every secret is registered with the logger and replaced by `***` in the log file and on screen. The generated password is shown once at the end of an install (and
 included in the `result` event); a password you chose is never printed back.
 
 **Ctrl-C.** Before the point of no return the first Ctrl-C cancels at the next safe point ("no disk has been changed"), the second stops waiting. After it, Ctrl-C says
@@ -187,12 +187,12 @@ Looks `DS923+`, `ds923plus`, `RS3618xs` up in the embedded list (or the cached r
 
 ```sh
 synofurb-cli plan (--host ADDRESS ... | --facts FILE|demo)
-    [--mode wipe|keep] [--keep md2[,md3]] [--system-gib N] [--copies N] [--raid auto|none|0|1|5|6|10|shr1|shr2] [--free-percent 0-90] [--kernel newest|stable] [--json]
+    [--mode wipe|keep] [--keep md2[,md3]] [--system-gib N] [--copies N] [--raid auto|none|0|1|5|6|10|shr1|shr2] [--free-percent 0-90] [--kernel newest|stable] [--addon ID[:KEY=VALUE,...]]... [--json]
 ```
 
 Every planner knob of the app's Storage step: `--mode keep` reclaims only DSM's system and swap and preserves the data arrays (`--keep` selects which; default all);
 `--system-gib 0` means "recommended"; `--copies` is the number of disks carrying a copy of the system (default automatic); `--raid` the level of the new data volume (`shr1`/`shr2` = Synology-Hybrid-RAID-like slices of mdadm arrays in one LVM group that use disks of different sizes fully, tolerating 1 or 2 failed disks; they need at least 2 / 4 wiped disks and cannot be combined with preserved arrays, see [RAID.md](RAID.md));
-`--free-percent` the share of the data volume group left unallocated; `--kernel` is only echoed (the kernel channel does not change the layout). Prints what will be destroyed, what is preserved, warnings, errors and the confirmation phrase. Exit 4 when the plan has
+`--free-percent` the share of the data volume group left unallocated; `--kernel` is only echoed (the kernel channel does not change the layout); `--addon` is only echoed too (see [addons](#addons)): the add-ons that would be installed and what to know about them (`--json`: the `addons` key). Prints what will be destroyed, what is preserved, warnings, errors and the confirmation phrase. Exit 4 when the plan has
 errors, 5 for unsupported hardware.
 
 ### install
@@ -226,6 +226,7 @@ Boot and source:
 | `--kit-dir DIR` | `synofurb-kit` | output folder of `--method kit` |
 | `--no-firmware` | firmware on | leave out non-free firmware packages |
 | `--no-verbose-installer` | verbose | no debug logging inside the Debian installer |
+| `--addon ID[:KEY=VALUE,...]` (repeat) | none | add-ons to install after the first boot, see [addons](#addons) |
 | `--source online\|offline`, `--bundle DIR` | online | offline: serve everything from a bundle ([Offline use](#offline-use)); `--bundle` (alias `--offline-bundle`) implies offline |
 
 What an install does, in order: connect and inspect, build the plan (exit 4/5 on errors or unsupported hardware), complete the [safety gate](#the-safety-gate), re-inspect and compare
@@ -251,6 +252,24 @@ management: https://192.168.1.30:8443/  (self-signed certificate)
 serial console: ttyS0 at 115200 baud (also on USB serial adapters)
 debug log:  ~/.local/share/synofurb/logs/synofurb-....log
 ```
+
+### addons
+
+```sh
+synofurb-cli addons list [--json]
+synofurb-cli plan|install ... --addon ID[:KEY=VALUE,...] [--addon ...]
+```
+
+Add-ons are Docker apps managed by the unit's web page ([ADDONS.md](ADDONS.md)): `docker`, `portainer`, `frigate`, `plex`. `addons list` shows each with its summary, what it needs,
+the privileges it asks for (`docker-socket`, `host-network`), whether it needs the Internet and its install-time settings. `--addon` is repeatable; what an add-on requires is added by itself
+(Docker for everything else), and the installer's plan lists them all (`Add-ons: Docker (required by ...), ...`) with the things to know: images are pulled from the Internet at the first boot,
+privileges, disk use, and with `--bundle` that Docker's packages are not in the offline bundle (they are downloaded on the first boot). Add-ons need the web management plane (not `--no-mgmt`).
+
+Settings: `--addon frigate:retain_days=14`. Values cannot contain a comma. **A secret setting never goes on the command line** (it would be in the process list and the shell history): write
+`KEY=@env:VARIABLE` or `KEY=@file:PATH` (first line), e.g. `--addon plex:plex_claim=@env:PLEX_CLAIM`; an inline value for a secret is refused (exit 2) and not echoed. Unknown add-ons or settings and
+out-of-range values are usage errors (exit 2) that list what exists. The choices are written to `/etc/synofurb/addons.d/pending/<id>.json` (secrets to `pending-secrets/<id>.json`, mode 0600) and
+installed on the first boot by the management plane; an add-on that cannot be installed (no Internet) shows "needs attention" in the web page and the installation itself does not fail.
+`install --dry-run` shows the pending files in the payload manifest; secret values are placeholders there.
 
 ### boot-manager, recover, backups
 
@@ -350,12 +369,12 @@ All `--json` documents carry `"schema": 1` and are printed with stable keys; new
 "compat":{"status","status_label","headline","details":[],"blocking","entry"},"auto_boot_method":"kexec","confirm_phrase":"ERASE DS918+","supported":true}`. `facts` is the engine's `DeviceFacts`: `model, unique, dsm_version,
 serial, hostname, arch, mem_kib, cpu, firmware, kexec, cpu_vendor, dom{...}|null, cmdline, is_root, nics[], disks[{name, model, serial, sectors, rotational, removable, table, parts[]}], arrays[{name, level, state, sectors, members, role, vg}], lvs[], mounts[]`.
 
-**`plan --json`**: `{"schema":1,"model","serial","confirm_phrase","ok","plan_ok","supported","errors":[],"warnings":[],"summary":[],"destroyed":[],"preserved":[{what,detail}],"platform":{},"compat":{},"kernel":{"channel","label"},"plan":{...}}`; `plan` is the engine's full plan
+**`plan --json`**: `{"schema":1,"model","serial","confirm_phrase","ok","plan_ok","supported","errors":[],"warnings":[],"summary":[],"destroyed":[],"preserved":[{what,detail}],"platform":{},"compat":{},"kernel":{"channel","label"},"addons":{"selected":[],"lines":[],"warnings":[]},"plan":{...}}`; `plan` is the engine's full plan
 (`mode, arch, firmware, request, system_disks, disks[] with the new partitions, arrays[], vgs[], boot, kept_arrays, sizes{min/recommended/max/chosen_system_mib, ...}`). `ok` is true only when the plan has no errors **and** the hardware is supported.
 
 **`version --json`**: `{"schema":1,"name":"synofurb-cli","version":"0.2.0","git":"abc1234"|null,"target":"x86_64-unknown-linux-gnu","os":"linux","arch":"x86_64","profile":"release","features":["cli","bundle"],"gui":false}`
 
-**`install --dry-run --json`**: `{"schema":1,"dry_run":true,"model","confirm_phrase","method","placeholders":[],"plan":{},"install_config":{},"installer_cmdline","offline_bundle":null|"DIR","payload":{"sha256","bytes","files":[{path,mode,size,sha256}]},"preseed","stage2"}`
+**`install --dry-run --json`**: `{"schema":1,"dry_run":true,"model","confirm_phrase","method","placeholders":[],"plan":{},"install_config":{},"installer_cmdline","offline_bundle":null|"DIR","addons":{"selected":[{id,name,auto,required_by,privileges,needs_internet,settings,secrets[]}],"lines":[],"warnings":[]},"payload":{"sha256","bytes","files":[{path,mode,size,sha256}]},"preseed","stage2"}`
 
 **`self-update --check --json`**: the updater's `UpdateInfo` (`current, latest, tag, update_available, channel, prerelease, asset{name,url,size}, checksums, signature, problems[], notes`) plus `program`, `installable`, `install_mode`, `install_blocked_reason`, `signature_asset`, `unsigned_allowed` and `notes_plain`.
 
@@ -478,6 +497,7 @@ before any network traffic); `--yes` alone never enables it, and it is rejected 
 | Goal: install / boot manager / recover | `install`, `boot-manager`, `recover`, `wizard` step 4 |
 | Storage (mode, keep list, size, copies, RAID, free %) with the destroyed/preserved lists | `plan`, `install` plan knobs |
 | System (host, user, password, SSH key, time zone, kernel, mirror, packages, serial console, DTB, management plane, boot method, firmware, verbose installer, kit folder, kexec) | `install` flags, `wizard` step 6 |
+| Add-ons (tick what to install after the first boot, presets) | `addons list`, `--addon` on `plan` / `install` |
 | Confirm (two boxes + typed phrase) | the [safety gate](#the-safety-gate) |
 | Install (phases, 12 steps, log, cancel) | `install` progress, `--log-format json`, Ctrl-C |
 | Done (logins, save to file) | the printed logins, `--save-logins` |

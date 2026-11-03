@@ -1,5 +1,6 @@
 //! `inspect`, `plan` and `install`.
 
+use super::addons_cmd;
 use super::args::{InspectArgs, InstallArgs, PlanArgs};
 use super::bundle;
 use super::dryrun;
@@ -13,6 +14,7 @@ use super::runner::{console_logger, progress_fn, run_job};
 use super::spec::{self, InstallSpec, Material, build_job, build_material, resolve_method, serial_text};
 use serde_json::json;
 use std::path::Path;
+use synofurb_core::addons::AddonContext;
 use synofurb_core::plan::{Plan, build_plan};
 use synofurb_core::session::{self, InstallJob, Outcome};
 
@@ -48,13 +50,17 @@ pub fn plan(out: &Out, a: PlanArgs) -> CliResult<()> {
     let db = load_compat_db();
     let asm = assess(&db, &insp.facts);
     let plan = build_plan(&insp.facts, &a.opts.request());
+    let chosen = addons_cmd::addons_from_args(&a.addon.addons)?;
+    let ctx = AddonContext { offline: false, root_mib: Some(plan.sizes.root_mib) };
     if a.json {
         let mut doc = plan_doc(&insp.facts, &plan, &asm);
         doc["kernel"] = facts::kernel_json(a.kernel.channel());
+        doc["addons"] = synofurb_core::addons::summary_json(&chosen, &ctx);
         out.json_doc(&doc);
     } else {
         out.data_lines(render::plan_report(&insp.facts, &plan, &asm));
         out.data(&format!("Kernel: {}", a.kernel.channel().label()));
+        out.data_lines(addons_cmd::plan_text(&chosen, &ctx));
     }
     verdict(&plan, &asm)
 }
@@ -84,7 +90,8 @@ pub fn install(out: &Out, a: InstallArgs) -> CliResult<()> {
     if !a.dry_run {
         gate::precheck(&a.gate, out)?;
     }
-    let spec = InstallSpec::from_args(&a.system, &a.boot, &a.source, out, &mut prompt)?;
+    let mut spec = InstallSpec::from_args(&a.system, &a.boot, &a.source, out, &mut prompt)?;
+    spec.addons = addons_cmd::addons_from_args(&a.addon.addons)?;
     // An offline install: the bundle must be a finished bundle before anything is contacted.
     if let Some(dir) = &spec.bundle {
         bundle::open_bundle(dir)?;
@@ -95,7 +102,9 @@ pub fn install(out: &Out, a: InstallArgs) -> CliResult<()> {
     let asm = assess(&db, &insp.facts);
     let plan = build_plan(&insp.facts, &a.plan.request());
 
-    let lines = render::plan_report(&insp.facts, &plan, &asm);
+    let mut lines = render::plan_report(&insp.facts, &plan, &asm);
+    lines
+        .extend(addons_cmd::plan_text(&spec.addons, &AddonContext { offline: spec.bundle.is_some(), root_mib: Some(plan.sizes.root_mib) }));
     if !a.dry_run {
         for l in &lines {
             out.info(l);

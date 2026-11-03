@@ -276,7 +276,7 @@ if [ -n "${ADDONS:-}" ]; then
     say "OFFLINE install: Docker ($ADDON_DOCKER_PACKAGES) is installed on the first boot instead"
   else
     # shellcheck disable=SC2086
-    apt_install $ADDON_DOCKER_PACKAGES || say "WARNING: Docker could not be installed now; the first boot tries again"
+    if ! apt_install $ADDON_DOCKER_PACKAGES; then say "WARNING: Docker could not be installed now; the first boot tries again"; fi
   fi
   systemctl enable synofurb-addons-firstboot.service || true
 fi

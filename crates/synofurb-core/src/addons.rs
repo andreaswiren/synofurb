@@ -105,7 +105,7 @@ static CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         id: "docker",
         name: "Docker",
-        summary: "Container engine and Compose, the base for the other add-ons.",
+        summary: "Docker Engine and the compose plugin from Debian. The base for every container add-on.",
         kind: AddonKind::System,
         requires: &[],
         privileges: &[],
@@ -117,7 +117,7 @@ static CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         id: "portainer",
         name: "Portainer",
-        summary: "Web page to manage your containers, images and volumes.",
+        summary: "Web page to manage Docker containers, images, volumes and networks.",
         kind: AddonKind::Compose,
         requires: &["docker"],
         privileges: &["docker-socket"],
@@ -176,7 +176,7 @@ pub fn entry(id: &str) -> Option<&'static CatalogEntry> {
 }
 
 /// A quick-setup preset: ids to tick (what they require is added by [`resolve`]).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct Preset {
     pub id: &'static str,
     pub label: &'static str,
@@ -489,14 +489,40 @@ pub fn pending_secrets_json(r: &Resolved) -> Option<String> {
     Some(serde_json::to_string_pretty(&r.choice.secrets).expect("json") + "\n")
 }
 
+/// The choice as one JSON document (plan JSON, dry run): who is installed and why, the lines and the warnings. Secret values never appear.
+pub fn summary_json(choices: &[AddonChoice], ctx: &AddonContext) -> serde_json::Value {
+    let items = resolve(choices).unwrap_or_default();
+    let selected: Vec<serde_json::Value> = items
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.entry.id, "name": r.entry.name, "auto": r.auto, "required_by": r.required_by,
+                "privileges": r.entry.privileges, "needs_internet": r.entry.needs_internet,
+                "settings": r.choice.settings, "secrets": r.choice.secrets.keys().collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    serde_json::json!({ "selected": selected, "lines": plan_lines(choices), "warnings": warnings(choices, ctx) })
+}
+
 /// A secret value that stands in for the real one in dry runs and rendered artefacts.
 pub const SECRET_PLACEHOLDER: &str = "DRYRUN-SECRET";
 
-/// The same choices with every secret replaced by [`SECRET_PLACEHOLDER`] (dry runs).
+/// The same choices with every secret replaced by [`SECRET_PLACEHOLDER`] (after the prefix the setting requires, so the result still
+/// validates). Dry runs use this.
 pub fn redact_secrets(choices: &[AddonChoice]) -> Vec<AddonChoice> {
     choices
         .iter()
-        .map(|c| AddonChoice { secrets: c.secrets.keys().map(|k| (k.clone(), SECRET_PLACEHOLDER.to_string())).collect(), ..c.clone() })
+        .map(|c| {
+            let prefix = |k: &str| match entry(&c.id).and_then(|e| e.settings.iter().find(|s| s.key == k)).map(|s| s.kind) {
+                Some(SettingKind::Secret { prefix, .. }) => prefix,
+                _ => "",
+            };
+            AddonChoice {
+                secrets: c.secrets.keys().map(|k| (k.clone(), format!("{}{SECRET_PLACEHOLDER}", prefix(k)))).collect(),
+                ..c.clone()
+            }
+        })
         .collect()
 }
 
@@ -603,7 +629,8 @@ mod tests {
         // spec_string never shows the value
         assert_eq!(p.spec_string(), "plex:plex_claim=<secret>");
         let red = redact_secrets(&[p]);
-        assert_eq!(red[0].secrets["plex_claim"], SECRET_PLACEHOLDER);
+        assert_eq!(red[0].secrets["plex_claim"], format!("claim-{SECRET_PLACEHOLDER}"));
+        validate(&red).unwrap();
     }
 
     #[test]
@@ -631,6 +658,20 @@ mod tests {
         assert!(w.contains("offline bundle does not contain Docker") && w.contains("tight"), "{w}");
         // a Docker-only choice needs no Internet for images
         assert!(!warnings(&[choice("docker")], &AddonContext::default()).join("\n").contains("pull container images"));
+    }
+
+    #[test]
+    fn summary_json_has_no_secret_values() {
+        let mut p = choice("plex");
+        p.secrets.insert("plex_claim".into(), "claim-SECRETVALUE".into());
+        let j = summary_json(&[p, choice("portainer")], &AddonContext::default());
+        assert_eq!(j["selected"].as_array().unwrap().len(), 3);
+        assert_eq!(j["selected"][0]["id"], "docker");
+        assert_eq!(j["selected"][0]["auto"], true);
+        assert_eq!(j["selected"][2]["secrets"], serde_json::json!(["plex_claim"]));
+        assert!(!j.to_string().contains("SECRETVALUE"));
+        assert!(j["lines"].as_array().unwrap().len() >= 2 && !j["warnings"].as_array().unwrap().is_empty());
+        assert_eq!(summary_json(&[], &AddonContext::default())["selected"], serde_json::json!([]));
     }
 
     #[test]

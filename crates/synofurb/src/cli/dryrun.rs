@@ -46,6 +46,8 @@ pub struct Rendered {
     pub bind_ip: IpAddr,
     /// The offline bundle the script and payload were rendered for, if any.
     pub bundle: Option<String>,
+    /// The chosen add-ons (`addons::summary_json`): who is installed and why, the lines and the warnings. No secret values.
+    pub addons: Value,
 }
 
 /// The address the generated script would call back to: this computer's address towards the NAS when known, else a documentation address.
@@ -113,6 +115,10 @@ pub fn render(
         http_base,
         bind_ip,
         bundle: offline_bundle.map(|d| d.display().to_string()),
+        addons: synofurb_core::addons::summary_json(
+            &cfg.addons,
+            &synofurb_core::addons::AddonContext { offline: offline_bundle.is_some(), root_mib: Some(plan.sizes.root_mib) },
+        ),
     })
 }
 
@@ -149,6 +155,11 @@ pub fn placeholders_note(r: &Rendered) -> Vec<String> {
         ),
         "The password hash and the SSH key are placeholders in this output; a real run uses yours.".into(),
     ];
+    if r.addons["selected"].as_array().is_some_and(|a| a.iter().any(|x| x["secrets"].as_array().is_some_and(|s| !s.is_empty()))) {
+        v.push(
+            "Secret add-on settings are placeholders in this output (payload/addons/secrets/); a real run uses the values you gave.".into(),
+        );
+    }
     if let Some(b) = &r.bundle {
         v.push(format!("OFFLINE: packages and installer files come from the bundle {b}, served by this computer at {} (mirror host/dir are rewritten accordingly).", r.http_base));
     }
@@ -166,6 +177,7 @@ pub fn to_json(facts: &DeviceFacts, plan: &Plan, method: &str, r: &Rendered) -> 
         "placeholders": placeholders_note(r),
         "plan": plan,
         "install_config": r.cfg_json,
+        "addons": r.addons,
         "installer_cmdline": r.cmdline,
         "offline_bundle": r.bundle,
         "payload": {"sha256": r.payload_sha256, "bytes": r.payload.len(), "files": manifest_json(&r.manifest)},

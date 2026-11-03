@@ -95,6 +95,7 @@ fn help_lists_every_command_and_exits_zero() {
         "manage",
         "logs",
         "bundle",
+        "addons",
         "fetch-installer",
         "self-update",
         "config",
@@ -1069,4 +1070,153 @@ fn scan_json_lists_what_was_scanned() {
     assert!(v["errors"].as_array().unwrap().is_empty());
     // the text mode says what it is scanning, on stderr
     assert!(r.stderr.contains("Scanning 1 network(s)") && r.stderr.contains("127.0.0.0/30"), "{}", r.stderr);
+}
+
+// ---------------------------------------------------------------------------------------------- add-ons
+
+#[test]
+fn addons_list_text_and_json() {
+    let s = Sandbox::new("addons-list");
+    let r = s.run(&["addons", "list"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    for need in ["docker", "portainer", "frigate", "plex", "retain_days", "plex_claim", "@env:VARIABLE"] {
+        assert!(r.stdout.contains(need), "{need}\n{}", r.stdout);
+    }
+    let v = s.run(&["addons", "list", "--json"]).json();
+    has_keys(&v, &["schema", "addons", "presets", "secret_syntax", "flag"]);
+    let ids: Vec<&str> = v["addons"].as_array().unwrap().iter().map(|a| a["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["docker", "portainer", "frigate", "plex"]);
+    has_keys(
+        &v["addons"][2],
+        &["id", "name", "summary", "kind", "requires", "privileges", "needs_internet", "approx_size_mib", "data_gib", "settings"],
+    );
+    assert_eq!(v["addons"][1]["privileges"][0], "docker-socket");
+    assert_eq!(v["addons"][1]["requires"][0], "docker");
+    assert!(s.run(&["help"]).stdout.contains("addons") || s.run(&["--help"]).stdout.contains("addons"));
+}
+
+#[test]
+fn plan_with_addons_adds_docker_and_reports_it_in_text_and_json() {
+    let s = Sandbox::new("addons-plan");
+    let r = s.run(&["plan", "--facts", "demo", "--addon", "frigate:retain_days=14", "--addon", "portainer"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(r.stdout.contains("Add-ons: Docker (required by Frigate NVR, Portainer), Portainer, Frigate NVR"), "{}", r.stdout);
+    assert!(r.stdout.contains("Internet") && r.stdout.contains("docker-socket"), "{}", r.stdout);
+    let v = s.run(&["plan", "--facts", "demo", "--addon", "frigate:retain_days=14", "--addon", "portainer", "--json"]).json();
+    let sel = v["addons"]["selected"].as_array().unwrap();
+    assert_eq!(sel.iter().map(|a| a["id"].as_str().unwrap()).collect::<Vec<_>>(), ["docker", "portainer", "frigate"]);
+    assert_eq!(sel[0]["auto"], true);
+    assert_eq!(sel[2]["settings"]["retain_days"], "14");
+    assert!(!v["addons"]["warnings"].as_array().unwrap().is_empty());
+    // no add-on: the document says so
+    let v = s.run(&["plan", "--facts", "demo", "--json"]).json();
+    assert_eq!(v["addons"]["selected"].as_array().unwrap().len(), 0);
+    assert!(!s.run(&["plan", "--facts", "demo"]).stdout.contains("Add-ons:"));
+}
+
+#[test]
+fn bad_addon_arguments_are_usage_errors() {
+    let s = Sandbox::new("addons-bad");
+    for bad in ["nope", "frigate:retain_days=0", "frigate:detector=x", "docker:x=1", "frigate:", ":x=1", "frigate:retain_days"] {
+        let r = s.run(&["plan", "--facts", "demo", "--addon", bad]);
+        assert_eq!(r.code, 2, "{bad}: {}", r.stderr);
+    }
+    let r = s.run(&["plan", "--facts", "demo", "--addon", "docker", "--addon", "docker"]);
+    assert_eq!(r.code, 2);
+    assert!(r.stderr.contains("twice"), "{}", r.stderr);
+    // add-ons need the management plane
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--no-mgmt", "--addon", "docker"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(r.stderr.contains("management plane"), "{}", r.stderr);
+}
+
+#[test]
+fn addon_secrets_come_from_env_or_file_never_from_the_command_line() {
+    let s = Sandbox::new("addons-secret");
+    let secret = "claim-SuperSecret12345";
+    // inline: refused, and the value is not echoed
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--addon", &format!("plex:plex_claim={secret}")]);
+    assert_eq!(r.code, 2);
+    assert!(r.stderr.contains("@env:") && !r.stderr.contains(secret) && !r.stdout.contains(secret), "{}", r.stderr);
+    // unset variable
+    assert_eq!(s.run(&["install", "--facts", "demo", "--dry-run", "--addon", "plex:plex_claim=@env:NOPE_UNSET"]).code, 2);
+    // env: accepted, dry run shows a placeholder
+    let out = s.path("review");
+    let r = s.run_env(
+        &["install", "--facts", "demo", "--dry-run", "--out", out.to_str().unwrap(), "--addon", "plex:plex_claim=@env:PLEX_CLAIM"],
+        &[("PLEX_CLAIM", secret)],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains(secret) && !r.stderr.contains(secret));
+    let sec = std::fs::read_to_string(out.join("payload/addons/secrets/plex.json")).unwrap();
+    assert!(sec.contains("DRYRUN-SECRET") && !sec.contains(secret), "{sec}");
+    // nothing in the review tree has the real value
+    fn walk(d: &std::path::Path, secret: &str) {
+        for e in std::fs::read_dir(d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, secret);
+            } else if p.extension().is_none_or(|x| x != "gz") {
+                let t = std::fs::read_to_string(&p).unwrap_or_default();
+                assert!(!t.contains(secret), "{} contains the secret", p.display());
+            }
+        }
+    }
+    walk(&out, secret);
+    // file: first line
+    let f = s.path("claim.txt");
+    std::fs::write(&f, format!("{secret}\n")).unwrap();
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--json", "--addon", &format!("plex:plex_claim=@file:{}", f.display())]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert!(!r.stdout.contains(secret));
+    let v = r.json();
+    assert_eq!(v["addons"]["selected"][1]["secrets"][0], "plex_claim");
+    assert!(v["payload"]["files"].as_array().unwrap().iter().any(|f| f["path"] == "addons/secrets/plex.json"));
+}
+
+#[test]
+fn dry_run_with_addons_renders_the_pending_files_and_the_first_boot_unit() {
+    let s = Sandbox::new("addons-dry");
+    let out = s.path("review");
+    let r = s.run(&[
+        "install",
+        "--facts",
+        "demo",
+        "--dry-run",
+        "--out",
+        out.to_str().unwrap(),
+        "--addon",
+        "frigate:retain_days=14",
+        "--addon",
+        "portainer",
+    ]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let env = std::fs::read_to_string(out.join("payload/env.sh")).unwrap();
+    assert!(
+        env.contains("ADDONS='docker portainer frigate'") && env.contains("ADDON_DOCKER_PACKAGES='docker.io docker-cli docker-compose'"),
+        "{env}"
+    );
+    for id in ["docker", "portainer", "frigate"] {
+        let j: Value = serde_json::from_str(&std::fs::read_to_string(out.join(format!("payload/addons/{id}.json"))).unwrap()).unwrap();
+        assert_eq!(j["id"], id);
+    }
+    let j: Value = serde_json::from_str(&std::fs::read_to_string(out.join("payload/addons/frigate.json")).unwrap()).unwrap();
+    assert_eq!(j["settings"]["retain_days"], "14");
+    assert!(!out.join("payload/addons/secrets").exists(), "no secret, no secret file");
+    assert!(out.join("payload/files/etc/systemd/system/synofurb-addons-firstboot.service").is_file());
+    let cfg: Value = serde_json::from_str(&std::fs::read_to_string(out.join("install-config.json")).unwrap()).unwrap();
+    assert_eq!(cfg["addons"][0]["id"], "frigate");
+    // the stage-2 script is valid sh and, as always, untouched by add-ons
+    let stage2 = std::fs::read_to_string(out.join("stage2.sh")).unwrap();
+    let dash = Command::new("sh").arg("-n").arg(out.join("stage2.sh")).output().unwrap();
+    assert!(dash.status.success(), "{}", String::from_utf8_lossy(&dash.stderr));
+    assert!(stage2.contains("chroot-setup.sh"));
+    // text form lists them
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--addon", "plex"]);
+    assert!(r.stdout.contains("Add-ons: Docker (required by Plex Media Server), Plex Media Server"), "{}", r.stdout);
+    assert!(r.stdout.contains("addons/docker.json"), "payload manifest lists the pending files");
+    // without add-ons nothing of this appears
+    let r = s.run(&["install", "--facts", "demo", "--dry-run", "--json"]);
+    assert_eq!(r.json()["addons"]["selected"].as_array().unwrap().len(), 0);
+    assert!(!r.json()["payload"]["files"].as_array().unwrap().iter().any(|f| f["path"].as_str().unwrap().starts_with("addons/")));
 }
