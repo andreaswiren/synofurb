@@ -370,8 +370,9 @@ pub mod fixtures {
         s.push_str("KV|uname_m|x86_64\nKV|kernel|4.4.302+\nKV|id_u|0\nKV|hostname|awss01\n");
         s.push_str("KV|unique|synology_apollolake_918+\nKV|model|DS918+\nKV|serial|18A0PDN014408\n");
         s.push_str("KV|dsm_version|7.2.1-69057\nKV|mem_kib|3900000\nKV|cpu|Intel(R) Celeron(R) CPU J3455 @ 1.50GHz\n");
-        s.push_str("KV|uefi|0\nKV|kexec|1\nKV|cmdline|root=/dev/md0 console=ttyS2,115200n8 quiet\n");
-        s.push_str("NIC|eth0|00:11:32:AA:BB:01\n");
+        s.push_str("KV|cpu_vendor|GenuineIntel\nKV|uefi|0\nKV|kexec|1\nKV|cmdline|root=/dev/md0 console=ttyS2,115200n8 quiet\n");
+        // two Intel i211 ports (igb)
+        s.push_str("NIC|eth0|00:11:32:AA:BB:01\nNIC|eth1|00:11:32:AA:BB:02\n");
         let sectors: u64 = 15_628_053_168;
         let paths = [
             ("sda", "1", "ata3", "0000:01:00.0", "2:0:0:0", "ZA1EJ7BG"),

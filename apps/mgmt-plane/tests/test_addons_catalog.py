@@ -205,7 +205,7 @@ def validate_manifest(m, folder):
         if dv.get("optional") is not True:
             add("device %s: every shipped device must be optional" % dv.get("id"))
 
-    privs = m.get("privileges")
+    privs = m.get("privileges", [])
     if not isinstance(privs, list) or not all(isinstance(p, str) and PRIV_RE.match(p) for p in privs):
         add("bad privileges")
 
@@ -223,9 +223,11 @@ def validate_manifest(m, folder):
             add("files[].once must be bool")
 
     hc = m.get("healthcheck")
-    if not hc or hc.get("type") not in HEALTH_TYPES:
+    if hc is None and m.get("kind") == "system":
+        pass                                        # a system add-on (Docker itself) is judged by its handler, not by a probe
+    elif not hc or hc.get("type") not in HEALTH_TYPES:
         add("bad healthcheck")
-    elif hc["type"] == "http" and not str(hc.get("url", "")).startswith("http://127.0.0.1:"):
+    elif hc["type"] == "http" and not str(hc.get("url", "")).startswith(("http://127.0.0.1:", "https://127.0.0.1:")):
         add("http healthcheck must target 127.0.0.1")
     if not isinstance(m.get("post_install", ""), str):
         add("post_install must be text")
@@ -305,18 +307,18 @@ class CatalogShape(unittest.TestCase):
         """Every ${name} in a template is a setting key, a loader variable, STORAGE_<key> or a variable set by a choice."""
         for aid in addon_ids():
             m = load(aid)
-            known = set(RESERVED) | {s["key"] for s in m["settings"]} | {"STORAGE_" + st["key"].upper() for st in m.get("storage", [])}
-            for s in m["settings"]:
+            known = set(RESERVED) | {s["key"] for s in m.get("settings", [])} | {"STORAGE_" + st["key"].upper() for st in m.get("storage", [])}
+            for s in m.get("settings", []):
                 if s["type"] == "choice":
                     for _, vars_ in choice_options(s):
                         known |= set(vars_)
-            files = [m["compose"]] + [f["template"] for f in m.get("files", [])]
+            files = ([m["compose"]] if "compose" in m else []) + [f["template"] for f in m.get("files", [])]
             for fn in files:
                 with self.subTest(addon=aid, template=fn):
                     used = set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", read_template(aid, fn)))
                     self.assertEqual(used - known, set())
             # choice variables must be defined by every option of that choice (else a render would break for some option)
-            for s in m["settings"]:
+            for s in m.get("settings", []):
                 if s["type"] == "choice":
                     sets = [set(v) for _, v in choice_options(s)]
                     if any(sets):
@@ -325,7 +327,7 @@ class CatalogShape(unittest.TestCase):
     def test_no_stray_dollars_or_tabs(self):
         for aid in addon_ids():
             m = load(aid)
-            for fn in [m["compose"]] + [f["template"] for f in m.get("files", [])]:
+            for fn in ([m["compose"]] if "compose" in m else []) + [f["template"] for f in m.get("files", [])]:
                 text = read_template(aid, fn)
                 self.assertNotIn("\t", text, fn)
                 self.assertNotIn("\r", text, fn)
@@ -334,7 +336,7 @@ class CatalogShape(unittest.TestCase):
     def test_secret_settings_have_no_secret_default_worth_hiding(self):
         """A shipped default for a secret must be a harmless placeholder (loopback address or empty)."""
         for aid in addon_ids():
-            for s in load(aid)["settings"]:
+            for s in load(aid).get("settings", []):
                 if s["type"] == "secret":
                     d = s.get("default", "")
                     self.assertTrue(d == "" or "127.0.0.1" in d, "%s/%s: %r" % (aid, s["key"], d))

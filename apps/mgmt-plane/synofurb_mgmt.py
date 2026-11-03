@@ -6071,7 +6071,8 @@ dialog.wide{width:min(840px,calc(100vw - 24px))}
 dialog::backdrop{background:rgb(0 0 0/.6)}
 .dh{display:flex;gap:12px;align-items:flex-start;padding:20px 20px 0}.dh h3{font-size:16px;line-height:21px;font-weight:600}.dh p{margin:2px 0 0;color:var(--fg-2);font-size:13px}
 .dh>.ic{width:22px;height:22px;margin-top:1px;color:var(--accent-fg)}.dh.bad>.ic{color:var(--err-solid)}
-.db{padding:16px 20px 4px}
+.db{padding:16px 20px 4px;overflow:auto;min-height:0}
+dialog[open]{display:flex;flex-direction:column;max-height:calc(100vh - 32px)}.dh,.df{flex:none}
 .df{display:flex;gap:8px;justify-content:flex-end;padding:14px 20px;background:var(--surface-2);border-top:1px solid var(--border);margin-top:12px;flex-wrap:wrap}
 .err{color:var(--err-fg);display:flex;gap:6px;margin:0 0 10px;font-size:13px;font-weight:600}
 /* login */
@@ -6197,7 +6198,7 @@ textarea.mono{width:100%}
 .acard .ft{margin-top:auto;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .aname{display:flex;gap:10px;align-items:center;min-width:0}.aname b{overflow-wrap:anywhere}
 .aico{width:40px;height:40px;border-radius:10px;background:var(--accent-bg);color:var(--accent-fg);display:inline-flex;align-items:center;justify-content:center;flex:none}
-.agrid+.card,.stack>.agrid{margin-top:0}
+.sec{display:flex;gap:8px;align-items:center;margin:20px 0 12px;font:600 15px/22px var(--font-ui)}
 .dsec{margin:0 0 16px}.dsec>h4{margin:0 0 8px;font:600 13px/19px var(--font-ui)}
 .dsec .row{margin-bottom:6px}
 pre.code.log2{max-height:50vh;min-height:120px}
@@ -6892,17 +6893,18 @@ PAGES.addons = async () => {
           onConfirm: async () => { const j = await api('POST', '/api/addons/' + a.id + '/update', {}); watchJob(j.job, a.name, 'update', reload); }}), a.update_available ? 'primary' : 'ghost'),
         btnIcon('scroll-text', T('ad.logs'), () => adLogs(a)), btnIcon('info', T('ad.details'), () => adDetails(a)),
         a.kind === 'system' ? null : btnIcon('trash', T('ad.remove'), () => adRemove(a, reload))];
-      return [adName(a), h('span', {}, adTag(a.status), a.installed_version ? h('span', {class: 'chip'}, a.installed_version) : null), h('div', {class: 'row'}, acts)];
+      return [adName(a), adTag(a.status), h('div', {class: 'row'}, acts)];
     });
     parts.push(cardFlush(T('ad.installed'), 'container', null, table(th('name', 'state', ''), rows)));
   }
-  const cards = r.addons.map(a => {
+  const cards = r.addons.filter(a => !a.installed || a.status === 'needs-attention').map(a => {
     const miss = a.requires.filter(id => !(byId[id] && byId[id].installed && byId[id].status !== 'needs-attention'));
     const can = h('button', {type: 'button', class: 'btn primary sm', disabled: miss.length > 0, onclick: () => adInstall(a, byId, reload)}, ic('download'), a.status === 'needs-attention' ? T('ad.retry') : T('ad.install'));
-    const foot = a.installed && a.status !== 'needs-attention' ? null : (miss.length ? tip(h('span', {}, can), T('ad.needs', {name: miss.map(id => (byId[id] ? byId[id].name : id)).join(', ')})) : can);
+    const foot = miss.length ? tip(h('span', {}, can), T('ad.needs', {name: miss.map(id => (byId[id] ? byId[id].name : id)).join(', ')})) : can;
     return h('section', {class: 'acard'}, adName(a), h('p', {'data-d': ''}, a.summary), h('div', {class: 'ft'}, adTag(a.status), foot));
   });
-  parts.push(h('h2', {class: 'vh'}, T('ad.available')), r.addons.length ? h('div', {class: 'agrid'}, cards) : h('div', {class: 'empty'}, ic('info'), T('ad.empty')));
+  if (cards.length) parts.push(h('h2', {class: 'sec'}, ic('plus', 'lg'), T('ad.available')), h('div', {class: 'agrid'}, cards));
+  else if (!inst.length) parts.push(h('div', {class: 'empty'}, ic('info'), T('ad.empty')));
   return h('div', {}, parts);
 };
 /*ENDPAGE*/

@@ -29,7 +29,7 @@ FONTS = (("Inter", 400, "Inter-Regular.otf", "kern,tnum"), ("Inter", 600, "Inter
          ("JetBrains Mono", 400, "JetBrainsMono-Regular.ttf", "kern"))
 ICONS = ("check x shield-check users circle-question-mark circle-dashed triangle-alert ban octagon-x info server hard-drive cpu memory-stick network power gauge layers "
          "refresh-cw eye eye-off copy download chevron-down arrow-right arrow-left plug terminal trash lock key-round clock thermometer activity plus sun moon database "
-         "undo-2 life-buoy flag menu wrench package settings panel-top search external-link book-open file-text recycle circle-check circle-x scroll-text clipboard-copy bell").split()
+         "undo-2 life-buoy flag menu wrench package settings panel-top search external-link book-open file-text recycle circle-check circle-x scroll-text clipboard-copy bell container camera play square").split()
 LOGOS = {"mark": "synofurb-mark.svg", "mark_dark": "synofurb-mark-dark.svg", "logo": "synofurb-logo.svg", "logo_dark": "synofurb-logo-dark.svg"}
 
 

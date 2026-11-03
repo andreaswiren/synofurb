@@ -945,8 +945,9 @@ fn provide_ok(provided: &Option<String>, want: &Option<(Op, String)>) -> bool {
 pub const CHROOT_KEYRING: &[&str] = &["debian-archive-keyring", "tzdata"];
 /// `apt_install debconf locales`
 pub const CHROOT_LOCALES: &[&str] = &["debconf", "locales"];
-/// `apt_install initramfs-tools`
-pub const CHROOT_INITRAMFS: &[&str] = &["initramfs-tools"];
+/// `apt_install initramfs-tools xz-utils busybox` (neither is in debootstrap's minbase: without xz-utils the initramfs falls back to gzip,
+/// without busybox it gets klibc's tool set and the mdadm boot scripts complain about missing `rm`)
+pub const CHROOT_INITRAMFS: &[&str] = &["initramfs-tools", "xz-utils", "busybox"];
 /// The big `apt_install` of `chroot-setup.sh` after the bootloader/microcode packages and before `$EXTRA`.
 /// A unit test fails when this list and the script drift apart.
 pub const CHROOT_TOOLS: &[&str] = &[
@@ -967,6 +968,8 @@ pub const CHROOT_TOOLS: &[&str] = &[
     "sudo",
     "openssh-server",
     "openssh-client",
+    "systemd-sysv",
+    "libpam-systemd",
     "systemd-resolved",
     "systemd-timesyncd",
     "avahi-daemon",

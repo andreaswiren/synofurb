@@ -696,13 +696,92 @@
   };
   PUBLIC.add('POST /api/update/progress');
 
+  /* ---------- add-ons: the list and details come from the real handlers; jobs are simulated with timers ---------- */
+  const AD = U.addons, ADJ = {};
+  const adRow = id => AD.list.addons.find(x => x.id === id);
+  const adDet = id => AD.detail[id];
+  function adSync(id) {
+    const r = adRow(id), d = adDet(id);
+    for (const o of [r, d]) { o.installed = st.ad[id].installed; o.status = st.ad[id].status; o.installed_version = st.ad[id].installed ? '1' : ''; o.update_available = false; o.detail = st.ad[id].detail || ''; o.link = o.installed && o.web ? {scheme: o.web.scheme, port: o.web.port, path: o.web.path, hint: o.web.hostname_hint} : null; }
+    d.values = st.ad[id].values || d.values;
+  }
+  st.ad = {};
+  AD.list.addons.forEach(a => { st.ad[a.id] = {installed: a.installed, status: a.status, detail: '', values: null}; });
+  function adEffPrivs(d, settings) {
+    const out = d.privileges.map(p => p.id);
+    d.settings.filter(s => s.type === 'choice').forEach(s => { const c = s.choices.find(x => x.value === (settings[s.key] || d.values[s.key])); if (c) c.privileges.forEach(p => { if (!out.includes(p)) out.push(p); }); });
+    return out;
+  }
+  function adJobView(j, full) {
+    const el = (Date.now() - j.t0) / 1000, n = j.steps.length, per = j.dur / n, idx = Math.min(n - 1, Math.floor(el / per)), done = el >= j.dur;
+    if (done && j.state === 'running') {
+      j.state = 'done'; j.ok = true; st.ad[j.addon].status = j.final.status; st.ad[j.addon].installed = j.final.installed; st.ad[j.addon].detail = '';
+      if (j.final.values) st.ad[j.addon].values = j.final.values;
+      adSync(j.addon);
+    }
+    const v = {id: j.id, kind: j.kind, addon: j.addon, state: j.state, step: j.steps[idx], steps: j.steps, progress: done ? 100 : Math.round(100 * el / j.dur), message: done ? '' : j.msgs[idx], ok: j.ok, error: '', started: j.t0 / 1000, finished: done ? Date.now() / 1000 : null, warnings: []};
+    if (full) v.log = j.msgs.slice(0, done ? n : idx + 1).map(x => '== ' + x).concat(done ? ['Done'] : []);
+    return v;
+  }
+  function adStart(id, kind, final, steps, msgs) {
+    const act = Object.values(ADJ).find(j => j.state === 'running');
+    if (act) throw bad(409, 'Another job is running (' + act.kind + ' ' + act.addon + '). Wait until it ends.');
+    const jid = 'j' + Math.random().toString(16).slice(2, 14).padEnd(12, '0');
+    ADJ[jid] = {id: jid, kind, addon: id, state: 'running', ok: null, t0: Date.now(), dur: kind === 'install' || kind === 'update' ? 5 : 2.4, steps, msgs, final};
+    st.ad[id].status = {install: 'installing', update: 'updating', remove: 'removing'}[kind] || st.ad[id].status; adSync(id);
+    return {ok: true, job: adJobView(ADJ[jid], false)};
+  }
+  function adAction(id, action, b) {
+    const d = adDet(id), s = st.ad[id];
+    if (!d) throw bad(404, "unknown add-on '" + id + "'");
+    if (action === 'install') {
+      if (s.installed && s.status !== 'needs-attention') throw bad(400, d.name + ' is already installed.');
+      const miss = d.requires.filter(r => !st.ad[r].installed);
+      if (miss.length) throw bad(400, d.name + ' needs ' + miss.map(r => adDet(r).name).join(', ') + ' to be installed first.');
+      const set = b.settings || {};
+      for (const k of Object.keys(set)) if (!d.settings.some(x => x.key === k)) throw bad(400, "unknown setting '" + k + "'");
+      for (const x of d.settings) {
+        const v = set[x.key];
+        if (x.required && (v === '' || (v == null && !d.values[x.key]))) throw bad(400, x.label + ' is required');
+        if (x.type === 'int' && v !== '' && v != null && (!Number.isInteger(Number(v)) || Number(v) < x.min || Number(v) > x.max)) throw bad(400, x.label + ' must be between ' + x.min + ' and ' + x.max);
+      }
+      const privs = adEffPrivs(d, set);
+      if (privs.length && b.accept !== true) throw bad(400, d.name + ' needs these privileges: ' + privs.join(', ') + '. Confirm them to continue.');
+      const vals = Object.assign({}, d.values);
+      d.settings.forEach(x => { if (x.type === 'secret') vals[x.key] = {set: !!set[x.key] || (vals[x.key] && vals[x.key].set)}; else if (set[x.key] != null) vals[x.key] = set[x.key]; });
+      return adStart(id, 'install', {status: 'running', installed: true, values: vals}, ['check', 'render', 'pull', 'start', 'health'],
+        ['Checking Docker', 'Writing the configuration', 'Downloading images (needs Internet)', 'Starting', 'Waiting for ' + d.name + ' to answer']);
+    }
+    if (!s.installed) throw bad(400, d.name + ' is not installed.');
+    if (action === 'update') return adStart(id, 'update', {status: 'running', installed: true}, ['check', 'render', 'pull', 'start', 'health'], ['Checking Docker', 'Writing the configuration', 'Downloading images (needs Internet)', 'Starting', 'Waiting for ' + d.name + ' to answer']);
+    if (action === 'remove') {
+      if (d.kind === 'system') throw bad(400, d.name + ' was installed with apt and stays on this unit.');
+      const users = AD.list.addons.filter(x => x.requires.includes(id) && st.ad[x.id].installed);
+      if (users.length) throw bad(400, d.name + ' is used by ' + users.map(x => x.id).join(', ') + '. Remove those first.');
+      if (b.delete_data === true && b.confirm !== id) throw bad(400, 'to delete the data, type the add-on name ' + JSON.stringify(id).replace(/"/g, "'") + ' to confirm');
+      return adStart(id, 'remove', {status: 'not-installed', installed: false}, ['stop', 'files', 'forget'], ['Stopping and removing containers', b.delete_data ? 'Deleting data' : 'Removing the compose file', 'Forgetting the settings']);
+    }
+    if (action === 'stop' && d.kind === 'system' && AD.list.addons.some(x => x.requires.includes(id) && st.ad[x.id].installed)) throw bad(400, d.name + ' is used by other add-ons. Remove or stop those first.');
+    return adStart(id, action, {status: action === 'stop' ? 'stopped' : 'running', installed: true}, [action], [{start: 'Starting', stop: 'Stopping', restart: 'Restarting'}[action]]);
+  }
+  R['GET /api/addons'] = () => { const o = clone(AD.list); const act = Object.values(ADJ).find(j => j.state === 'running'); o.job = act ? adJobView(act, false) : null; return o; };
+  R['GET /api/jobs'] = () => ({ok: true, jobs: Object.values(ADJ).map(j => adJobView(j, false))});
+  const DYN = [
+    [/^GET \/api\/addons\/([a-z0-9-]+)$/, m => { const d = adDet(m[1]); if (!d) throw bad(404, "unknown add-on '" + m[1] + "'"); return {ok: true, addon: clone(d)}; }],
+    [/^GET \/api\/addons\/([a-z0-9-]+)\/logs$/, m => ({ok: true, logs: '2026-11-03T08:00:01Z ' + m[1] + ' | starting\n2026-11-03T08:00:03Z ' + m[1] + ' | listening\n2026-11-03T08:00:09Z ' + m[1] + ' | ready\n'})],
+    [/^GET \/api\/jobs\/(j[0-9a-f]{12})$/, m => { const j = ADJ[m[1]]; if (!j) throw bad(404, 'no such job'); return {ok: true, job: adJobView(j, true)}; }],
+    [/^POST \/api\/addons\/([a-z0-9-]+)\/(install|start|stop|restart|update|remove)$/, (m, b) => adAction(m[1], m[2], b)],
+  ];
+  function dynRoute(route) { for (const [rx, fn] of DYN) { const m = rx.exec(route); if (m) return b => fn(m, b); } return null; }
+  AD.list.addons.forEach(a => adSync(a.id));
+
   window.fetch = async function (url, opt) {
     const u = new URL(typeof url === 'string' ? url : url.url, location.href);
     if (!/\/api\//.test(u.pathname)) return origFetch ? origFetch(url, opt) : Promise.reject(new Error('offline demo'));
     const method = ((opt && opt.method) || 'GET').toUpperCase();
     const route = method + ' ' + u.pathname.slice(u.pathname.indexOf('/api/'));
     await sleep(route.includes('volumes/create') ? 900 : 90 + Math.random() * 90);
-    const fn = R[route];
+    const fn = R[route] || dynRoute(route);
     if (!fn) return E(404, 'not found');
     if (!PUBLIC.has(route) && !st.login) return E(401, 'authentication required');
     let body = {};
