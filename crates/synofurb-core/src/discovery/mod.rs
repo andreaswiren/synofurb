@@ -132,8 +132,25 @@ impl Inventory {
         self.devices.iter().filter(|d| d.synology || d.synofurb_debian)
     }
 
+    /// Drop sightings that name nothing: seen only by the Synology UDP scan and without a model, host name, serial or MAC.
+    /// Versions before 0.2.1 recorded this computer's own broadcast query (from its own network adapters) as a "Synology" unit
+    /// and saved it; this removes those saved entries. Returns how many were removed.
+    pub fn prune_unidentified(&mut self) -> usize {
+        let before = self.devices.len();
+        self.devices.retain(|d| {
+            let only_udp = !d.sources.is_empty() && d.sources.iter().all(|s| s == "synology-udp");
+            let names_nothing = d.model.is_empty() && d.hostname.is_empty() && d.serial.is_empty() && d.mac.is_none();
+            !(only_udp && names_nothing && !d.synofurb_debian)
+        });
+        before - self.devices.len()
+    }
+
     pub fn load(path: &std::path::Path) -> Inventory {
-        std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        let mut inv: Inventory = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        if inv.prune_unidentified() > 0 {
+            let _ = inv.save(path); // forget them on disk too, so they do not come back
+        }
+        inv
     }
     pub fn save(&self, path: &std::path::Path) -> anyhow::Result<()> {
         if let Some(p) = path.parent() {
@@ -280,5 +297,43 @@ mod tests {
         let p = std::env::temp_dir().join(format!("sf-inv-{}.json", std::process::id()));
         inv.save(&p).unwrap();
         assert_eq!(Inventory::load(&p).devices.len(), 1);
+    }
+
+    #[test]
+    fn saved_self_sightings_are_pruned_on_load() {
+        let own = Found {
+            ips: vec!["192.168.69.100".parse().unwrap()],
+            synology: true,
+            sources: vec!["synology-udp".into()],
+            ..Default::default()
+        };
+        let real = Found {
+            ips: vec!["192.168.1.20".parse().unwrap()],
+            model: "DS918+".into(),
+            synology: true,
+            sources: vec!["synology-udp".into()],
+            ..Default::default()
+        };
+        let mdns = Found { ips: vec!["192.168.1.30".parse().unwrap()], synology: true, sources: vec!["mdns".into()], ..Default::default() };
+        let mut inv = Inventory { devices: vec![own, real, mdns] };
+        assert_eq!(inv.prune_unidentified(), 1);
+        assert_eq!(inv.devices.len(), 2);
+        assert!(inv.devices.iter().all(|d| d.ips[0].to_string() != "192.168.69.100"));
+        // and the cleaned list is written back by `load`
+        let p = std::env::temp_dir().join(format!("sf-inv-prune-{}.json", std::process::id()));
+        let dirty = Inventory {
+            devices: vec![Found {
+                ips: vec!["172.18.192.1".parse().unwrap()],
+                synology: true,
+                sources: vec!["synology-udp".into()],
+                ..Default::default()
+            }],
+        };
+        dirty.save(&p).unwrap();
+        assert!(Inventory::load(&p).devices.is_empty());
+        assert!(Inventory::load(&p).devices.is_empty());
+        let on_disk: Inventory = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert!(on_disk.devices.is_empty());
+        let _ = std::fs::remove_file(&p);
     }
 }
