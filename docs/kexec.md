@@ -14,16 +14,21 @@ DSM does not ship `kexec-tools`, and a dynamically linked build will not run aga
 binaries; build them yourself:
 
 ```
-# needs zig (https://ziglang.org) and curl; builds x86_64, aarch64 and armv7 from kexec-tools 2.0.32 (SHA-256 pinned)
+# needs zig 0.13.0 and curl; builds x86_64 from kexec-tools 2.0.32 (source tarball SHA-256 pinned)
+python3 -m venv zigenv && zigenv/bin/pip install ziglang==0.13.0     # zig from PyPI; put its folder on PATH
 scripts/build-kexec.sh x86_64
-scripts/build-kexec.sh aarch64
-scripts/build-kexec.sh armv7
 file assets/kexec/amd64/kexec        # must say: statically linked
+assets/kexec/amd64/kexec --version   # kexec-tools 2.0.32
 ```
 
-The GitHub workflow `ci.yml` has a manually triggered `kexec-static` job that does the same on a runner. **The script has not been
-run by the author** (the environment it was written in does not allow compiling downloaded sources): inspect the result and run
-`kexec --version` before trusting it.
+**Status (2026-11-09).** The `x86_64` build was run: with zig 0.13.0 it produces a statically linked 64-bit ELF of about 214 KB that starts and prints
+`kexec-tools 2.0.32`. Two things had to be fixed in the script to get there (the purgatory stub is built with `-march=x86-64`, which zig misreads, and with a
+`-Wl,-Map=` option zig's linker rejects; the compiler wrapper now rewrites the first and drops the second). It has **not** been run on a NAS yet.
+**`aarch64` and `armv7` do not build**: zig rejects `-mcmodel=large` for the aarch64 purgatory, and the armv7 purgatory link fails. Those units need their own work.
+
+The manual GitHub workflow `kexec-static.yml` (also a job in `ci.yml`) builds the x86_64 binary on a runner and keeps it as an artifact `kexec-static` with its SHA-256 in the log.
+The `setup-zig` action is not used: it could not download any zig version (404 on every mirror), so zig comes from PyPI, pinned.
+The Windows release does not contain this binary yet, so for now put it next to the app or point the app at it (below).
 
 synofurb looks for `assets/kexec/<amd64|arm64|armhf>/kexec` next to the executable or in the working directory, in
 `$SYNOFURB_KEXEC`, or at the path given with `--kexec` / the GUI browse button.

@@ -2,7 +2,7 @@ name: kexec-static
 
 # Builds the static `kexec` binaries the app uploads to the NAS (docs/kexec.md) and keeps them as a workflow artifact.
 # Manual only. Same steps as the job of the same name in ci.yml, without the rest of the CI.
-# The binaries are built from kexec-tools 2.0.32 (source tarball pinned by SHA-256 in scripts/build-kexec.sh) with zig 0.14.1.
+# The binaries are built from kexec-tools 2.0.32 (source tarball pinned by SHA-256 in scripts/build-kexec.sh) with zig 0.13.0 (from PyPI). x86_64 only: the aarch64 and armv7 builds fail (docs/kexec.md).
 # Inspect them before use: `file assets/kexec/amd64/kexec` must say "statically linked"; the job prints it.
 
 on:
@@ -17,13 +17,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: 0.14.1
-      - run: for a in x86_64 aarch64 armv7; do scripts/build-kexec.sh $a; done
+      - name: Install zig 0.13.0 from PyPI (pinned; the setup-zig action could not fetch any zig version)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zigenv"
+          "$RUNNER_TEMP/zigenv/bin/pip" install --quiet "ziglang==0.13.0"
+          dirname "$("$RUNNER_TEMP/zigenv/bin/python" -c 'import ziglang; print(ziglang.__file__)')" >> "$GITHUB_PATH"
+      - run: zig version
+      # x86_64 only: aarch64 and armv7 do not build yet (docs/kexec.md)
+      - run: scripts/build-kexec.sh x86_64
       - run: |
           file assets/kexec/*/kexec
           sha256sum assets/kexec/*/kexec
+          assets/kexec/amd64/kexec --version
       - uses: actions/upload-artifact@v4
         with:
           name: kexec-static

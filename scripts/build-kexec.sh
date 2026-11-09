@@ -39,8 +39,19 @@ echo "$SHA256  kt.tar.xz" | sha256sum -c -
 tar xf kt.tar.xz
 cd "kexec-tools-$VERSION"
 
+# zig cc reads `-march=x86-64` (which kexec-tools passes when it builds its purgatory stub) as the CPU "x86" and stops with
+# "unknown CPU: 'x86'"; zig spells that baseline CPU x86_64, so the wrapper rewrites the flag. It also drops the purgatory's
+# `-Wl,-Map=` link-map option, which zig's linker front end does not support.
 cat > "$WORK/cc" <<CC
 #!/bin/sh
+for a in "\$@"; do
+  shift
+  case "\$a" in
+    -march=x86-64) a=-mcpu=x86_64 ;;
+    -Wl,-Map=*) continue ;;   # a link map for debugging; zig's linker front end rejects it
+  esac
+  set -- "\$@" "\$a"
+done
 exec zig cc -target $TARGET "\$@"
 CC
 chmod +x "$WORK/cc"

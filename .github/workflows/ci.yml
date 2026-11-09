@@ -48,11 +48,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: 0.14.1     # pinned: the action's default is the newest build, which can be missing from every mirror
-      - run: for a in x86_64 aarch64 armv7; do scripts/build-kexec.sh $a; done
-      - run: file assets/kexec/*/kexec
+      - name: Install zig 0.13.0 from PyPI (pinned; the setup-zig action could not fetch any zig version)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zigenv"
+          "$RUNNER_TEMP/zigenv/bin/pip" install --quiet "ziglang==0.13.0"
+          dirname "$("$RUNNER_TEMP/zigenv/bin/python" -c 'import ziglang; print(ziglang.__file__)')" >> "$GITHUB_PATH"
+      - run: zig version
+      # x86_64 only: aarch64 and armv7 do not build yet (docs/kexec.md)
+      - run: scripts/build-kexec.sh x86_64
+      - run: |
+          file assets/kexec/*/kexec
+          sha256sum assets/kexec/*/kexec
+          assets/kexec/amd64/kexec --version
       - uses: actions/upload-artifact@v4
         with:
           name: kexec-static
