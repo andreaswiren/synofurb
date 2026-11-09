@@ -14,24 +14,25 @@ DSM does not ship `kexec-tools`, and a dynamically linked build will not run aga
 binaries; build them yourself:
 
 ```
-# needs zig 0.13.0 and curl; builds x86_64 from kexec-tools 2.0.32 (source tarball SHA-256 pinned)
-python3 -m venv zigenv && zigenv/bin/pip install ziglang==0.13.0     # zig from PyPI; put its folder on PATH
+# x86_64, on an x86-64 Linux computer with gcc and make (what the release workflow does): a native static build
 scripts/build-kexec.sh x86_64
-file assets/kexec/amd64/kexec        # must say: statically linked
-assets/kexec/amd64/kexec --version   # kexec-tools 2.0.32
+file assets/kexec/amd64/kexec          # must say: statically linked
+assets/kexec/amd64/kexec --version     # kexec-tools 2.0.32
+scripts/test-kexec.sh assets/kexec/amd64/kexec    # must say PASS (see below)
 ```
 
-**Status (2026-11-09).** The `x86_64` build was run: with zig 0.13.0 it produces a statically linked 64-bit ELF of about 214 KB that starts and prints
-`kexec-tools 2.0.32`. Two things had to be fixed in the script to get there (the purgatory stub is built with `-march=x86-64`, which zig misreads, and with a
-`-Wl,-Map=` option zig's linker rejects; the compiler wrapper now rewrites the first and drops the second). It has **not** been run on a NAS yet.
-**`aarch64` and `armv7` do not build**: zig rejects `-mcmodel=large` for the aarch64 purgatory, and the armv7 purgatory link fails. Those units need their own work.
+The binary is kexec-tools 2.0.32 (source tarball SHA-256 pinned), linked statically against glibc for Linux 3.2.0 and up, so it runs on DSM's 3.10 kernel and needs nothing on the NAS.
+
+**Do not build the x86_64 binary with zig.** The 0.2.4 and 0.2.5 releases did, and on a real RS812+ `kexec -l` failed with `Unhandled rela relocation: R_X86_64_29`: the purgatory stub
+that zig produces contains a GOTPC64 relocation that kexec cannot process. `scripts/test-kexec.sh` reproduces that without a NAS (kexec prepares the kernel in user space before the
+`kexec_load` syscall) and is part of the release workflow: it must reach the syscall. It fails on the zig build and passes on the gcc build (checked 2026-11-09).
+
+`aarch64` and `armv7` still use the zig route in `scripts/build-kexec.sh` and **do not build**: zig rejects `-mcmodel=large` for the aarch64 purgatory, and the armv7 purgatory link fails.
+Those units need a proper cross toolchain (gcc for the target), not zig. They are not built in CI.
 
 The manual GitHub workflow `kexec-static.yml` (also a job in `ci.yml`) builds the x86_64 binary on a runner and keeps it as an artifact `kexec-static` with its SHA-256 in the log.
-The `setup-zig` action is not used: it could not download any zig version (404 on every mirror), so zig comes from PyPI, pinned.
-Windows releases from 0.2.4 contain the amd64 binary at `assets/kexec/amd64/kexec` next to the app (installers, portable zip and CLI zip); the release workflow builds it. Other platforms' packages do not carry it yet; put it next to the app or point the app at it (below).
-
-synofurb looks for `assets/kexec/<amd64|arm64|armhf>/kexec` next to the executable or in the working directory, in
-`$SYNOFURB_KEXEC`, or at the path given with `--kexec` / the GUI browse button.
+Windows releases from 0.2.4 contain the amd64 binary at `assets/kexec/amd64/kexec` next to the app (installers, portable zip and CLI zip); the release workflow builds it.
+Other platforms' packages do not carry it yet; put it next to the app or point the app at it (below).
 
 The load uses `kexec --kexec-syscall -l ...` (the classic `kexec_load` syscall). kexec-tools' default, `kexec_file_load`, needs `memfd_create` (Linux 3.17) and fails on DSM 6's 3.10 kernel with `Failed to copy decompressed buf`; kexec does not fall back from that failure by itself.
 

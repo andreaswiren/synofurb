@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6
+
+### Fixed
+- **`kexec -l` failed on the RS812+ with `Unhandled rela relocation: R_X86_64_29`** (0.2.4 and 0.2.5 releases). The bundled `kexec` was built with zig, and the "purgatory" stub zig produced contains a relocation (GOTPC64) that kexec cannot process; the 0.2.5 fix (`--kexec-syscall`) got past the earlier `memfd_create` failure and exposed this one. The x86-64 binary is now built **natively with gcc** (static glibc, Linux 3.2.0 and up), the toolchain kexec-tools is written for.
+- **New `scripts/test-kexec.sh`** runs the user-space part of `kexec -l` against the real Debian installer kernel without a NAS: it fails on the zig build with the exact error and passes on the gcc build (which gets as far as the `kexec_load` syscall, refused only because the test is not root). The release workflow runs it and refuses to package a binary that fails it.
+- **Not verified**: that `kexec_load` then loads the installer and the unit reboots into it on the real RS812+. The `aarch64` and `armv7` kexec binaries still do not build.
+
 ## 0.2.5
 
 ### Fixed
