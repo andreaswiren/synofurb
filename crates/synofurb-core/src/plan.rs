@@ -765,6 +765,15 @@ pub fn build_plan(facts: &DeviceFacts, req: &PlanRequest) -> Plan {
         plan.warnings.push("This ARM board has no UEFI. Debian boots from raw disk sectors through U-Boot; the U-Boot environment must be changed once over the serial console (Debian wiki: InstallingDebianOn/Synology). Keep a TTL serial adapter ready (115200 baud).".into());
     }
 
+    if fw == Firmware::Uefi && facts.arch == Arch::X86_64 && facts.dom.is_some() {
+        // seen on a real RS812+: UEFI firmware, an internal boot flash whose layout is not the one synofurb edits (DS918+-like)
+        plan.warnings.push(
+            "This unit has an internal boot flash that synofurb cannot edit. The firmware may keep starting Synology's loader from it, not Debian from the disks. \
+             If so, Debian is installed but only starts after the boot order is changed (BIOS or UEFI menu, over the serial console or a monitor). Have one ready."
+                .into(),
+        );
+    }
+
     let kept: BTreeSet<String> = match (req.mode, &req.keep_arrays) {
         (StorageMode::WipeAll, _) => BTreeSet::new(),
         (StorageMode::KeepVolumes, Some(k)) => k.iter().cloned().collect(),
@@ -1671,6 +1680,26 @@ mod tests {
         assert!(p.sizes.max_system_mib > 9 * 1024, "{}", p.sizes.max_system_mib);
         assert!(p.summary().iter().any(|l| l.contains("boot flash")));
         p.validate(&f).unwrap();
+    }
+
+    #[test]
+    fn a_boot_flash_that_cannot_be_edited_is_warned_about_on_a_uefi_unit() {
+        // the real RS812+: UEFI firmware, a 122 MiB USB boot flash whose partitions are 15.7 and 94 MiB and carry no DS918+ markers
+        let raw = fixtures::ds_4bay().replace("KV|uefi|0\n", "KV|uefi|1\n").replace("NIC|eth0", "DOM|250880|32067|192780|0|0\nNIC|eth0");
+        let f = parse_inspect(&raw).unwrap();
+        assert_eq!(f.firmware, Firmware::Uefi, "not editable, so not the boot-flash route");
+        let p = build_plan(&f, &PlanRequest::default());
+        assert!(
+            p.warnings.iter().any(|w| w.contains("boot flash that synofurb cannot edit") && w.contains("boot order")),
+            "{:?}",
+            p.warnings
+        );
+        // an editable flash is the supported route and needs no such warning; a unit without any boot flash neither
+        let ok = parse_inspect(&raw.replace("DOM|250880|32067|192780|0|0", "DOM|262144|65536|196608|1|1")).unwrap();
+        assert_eq!(ok.firmware, Firmware::Dom);
+        assert!(!build_plan(&ok, &PlanRequest::default()).warnings.iter().any(|w| w.contains("cannot edit")));
+        let none = parse_inspect(&fixtures::ds_4bay().replace("KV|uefi|0\n", "KV|uefi|1\n")).unwrap();
+        assert!(!build_plan(&none, &PlanRequest::default()).warnings.iter().any(|w| w.contains("cannot edit")));
     }
 
     // ------------------------------------------------------------------------------------ SHR

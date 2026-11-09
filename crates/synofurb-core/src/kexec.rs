@@ -144,7 +144,10 @@ pub fn stage_and_load(
         bail!("unsafe kernel command line");
     }
     let mut p = Privileged { sh, is_root: privileged_root, sudo_password: sudo_pw };
-    let r = p.run(&format!("'{kx}' -l '{kr}' --initrd='{ir}'{dtb_arg} --command-line='{}'", job.cmdline))?;
+    // `--kexec-syscall`: use the classic kexec_load syscall. Without it kexec-tools tries kexec_file_load first, which needs memfd_create
+    // (Linux 3.17): on DSM 6's 3.10 kernel that fails with "Failed to copy decompressed buf" and kexec does not fall back (found on a real RS812+).
+    // kexec_load is what every DSM kernel with CONFIG_KEXEC offers.
+    let r = p.run(&format!("'{kx}' --kexec-syscall -l '{kr}' --initrd='{ir}'{dtb_arg} --command-line='{}'", job.cmdline))?;
     if !r.ok() {
         bail!("kexec -l failed: {} {}", r.stdout.trim(), r.stderr.trim());
     }
@@ -318,7 +321,11 @@ mod tests {
         let stage = stage_and_load(&mut m, true, None, &job, &log, &mut |_, _| {}).unwrap();
         assert!(stage.starts_with("/tmp/.synofurb-"));
         assert_eq!(m.uploads.len(), 3);
-        assert!(m.commands.iter().any(|c| c.contains("kexec' -l") && c.contains("--initrd=") && c.contains("--command-line='auto=true")));
+        assert!(
+            m.commands
+                .iter()
+                .any(|c| c.contains("kexec' --kexec-syscall -l") && c.contains("--initrd=") && c.contains("--command-line='auto=true"))
+        );
         assert!(m.commands.last().unwrap().starts_with("rm -f"), "kernel/initrd deleted once loaded");
     }
 

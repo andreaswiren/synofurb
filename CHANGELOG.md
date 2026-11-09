@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.5
+
+### Fixed
+- **`kexec -l` failed on DSM 6** with `Failed to copy decompressed buf` (found on a real RS812+, DSM 6.2.4, kernel 3.10). kexec-tools tries the file-based `kexec_file_load` first, which needs `memfd_create` (Linux 3.17), and does not fall back when that fails. The app now passes `--kexec-syscall`, which selects the classic `kexec_load`, the one DSM kernels with `CONFIG_KEXEC` offer. This was the first time the bundled `kexec` ran on a unit: it uploaded, passed its SHA-256 check on the NAS and printed `kexec-tools 2.0.32`; loading the installer was the step that failed, before anything was changed. **Not verified**: that `kexec_load` then loads the installer and the unit reboots into it.
+- **A unit whose internal boot flash cannot be edited now gets a plan warning** on x86-64 with UEFI firmware (the RS812+: a 122 MiB USB flash whose layout is not the DS918+ one). The plan installs GRUB on the disks' ESP; the firmware may keep starting Synology's loader from the flash instead, so Debian would be installed but not start until the boot order is changed (BIOS or UEFI menu, over the serial console or a monitor).
+
 ## 0.2.4
 
 ### Fixed

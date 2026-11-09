@@ -33,6 +33,8 @@ Windows releases from 0.2.4 contain the amd64 binary at `assets/kexec/amd64/kexe
 synofurb looks for `assets/kexec/<amd64|arm64|armhf>/kexec` next to the executable or in the working directory, in
 `$SYNOFURB_KEXEC`, or at the path given with `--kexec` / the GUI browse button.
 
+The load uses `kexec --kexec-syscall -l ...` (the classic `kexec_load` syscall). kexec-tools' default, `kexec_file_load`, needs `memfd_create` (Linux 3.17) and fails on DSM 6's 3.10 kernel with `Failed to copy decompressed buf`; kexec does not fall back from that failure by itself.
+
 ## What happens on the NAS
 
 1. Files go to a private directory under `/tmp` (or `/var/tmp`), mode 0700, with size-checked free space and **SHA-256 verified on
