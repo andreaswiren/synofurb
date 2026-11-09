@@ -44,8 +44,44 @@ env:
   CARGO_PACKAGER_VERSION: "0.11.8"
 
 jobs:
+  kexec:
+    # The static kexec the app uploads to the NAS to start the Debian installer (docs/kexec.md). Built from kexec-tools 2.0.32 (source
+    # SHA-256 pinned in scripts/build-kexec.sh) with zig 0.13.0 from PyPI, then packed into the installers, the portable zip and the CLI zip.
+    name: build kexec (amd64)
+    if: inputs.reuse_run_id == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install zig 0.13.0 from PyPI (pinned)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zigenv"
+          "$RUNNER_TEMP/zigenv/bin/pip" install --quiet "ziglang==0.13.0"
+          dirname "$("$RUNNER_TEMP/zigenv/bin/python" -c 'import ziglang; print(ziglang.__file__)')" >> "$GITHUB_PATH"
+      - run: zig version
+      - name: Build, inspect and checksum
+        run: |
+          set -euo pipefail
+          scripts/build-kexec.sh x86_64
+          file assets/kexec/amd64/kexec | tee /dev/stderr | grep -q "statically linked" || { echo "::error::kexec is not statically linked"; exit 1; }
+          assets/kexec/amd64/kexec --version
+          sha256sum assets/kexec/amd64/kexec | tee kexec-sha256.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kexec-amd64
+          path: |
+            assets/kexec/amd64/kexec
+            kexec-sha256.txt
+          if-no-files-found: error
+          retention-days: 30
+
   build:
     name: build windows-x86_64 (msi, exe, zip)
+    needs: [kexec]
     if: inputs.reuse_run_id == ''
     runs-on: windows-latest
     timeout-minutes: 120
@@ -71,6 +107,17 @@ jobs:
           printf '%s' "${TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$' || { echo "::error::tag '${TAG}' is not vMAJOR.MINOR.PATCH[-pre]"; exit 1; }
           [ "${TAG#v}" = "${cargo_version}" ] || { echo "::error::tag ${TAG} but Cargo.toml version is ${cargo_version}"; exit 1; }
           echo "version=${cargo_version}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kexec-amd64
+          path: .
+      - name: The kexec binary is in place (packaged by the scripts below)
+        run: |
+          set -euo pipefail
+          ls -l assets/kexec/amd64/kexec kexec-sha256.txt
+          test -s assets/kexec/amd64/kexec
+          head -c 4 assets/kexec/amd64/kexec | od -An -c | grep -q 'E *L *F' || { echo "::error::assets/kexec/amd64/kexec is not an ELF file"; exit 1; }
 
       - name: Design gate (REPORT ONLY in this workflow)
         run: |
@@ -146,6 +193,9 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\msi-install.log" -Tail 80; throw "msiexec /i exit code $($p.ExitCode)" }
           $exe = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA -Recurse -Filter synofurb.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $exe) { throw 'synofurb.exe not found after the MSI install' }
+          $kx = Join-Path (Split-Path $exe.FullName) 'assets\kexec\amd64\kexec'
+          if (-not (Test-Path $kx) -or (Get-Item $kx).Length -lt 100000) { Get-ChildItem (Split-Path $exe.FullName) -Recurse | Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host; throw "kexec is not installed next to synofurb.exe ($kx)" }
+          Write-Host "kexec installed: $kx ($((Get-Item $kx).Length) bytes)"
           # synofurb.exe is a GUI-subsystem program: PowerShell does not wait for it with `&`, so start it and wait explicitly
           $verOut = Join-Path $env:RUNNER_TEMP 'installed-version.txt'
           $p = Start-Process -FilePath $exe.FullName -ArgumentList '--version' -Wait -PassThru -RedirectStandardOutput $verOut
@@ -155,6 +205,17 @@ jobs:
           Write-Host $ver
           $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "msiexec /x exit code $($p.ExitCode)" }
+
+      - name: The zips contain the kexec binary
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          foreach ($z in (Get-ChildItem dist/release -Filter '*.zip')) {
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($z.FullName)
+            try { $e = $zip.Entries | Where-Object { $_.FullName -eq 'assets/kexec/amd64/kexec' } } finally { $zip.Dispose() }
+            if (-not $e -or $e.Length -lt 100000) { throw "$($z.Name) has no assets/kexec/amd64/kexec" }
+            Write-Host "$($z.Name): assets/kexec/amd64/kexec ($($e.Length) bytes)"
+          }
 
       - name: The files the release needs exist
         run: |
@@ -169,6 +230,7 @@ jobs:
           path: |
             dist/release/*
             gate-report.txt
+            kexec-sha256.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -182,6 +244,12 @@ jobs:
       contents: write
       actions: read   # download the artifact of an earlier run (reuse_run_id)
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_sha != '' && inputs.target_sha || github.sha }}
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-windows
@@ -211,7 +279,7 @@ jobs:
           {
             echo "# synofurb ${VERSION} (Windows, unsigned)"
             echo
-            echo "**Read this first.** This is a first release built for the Windows installers. It is **not** the full release pipeline:"
+            echo "**Read this first.** This is a Windows-only build from the unsigned release workflow. It is **not** the full release pipeline:"
             echo
             echo "- **Unsigned.** The \`.msi\` and \`.exe\` are not Authenticode-signed (Windows SmartScreen will warn) and \`SHA256SUMS\` has no minisign signature."
             echo "  The checksums catch a damaged download, not a tampered release. From 0.2.2 the in-app updater can install an unsigned release only after you tick an explicit consent box (it checks the SHA-256 only); older versions can only show that an update exists, so install the first update by hand."
@@ -221,9 +289,21 @@ jobs:
             echo '```'
             echo "${gate}"
             echo '```'
-            echo "- **Never run on real hardware.** Nothing has been tested on a real Synology (reinstall, boot flash, RAID/LVM steps). Back up your data first, and expect failures."
+            echo "- **The reinstall itself has not been completed on any real Synology.** The read-only inspection has been run on real units; the step that loads the Debian installer (kexec), the partitioning and the first boot of Debian have not. Back up your data first, and expect failures."
             echo "- Windows x86-64 only. No macOS, Linux, boot-agent or NAS-side management assets in this release."
             echo
+            echo "## What changed in ${VERSION}"
+            echo
+            vre="$(printf '%s' "${VERSION}" | sed 's/\./\\./g')"
+            awk -v re="^## ${vre}( |$)" '$0 ~ re { f = 1; next } f && /^## / { exit } f' CHANGELOG.md
+            echo
+            echo "Full list: \`CHANGELOG.md\`."
+            echo
+            kx="$(find dl -name kexec-sha256.txt | head -n 1)"
+            if [ -n "${kx}" ]; then
+              echo "The static \`kexec\` for the NAS (amd64) is included at \`assets/kexec/amd64/kexec\` next to the app (installers and zips). SHA-256: \`$(cut -d' ' -f1 "${kx}")\`. Built by this workflow from kexec-tools 2.0.32."
+              echo
+            fi
             echo "## Files"
             echo
             echo "| File | What |"

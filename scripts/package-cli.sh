@@ -36,10 +36,13 @@ mkdir -p "$OUT"
 DEST="$OUT/$(pkg_cli_asset_name "$VERSION" "$OS" "$ARCH" "$EXT")"
 
 PY="$(pkg_python)"
-"$PY" - "$EXT" "$DEST" "$BIN" "$PKG_ROOT/LICENSE" "$VERSION" "$OS" "$ARCH" <<'PYEOF'
+KEXEC=""
+if [ -f "$PKG_ROOT/assets/kexec/amd64/kexec" ]; then KEXEC="$PKG_ROOT/assets/kexec/amd64/kexec"; fi
+
+"$PY" - "$EXT" "$DEST" "$BIN" "$PKG_ROOT/LICENSE" "$VERSION" "$OS" "$ARCH" "$KEXEC" <<'PYEOF'
 import gzip, io, os, sys, tarfile, zipfile
 
-ext, dest, binary, license_file, version, os_name, arch = sys.argv[1:8]
+ext, dest, binary, license_file, version, os_name, arch, kexec = sys.argv[1:9]
 epoch = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
 readme = f"""synofurb-cli {version} ({os_name} {arch}) - command line only, no graphical libraries
 
@@ -50,6 +53,8 @@ Project: https://github.com/andreaswiren/synofurb  -  MIT License
 """.encode()
 binname = "synofurb-cli.exe" if os_name == "windows" else "synofurb-cli"
 members = [(binname, open(binary, "rb").read(), 0o755), ("LICENSE", open(license_file, "rb").read(), 0o644), ("README.txt", readme, 0o644)]
+if kexec:
+    members.append(("assets/kexec/amd64/kexec", open(kexec, "rb").read(), 0o755))
 
 if ext == "zip":
     ts = max(epoch, 315532800)  # zip cannot store dates before 1980

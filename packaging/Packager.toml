@@ -38,6 +38,10 @@ icons = [
 binaries-dir = '@BINARIES_DIR@'
 binaries = [{ path = "synofurb", main = true }]
 
+# The static kexec for the NAS (docs/kexec.md): the app looks for assets/kexec/<arch>/kexec next to the executable. Filled in by the
+# script only when assets/kexec/amd64/kexec exists (the Windows release builds it first); other builds ship without it.
+# @RESOURCES@
+
 # ---- Linux: .deb (the .AppImage uses the same config; the .rpm is built by scripts/package-rpm.sh) ----------
 [deb]
 section = "utils"
