@@ -105,7 +105,7 @@ After `remove`, the boot flash contains only Synology's own files again (the too
 If DSM's system partition was reclaimed and the install did not complete, the unit boots Synology's loader, which
 brings up Synology's own recovery/installer web page. The usual way to use it is to open
 <https://find.synology.com> (or Synology Assistant), find the unit and install DSM again with the `.pat` file for your
-model from Synology's download centre. Synology documents this "reinstall DSM" procedure and states that data volumes
+model from Synology's download centre. (If you cannot log in to DSM, or the unit's address is unknown, the RESET button helps: see [RESET.md](RESET.md) and `synofurb-cli reset-help <model>`.) Synology documents this "reinstall DSM" procedure and states that data volumes
 are kept when you choose to keep them, **but you must check Synology's current documentation for your DSM version, and
 this project cannot guarantee it** (you lose DSM settings, packages and users either way; only files on intact volumes
 can survive). That is why the confirmation screen says *no guarantee* and why a backup is not optional.

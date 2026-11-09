@@ -22,5 +22,6 @@ pub mod hostkey;
 pub mod manage;
 pub mod offline;
 pub mod recovery;
+pub mod reset;
 pub mod timing;
 pub mod updater;

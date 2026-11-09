@@ -34,10 +34,13 @@ ICON=""
 if [ "$OS" = linux ]; then ICON="$PKG_ROOT/packaging/icons/512x512.png"; fi
 
 PY="$(pkg_python)"
-"$PY" - "$EXT" "$DEST" "$BIN" "$PKG_ROOT/LICENSE" "$VERSION" "$OS" "$ARCH" "$ICON" <<'PYEOF'
+KEXEC=""
+if [ -f "$PKG_ROOT/assets/kexec/amd64/kexec" ]; then KEXEC="$PKG_ROOT/assets/kexec/amd64/kexec"; fi
+
+"$PY" - "$EXT" "$DEST" "$BIN" "$PKG_ROOT/LICENSE" "$VERSION" "$OS" "$ARCH" "$ICON" "$KEXEC" <<'PYEOF'
 import gzip, io, os, sys, tarfile, zipfile
 
-ext, dest, binary, license_file, version, os_name, arch, icon = sys.argv[1:9]
+ext, dest, binary, license_file, version, os_name, arch, icon, kexec = sys.argv[1:10]
 epoch = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
 readme = f"""synofurb {version} ({os_name} {arch}) - portable build
 
@@ -49,6 +52,9 @@ binname = "synofurb.exe" if os_name == "windows" else "synofurb"
 members = [(binname, open(binary, "rb").read(), 0o755), ("LICENSE", open(license_file, "rb").read(), 0o644), ("README.txt", readme, 0o644)]
 if icon:
     members.append(("synofurb.png", open(icon, "rb").read(), 0o644))
+if kexec:
+    # the static kexec for the NAS (docs/kexec.md); the app finds it at assets/kexec/amd64/kexec next to the executable
+    members.append(("assets/kexec/amd64/kexec", open(kexec, "rb").read(), 0o755))
 
 if ext == "zip":
     ts = max(epoch, 315532800)  # zip cannot store dates before 1980

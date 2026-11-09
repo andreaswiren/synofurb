@@ -53,9 +53,14 @@ if [ -n "${WINDOWS_CERT_THUMBPRINT:-}" ]; then
     printf '%s' "$WINDOWS_CERT_THUMBPRINT" | grep -Eq '^[0-9A-Fa-f]{40}$' || pkg_die "WINDOWS_CERT_THUMBPRINT must be a 40-digit SHA-1 hex thumbprint"
     win_line="certificate-thumbprint = \"$WINDOWS_CERT_THUMBPRINT\""$'\n'"timestamp-url = \"${WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}\""
 fi
+res_line="# (no assets/kexec/amd64/kexec in this checkout: built without the bundled kexec)"
+if [ -f "$PKG_ROOT/assets/kexec/amd64/kexec" ]; then
+    res_line='resources = [{ src = "../assets/kexec/amd64/kexec", target = "assets/kexec/amd64/kexec" }]'
+fi
+gen="${gen//# @RESOURCES@/$res_line}"
 gen="${gen//# @MACOS_SIGNING@/$macos_line}"
 gen="${gen//# @WINDOWS_SIGNING@/$win_line}"
-if printf '%s' "$gen" | grep -Eq '@(VERSION|BINARIES_DIR|MACOS_SIGNING|WINDOWS_SIGNING)@'; then pkg_die "unreplaced placeholder in the generated config"; fi
+if printf '%s' "$gen" | grep -Eq '@(VERSION|BINARIES_DIR|RESOURCES|MACOS_SIGNING|WINDOWS_SIGNING)@'; then pkg_die "unreplaced placeholder in the generated config"; fi
 CONFIG="$PKG_ROOT/packaging/.Packager.generated.toml"
 printf '%s\n' "$gen" >"$CONFIG"
 if [ "$RENDER_ONLY" = 1 ]; then

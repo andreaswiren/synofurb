@@ -45,8 +45,10 @@ pub fn find_kexec_binary(arch: Arch, explicit: Option<&Path>) -> Result<PathBuf>
         }
     }
     bail!(
-        "no static kexec binary for {} found. Build one with scripts/build-kexec.sh (see docs/kexec.md) \
-         and pass it with --kexec, or use the installer kit instead.",
+        "no static kexec binary for {} found (looked for assets/kexec/{}/kexec next to the app, in $SYNOFURB_KEXEC and in the working directory). \
+         Windows releases from 0.2.4 include the amd64 one; otherwise build one (scripts/build-kexec.sh, docs/kexec.md) and pass it with --kexec, \
+         or use the installer kit instead.",
+        arch.debian(),
         arch.debian()
     )
 }

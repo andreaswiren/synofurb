@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.4
+
+### Fixed
+- **The Windows release now contains the static `kexec`** (`assets/kexec/amd64/kexec` next to the app, in the MSI, the NSIS installer, the portable zip and the CLI zip). Without it the app could not start the Debian installer on a unit: the install stopped at "no static kexec binary for amd64 found" (found on a real RS812+; it stopped before anything on the unit was changed). The release workflow builds it first (kexec-tools 2.0.32, source SHA-256 pinned, zig 0.13.0 from PyPI), checks that it is a static ELF that runs, and the MSI smoke test checks that it is installed next to `synofurb.exe`. The SHA-256 is in the release notes. It has **not been run on a NAS yet**.
+- **`scripts/build-kexec.sh` never ran before and did not work**: the x86_64 build failed in the purgatory stub (zig misreads `-march=x86-64` and rejects `-Wl,-Map=`); the compiler wrapper now handles both. **`aarch64` and `armv7` still do not build** (docs/kexec.md). The CI job `kexec-static` and the new manual workflow `kexec-static.yml` build x86_64 only; the `setup-zig` action could not download any zig, so zig comes from PyPI, pinned.
+- **Confirm**: the red confirmation card starts level with the alert on the left (its title was above its box); the Destroyed, Changed and Preserved cards start at the same height; the add-on privilege text lines up with its checkbox label; the phrase chip no longer stretches over the card.
+- A CI test (`test_builtin_udp_resolver_when_dig_is_missing`) used a real `dig` when the machine had one.
+- The error for a missing kexec binary now says where the app looked and that releases from 0.2.4 include it.
+- The release notes of the Windows workflow now include "What changed" from this file, and no longer claim that nothing was ever run on real hardware (the read-only inspection has; the reinstall has not been completed).
+
+### Added
+- **Factory-reset help for 78 Synology models** (`docs/RESET.md`, `crates/synofurb-core/src/reset.rs`, `synofurb-cli reset-help [MODEL] [--json] [--list]`): the RESET-button procedures (Mode 1: forgot the admin password or the address; Mode 2: reinstall DSM; DSM 7 System Reset: erase everything), where the button is (only the RS812+ is recorded, "back panel", from Synology's own guide; the others point to the model's Download Center page), and the page link for each model. Three names in the list we were given (`DS122j`, `DS222+`, `DS2414+`) do not exist at Synology and are not in the table. **Not verified**: nothing was tried on a unit; the sequence comes from excerpts of Synology's pages because the knowledge-base articles only render in a browser. The desktop app does not show it yet.
+
 ## 0.2.3
 
 ### Added (management plane: certificates and the HAProxy front, Stage 2 of docs/ADDONS.md; the management-plane version is not bumped here)

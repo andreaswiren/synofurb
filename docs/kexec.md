@@ -28,7 +28,7 @@ assets/kexec/amd64/kexec --version   # kexec-tools 2.0.32
 
 The manual GitHub workflow `kexec-static.yml` (also a job in `ci.yml`) builds the x86_64 binary on a runner and keeps it as an artifact `kexec-static` with its SHA-256 in the log.
 The `setup-zig` action is not used: it could not download any zig version (404 on every mirror), so zig comes from PyPI, pinned.
-The Windows release does not contain this binary yet, so for now put it next to the app or point the app at it (below).
+Windows releases from 0.2.4 contain the amd64 binary at `assets/kexec/amd64/kexec` next to the app (installers, portable zip and CLI zip); the release workflow builds it. Other platforms' packages do not carry it yet; put it next to the app or point the app at it (below).
 
 synofurb looks for `assets/kexec/<amd64|arm64|armhf>/kexec` next to the executable or in the working directory, in
 `$SYNOFURB_KEXEC`, or at the path given with `--kexec` / the GUI browse button.

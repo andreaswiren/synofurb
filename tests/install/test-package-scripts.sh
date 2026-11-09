@@ -75,6 +75,21 @@ run "$S/package-cli.sh" --target riscv64-unknown-linux-gnu --out "$WORK/oc2"; ch
 run "$S/package-cli.sh" --target x86_64-unknown-linux-gnu --bin "$WORK/nope" --out "$WORK/oc2"; chk "missing binary must fail" "$([ "$RC" != 0 ]; echo $?)"; chk "tells how to build it" "$(printf '%s' "$OUT" | grep -q -- '--no-default-features --bin synofurb-cli'; echo $?)"
 finish
 
+begin "bundled kexec: in the CLI zip, the portable zip and the packager resources when the file exists, in none when it does not"
+mkdir -p "$SK/assets/kexec/amd64"; head -c 150000 /dev/zero | tr '\0' 'K' >"$SK/assets/kexec/amd64/kexec"
+run "$S/package-cli.sh" --target x86_64-pc-windows-msvc --out "$WORK/kx1"; chk "cli exit $RC" "$([ "$RC" = 0 ]; echo $?)"
+chk "cli zip has the kexec" "$(python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); i=z.getinfo('assets/kexec/amd64/kexec'); sys.exit(0 if i.file_size==150000 else 1)" "$WORK/kx1/synofurb-cli-0.7.1-windows-x86_64.zip"; echo $?)"
+run "$S/package-portable.sh" --target x86_64-pc-windows-msvc --out "$WORK/kx2"; chk "portable exit $RC" "$([ "$RC" = 0 ]; echo $?)"
+chk "portable zip has the kexec" "$(python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); sys.exit(0 if 'assets/kexec/amd64/kexec' in z.namelist() and 'synofurb.exe' in z.namelist() else 1)" "$WORK/kx2/synofurb-0.7.1-windows-x86_64.zip"; echo $?)"
+run "$S/package-cargo-packager.sh" --target x86_64-pc-windows-msvc --formats wix --render-only; chk "render exit $RC" "$([ "$RC" = 0 ]; echo $?)"
+chk "resources entry" "$(grep -q '^resources = \[{ src = "../assets/kexec/amd64/kexec", target = "assets/kexec/amd64/kexec" }\]' "$SK/packaging/.Packager.generated.toml"; echo $?)"
+rm -rf "$SK/assets"
+run "$S/package-cli.sh" --target x86_64-pc-windows-msvc --out "$WORK/kx3"; chk "cli without kexec exit $RC" "$([ "$RC" = 0 ]; echo $?)"
+chk "no kexec in the cli zip without the file" "$(python3 -c "import zipfile,sys; sys.exit(1 if any('kexec' in n for n in zipfile.ZipFile(sys.argv[1]).namelist()) else 0)" "$WORK/kx3/synofurb-cli-0.7.1-windows-x86_64.zip"; echo $?)"
+run "$S/package-cargo-packager.sh" --target x86_64-pc-windows-msvc --formats wix --render-only; chk "render without exit $RC" "$([ "$RC" = 0 ]; echo $?)"
+chk "no resources entry without the file" "$(grep -q '^resources' "$SK/packaging/.Packager.generated.toml"; [ $? -ne 0 ]; echo $?)"
+finish
+
 begin "rpm: name, version, requires, files"
 if ! command -v rpmbuild >/dev/null 2>&1 || ! command -v rpm >/dev/null 2>&1; then skip "rpmbuild not installed"; else
     run "$S/package-rpm.sh" --target x86_64-unknown-linux-gnu --out "$WORK/o3"; chk "exit $RC" "$([ "$RC" = 0 ]; echo $?)"
