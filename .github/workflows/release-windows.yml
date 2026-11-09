@@ -46,7 +46,7 @@ env:
 jobs:
   kexec:
     # The static kexec the app uploads to the NAS to start the Debian installer (docs/kexec.md). Built from kexec-tools 2.0.32 (source
-    # SHA-256 pinned in scripts/build-kexec.sh) with zig 0.13.0 from PyPI, then packed into the installers, the portable zip and the CLI zip.
+    # SHA-256 pinned in scripts/build-kexec.sh) with the runner's native gcc, then packed into the installers, the portable zip and the CLI zip.
     name: build kexec (amd64)
     if: inputs.reuse_run_id == ''
     runs-on: ubuntu-24.04
@@ -57,18 +57,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install zig 0.13.0 from PyPI (pinned)
-        run: |
-          python3 -m venv "$RUNNER_TEMP/zigenv"
-          "$RUNNER_TEMP/zigenv/bin/pip" install --quiet "ziglang==0.13.0"
-          dirname "$("$RUNNER_TEMP/zigenv/bin/python" -c 'import ziglang; print(ziglang.__file__)')" >> "$GITHUB_PATH"
-      - run: zig version
-      - name: Build, inspect and checksum
+      - name: Build, test and checksum (native static gcc build; scripts/test-kexec.sh must pass)
         run: |
           set -euo pipefail
+          gcc --version | head -n 1
           scripts/build-kexec.sh x86_64
           file assets/kexec/amd64/kexec | tee /dev/stderr | grep -q "statically linked" || { echo "::error::kexec is not statically linked"; exit 1; }
           assets/kexec/amd64/kexec --version
+          # reproduces the failure of the zig-built 0.2.4/0.2.5 binaries (R_X86_64_29) without a NAS; see the script
+          scripts/test-kexec.sh assets/kexec/amd64/kexec
           sha256sum assets/kexec/amd64/kexec | tee kexec-sha256.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

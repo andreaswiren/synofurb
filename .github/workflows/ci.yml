@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
       - run: shellcheck -s dash payload/chroot-setup.sh payload/files/usr/local/sbin/* 
-      - run: shellcheck -s sh scripts/build-kexec.sh
+      - run: shellcheck -s sh scripts/build-kexec.sh scripts/test-kexec.sh
       - run: python3 -m unittest discover -s apps/mgmt-plane/tests -v
         working-directory: .
         env:
@@ -48,18 +48,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install zig 0.13.0 from PyPI (pinned; the setup-zig action could not fetch any zig version)
-        run: |
-          python3 -m venv "$RUNNER_TEMP/zigenv"
-          "$RUNNER_TEMP/zigenv/bin/pip" install --quiet "ziglang==0.13.0"
-          dirname "$("$RUNNER_TEMP/zigenv/bin/python" -c 'import ziglang; print(ziglang.__file__)')" >> "$GITHUB_PATH"
-      - run: zig version
-      # x86_64 only: aarch64 and armv7 do not build yet (docs/kexec.md)
+      # x86_64 only, native gcc: aarch64 and armv7 do not build yet (docs/kexec.md)
       - run: scripts/build-kexec.sh x86_64
       - run: |
           file assets/kexec/*/kexec
           sha256sum assets/kexec/*/kexec
           assets/kexec/amd64/kexec --version
+          scripts/test-kexec.sh assets/kexec/amd64/kexec
       - uses: actions/upload-artifact@v4
         with:
           name: kexec-static
