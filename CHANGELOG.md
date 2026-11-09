@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.7
+
+### Fixed
+- **The NAS fetched its install script from an address it cannot reach** (found on a real RS812+). The app told the installer to call back to "the address this computer would use to reach the NAS", taken from the routing table. When a VPN overlay (NetBird here) advertises the NAS's own LAN as a routed network with a better metric, that answer is the overlay address (`100.64.x.x`), not the computer's address on the LAN. The installer booted but never got its stage-2 script, so nothing was installed (the disks were not touched). The app now uses this computer's address on the NAS's own subnet (longest prefix first) and only falls back to the routing table when there is none.
+- **A check for updates started from the menu now says how it ended.** It used to show nothing unless the Settings or About page was open. It now shows "No update found. synofurb {version} is the newest version.", the reason when the check failed, or opens the update dialog when a newer version exists.
+
+### Added
+- **The Debian installer's SSH server is on by default** (Debian's `network-console`, online installs). With no screen on the NAS a stuck install could only be guessed at. Once the installer has a network it loads the component from the mirror and accepts `ssh installer@<the NAS's address>` with a random password that is written to the install log (`installer debug SSH ...`). It gives a shell and the installer log. It is off in offline mode (the bundle has no real mirror). Checked in an emulator (QEMU) with the generated preseed: the login works while the install waits at "Loading additional components". **Not yet seen on the real RS812+.** It cannot help when the installer never gets a network at all; the serial console (`ttyS0`, 115200) is the only view then.
+
+### Known, not fixed
+- **`kexec -l` with the 537 MB installer initrd (installer plus the 496 MB firmware bundle) ran at 100% CPU in user space for more than 12 minutes on the RS812+ (Atom D2700) and never finished**; with the 40 MB initrd of `--no-firmware` it loads in about 2 seconds. The same binary loads a 495 MB initrd in about a second on a PC. The cause is not found. Until it is, use `--no-firmware` on this unit (its Intel network cards do not need firmware).
+- The Settings button in the title bar does nothing when clicked (reproduced, cause not found).
+- No install has completed on the RS812+ yet.
+
 ## 0.2.6
 
 ### Fixed

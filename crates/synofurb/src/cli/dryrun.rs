@@ -100,7 +100,11 @@ pub fn render(
         log_tcp_port: PLACEHOLDER_TCP_PORT,
         dry_run: false,
     })?;
-    let preseed = debian::render_preseed(&PreseedParams { cfg, http_base: &http_base });
+    let preseed = debian::render_preseed(&PreseedParams {
+        cfg,
+        http_base: &http_base,
+        debug_ssh_password: offline_bundle.is_none().then_some("DRYRUN-debug-ssh-password"),
+    });
     let cmdline = debian::installer_cmdline(&cfg.serial, &bind_ip.to_string(), PLACEHOLDER_UDP_PORT, true, None);
     let manifest = manifest_of(&payload.bytes)?;
     Ok(Rendered {
