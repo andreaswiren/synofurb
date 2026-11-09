@@ -22,6 +22,7 @@ pub mod misc;
 pub mod out;
 pub mod prompt;
 pub mod render;
+pub mod reset_cmd;
 pub mod runner;
 pub mod scan;
 pub mod spec;
@@ -90,6 +91,7 @@ pub fn run(out: &Out, p: &Program, cmd: Cmd) -> CliResult<()> {
         Cmd::Inventory { action } => scan::inventory(out, action),
         Cmd::Inspect(a) => install::inspect(out, a),
         Cmd::Compat(a) => compat_cmd::compat(out, a),
+        Cmd::ResetHelp(a) => reset_cmd::reset_help(out, a),
         Cmd::Plan(a) => install::plan(out, a),
         Cmd::Install(a) => install::install(out, *a),
         Cmd::Wizard(a) => wizard::run_wizard(out, a),

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4 (unreleased)
+
+### Added
+- **Factory-reset help for 78 Synology models** (`docs/RESET.md`, `crates/synofurb-core/src/reset.rs`, `synofurb-cli reset-help [MODEL] [--json] [--list]`): the RESET-button procedures (Mode 1: forgot the admin password or the address; Mode 2: reinstall DSM; DSM 7 System Reset: erase everything), where the button is (only the RS812+ is recorded, "back panel", from Synology's own guide; the others point to the model's Download Center page), and the page link for each model. Three names in the list we were given (`DS122j`, `DS222+`, `DS2414+`) do not exist at Synology and are not in the table. **Not verified**: nothing was tried on a unit; the sequence comes from excerpts of Synology's pages because the knowledge-base articles only render in a browser. The desktop app does not show it yet.
+
 ## 0.2.3
 
 ### Added (management plane: certificates and the HAProxy front, Stage 2 of docs/ADDONS.md; the management-plane version is not bumped here)

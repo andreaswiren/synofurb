@@ -92,6 +92,12 @@ pub enum Cmd {
         after_help = "EXAMPLES\n  synofurb-cli compat\n  synofurb-cli compat DS923+ --json\n  synofurb-cli compat --refresh\n  synofurb-cli compat --list --status verified"
     )]
     Compat(CompatArgs),
+    /// Factory-reset help for a Synology model: the RESET-button procedures, where to find the button, the Download Center page (no unit needed)
+    #[command(
+        name = "reset-help",
+        after_help = "EXAMPLES\n  synofurb-cli reset-help RS812+\n  synofurb-cli reset-help DS918+ --json\n  synofurb-cli reset-help --list\n\nNothing here touches a unit. docs/RESET.md says what is verified."
+    )]
+    ResetHelp(ResetHelpArgs),
     /// Inspect a running DSM and show the install plan (read-only). Exit 4 when the plan has errors, 5 when the hardware is unsupported
     #[command(
         after_help = "EXAMPLES\n  synofurb-cli plan --host 192.168.1.20\n  synofurb-cli plan --host 192.168.1.20 --mode keep --keep md2 --json\n  synofurb-cli plan --host 192.168.1.20 --system-gib 64 --copies 2 --raid 5 --free-percent 10\n  synofurb-cli plan --facts facts.json --mode wipe"
@@ -547,6 +553,17 @@ pub struct CompatArgs {
 }
 
 #[derive(Args, Debug, Clone)]
+pub struct ResetHelpArgs {
+    /// model name, e.g. "RS812+" or "DS918+" (omit for the generic procedure)
+    pub model: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+    /// list the models that have an entry (one per line)
+    #[arg(long, conflicts_with = "model")]
+    pub list: bool,
+}
+
+#[derive(Args, Debug, Clone)]
 pub struct PlanArgs {
     #[command(flatten)]
     pub src: LiveOrFacts,
@@ -991,6 +1008,15 @@ mod tests {
     }
 
     #[test]
+    fn reset_help_takes_a_model_or_a_list_but_not_both() {
+        let Cmd::ResetHelp(a) = ok(&["reset-help", "RS812+", "--json"]).cmd else { panic!() };
+        assert_eq!((a.model.as_deref(), a.json, a.list), (Some("RS812+"), true, false));
+        let Cmd::ResetHelp(a) = ok(&["reset-help", "--list"]).cmd else { panic!() };
+        assert!(a.list && a.model.is_none());
+        assert!(err(&["reset-help", "DS918+", "--list"]).contains("cannot be used"));
+    }
+
+    #[test]
     fn every_top_level_command_exists_and_has_no_gui() {
         let cmd = Cli::command();
         let names: Vec<&str> = cmd.get_subcommands().map(|c| c.get_name()).collect();
@@ -999,6 +1025,7 @@ mod tests {
             "inventory",
             "inspect",
             "compat",
+            "reset-help",
             "plan",
             "install",
             "wizard",

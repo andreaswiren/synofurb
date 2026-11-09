@@ -25,6 +25,7 @@ Contents: [Quick start](#quick-start) - [Conventions](#conventions) - [Exit code
 ```sh
 synofurb-cli scan                                  # find units (saved to the inventory)
 synofurb-cli compat DS923+                         # what is known about the model
+synofurb-cli reset-help RS812+                       # factory-reset help for a model (docs/RESET.md); touches no unit
 export SYNOFURB_PASSWORD=...                       # the NAS admin's SSH password (or --key FILE, or answer the prompt)
 synofurb-cli inspect --host 192.168.1.20           # read-only: disks, arrays, firmware, serial console, compatibility verdict
 synofurb-cli plan --host 192.168.1.20 --mode keep  # what would be destroyed, what kept; prints the confirmation phrase
