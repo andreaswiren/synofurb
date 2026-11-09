@@ -49,6 +49,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.1     # pinned: the action's default is the newest build, which can be missing from every mirror
       - run: for a in x86_64 aarch64 armv7; do scripts/build-kexec.sh $a; done
       - run: file assets/kexec/*/kexec
       - uses: actions/upload-artifact@v4

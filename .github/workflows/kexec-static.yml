@@ -1,0 +1,31 @@
+name: kexec-static
+
+# Builds the static `kexec` binaries the app uploads to the NAS (docs/kexec.md) and keeps them as a workflow artifact.
+# Manual only. Same steps as the job of the same name in ci.yml, without the rest of the CI.
+# The binaries are built from kexec-tools 2.0.32 (source tarball pinned by SHA-256 in scripts/build-kexec.sh) with zig 0.14.1.
+# Inspect them before use: `file assets/kexec/amd64/kexec` must say "statically linked"; the job prints it.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kexec-static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.14.1
+      - run: for a in x86_64 aarch64 armv7; do scripts/build-kexec.sh $a; done
+      - run: |
+          file assets/kexec/*/kexec
+          sha256sum assets/kexec/*/kexec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kexec-static
+          path: assets/kexec
+          retention-days: 30
