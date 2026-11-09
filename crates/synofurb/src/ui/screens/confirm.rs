@@ -30,7 +30,8 @@ impl App {
             .outline()
             .id(id)
             .content_style(StyleRefinement::default().border_color(border).border_l_4())
-            .title(title)
+            // one fixed header height: a header with an info button is taller than one without, which moved the cards to different y
+            .title(h_flex().h(px(24.0)).items_center().child(title))
             .child(v_flex().gap(px(2.0)).children(lines))
     }
 
@@ -322,22 +323,24 @@ impl App {
             PhraseMatch::Partial { n, total } => Some(kit::chip(&p, format!("{n} of {total}")).into_any_element()),
             PhraseMatch::Empty => None,
         };
-        let card = GroupBox::new()
-            .outline()
-            .id("danger")
-            .content_style(StyleRefinement::default().border_color(p.err_solid).border_2())
-            .title(
-                h_flex().gap(px(8.0)).items_center().text_color(p.err_fg).child(icons::icon_sized(role::STOP, 18.0, p.err_fg)).child(
-                    div()
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .text_sm()
-                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                        .child(phrase.clone()),
-                ),
-            )
-            .child(
+        let card =
+            GroupBox::new().outline().id("danger").content_style(StyleRefinement::default().border_color(p.err_solid).border_2()).child(
                 v_flex()
                     .gap(px(8.0))
+                    .child(
+                        h_flex()
+                            .gap(px(8.0))
+                            .items_center()
+                            .text_color(p.err_fg)
+                            .child(icons::icon_sized(role::STOP, 18.0, p.err_fg))
+                            .child(
+                                div()
+                                    .font_family(cx.theme().mono_font_family.clone())
+                                    .text_sm()
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                    .child(phrase.clone()),
+                            ),
+                    )
                     .child(Checkbox::new("ack-backup").label(copy::CONF_BACKUP.short).checked(self.ack_backup).on_click(cx.listener(
                         |this, v: &bool, _, cx| {
                             this.ack_backup = *v;
@@ -365,7 +368,7 @@ impl App {
                                             cx.notify();
                                         })),
                                 )
-                                .child(div().pl(px(28.0)).child(kit::caption(cx, line))),
+                                .child(div().pl(px(24.0)).child(kit::caption(cx, line))),
                         )
                     })
                     .child(Checkbox::new("ack-unit").label(copy::CONF_UNIT.fmt(&[&unit_label])).checked(self.ack_unit).on_click(
@@ -374,7 +377,7 @@ impl App {
                             cx.notify();
                         }),
                     ))
-                    .child(kit::chip(&p, phrase.clone()).font_family(cx.theme().mono_font_family.clone()))
+                    .child(kit::chip(&p, phrase.clone()).font_family(cx.theme().mono_font_family.clone()).self_start())
                     .child(
                         h_flex()
                             .gap(px(6.0))
