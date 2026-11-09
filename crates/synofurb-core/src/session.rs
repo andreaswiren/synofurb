@@ -235,7 +235,8 @@ pub fn stage(job: &InstallJob, bind_ip: IpAddr, inspect_raw: &str, log: &Logger,
     // The installer's own SSH server, on by default: with no screen on the NAS it is the only way to see why an install is stuck.
     // It is fetched from the Debian mirror once the installer has a network, so an offline bundle (no real mirror) goes without.
     let debug_ssh_password = bundle.is_none().then(|| crate::config::generate_password(12));
-    let preseed = debian::render_preseed(&PreseedParams { cfg: &cfg, http_base: &http_base, debug_ssh_password: debug_ssh_password.as_deref() });
+    let preseed =
+        debian::render_preseed(&PreseedParams { cfg: &cfg, http_base: &http_base, debug_ssh_password: debug_ssh_password.as_deref() });
     match &debug_ssh_password {
         Some(pw) => log.info(format!(
             "installer debug SSH (on once the installer has a network and has loaded it from the mirror): ssh installer@<the NAS's address>  password {pw}  (this password is only for the installer session)"

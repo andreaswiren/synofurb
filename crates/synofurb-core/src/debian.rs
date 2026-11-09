@@ -394,7 +394,8 @@ mod tests {
     #[test]
     fn preseed_runs_stage2_at_partman() {
         let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
-        let p = render_preseed(&PreseedParams { cfg: &cfg, http_base: "http://10.0.0.2:8800/tok", debug_ssh_password: Some("Abc123xyz789") });
+        let p =
+            render_preseed(&PreseedParams { cfg: &cfg, http_base: "http://10.0.0.2:8800/tok", debug_ssh_password: Some("Abc123xyz789") });
         assert!(p.contains("d-i partman/early_command string wget -q -O /tmp/synofurb-stage2.sh http://10.0.0.2:8800/tok/stage2.sh"));
         assert!(p.contains("netcfg/get_hostname string nas"));
         assert!(!p.contains("$6$"), "no password material in the preseed");
