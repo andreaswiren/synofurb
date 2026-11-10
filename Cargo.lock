@@ -7743,7 +7743,7 @@ dependencies = [
 
 [[package]]
 name = "synofurb"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7766,7 +7766,7 @@ dependencies = [
 
 [[package]]
 name = "synofurb-core"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "async-trait",

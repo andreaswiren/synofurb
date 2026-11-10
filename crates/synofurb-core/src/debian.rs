@@ -226,15 +226,22 @@ pub struct PreseedParams<'a> {
     pub debug_ssh_password: Option<&'a str>,
 }
 
-/// Appended to `preseed/early_command` when the installer SSH server (`network-console`) is on. That package ends its set-up with
-/// a "Continue installation remotely using SSH" note that the local console shows and waits on, so an unattended install would
-/// stand still until someone pressed Enter on a console nobody looks at (found on a real RS812+ in 0.2.7). This background loop
-/// waits until that note is up and the SSH server is listening, then presses Enter for it through `screen`, which the installer's
-/// local console runs in. A person who logs in over SSH still gets the installer menu, in a screen session of their own. The
-/// `[d]` / `[s]` brackets keep `grep` from matching its own entry in `ps`. The closed descriptors matter: the installer runs this
-/// command with a pipe open to its logger and waits for that pipe to close, so a background job that keeps it open freezes the
-/// installer before its first screen (seen in QEMU).
-const DEBUG_SSH_UNBLOCK: &str = r#"; ( n=0; while [ $n -lt 1200 ]; do n=$((n+1)); sleep 1; if ps | grep -q '[d]pkg/info/network' && ps | grep -q '[s]shd: /usr/sbin/sshd'; then sleep 2; s=$(screen -ls | sed -n 's/^[[:space:]]*\([0-9]*\.tty[^[:space:]]*\).*/\1/p' | head -n 1); [ -n "$s" ] && screen -S "$s" -X stuff "$(printf '\r')"; logger -t synofurb "installer SSH note dismissed on $s"; break; fi; done ) >/dev/null 2>&1 </dev/null 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &"#;
+/// Appended to `preseed/early_command`: answers, with Enter, any question the installer stops at before stage 2 takes over. The
+/// NAS has no screen and nobody sits at its serial console, so a question there stands still forever. Seen on a real RS812+: the
+/// `network-console` note ("Continue installation remotely using SSH", 0.2.7), and a single failed DNS lookup of the mirror
+/// ("package retrieval failed", question `retriever/net/error`, whose default is Retry, 0.2.9). A critical question cannot be
+/// preseeded away, so this background loop watches the installer's own log (`DEBCONF_DEBUG` is always on, see
+/// [`installer_cmdline`]) for a critical question that has been asked and is waiting (its last line is `GO`), and presses Enter
+/// through `screen`, which the installer's local console runs in. Its own log lines are left out when it looks (otherwise they
+/// hide the next question, which the installer asks within the same second: found in QEMU), and it keeps pressing every few
+/// seconds while a question is waiting, because the installer asks several questions in one go (mirror hostname and directory)
+/// and logs nothing between their answers. At most 200 presses, so a mirror that stays down ends in a stopped installer
+/// rather than an endless loop. It stops for good once stage 2 has been fetched
+/// (`/tmp/synofurb-stage2.sh` exists): from there the installer is past its point of no return, and an Enter must never answer
+/// what follows a failed stage 2. A person who logs in over SSH still gets the installer menu in a screen session of their own.
+/// The closed descriptors matter: the installer runs this command with a pipe open to its logger and waits for that pipe to close,
+/// so a background job that keeps it open freezes the installer before its first screen (seen in QEMU).
+const ANSWER_BLOCKING_QUESTIONS: &str = r#"; ( a=0; while [ $a -lt 200 ] && [ ! -e /tmp/synofurb-stage2.sh ]; do sleep 3; t=$(grep -v 'synofurb:' /var/log/syslog | tail -n 8); if echo "$t" | tail -n 1 | grep -q 'debconf: --> GO' && echo "$t" | grep -q 'debconf: --> INPUT critical'; then a=$((a+1)); q=$(echo "$t" | sed -n 's/.*INPUT critical \([^ ]*\).*/\1/p' | tail -n 1); s=$(screen -ls | sed -n 's/^[[:space:]]*\([0-9]*\.tty[^[:space:]]*\).*/\1/p' | head -n 1); [ -n "$s" ] && screen -S "$s" -X stuff "$(printf '\r')"; logger -t synofurb "pressed Enter on the installer question $q ($a) on $s"; sleep 5; fi; done ) >/dev/null 2>&1 </dev/null 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &"#;
 
 pub fn render_preseed(p: &PreseedParams) -> String {
     let c = p.cfg;
@@ -276,7 +283,7 @@ pub fn render_preseed(p: &PreseedParams) -> String {
         suite = c.suite,
         tz = c.timezone,
         base = p.http_base,
-        unblock = if p.debug_ssh_password.is_some() { DEBUG_SSH_UNBLOCK } else { "" },
+        unblock = ANSWER_BLOCKING_QUESTIONS,
         debug = match p.debug_ssh_password {
             Some(pw) => format!(
                 "# the installer's SSH server (network-console), loaded from the mirror once the network is up: ssh installer@<NAS>\n\
@@ -303,8 +310,9 @@ pub fn installer_cmdline(serial: &SerialConsole, log_host: &str, log_udp_port: u
     if let Some(u) = preseed_url {
         a.push(format!("url={u}"));
     }
+    // Always on: the question watcher in the preseed (`ANSWER_BLOCKING_QUESTIONS`) reads the questions from the installer's log.
+    a.push("DEBCONF_DEBUG=5".into());
     if verbose {
-        a.push("DEBCONF_DEBUG=5".into());
         a.push("BOOT_DEBUG=2".into());
     }
     a.join(" ")
@@ -423,14 +431,27 @@ mod tests {
         assert!(on.contains("d-i anna/choose_modules string network-console"));
         assert!(on.contains("d-i network-console/password password Abc123xyz789"));
         assert!(on.contains("d-i network-console/password-again password Abc123xyz789"));
-        // network-console waits on a "continue remotely" note on the local console; the watcher presses Enter for it
-        let early = on.lines().find(|l| l.starts_with("d-i preseed/early_command")).expect("early_command line");
-        assert!(early.contains("screen -S") && early.contains("-X stuff") && early.contains("[s]shd: /usr/sbin/sshd"));
-        assert!(early.ends_with('&'), "the watcher runs in the background so the installer goes on");
-        assert!(early.contains("</dev/null 3>&- 4>&-"), "it must not keep the installer's logging pipe open");
         let off = render_preseed(&PreseedParams { cfg: &cfg, http_base: "http://h/t", debug_ssh_password: None });
         assert!(!off.contains("network-console"));
-        assert!(!off.contains("screen -S"));
+    }
+
+    #[test]
+    fn preseed_answers_questions_the_installer_stops_at() {
+        // network-console's "continue remotely" note and a failed mirror lookup ("package retrieval failed") both wait on a
+        // console nobody looks at; the watcher presses Enter for a critical question that is waiting - with or without the SSH
+        // server, so for an offline bundle too
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        for pw in [Some("Abc123xyz789"), None] {
+            let p = render_preseed(&PreseedParams { cfg: &cfg, http_base: "http://h/t", debug_ssh_password: pw });
+            let early = p.lines().find(|l| l.starts_with("d-i preseed/early_command")).expect("early_command line");
+            assert!(early.contains("screen -S") && early.contains("-X stuff"));
+            assert!(early.contains("debconf: --> INPUT critical") && early.contains("debconf: --> GO"));
+            assert!(early.contains("[ $a -lt 200 ]"), "it gives up after a bounded number of answers");
+            assert!(early.contains("grep -v 'synofurb:'"), "its own log lines must not hide the next question");
+            assert!(early.contains("[ ! -e /tmp/synofurb-stage2.sh ]"), "it must stop once stage 2 has been fetched");
+            assert!(early.ends_with('&'), "the watcher runs in the background so the installer goes on");
+            assert!(early.contains("</dev/null 3>&- 4>&-"), "it must not keep the installer's logging pipe open");
+        }
     }
 
     #[test]
@@ -450,8 +471,10 @@ mod tests {
         let c = installer_cmdline(&SerialConsole::default(), "10.0.0.2", 8802, true, None);
         assert!(c.contains("log_host=10.0.0.2") && c.contains("log_port=8802"));
         assert!(c.contains("console=tty0 console=ttyS0,115200n8"), "serial must come last so it is /dev/console");
-        assert!(c.contains("DEBCONF_DEBUG=5"));
-        assert!(!installer_cmdline(&SerialConsole::default(), "h", 1, false, None).contains("DEBCONF_DEBUG"));
+        assert!(c.contains("DEBCONF_DEBUG=5") && c.contains("BOOT_DEBUG=2"));
+        // the question watcher needs the installer's debconf log even when the verbose switch is off
+        let quiet = installer_cmdline(&SerialConsole::default(), "h", 1, false, None);
+        assert!(quiet.contains("DEBCONF_DEBUG=5") && !quiet.contains("BOOT_DEBUG"));
     }
 
     #[test]
