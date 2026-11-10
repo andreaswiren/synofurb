@@ -9,21 +9,27 @@ use crate::model::*;
 use crate::platform;
 use anyhow::{Result, bail};
 
-/// Shell helper shared with the stage-2 installer: best-effort disk serial number.
+/// Shell helper shared with the stage-2 installer: best-effort disk serial number. Each source is tried in turn and only a
+/// plausible answer (4 characters or more) is taken: on the RS812+ the installer's kernel offers `vpd_pg80` for its SATA disks
+/// but it reads as just `-`, and a helper that stopped at the first source that exists never reached `udevadm`, which has the
+/// real serial (0.2.9: stage 2 then "could not find" any of the four disks and stopped in its preflight, before changing anything).
 pub const DISK_SERIAL_FN: &str = r#"disk_serial() {
   _d="$1"
   if [ -r "/sys/block/$_d/device/serial" ]; then
-    tr -cd '[:alnum:]_-' < "/sys/block/$_d/device/serial"; return
+    _s=$(tr -cd '[:alnum:]_-' < "/sys/block/$_d/device/serial")
+    if [ ${#_s} -ge 4 ]; then printf '%s' "$_s"; return; fi
   fi
   if [ -r "/sys/block/$_d/device/vpd_pg80" ]; then
-    dd if="/sys/block/$_d/device/vpd_pg80" bs=1 skip=4 2>/dev/null | tr -cd '[:alnum:]_-'; return
+    _s=$(dd if="/sys/block/$_d/device/vpd_pg80" bs=1 skip=4 2>/dev/null | tr -cd '[:alnum:]_-')
+    if [ ${#_s} -ge 4 ]; then printf '%s' "$_s"; return; fi
   fi
   if command -v udevadm >/dev/null 2>&1; then
-    _s=$(udevadm info --query=property --name="/dev/$_d" 2>/dev/null | sed -n 's/^ID_SERIAL_SHORT=//p' | head -n1)
-    if [ -n "$_s" ]; then printf '%s' "$_s" | tr -cd '[:alnum:]_-'; return; fi
+    _s=$(udevadm info --query=property --name="/dev/$_d" 2>/dev/null | sed -n 's/^ID_SERIAL_SHORT=//p' | head -n1 | tr -cd '[:alnum:]_-')
+    if [ ${#_s} -ge 4 ]; then printf '%s' "$_s"; return; fi
   fi
   if command -v smartctl >/dev/null 2>&1; then
-    smartctl -i "/dev/$_d" 2>/dev/null | sed -n 's/^Serial [Nn]umber: *//p' | head -n1 | tr -cd '[:alnum:]_-'
+    _s=$(smartctl -i "/dev/$_d" 2>/dev/null | sed -n 's/^Serial [Nn]umber: *//p' | head -n1 | tr -cd '[:alnum:]_-')
+    if [ ${#_s} -ge 4 ]; then printf '%s' "$_s"; return; fi
   fi
 }
 "#;
@@ -414,6 +420,45 @@ pub mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Runs `disk_serial sdb` against a fake `/sys/block` and a fake `udevadm`.
+    #[cfg(unix)]
+    fn run_disk_serial(vpd_pg80: Option<&[u8]>) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("sf-serial-{}-{}", std::process::id(), vpd_pg80.map_or(0, |v| v.len())));
+        let _ = std::fs::remove_dir_all(&dir);
+        let dev = dir.join("sys/block/sdb/device");
+        std::fs::create_dir_all(&dev).unwrap();
+        if let Some(v) = vpd_pg80 {
+            std::fs::write(dev.join("vpd_pg80"), v).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let ud = dir.join("bin/udevadm");
+        std::fs::write(&ud, "#!/bin/sh\necho ID_MODEL=X\necho ID_SERIAL_SHORT=WD-WCC4N1XRD3VH\n").unwrap();
+        std::fs::set_permissions(&ud, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let script = format!("{}\ndisk_serial sdb", DISK_SERIAL_FN.replace("/sys/block", &format!("{}/sys/block", dir.display())));
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .env("PATH", format!("{}/bin:/usr/bin:/bin", dir.display()))
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disk_serial_falls_through_a_source_that_gives_nothing_usable() {
+        // the RS812+ installer's kernel: vpd_pg80 exists for the SATA disks but reads as just "-" after its 4-byte header
+        assert_eq!(run_disk_serial(Some(&[0x80, 0, 0, 1, b'-'])), "WD-WCC4N1XRD3VH");
+        // no such file at all: udevadm answers
+        assert_eq!(run_disk_serial(None), "WD-WCC4N1XRD3VH");
+        // a real serial page (header, then the serial padded with spaces) is used as it is
+        let mut page = vec![0x80, 0, 0, 20];
+        page.extend_from_slice(b"      WD-OTHER123456");
+        assert_eq!(run_disk_serial(Some(&page)), "WD-OTHER123456");
+    }
 
     #[test]
     fn parses_fixture() {
