@@ -220,6 +220,10 @@ pub struct PreseedParams<'a> {
     pub cfg: &'a InstallConfig,
     /// `http://host:port/token`
     pub http_base: &'a str,
+    /// Password of the installer's own SSH server (Debian's `network-console`, `ssh installer@<NAS>`), so a stuck install can be looked
+    /// into without a screen. `None` leaves it off (the offline mirror may not carry the component). The password lives only for the
+    /// installer session, in RAM on the NAS.
+    pub debug_ssh_password: Option<&'a str>,
 }
 
 pub fn render_preseed(p: &PreseedParams) -> String {
@@ -249,7 +253,7 @@ pub fn render_preseed(p: &PreseedParams) -> String {
          d-i clock-setup/ntp boolean false\n\
          d-i time/zone string {tz}\n\
          d-i preseed/early_command string logger -t synofurb \"preseed loaded; stage 2 starts at partman\"\n\
-         d-i partman/early_command string wget -q -O /tmp/synofurb-stage2.sh {base}/stage2.sh && sh /tmp/synofurb-stage2.sh\n",
+         d-i partman/early_command string wget -q -O /tmp/synofurb-stage2.sh {base}/stage2.sh && sh /tmp/synofurb-stage2.sh\n{debug}",
         locale = c.locale,
         keymap = c.keymap,
         host = c.hostname,
@@ -258,6 +262,15 @@ pub fn render_preseed(p: &PreseedParams) -> String {
         suite = c.suite,
         tz = c.timezone,
         base = p.http_base,
+        debug = match p.debug_ssh_password {
+            Some(pw) => format!(
+                "# the installer's SSH server (network-console), loaded from the mirror once the network is up: ssh installer@<NAS>\n\
+                 d-i anna/choose_modules string network-console\n\
+                 d-i network-console/password password {pw}\n\
+                 d-i network-console/password-again password {pw}\n"
+            ),
+            None => String::new(),
+        },
     )
 }
 
@@ -381,10 +394,22 @@ mod tests {
     #[test]
     fn preseed_runs_stage2_at_partman() {
         let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
-        let p = render_preseed(&PreseedParams { cfg: &cfg, http_base: "http://10.0.0.2:8800/tok" });
+        let p =
+            render_preseed(&PreseedParams { cfg: &cfg, http_base: "http://10.0.0.2:8800/tok", debug_ssh_password: Some("Abc123xyz789") });
         assert!(p.contains("d-i partman/early_command string wget -q -O /tmp/synofurb-stage2.sh http://10.0.0.2:8800/tok/stage2.sh"));
         assert!(p.contains("netcfg/get_hostname string nas"));
         assert!(!p.contains("$6$"), "no password material in the preseed");
+    }
+
+    #[test]
+    fn preseed_enables_the_installer_ssh_unless_switched_off() {
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let on = render_preseed(&PreseedParams { cfg: &cfg, http_base: "http://h/t", debug_ssh_password: Some("Abc123xyz789") });
+        assert!(on.contains("d-i anna/choose_modules string network-console"));
+        assert!(on.contains("d-i network-console/password password Abc123xyz789"));
+        assert!(on.contains("d-i network-console/password-again password Abc123xyz789"));
+        let off = render_preseed(&PreseedParams { cfg: &cfg, http_base: "http://h/t", debug_ssh_password: None });
+        assert!(!off.contains("network-console"));
     }
 
     #[test]

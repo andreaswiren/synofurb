@@ -87,7 +87,7 @@ rm -rf "$SK/assets"
 run "$S/package-cli.sh" --target x86_64-pc-windows-msvc --out "$WORK/kx3"; chk "cli without kexec exit $RC" "$([ "$RC" = 0 ]; echo $?)"
 chk "no kexec in the cli zip without the file" "$(python3 -c "import zipfile,sys; sys.exit(1 if any('kexec' in n for n in zipfile.ZipFile(sys.argv[1]).namelist()) else 0)" "$WORK/kx3/synofurb-cli-0.7.1-windows-x86_64.zip"; echo $?)"
 run "$S/package-cargo-packager.sh" --target x86_64-pc-windows-msvc --formats wix --render-only; chk "render without exit $RC" "$([ "$RC" = 0 ]; echo $?)"
-chk "no resources entry without the file" "$(grep -q '^resources' "$SK/packaging/.Packager.generated.toml"; [ $? -ne 0 ]; echo $?)"
+chk "no resources entry without the file" "$(grep -q '^resources' "$SK/packaging/.Packager.generated.toml"; test $? -ne 0; echo $?)"
 finish
 
 begin "rpm: name, version, requires, files"

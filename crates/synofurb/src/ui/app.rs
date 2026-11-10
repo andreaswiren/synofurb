@@ -1029,6 +1029,22 @@ impl App {
                     Ok(_) => self.update = UpdateState::UpToDate,
                     Err(f) => self.update = UpdateState::CheckFailed(f),
                 }
+                // a check started from the menu has no status line on screen: say how it ended. Settings and About
+                // show the same state in their update row, so they get no second message.
+                if manual && !matches!(self.screen, Screen::Settings | Screen::About) {
+                    match &self.update {
+                        UpdateState::UpToDate => {
+                            let msg = copy::UPD_TOAST_CURRENT.fmt(&[version()]);
+                            self.toast(window, cx, &msg, true);
+                        }
+                        UpdateState::CheckFailed(f) => {
+                            let msg = copy::UPD_ST_FAILED.fmt(&[f.reason().short]);
+                            self.toast(window, cx, &msg, false);
+                        }
+                        UpdateState::Available(_) => self.open_update_dialog(window, cx),
+                        _ => {}
+                    }
+                }
             }
             Msg::UpdateProgress(p) => {
                 if let UpdateState::Downloading(info, _) = &self.update {

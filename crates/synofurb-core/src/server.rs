@@ -34,12 +34,34 @@ pub struct Server {
     threads: Vec<JoinHandle<()>>,
 }
 
-/// Which of our addresses does `peer` see? (UDP connect picks the outgoing interface, sends nothing.)
+/// Which of our addresses should the NAS use to reach us? An IPv4 address of ours on the NAS's own subnet wins (the longest
+/// prefix when several match): a VPN or overlay (NetBird, Tailscale, ZeroTier) can advertise the same LAN as a routed network
+/// with a better metric, and the route-based answer is then the overlay address, which the NAS cannot reach (found on a real
+/// RS812+: "reaches the NAS from 100.64.x.x" while the computer sits on 192.168.67.0/24, so the installer never got its stage-2).
+/// With no address on that subnet, or for IPv6, the address the OS would route from.
 pub fn local_ip_towards(peer: IpAddr) -> Result<IpAddr> {
+    if let IpAddr::V4(p) = peer
+        && let Some(ip) = same_subnet_addr(p, &crate::discovery::networks::local_addrs())
+    {
+        return Ok(IpAddr::V4(ip));
+    }
     let bind = if peer.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
     let s = UdpSocket::bind(bind)?;
     s.connect(SocketAddr::new(peer, 9))?;
     Ok(s.local_addr()?.ip())
+}
+
+/// Our address on the same subnet as `peer`, the longest prefix first; loopback only for a loopback peer.
+fn same_subnet_addr(peer: std::net::Ipv4Addr, locals: &[crate::discovery::networks::LocalAddr]) -> Option<std::net::Ipv4Addr> {
+    locals
+        .iter()
+        .filter(|a| a.ip.is_loopback() == peer.is_loopback() && a.prefix >= 1 && a.prefix <= 32)
+        .filter(|a| {
+            let mask = u32::MAX.checked_shl(32 - u32::from(a.prefix)).unwrap_or(0);
+            (u32::from(a.ip) & mask) == (u32::from(peer) & mask)
+        })
+        .max_by_key(|a| a.prefix)
+        .map(|a| a.ip)
 }
 
 impl Server {
@@ -584,6 +606,20 @@ mod tests {
         assert_eq!(strip_syslog_pri("<30>hello"), "hello");
         assert_eq!(strip_syslog_pri("<x>hello"), "<x>hello");
         assert_eq!(strip_syslog_pri("plain"), "plain");
+    }
+
+    #[test]
+    fn the_address_on_the_nas_subnet_beats_an_overlay_address() {
+        use crate::discovery::networks::LocalAddr;
+        let l = |name: &str, ip: &str, prefix: u8| LocalAddr { interface: name.into(), ip: ip.parse().unwrap(), prefix };
+        // the real case: Ethernet on the LAN and NetBird (wt0), whose routed networks include the LAN
+        let locals = [l("wt0", "100.64.90.140", 16), l("Ethernet", "192.168.67.123", 24), l("WSL", "172.21.16.1", 20)];
+        assert_eq!(same_subnet_addr("192.168.67.133".parse().unwrap(), &locals), Some("192.168.67.123".parse().unwrap()));
+        // a NAS on no local subnet: no answer here, the route decides
+        assert_eq!(same_subnet_addr("10.9.9.9".parse().unwrap(), &locals), None);
+        // the longest prefix wins
+        let two = [l("a", "192.168.0.5", 16), l("b", "192.168.67.5", 24)];
+        assert_eq!(same_subnet_addr("192.168.67.133".parse().unwrap(), &two), Some("192.168.67.5".parse().unwrap()));
     }
 
     #[test]

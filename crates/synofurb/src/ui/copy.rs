@@ -593,6 +593,7 @@ mod strings {
         UPD_ST_NONE: Prose, "Not checked yet", "", "", "";
         UPD_ST_CHECKING: Prose, "Checking for updates", "", "", "";
         UPD_ST_CURRENT: Prose, "{v} is current", "", "", "";
+        UPD_TOAST_CURRENT: Prose, "No update found. synofurb {v} is the newest version.", "", "", "";
         UPD_ST_AVAILABLE: Prose, "{v} available", "", "", "";
         UPD_ST_UNSIGNED: Prose, "This release is not signed. synofurb checks its SHA-256 only.", "", "", "";
         UPD_CONSENT: Prose, "I understand and want to install it", "", "", "";
