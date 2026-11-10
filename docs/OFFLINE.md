@@ -221,11 +221,12 @@ During `session::stage` an offline job:
 * Installer and archive can be out of sync for a few hours after a kernel update (netboot images vs. module udebs).
   The build then warns ("the archive has no module udebs for the installer kernel ..."). Build again later. The
   same limit applies online.
-* On armhf the archive has no `xfs-modules` udeb (nor `crc-modules`), so `partman-xfs` cannot be installed there and is
+* On armhf the archive has no `xfs-modules` udeb , so `partman-xfs` cannot be installed there and is
   left out with a warning; the stage-2 script formats with `mkfs.xfs` from `xfsprogs-udeb` and does not use partman,
   and the same happens online. Whether the armhf installer kernel has XFS built in is not something the bundle can check.
-* The name `crc-modules` in `script::ANNA_PACKAGES` does not exist in trixie. `try anna-install` ignores
-  it online and offline; the build records a warning. (Left unchanged in `script.rs`.)
+* `crc-modules` is no longer in `script::ANNA_PACKAGES`: trixie has no such udeb, and a single unknown name makes
+  `anna-install` fail the whole call (found on a real RS812+ in 0.2.7: nothing was loaded, so `parted` was missing).
+  The script now calls `anna-install` once per udeb, so a name Debian drops later costs a warning, not the install.
 * `Valid-Until`: the temporary apt settings above only exist during the install; they are removed afterwards.
 
 ## How completeness is proven (`tests/offline/run.sh`)

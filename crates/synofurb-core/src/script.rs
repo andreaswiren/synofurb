@@ -83,7 +83,6 @@ pub const ANNA_PACKAGES: &[&str] = &[
     "fat-modules",
     "scsi-modules",
     "sata-modules",
-    "crc-modules",
     "usb-storage-modules",
     "usb-modules",
 ];
@@ -384,7 +383,9 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
 
     // -- 1. installer components --------------------------------------------
     writeln!(w, "\nstep 1 \"Loading installer components (RAID, LVM, XFS, debootstrap)\"")?;
-    writeln!(w, "try anna-install {}", ANNA_PACKAGES.join(" "))?;
+    // One udeb at a time: `anna-install` refuses the whole call when a single name is unknown (a udeb that Debian dropped, as
+    // `crc-modules` was), and then not even `parted-udeb` gets loaded. A missing optional one only costs a warning here.
+    writeln!(w, "for _u in {}; do try anna-install \"$_u\"; done", ANNA_PACKAGES.join(" "))?;
     writeln!(w, "settle")?;
     writeln!(w, "for m in dm_mod raid0 raid1 raid10 raid456 xfs ext4 vfat loop; do try modprobe $m; done")?;
     writeln!(w, "for t in parted mdadm lvm mkfs.xfs mkfs.ext4 mkfs.fat mkswap debootstrap blockdev wget; do")?;
