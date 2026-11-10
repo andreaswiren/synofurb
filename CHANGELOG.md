@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.10
+
+### Fixed
+- **Stage 2 could not find any of the four disks in the installer and stopped in its preflight** (found on a real RS812+, the first time stage 2 ran there: `cannot find disk 'sda' (model WD30EFRX-68EUZN0, serial WD-WCC4N1XRD3VH, ...) in the installer`). Stage 2 matches each disk by size and serial number. The helper that reads the serial took the first source that exists, and on the installer's kernel the SCSI serial page of these SATA disks reads as just `-`, so it never asked `udevadm`, which has the real serial. It now tries each source in turn (kernel attribute, SCSI serial page, `udevadm`, `smartctl`) and only accepts an answer of four characters or more. This is a safety check in the preflight, so nothing on the disks had been changed; the NAS only needed a restart. A test now runs the helper against a fake `/sys/block` and a fake `udevadm`, including the exact case from the NAS.
+
+### Confirmed on the real RS812+
+- The 0.2.9 installer reached stage 2 unattended: the Debian installer loaded all its components, the question watcher pressed Enter on the SSH note, and stage 2 loaded its tools (`parted` and the rest) and got to its preflight.
+
 ## 0.2.9
 
 ### Fixed
