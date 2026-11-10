@@ -226,6 +226,16 @@ pub struct PreseedParams<'a> {
     pub debug_ssh_password: Option<&'a str>,
 }
 
+/// Appended to `preseed/early_command` when the installer SSH server (`network-console`) is on. That package ends its set-up with
+/// a "Continue installation remotely using SSH" note that the local console shows and waits on, so an unattended install would
+/// stand still until someone pressed Enter on a console nobody looks at (found on a real RS812+ in 0.2.7). This background loop
+/// waits until that note is up and the SSH server is listening, then presses Enter for it through `screen`, which the installer's
+/// local console runs in. A person who logs in over SSH still gets the installer menu, in a screen session of their own. The
+/// `[d]` / `[s]` brackets keep `grep` from matching its own entry in `ps`. The closed descriptors matter: the installer runs this
+/// command with a pipe open to its logger and waits for that pipe to close, so a background job that keeps it open freezes the
+/// installer before its first screen (seen in QEMU).
+const DEBUG_SSH_UNBLOCK: &str = r#"; ( n=0; while [ $n -lt 1200 ]; do n=$((n+1)); sleep 1; if ps | grep -q '[d]pkg/info/network' && ps | grep -q '[s]shd: /usr/sbin/sshd'; then sleep 2; s=$(screen -ls | sed -n 's/^[[:space:]]*\([0-9]*\.tty[^[:space:]]*\).*/\1/p' | head -n 1); [ -n "$s" ] && screen -S "$s" -X stuff "$(printf '\r')"; logger -t synofurb "installer SSH note dismissed on $s"; break; fi; done ) >/dev/null 2>&1 </dev/null 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &"#;
+
 pub fn render_preseed(p: &PreseedParams) -> String {
     let c = p.cfg;
     format!(
@@ -252,7 +262,11 @@ pub fn render_preseed(p: &PreseedParams) -> String {
          d-i clock-setup/utc boolean true\n\
          d-i clock-setup/ntp boolean false\n\
          d-i time/zone string {tz}\n\
-         d-i preseed/early_command string logger -t synofurb \"preseed loaded; stage 2 starts at partman\"\n\
+         d-i passwd/root-login boolean true\n\
+         d-i passwd/root-password password unused-by-stage-2\n\
+         d-i passwd/root-password-again password unused-by-stage-2\n\
+         d-i passwd/make-user boolean false\n\
+         d-i preseed/early_command string logger -t synofurb \"preseed loaded; stage 2 starts at partman\"{unblock}\n\
          d-i partman/early_command string wget -q -O /tmp/synofurb-stage2.sh {base}/stage2.sh && sh /tmp/synofurb-stage2.sh\n{debug}",
         locale = c.locale,
         keymap = c.keymap,
@@ -262,6 +276,7 @@ pub fn render_preseed(p: &PreseedParams) -> String {
         suite = c.suite,
         tz = c.timezone,
         base = p.http_base,
+        unblock = if p.debug_ssh_password.is_some() { DEBUG_SSH_UNBLOCK } else { "" },
         debug = match p.debug_ssh_password {
             Some(pw) => format!(
                 "# the installer's SSH server (network-console), loaded from the mirror once the network is up: ssh installer@<NAS>\n\
@@ -408,8 +423,26 @@ mod tests {
         assert!(on.contains("d-i anna/choose_modules string network-console"));
         assert!(on.contains("d-i network-console/password password Abc123xyz789"));
         assert!(on.contains("d-i network-console/password-again password Abc123xyz789"));
+        // network-console waits on a "continue remotely" note on the local console; the watcher presses Enter for it
+        let early = on.lines().find(|l| l.starts_with("d-i preseed/early_command")).expect("early_command line");
+        assert!(early.contains("screen -S") && early.contains("-X stuff") && early.contains("[s]shd: /usr/sbin/sshd"));
+        assert!(early.ends_with('&'), "the watcher runs in the background so the installer goes on");
+        assert!(early.contains("</dev/null 3>&- 4>&-"), "it must not keep the installer's logging pipe open");
         let off = render_preseed(&PreseedParams { cfg: &cfg, http_base: "http://h/t", debug_ssh_password: None });
         assert!(!off.contains("network-console"));
+        assert!(!off.contains("screen -S"));
+    }
+
+    #[test]
+    fn preseed_answers_the_account_questions_so_the_installer_does_not_stop_at_them() {
+        // user-setup runs before partman and asks for a root password at `critical`; the real accounts come from stage 2, which
+        // runs its own debootstrap, so this value never reaches the new system. (A locked `root-password-crypted` is not
+        // enough: user-setup clears it and asks anyway - seen in QEMU.)
+        let cfg = InstallConfig::new("nas", "nasadmin", format!("$6$saltsaltsaltsalt${}", "x".repeat(86)));
+        let p = render_preseed(&PreseedParams { cfg: &cfg, http_base: "http://h/t", debug_ssh_password: None });
+        assert!(p.contains("d-i passwd/make-user boolean false"));
+        assert!(p.contains("d-i passwd/root-password password unused-by-stage-2"));
+        assert!(p.contains("d-i passwd/root-password-again password unused-by-stage-2"));
     }
 
     #[test]

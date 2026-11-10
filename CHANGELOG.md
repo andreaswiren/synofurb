@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.8
+
+Three bugs that stopped the install before it touched a disk, all found on a real RS812+ (no disk was written in any of those attempts).
+
+### Fixed
+- **The installer SSH server of 0.2.7 stopped every unattended install.** Debian's `network-console` ends its set-up with a "Continue installation remotely using SSH" note that the NAS's own console waits on until someone presses Enter, so the install stood still before stage 2. A small background loop in the preseed now waits for that note and the SSH server, and presses Enter for it. A person who logs in over SSH still gets the installer menu. (Closing the loop's inherited file descriptors was needed too: left open they froze the installer before its first screen.)
+- **The installer stopped at a root-password prompt.** The preseed did not answer the account questions of `user-setup`, which runs before the disks are touched and asks at the highest priority. The preseed now answers them (no user, a placeholder root password); the real accounts are still created by stage 2, which runs its own debootstrap, so the placeholder never reaches the new system.
+- **Stage 2 loaded none of its tools** (`required tool 'parted' is missing`). Its list of installer components contained `crc-modules`, which Debian 13 no longer has, and `anna-install` then refuses the whole call. The name is gone and each component is now loaded on its own, so one that Debian drops later only costs a warning.
+
 ## 0.2.7
 
 ### Fixed
