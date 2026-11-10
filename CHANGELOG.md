@@ -1,9 +1,14 @@
 # Changelog
 
+## 0.2.11
+
+### Fixed
+- **Stage 2 still could not find any of the four disks in the installer (the real cause of 0.2.9's and 0.2.10's preflight stop).** Stage 2 matches each disk by size and serial number, and the helper that reads the serial removed unwanted characters with `tr -cd '[:alnum:]_-'`. The Debian installer's busybox `tr` mishandles that character class: it turned `WD-AB 12_x!` into `-_`, so every source (the kernel's serial page, `udevadm`, `smartctl`) gave `-`, and no disk matched. It now filters with explicit ranges (`tr -cd 'A-Za-z0-9_-'`), which the installer's busybox, the DSM tools and GNU `tr` all handle the same way (checked on the installer of the real RS812+: `udevadm` and the serial page both give `WD-WCC4N1XRD3VH`). A test keeps the character class out of the helper. As before, this is a preflight check, so no disk was changed; the NAS only needed a restart.
+
 ## 0.2.10
 
 ### Fixed
-- **Stage 2 could not find any of the four disks in the installer and stopped in its preflight** (found on a real RS812+, the first time stage 2 ran there: `cannot find disk 'sda' (model WD30EFRX-68EUZN0, serial WD-WCC4N1XRD3VH, ...) in the installer`). Stage 2 matches each disk by size and serial number. The helper that reads the serial took the first source that exists, and on the installer's kernel the SCSI serial page of these SATA disks reads as just `-`, so it never asked `udevadm`, which has the real serial. It now tries each source in turn (kernel attribute, SCSI serial page, `udevadm`, `smartctl`) and only accepts an answer of four characters or more. This is a safety check in the preflight, so nothing on the disks had been changed; the NAS only needed a restart. A test now runs the helper against a fake `/sys/block` and a fake `udevadm`, including the exact case from the NAS.
+- The serial helper of stage 2 now tries each source in turn (kernel attribute, SCSI serial page, `udevadm`, `smartctl`) and only accepts an answer of four characters or more, so a source that gives nothing usable no longer hides the ones after it. **This did not fix the stop** in the preflight that 0.2.9 showed (`cannot find disk 'sda' (model WD30EFRX-68EUZN0, serial WD-WCC4N1XRD3VH, ...)`): that was found on the real installer afterwards and fixed in 0.2.11. A test runs the helper against a fake `/sys/block` and a fake `udevadm`.
 
 ### Confirmed on the real RS812+
 - The 0.2.9 installer reached stage 2 unattended: the Debian installer loaded all its components, the question watcher pressed Enter on the SSH note, and stage 2 loaded its tools (`parted` and the rest) and got to its preflight.

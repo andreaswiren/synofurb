@@ -9,26 +9,27 @@ use crate::model::*;
 use crate::platform;
 use anyhow::{Result, bail};
 
-/// Shell helper shared with the stage-2 installer: best-effort disk serial number. Each source is tried in turn and only a
-/// plausible answer (4 characters or more) is taken: on the RS812+ the installer's kernel offers `vpd_pg80` for its SATA disks
-/// but it reads as just `-`, and a helper that stopped at the first source that exists never reached `udevadm`, which has the
-/// real serial (0.2.9: stage 2 then "could not find" any of the four disks and stopped in its preflight, before changing anything).
+/// Shell helper shared with the stage-2 installer: best-effort disk serial number. The characters are filtered with explicit
+/// ranges, never with the `[:alnum:]` class: the Debian installer's busybox `tr -cd '[:alnum:]_-'` keeps only `-` and `_` (it turned
+/// `WD-AB 12_x!` into `-_`), so every source gave `-` and stage 2 "could not find" any of the four disks in its preflight, before
+/// changing anything (0.2.9 and 0.2.10 on a real RS812+). Each source is also tried in turn and only a plausible answer
+/// (4 characters or more) is taken, so one that gives nothing usable no longer hides the sources after it.
 pub const DISK_SERIAL_FN: &str = r#"disk_serial() {
   _d="$1"
   if [ -r "/sys/block/$_d/device/serial" ]; then
-    _s=$(tr -cd '[:alnum:]_-' < "/sys/block/$_d/device/serial")
+    _s=$(tr -cd 'A-Za-z0-9_-' < "/sys/block/$_d/device/serial")
     if [ ${#_s} -ge 4 ]; then printf '%s' "$_s"; return; fi
   fi
   if [ -r "/sys/block/$_d/device/vpd_pg80" ]; then
-    _s=$(dd if="/sys/block/$_d/device/vpd_pg80" bs=1 skip=4 2>/dev/null | tr -cd '[:alnum:]_-')
+    _s=$(dd if="/sys/block/$_d/device/vpd_pg80" bs=1 skip=4 2>/dev/null | tr -cd 'A-Za-z0-9_-')
     if [ ${#_s} -ge 4 ]; then printf '%s' "$_s"; return; fi
   fi
   if command -v udevadm >/dev/null 2>&1; then
-    _s=$(udevadm info --query=property --name="/dev/$_d" 2>/dev/null | sed -n 's/^ID_SERIAL_SHORT=//p' | head -n1 | tr -cd '[:alnum:]_-')
+    _s=$(udevadm info --query=property --name="/dev/$_d" 2>/dev/null | sed -n 's/^ID_SERIAL_SHORT=//p' | head -n1 | tr -cd 'A-Za-z0-9_-')
     if [ ${#_s} -ge 4 ]; then printf '%s' "$_s"; return; fi
   fi
   if command -v smartctl >/dev/null 2>&1; then
-    _s=$(smartctl -i "/dev/$_d" 2>/dev/null | sed -n 's/^Serial [Nn]umber: *//p' | head -n1 | tr -cd '[:alnum:]_-')
+    _s=$(smartctl -i "/dev/$_d" 2>/dev/null | sed -n 's/^Serial [Nn]umber: *//p' | head -n1 | tr -cd 'A-Za-z0-9_-')
     if [ ${#_s} -ge 4 ]; then printf '%s' "$_s"; return; fi
   fi
 }
@@ -450,6 +451,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn disk_serial_falls_through_a_source_that_gives_nothing_usable() {
+        // busybox's `tr` mishandles `[:alnum:]` (found on the real installer); explicit ranges work everywhere
+        assert!(!DISK_SERIAL_FN.contains("[:alnum:]") && DISK_SERIAL_FN.contains("tr -cd 'A-Za-z0-9_-'"));
         // the RS812+ installer's kernel: vpd_pg80 exists for the SATA disks but reads as just "-" after its 4-byte header
         assert_eq!(run_disk_serial(Some(&[0x80, 0, 0, 1, b'-'])), "WD-WCC4N1XRD3VH");
         // no such file at all: udevadm answers
