@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.9
+
+### Fixed
+- **One failed DNS lookup of the Debian mirror left the installer waiting for a key on a console nobody sees** (found on a real RS812+: `wget: unable to resolve host address 'deb.debian.org'`, then "package retrieval failed"). The installer asks "Retry?" at the highest priority, which cannot be preseeded away, and the NAS has no screen. The background loop of 0.2.8, which only dismissed the SSH note, now presses Enter (the default is Retry) for any critical question that is waiting, every few seconds while one is waiting (up to 200 times) and never after stage 2 has been fetched (the installer is then past its point of no return, and an Enter must not answer what follows a failed stage 2). It reads the questions from the installer's own log, so the installer's debconf logging is now always on, not only with the verbose switch. It runs for offline installs too. A mirror that stays down still ends in a stopped installer, and the log says so.
+- No disk was written in the attempt that found this.
+
 ## 0.2.8
 
 Three bugs that stopped the install before it touched a disk, all found on a real RS812+ (no disk was written in any of those attempts).
