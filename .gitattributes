@@ -1,0 +1,25 @@
+# Text is stored with LF and checked out with LF on every platform. Scripts, units and configs are embedded into the program
+# with include_str! and run on the NAS (busybox / dash), where a "\r" breaks them ("Syntax error: word unexpected (expecting
+# "do")"); the Windows release build checked them out with CRLF. The program also strips "\r" when it embeds them
+# (payload::lf), this keeps the working tree clean too.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.gz binary
+*.zip binary
+*.tar binary
+*.xz binary
+*.pdf binary
+*.msi binary
+*.exe binary
+*.dtb binary
+*.bin binary

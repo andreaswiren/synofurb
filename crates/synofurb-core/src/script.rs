@@ -372,6 +372,20 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     writeln!(w, "emit \"@@BEGIN run=$RUN_ID arch={} firmware={:?} mode={:?} dry=$DRY\"", plan.arch.debian(), plan.firmware, plan.mode)?;
     writeln!(w, "log \"installer kernel: $(uname -srm)  memory: $(sed -n 's/^MemTotal: *//p' /proc/meminfo)\"")?;
     writeln!(w, "log \"target NAS: {} ({}), DSM {}\"", p.facts.model, p.facts.serial, p.facts.dsm_version)?;
+    // The installer's clock. The RS812+'s hardware clock reads 2001-01-02, and `apt` inside the new system then refuses every
+    // signed package list ("Not live until 2026-..."), so step 11 stopped after the disks had been written (found on the real
+    // unit). When the clock is earlier than the moment this script was generated, take the time from the computer that started the
+    // install, for the running system and for the hardware clock the new system boots from; NTP corrects the rest later.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    writeln!(w, "NOW_EPOCH={now}")?;
+    writeln!(w, "if [ \"$DRY\" != 1 ] && [ \"$(date +%s)\" -lt \"$NOW_EPOCH\" ]; then")?;
+    writeln!(
+        w,
+        "  warn \"the installer's clock reads $(date -u '+%Y-%m-%d %H:%M:%S') UTC, earlier than the start of this install; setting it and the hardware clock from the computer that started the install\""
+    )?;
+    writeln!(w, "  try date -u -s \"@$NOW_EPOCH\"")?;
+    writeln!(w, "  try hwclock -w -u")?;
+    writeln!(w, "fi")?;
     if plan.dom_boot {
         // before anything is touched: without the tool the installer can neither fall back to DSM nor register Debian
         writeln!(
@@ -590,6 +604,10 @@ pub fn render_stage2(p: &ScriptParams) -> Result<String> {
     }
 
     // -- 9. debootstrap ----------------------------------------------------------------
+    // The installer's kernel command line has DEBIAN_FRONTEND=text, and debootstrap's chroot inherits it: the packages' own
+    // questions (`libpam-runtime`'s pam-auth-update) then wait for an answer on a console nobody reads, and loop forever on an empty
+    // one. Seen on the real unit: debootstrap ran for an hour at "Configuring libpam-runtime" after the disks were written.
+    writeln!(w, "\nexport DEBIAN_FRONTEND=noninteractive")?;
     writeln!(w, "\nstep 9 \"Installing the Debian {} base system (debootstrap, {})\"", p.cfg.suite, plan.arch.debian())?;
     writeln!(
         w,
@@ -756,6 +774,24 @@ mod tests {
         let plan = build_plan(&facts, &PlanRequest { mode, ..Default::default() });
         let cfg = InstallConfig::new("nas", "nasadmin", format!("${}${}${}", "6", "saltsaltsaltsalt", "x".repeat(86)));
         (render_stage2(&params(&plan, &facts, &cfg)).unwrap(), plan)
+    }
+
+    /// Two things that stopped the first stage 2 to get this far on a real RS812+, after the disks were written: the installer's
+    /// debconf frontend is `text` and debootstrap's packages then loop forever on their questions; and the unit's hardware clock
+    /// reads 2001, so `apt` refuses every signed package list ("Not live until 2026-...").
+    #[test]
+    fn stage2_runs_debootstrap_without_questions_and_sets_a_clock_that_is_behind() {
+        let (s, _) = render(StorageMode::WipeAll);
+        let export = s.find("export DEBIAN_FRONTEND=noninteractive").expect("the frontend is set");
+        let debootstrap = s.find("run debootstrap").expect("debootstrap runs");
+        assert!(export < debootstrap, "the frontend must be set before debootstrap starts");
+        let clock = s.find("NOW_EPOCH=").expect("the start time is in the script");
+        assert!(clock < s.find("step 1 ").unwrap(), "the clock is set before anything is downloaded");
+        assert!(s.contains("[ \"$(date +%s)\" -lt \"$NOW_EPOCH\" ]"), "only a clock that is behind is touched");
+        assert!(s.contains("try date -u -s \"@$NOW_EPOCH\"") && s.contains("try hwclock -w -u"), "the running and the hardware clock");
+        let epoch: u64 = s.lines().find_map(|l| l.strip_prefix("NOW_EPOCH=")).unwrap().parse().unwrap();
+        assert!(epoch > 1_700_000_000, "the epoch is the real time, not 0");
+        sh_syntax_ok(&s);
     }
 
     fn sh_syntax_ok(script: &str) {

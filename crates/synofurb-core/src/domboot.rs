@@ -342,6 +342,7 @@ pub fn install_agent(
     let mut initrd = std::fs::read(&files.initrd).with_context(|| format!("reading {}", files.initrd.display()))?;
     initrd.extend(overlay.cpio());
     let kernel = std::fs::read(&files.kernel).with_context(|| format!("reading {}", files.kernel.display()))?;
+    let dom_script = crate::payload::lf(dom_script); // a Windows checkout embeds it with \r\n (see payload::lf)
     let dir = format!("/tmp/.synofurb-dom-{}", random_token(4));
     sh.exec(&format!("mkdir -p '{dir}' && chmod 700 '{dir}'"), None)?;
     for (name, data, mode) in

@@ -858,7 +858,7 @@ impl MgmtBundle {
             .iter()
             .map(|(name, content)| BundleFile {
                 name: name.to_string(),
-                data: content.as_bytes().to_vec(),
+                data: crate::payload::lf(content).as_bytes().to_vec(),
                 executable: MGMT_FILES.iter().any(|(n, _, x)| n == name && *x),
             })
             .collect();
