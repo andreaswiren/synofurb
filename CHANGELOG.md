@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.12
+
+First version found to get through the whole of stage 2's preparation on the real RS812+ (disks matched, wiped, partitioned, RAID/LVM/filesystems made, base system installed). It also fixes the three things that then stopped the install **after the disks had been written** (found one after the other on the real unit). Each was finished by hand there, in the Debian installer over its debug SSH, so the NAS ended with a working system; none of the three can happen again with this version.
+
+### Fixed
+- **debootstrap ran for an hour at "Configuring libpam-runtime" and never finished.** The installer's kernel command line has `DEBIAN_FRONTEND=text`, debootstrap's chroot inherits it, and `pam-auth-update` then asks its question on a console nobody reads and loops on the empty answer (hundreds of thousands of `Use of uninitialized value` lines). Stage 2 now sets `DEBIAN_FRONTEND=noninteractive` before debootstrap (the chroot script already did).
+- **The chroot configuration script was refused by the new system's shell** (`Syntax error: word unexpected (expecting "do")` at its first loop). Scripts and configs are embedded in the program with `include_str!`, which keeps the line endings of the machine that built it, and the Windows release build checks the repository out with CRLF, so every embedded file (the chroot script, the management plane, the systemd units, the boot tool) carried `\r\n`. Everything that goes to a NAS is now converted to `\n` when it is packed (`payload::lf`), a new `.gitattributes` makes every checkout use LF, and a test checks that no file in the payload contains a carriage return.
+- **`apt` in the new system refused every package list** (`Not live until 2026-...`). The RS812+'s hardware clock reads 2001-01-02, so the installer's clock was in 2001 and all signatures were "from the future". Stage 2 now sets the clock (and the hardware clock the new system boots from) from the computer that started the install when the installer's clock is earlier than that moment.
+
 ## 0.2.11
 
 ### Fixed

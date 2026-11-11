@@ -32,8 +32,16 @@ macro_rules! boot_asset {
     };
 }
 
-/// The DOM boot-menu manager script (also placed into the installer initrd and uploaded to DSM).
+/// The DOM boot-menu manager script (also placed into the installer initrd and uploaded to DSM). Use it through [`lf`].
 pub const DOM_SCRIPT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../boot/dom/synofurb-dom"));
+
+/// Line endings of an embedded script or config file as `\n`. `include_str!` embeds a file exactly as the build machine checked it
+/// out, and a Windows checkout turns every line ending into `\r\n` (the Windows release build did: 0.2.9-0.2.11 shipped a
+/// `chroot-setup.sh` that the target's `dash` refused with `Syntax error: word unexpected (expecting "do")` at its first loop, on a
+/// real RS812+, after the disks had been wiped). Everything that goes to a NAS passes through this, whatever the checkout did.
+pub fn lf(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains('\r') { std::borrow::Cow::Owned(s.replace("\r\n", "\n")) } else { std::borrow::Cow::Borrowed(s) }
+}
 
 /// (path inside the bundle, content, mode)
 const STATIC_FILES: &[(&str, &str)] = &[
@@ -181,7 +189,7 @@ fn build_payload_with(
     };
     for (path, content) in STATIC_FILES {
         let mode = if path.ends_with(".sh") || path.contains("usr/local/sbin/") { 0o755 } else { 0o644 };
-        add(path, content.as_bytes(), mode)?;
+        add(path, lf(content).as_bytes(), mode)?;
     }
     add("env.sh", render_env_with(cfg, plan, facts, offline).as_bytes(), 0o600)?;
     add(
@@ -256,6 +264,29 @@ mod tests {
             assert!(names.iter().any(|n| n == need), "missing {need} in {names:?}");
         }
         assert_eq!(p.sha256.len(), 64);
+    }
+
+    /// A Windows checkout embeds every script with `\r\n` (the Windows release build of 0.2.9-0.2.11 did), and the target's `dash`
+    /// refuses `do\r`; nothing in the payload may carry a carriage return, whatever the build machine's checkout did.
+    #[test]
+    fn payload_files_carry_no_carriage_returns() {
+        let (cfg, plan, facts) = setup();
+        let p = build_payload(&cfg, &plan, &facts, "x").unwrap();
+        for e in tar::Archive::new(flate2::read::GzDecoder::new(&p.bytes[..])).entries().unwrap() {
+            let mut e = e.unwrap();
+            let n = e.path().unwrap().to_string_lossy().to_string();
+            let mut b = vec![];
+            e.read_to_end(&mut b).unwrap();
+            assert!(!b.contains(&b'\r'), "{n} carries a carriage return");
+        }
+    }
+
+    #[test]
+    fn lf_turns_windows_line_endings_into_unix_ones_and_leaves_clean_text_alone() {
+        assert_eq!(lf("a\r\nb\r\n"), "a\nb\n");
+        assert_eq!(lf("a\nb\n"), "a\nb\n");
+        assert!(matches!(lf("a\nb\n"), std::borrow::Cow::Borrowed(_)), "clean text is not copied");
+        assert_eq!(lf("for k in a; do\r\n  x\r\ndone\r\n"), "for k in a; do\n  x\ndone\n");
     }
 
     /// Unpack the payload of the demo job below `dir`.
