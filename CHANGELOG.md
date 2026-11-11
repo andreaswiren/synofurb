@@ -2,7 +2,7 @@
 
 ## 0.2.12
 
-First version found to get through the whole of stage 2's preparation on the real RS812+ (disks matched, wiped, partitioned, RAID/LVM/filesystems made, base system installed). It also fixes the three things that then stopped the install **after the disks had been written** (found one after the other on the real unit). Each was finished by hand there, in the Debian installer over its debug SSH, so the NAS ended with a working system; none of the three can happen again with this version.
+First version found to get through the whole of stage 2's preparation on the real RS812+ (disks matched, wiped, partitioned, RAID/LVM/filesystems made, base system installed). It also fixes the three things that then stopped the install **after the disks had been written** (found one after the other on the real unit). Each was worked around by hand there, in the Debian installer over its debug SSH, to finish that install; this version fixes all three in the program.
 
 ### Fixed
 - **debootstrap ran for an hour at "Configuring libpam-runtime" and never finished.** The installer's kernel command line has `DEBIAN_FRONTEND=text`, debootstrap's chroot inherits it, and `pam-auth-update` then asks its question on a console nobody reads and loops on the empty answer (hundreds of thousands of `Use of uninitialized value` lines). Stage 2 now sets `DEBIAN_FRONTEND=noninteractive` before debootstrap (the chroot script already did).
