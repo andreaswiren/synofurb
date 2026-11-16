@@ -8,7 +8,7 @@ jobs:
   rust:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb imagemagick bc python3-pil mesa-vulkan-drivers libxtst6 fonts-dejavu-core build-essential pkg-config clang cmake libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xkb-dev libxcb-randr0-dev libxcb-icccm4-dev libxcb-image0-dev libxcb-keysyms1-dev libxcb-util-dev libxcb-cursor-dev libxcb-xinerama0-dev libvulkan-dev libfontconfig-dev libfreetype-dev libasound2-dev libssl-dev libzstd-dev libgl1-mesa-dev libegl1-mesa-dev libdrm-dev libgbm-dev
@@ -34,7 +34,7 @@ jobs:
   shell-and-python:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
       - run: shellcheck -s dash payload/chroot-setup.sh payload/files/usr/local/sbin/* 
       - run: shellcheck -s sh scripts/build-kexec.sh scripts/test-kexec.sh
@@ -47,7 +47,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # x86_64 only, native gcc: aarch64 and armv7 do not build yet (docs/kexec.md)
       - run: scripts/build-kexec.sh x86_64
       - run: |
@@ -55,7 +55,7 @@ jobs:
           sha256sum assets/kexec/*/kexec
           assets/kexec/amd64/kexec --version
           scripts/test-kexec.sh assets/kexec/amd64/kexec
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: kexec-static
           path: assets/kexec
